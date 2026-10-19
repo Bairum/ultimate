@@ -278,7 +278,13 @@ it("groups each conversation's tool and model calls into runs split by quiet, op
       end: new Date(T0 + 112_000).toISOString(),
       ok: true,
       calls: [
-        expect.objectContaining({ kind: 'tool', name: 'read', ms: 2000, ok: true }),
+        expect.objectContaining({
+          kind: 'tool',
+          name: 'read',
+          ms: 2000,
+          ok: true,
+          trace: expect.any(String),
+        }),
         expect.objectContaining({ kind: 'model', name: 'anthropic/opus', ms: 7000 }),
       ],
     },

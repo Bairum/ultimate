@@ -335,6 +335,7 @@ export async function lanes(
           kind: call.kind,
           name: call.name,
           ok: call.ok,
+          trace: call.trace,
         })),
         ...(run.calls.length > CALLS ? { more: run.calls.length - CALLS } : {}),
       })),

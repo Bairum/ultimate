@@ -51,8 +51,15 @@ export const StreamAction = actionRef<
   { rows: SystemRow[]; next?: string; head: string }
 >('system', 'stream')
 
-/** One call inside a run: a tool call, or a model call (kind `model`). */
-export type LaneCall = { at: string; ms: number; kind: string; name: string; ok: boolean }
+/** One call inside a run: a tool call, or a model call (kind `model`); `trace` opens its tree with `tree`. */
+export type LaneCall = {
+  at: string
+  ms: number
+  kind: string
+  name: string
+  ok: boolean
+  trace: string
+}
 /**
  * A stretch of work in one conversation: calls with at most 20 s of quiet between them. `end` is absent while the run
  * is open (its last call ended under 20 s ago, or the conversation has a live task). `more` counts calls past the 200

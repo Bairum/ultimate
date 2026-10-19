@@ -16,6 +16,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { NoticeEvent } from '../../shared/events.ts'
 import { Branched, LineageApi, Rooted } from '../lineage/api.ts'
 import { SubmissionLanded } from '../workspaces/api.ts'
+import { seedLanes } from './lanes.ts'
 
 const messageText = (content: unknown) =>
   typeof content === 'string'
@@ -795,6 +796,14 @@ export const actions = {
       }
     }, BACKGROUND_CONTEXT)
     return { seeded: 2 + demoLandings.length + notices.length }
+  },
+  /**
+   * Faux only: a coordinator branch and two workers next to @ultimate and the lander, with half an hour of their tool
+   * and model calls in the trace (one failing) and one worker still calling, to preview the System surface's lanes.
+   */
+  async seedLanes(_args: JsonValue, { host }: ActionContext) {
+    if (!host.faux) throw new Error('seedLanes runs only under faux')
+    return seedLanes(host)
   },
   /**
    * Faux only: `{conversation, count}` appends about `count` entries to `conversation` in turns of four: a user input,
