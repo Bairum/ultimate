@@ -397,8 +397,11 @@ export const actions = {
     stream.rows.filter((row) => row.source === source).map((row) => row.summary)
   expect(of('event')).toEqual(['{"n":3}', '{"n":2}', '{"n":1}'])
   expect(of('call')).toEqual(['ui → alpha  {"n":3}', 'ui → alpha  {"n":2}', 'ui → alpha  {"n":1}'])
+  // Newest first by finish time. `at` carries whole milliseconds, so a call's finish read back from it can be up to
+  // 1 ms early: calls finishing within the same millisecond may appear swapped by less than that.
   const times = stream.rows.map((row) => Date.parse(row.at) + (row.ms ?? 0))
-  expect(times).toEqual(times.toSorted((a, b) => b - a))
+  for (const [index, time] of times.slice(1).entries())
+    expect(time).toBeLessThanOrEqual(times[index] + 1)
   // Older than the newest event, calls used up: the middle event, then the first.
   const newest = stream.rows.find((row) => row.source === 'event')!.id.slice(1)
   // Only the pings: opening storage recorded `ultimate.started` before them.
