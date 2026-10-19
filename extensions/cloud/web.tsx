@@ -9,7 +9,7 @@ import type { Transition } from '../../cloud/protocol.ts'
 import type { CloudState } from './types.ts'
 import { movedAway, phaseOf, TransitionCard } from './transition.tsx'
 import { MoveHelp } from './ui.tsx'
-import { CancelAction, MoveHereAction, StateAction } from './refs.ts'
+import { BackupAction, CancelAction, MoveHereAction, StateAction } from './refs.ts'
 
 /** What another extension offers for help with moves: sync's "Ask @sync" link. */
 const Help = () => (
@@ -66,13 +66,23 @@ const running = (transition?: Transition | null) =>
 const local = poll(
   (signal) => api.action(StateAction, null, { signal }),
   (state) =>
-    state?.status === 'off' ? 30_000 : running(state?.transition) || state?.progress ? 1000 : 4000,
+    state?.status === 'off'
+      ? 30_000
+      : running(state?.transition) || state?.progress || state?.backup
+        ? 1000
+        : 4000,
 )
 const useLocal = () => useSyncExternalStore(local.subscribe, local.get)
 
 const moveHere = async (force = false) => {
   await api.action(MoveHereAction, { force })
   local.refresh()
+}
+const backUp = async () => {
+  const done = api.action(BackupAction)
+  // The upload's progress shows as soon as the server started it.
+  setTimeout(local.refresh, 300)
+  await done.finally(local.refresh)
 }
 const cancelHere = async () => {
   await api.action(CancelAction)
@@ -153,6 +163,69 @@ function MachineRow({
       </span>
       {children}
     </li>
+  )
+}
+
+/** `just now`, `12m ago`, `3h ago`, `2d ago`. */
+function since(at: number, now = Date.now()) {
+  const minutes = Math.max(0, Math.floor((now - at) / 60000))
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes}m ago`
+  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)}h ago`
+  return `${Math.floor(minutes / 60 / 24)}d ago`
+}
+const mb = (bytes: number) => {
+  const value = bytes / 1024 / 1024
+  return value < 10 ? value.toFixed(1) : String(Math.round(value))
+}
+
+/** On the writer: when the project was last backed up, "Back up now", and the upload while it runs. */
+function BackupRow({ state }: { state: CloudState }) {
+  const { busy, error, act } = useAct()
+  const { lastBackup, backup } = state
+  const uploading = !!backup
+  return (
+    <div className="space-y-1 border-t border-border/60 px-3 py-2" data-cloud-backup>
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[12px] text-foreground/90">
+            {uploading ? 'Backing up…' : 'Backup'}
+          </span>
+          <span
+            className="block truncate text-[11px] text-muted-foreground"
+            title={lastBackup ? new Date(lastBackup.at).toLocaleString() : undefined}
+          >
+            {uploading && backup.total > 0
+              ? `${mb(backup.done)} / ${mb(backup.total)} MB`
+              : lastBackup
+                ? `Last backup: ${since(lastBackup.at)} · ${mb(lastBackup.bytes)} MB`
+                : 'No backup yet'}
+          </span>
+        </span>
+        <Button
+          className="h-6 font-sans text-[12px]"
+          disabled={busy || uploading || running(state.transition)}
+          onClick={() => act(backUp)}
+          size="xs"
+          title="Upload an encrypted snapshot now; this machine keeps the project"
+          variant="outline"
+        >
+          {uploading ? <LoaderCircleIcon className="size-3 animate-spin" /> : null}
+          Back up now
+        </Button>
+      </div>
+      {uploading && (
+        <div className="h-0.5 overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-brand/70 transition-[width]"
+            style={{
+              width: `${backup.total ? Math.min(100, (backup.done / backup.total) * 100) : 0}%`,
+            }}
+          />
+        </div>
+      )}
+      {error && <p className="font-sans text-[12px] text-error">{error}</p>}
+    </div>
   )
 }
 
@@ -317,6 +390,7 @@ function LocalPicker({ state }: { state: CloudState }) {
           )}
         </MachineRow>
       </ul>
+      {here && <BackupRow state={state} />}
       {state.role === 'standby' && state.blocked && (
         <p className="border-t border-border/60 px-3 py-1.5 font-sans text-[12px] text-muted-foreground">
           {state.blocked}
@@ -398,7 +472,7 @@ function LocalExecutor() {
   return (
     <ExecutorButton
       label={label}
-      moving={running(state.transition)}
+      moving={running(state.transition) || !!state.backup}
       warn={state.role === 'writer' && state.missing.length > 0}
     >
       <LocalPicker state={state} />

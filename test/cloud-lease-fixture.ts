@@ -69,6 +69,7 @@ function memoryBucket() {
     async delete(names: string | string[]) {
       for (const name of [names].flat()) objects.delete(name)
     },
+    keys: () => [...objects.keys()],
     async list({ prefix }: { prefix: string }) {
       return {
         objects: [...objects.keys()]
@@ -285,7 +286,8 @@ export async function checkout() {
   }
 }
 
-const bucket = memoryBucket()
+/** The Worker's R2 bucket, shared by every test in the file. */
+export const bucket = memoryBucket()
 const machines = new Set<{ close(): Promise<void> }>()
 beforeAll(() => {
   Object.defineProperty(crypto.subtle, 'timingSafeEqual', {

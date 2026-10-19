@@ -11,6 +11,7 @@ import type { SubagentsService } from '../extensions/subagents/api.ts'
 import { machineRoot, primaryAgent, residentHere } from '../lib/machine.ts'
 import { parseDefinition } from '../lib/agents.ts'
 import {
+  backup,
   cancel,
   createWatcher,
   fleet,
@@ -189,6 +190,8 @@ function fake(
       if (url.endsWith('/cloud/actions/moveHere'))
         return Response.json({ result: { id: 'local-1' } })
       if (url.endsWith('/cloud/actions/cancel')) return Response.json({ result: { ok: true } })
+      if (url.endsWith('/cloud/actions/backup'))
+        return Response.json({ result: { id: 'b1', at: 9, bytes: 100 } })
       return new Response('not found', { status: 404 })
     },
   }
@@ -319,6 +322,42 @@ it('routes moves here over loopback as @sync and elsewhere through the cloud, se
   expect(moves[2].auth).toBe('Bearer secret')
   await expect(move(deps, { project: 'scratch' })).rejects.toThrow('no running project home')
   await expect(move(deps, { project: 'nope' })).rejects.toThrow('Unknown project nope')
+})
+
+it('backs up a project its home on this machine writes, and shows the writer’s last backup', async () => {
+  const standby = fake({
+    directory: () => Response.json([{ ...directory[0], lastBackupAt: 4 }]),
+  })
+  // On standby here: the cloud's record of the writer's backup shows, and backing up is refused.
+  expect((await fleet(standby.deps)).projects[0].lastBackupAt).toBe(4)
+  await expect(backup(standby.deps, 'ultimate')).rejects.toThrow(
+    'ultimate runs on haza-pc; back it up there',
+  )
+  await expect(backup(standby.deps, 'scratch')).rejects.toThrow('no running project home')
+
+  const writing = fake({
+    directory: () => Response.json([{ ...directory[0], lastBackupAt: 4 }]),
+    state: () => ({
+      status: 'on',
+      machine: 'rog',
+      role: 'writer',
+      free: false,
+      missing: [],
+      lastBackup: { id: 'b0', at: 6, bytes: 1 },
+    }),
+  })
+  // This machine's own record is the newest.
+  expect((await fleet(writing.deps)).projects[0].lastBackupAt).toBe(6)
+  expect(await backup(writing.deps, 'ultimate')).toEqual({
+    key: 'github.com/hazat/ultimate',
+    id: 'b1',
+    at: 9,
+    bytes: 100,
+  })
+  expect(writing.requests.at(-1)).toMatchObject({
+    url: 'http://127.0.0.1:4747/api/extensions/cloud/actions/backup',
+    origin: 'http://127.0.0.1:4747',
+  })
 })
 
 it('cancels a move this machine runs locally, and any other through the cloud', async () => {

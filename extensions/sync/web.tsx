@@ -27,6 +27,12 @@ function ago(at: number, now: number) {
   return `${Math.floor(minutes / 60 / 24)}d`
 }
 
+/** `just now`, `3h ago`. */
+const backedUp = (at: number) => {
+  const age = ago(at, Date.now())
+  return age === 'now' ? 'just now' : `${age} ago`
+}
+
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 
 /** A small amber line, cut to one line; the full text shows on hover. */
@@ -72,6 +78,15 @@ function ProjectRow({ project, machine }: { project: FleetProject; machine: stri
           ))}
         </span>
       </div>
+      {project.lastBackupAt !== undefined && (
+        <div
+          className="text-muted-foreground/70"
+          data-sync-backup
+          title={new Date(project.lastBackupAt).toLocaleString()}
+        >
+          last backup {backedUp(project.lastBackupAt)}
+        </div>
+      )}
       {local?.login && !local.login.ok && (
         <Warning
           text={
@@ -306,7 +321,7 @@ const syncChat = (conversation: {
 
 export default defineWebExtension({
   tools: { fleet: FleetCall, move: MoveCall },
-  chat: { when: syncChat, tools: ['fleet', 'move', 'cancel', 'report'] },
+  chat: { when: syncChat, tools: ['fleet', 'move', 'cancel', 'backup', 'report'] },
   intro: {
     when: syncChat,
     title: '@sync moves your projects between machines.',

@@ -268,6 +268,9 @@ interface Attachment {
 const attachment = (socket: MachineSocket) =>
   socket.deserializeAttachment() as Attachment | null | undefined
 
+/** A machine's epoch-millisecond timestamp. */
+const validTime = (value: unknown) => Number.isSafeInteger(value) && (value as number) > 0
+
 /** Secret names as hello carries them: bounded, names only. */
 const validSecrets = ({ secrets, secretsComplete }: Pick<Hello, 'secrets' | 'secretsComplete'>) =>
   Array.isArray(secrets) &&
@@ -293,6 +296,7 @@ function validHello(hello: Hello, { key, alias }: Attachment) {
     typeof hello.history === 'boolean' &&
     validSecrets(hello) &&
     (hello.tailnet === undefined || validTailnet(hello.tailnet)) &&
+    (hello.lastBackupAt === undefined || validTime(hello.lastBackupAt)) &&
     (hello.transition === undefined ||
       (typeof hello.transition === 'string' && /^[\w-]{1,64}$/.test(hello.transition)))
   )
@@ -373,6 +377,7 @@ export class SharedReplica {
       },
       machines,
       ...(this.store.transition() ? { transition: this.store.transition() } : {}),
+      ...(this.store.lastBackupAt() ? { lastBackupAt: this.store.lastBackupAt() } : {}),
     }
     this.ctx.waitUntil(
       directory(this.env)
@@ -398,6 +403,7 @@ export class SharedReplica {
           'transition',
           'secrets',
           'tailnet',
+          'backup',
         ].includes(message?.type)
       )
         type = message.type
@@ -503,6 +509,11 @@ export class SharedReplica {
       }
       // Only the writer's messages count from here: a standby is fenced off.
       if (held?.role !== 'writer') return
+      // A backup leaves the lease as it is; the fleet shows when the writer last made one.
+      if (message.type === 'backup') {
+        if (validTime(message.at) && this.store.backedUp(held.machine!, message.at)) this.presence()
+        return
+      }
       if (message.type === 'release-waiting') {
         const { by, tasks, dirty, runs, unchecked } = message
         if (

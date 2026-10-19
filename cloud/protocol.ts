@@ -26,6 +26,7 @@
 //    keeps the latest and sends it in every `role`, to every socket. @sync starts a move with `move-to` and stops one
 //    with `cancel`, both sent to the target machine's standby socket.
 // 3. Every machine, writer or standby, sends `secrets` and `tailnet` when its secret names or tailnet address change.
+//    The writer sends `backup` after uploading a backup snapshot; the lease does not change.
 //    Conversations never reach the cloud: a move carries them in an encrypted snapshot (`snapshots.ts`).
 
 export const PROJECT_MISMATCH = 4009
@@ -219,6 +220,8 @@ export type Hello = {
   transition?: string
   /** This checkout's tailnet address (`validTailnet`), once the `tailscale` extension published it. */
   tailnet?: string
+  /** When this machine last finished a backup of the project (`cloud-backup.json`), if ever. */
+  lastBackupAt?: number
 }
 
 export type MachineMessage =
@@ -252,6 +255,8 @@ export type MachineMessage =
   | { type: 'secrets'; secrets: string[]; secretsComplete: boolean }
   /** The checkout's tailnet address changed since hello; null once it has none. Workers predating it ignore it. */
   | { type: 'tailnet'; url: string | null }
+  /** The writer finished a backup (an encrypted snapshot uploaded without releasing). Workers predating it ignore it. */
+  | { type: 'backup'; at: number }
 
 export type CloudMessage =
   | {

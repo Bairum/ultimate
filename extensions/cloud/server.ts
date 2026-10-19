@@ -19,7 +19,7 @@ import type { Lease, LeaseDeps } from './lease.ts'
 import type { CloudState } from './types.ts'
 import * as snapshot from './snapshot.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { CancelAction, MoveHereAction, StateAction } from './refs.ts'
+import { BackupAction, CancelAction, MoveHereAction, StateAction } from './refs.ts'
 
 export const secrets = [
   { name: 'ULTIMATE_CLOUD_TOKEN', description: 'Bearer token for the cloud sync endpoint' },
@@ -91,6 +91,8 @@ export interface SyncHooks {
   cancel?(id: string): void
   /** The transition this machine prepares, named in hello so the cloud keeps it. */
   transition?(): string | undefined
+  /** When this machine last finished a backup of the project, named in hello for the fleet. */
+  lastBackupAt?(): number | undefined
   /** A connection after the first said hello: its first role answers what an earlier one left unanswered. */
   hello?(): void
 }
@@ -296,6 +298,7 @@ export function startSync(
           ...names,
           ...(hooks.transition?.() ? { transition: hooks.transition() } : {}),
           ...(address ? { tailnet: address } : {}),
+          ...(hooks.lastBackupAt?.() ? { lastBackupAt: hooks.lastBackupAt() } : {}),
         })
       })
     })
@@ -405,6 +408,11 @@ export const actions = {
     const { force, by } = (args ?? {}) as { force?: unknown; by?: unknown }
     return active.moveHere({ force: force === true, by: by === 'sync' ? 'sync' : 'local' })
   }),
+  /** Back up now: upload a snapshot while this machine keeps the lease; resolves once it is uploaded. */
+  backup: implementAction(BackupAction, async () => {
+    if (!active) throw new Error('Cloud sync is off')
+    return active.backup()
+  }),
   /** Stop the preparing move, until its claim is sent. */
   cancel: implementAction(CancelAction, async () => {
     if (!active) throw new Error('Cloud sync is off')
@@ -441,7 +449,7 @@ export const actions = {
     return { key: identity.key, from }
   },
 }
-export const userActions = ['moveHere', 'cancel', 'relink']
+export const userActions = ['moveHere', 'cancel', 'relink', 'backup']
 
 /**
  * With cloud sync on, a home opens storage only as this project's writer: one whose `cloud-lease.json` names `key`.

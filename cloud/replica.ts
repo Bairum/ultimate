@@ -8,6 +8,8 @@ export type MachineRecord = Pick<
   'root' | 'port' | 'secrets' | 'secretsComplete' | 'tailnet'
 > & {
   lastSeen: number
+  /** When this machine last finished a backup as the writer, as it reported. */
+  lastBackupAt?: number
 }
 
 /** The repository a replica belongs to, fixed by the first hello. */
@@ -85,6 +87,8 @@ export class ReplicaStore {
   }
   seen(machine: string, hello?: Hello) {
     const machines = this.machines()
+    // A hello without a backup time keeps the one recorded: it may come from a process that has not read it yet.
+    const lastBackupAt = hello?.lastBackupAt ?? machines[machine]?.lastBackupAt
     const known = hello
       ? {
           root: hello.root,
@@ -92,6 +96,7 @@ export class ReplicaStore {
           secrets: hello.secrets,
           secretsComplete: hello.secretsComplete,
           ...(hello.tailnet ? { tailnet: hello.tailnet } : {}),
+          ...(lastBackupAt ? { lastBackupAt } : {}),
         }
       : machines[machine]
     if (known)
@@ -137,6 +142,18 @@ export class ReplicaStore {
     if (!known || known.root !== root || (known.tailnet ?? null) === url) return false
     const { tailnet: _, ...rest } = known
     this.put('metadata', 6, { ...machines, [machine]: url ? { ...rest, tailnet: url } : rest })
+    return true
+  }
+  /** The writer's last backup, when the machine holding the lease reported one. */
+  lastBackupAt(): number | undefined {
+    const lease = this.lease()
+    return lease?.machine ? this.machines()[lease.machine]?.lastBackupAt : undefined
+  }
+  /** `machine` finished a backup at `at`. False: it is no known machine. */
+  backedUp(machine: string, at: number): boolean {
+    const machines = this.machines()
+    if (!machines[machine]) return false
+    this.put('metadata', 6, { ...machines, [machine]: { ...machines[machine], lastBackupAt: at } })
     return true
   }
   /** The latest transition a machine reported, running or ended. */

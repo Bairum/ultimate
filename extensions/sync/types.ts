@@ -19,6 +19,8 @@ export interface LocalProject {
   stale: string[]
   /** `refs/heads/ultimate-moved/*` refs a move kept aside in the checkout. */
   keptRefs: string[]
+  /** When this machine last backed the project up, from its `cloud.state`. */
+  lastBackupAt?: number
 }
 
 export interface FleetProject {
@@ -28,6 +30,8 @@ export interface FleetProject {
   writer: { machine: string | null; online: boolean; lastSeen?: number }
   standbys: { machine: string; connected: boolean; lastSeen: number }[]
   transition?: Transition
+  /** When the writer last finished a backup: the cloud's record, or this machine's own when it is the writer. */
+  lastBackupAt?: number
   local?: LocalProject
 }
 
