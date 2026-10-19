@@ -424,6 +424,30 @@ it('writes a repeated poll with its ancestors when a model or failing call is ma
   }
 })
 
+it('drops a poll call mark when the call ends, while closed, after a failed open and while open', async () => {
+  const poll = (trace: ReturnType<typeof callTrace>) =>
+    trace.run({ kind: 'action', caller: 'ui', callee: 'x', name: 'x/poll', poll: true }, () =>
+      trace.run(service('y.read'), () => 1),
+    )
+  const closed = callTrace(join(await temp(), 'trace.sqlite'))
+  poll(closed)
+  expect(closed.marked()).toBe(0)
+  // A directory in the file's place makes open fail; tracing stays off.
+  const file = join(await temp(), 'trace.sqlite')
+  await mkdir(file)
+  const broken = callTrace(file)
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+  broken.open()
+  error.mockRestore()
+  poll(broken)
+  expect(broken.marked()).toBe(0)
+  const open = callTrace(join(await temp(), 'trace.sqlite'))
+  open.open()
+  poll(open)
+  expect(open.marked()).toBe(0)
+  open.close()
+})
+
 it('writes a repeated poll that emits an event, with its chain, so its reactors keep their parents', async () => {
   const home = await temp()
   const prepared = await prepareHarness({ ultimateRoot: home, userHome: home, home, faux: true })

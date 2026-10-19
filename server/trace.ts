@@ -219,11 +219,12 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
     // Epoch milliseconds with a fraction, so a parent sorts before the child it started in the same millisecond.
     const at = performance.timeOrigin + started
     const finish = (ok: boolean, value: unknown) => {
+      // Drop the call's marks first, so a closed trace (or one that failed to open) does not keep them.
+      const skipped = ok && repeats.has(id)
+      repeats.delete(id)
+      marked.delete(id)
       if (!database) return
       try {
-        const skipped = ok && repeats.has(id)
-        repeats.delete(id)
-        marked.delete(id)
         // A repeat that failed is news: it is written like any failure, with its marked ancestors.
         if (skipped) return countRepeat(call.name)
         unmark(parent?.parentCall)
@@ -302,6 +303,8 @@ export function callTrace(file: string, retention = { rows: 200_000, days: 7 }) 
      * whose reactors continue its trace later and need it as their parent. Called by `emit`, inside the call.
      */
     keep: (context: EventContext | undefined) => unmark(context?.parentCall),
+    /** How many running calls are marked as skippable polls; 0 whenever no call runs. */
+    marked: () => marked.size,
     /** Open `<home>/trace.sqlite` and apply retention, then hourly; a failure leaves tracing off. */
     open() {
       if (database) return
