@@ -351,13 +351,11 @@ function Connection() {
   const connection = useConnection()
   const system = useSystem()
   const open = connection.status === 'open'
-  const offline = system?.offline === true
   return (
     <Item
       tip={
         system && (
           <>
-            {offline && <div>Machine offline · showing the last synced state</div>}
             {system.process.url} · pid {system.process.pid} · node {system.process.node}
             <div>
               generation {system.process.generation} · since{' '}
@@ -370,17 +368,11 @@ function Connection() {
       <span
         className={cn(
           'size-1.5 rounded-full',
-          offline ? 'bg-warning' : open ? 'bg-success' : 'animate-pulse-dot bg-warning',
+          open ? 'bg-success' : 'animate-pulse-dot bg-warning',
         )}
       />
-      <span className={offline || !open ? 'text-warning' : undefined}>
-        {offline
-          ? 'offline'
-          : open
-            ? 'live'
-            : connection.status === 'connecting'
-              ? 'connecting…'
-              : 'reconnecting…'}
+      <span className={open ? undefined : 'text-warning'}>
+        {open ? 'live' : connection.status === 'connecting' ? 'connecting…' : 'reconnecting…'}
       </span>
       {system && <span className="text-muted-foreground/70">gen {system.process.generation}</span>}
     </Item>

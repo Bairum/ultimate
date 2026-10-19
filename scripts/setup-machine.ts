@@ -1,7 +1,6 @@
-// Installs Ultimate, the machine's Cloudflare tunnel and the machine home as services: on Linux systemd user units
-// with linger, so they start at boot without a login; on macOS launchd agents in ~/Library/LaunchAgents, which run
-// while the user is logged in. Usage: pnpm setup:machine [--project <dir>] [--machine <name>] [--no-tunnel]
-// [--dry-run]. See "New machine" in cloud/README.md.
+// Installs Ultimate and the machine home as services: on Linux systemd user units with linger, so they start at boot
+// without a login; on macOS launchd agents in ~/Library/LaunchAgents, which run while the user is logged in.
+// Usage: pnpm setup:machine [--project <dir>] [--machine <name>] [--dry-run]. See "New machine" in cloud/README.md.
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, hostname, userInfo } from 'node:os'
@@ -21,8 +20,6 @@ export interface UnitOptions {
   machine: string
   /** The user's PATH (`loginPath`), kept after node so the agent finds the same tools as in a terminal. */
   path: string
-  /** Whether cloud.tunnels has an entry for the machine. */
-  tunnel: boolean
 }
 
 export interface Unit {
@@ -60,9 +57,6 @@ function unit(description: string, service: string[]) {
     '',
   ].join('\n')
 }
-
-/** The clone's own Wrangler, the bin entry of node_modules/wrangler/package.json. */
-const wranglerBin = (clone: string) => join(clone, 'node_modules/wrangler/bin/wrangler.js')
 
 /** Whitespace and the characters systemd treats specially in unit values: quotes, escapes, specifiers, variables. */
 const special = /[\s"'\\%$]/
@@ -149,7 +143,7 @@ function services(options: UnitOptions, path: string): Service[] {
   const { clone, project, home, node, machine } = options
   const ultimate = join(clone, 'bin/ultimate.ts')
   const env = { PATH: path, ULTIMATE_NO_OPEN: '1' }
-  const list: Service[] = [
+  return [
     {
       unit: 'ultimate.service',
       label: 'com.ultimate.app',
@@ -174,16 +168,6 @@ function services(options: UnitOptions, path: string): Service[] {
       ],
     },
   ]
-  if (options.tunnel)
-    list.push({
-      unit: 'ultimate-tunnel.service',
-      label: 'com.ultimate.tunnel',
-      description: `Ultimate Cloudflare tunnel (ultimate-${machine})`,
-      cwd: clone,
-      env: { PATH: path },
-      args: [node, wranglerBin(clone), 'tunnel', 'run', `ultimate-${machine}`],
-    })
-  return list
 }
 
 /** Renders the unit files; pure, so the side effects stay in main. Throws for a path systemd would misread. */
@@ -329,7 +313,6 @@ function main() {
     options: {
       project: { type: 'string' },
       machine: { type: 'string' },
-      'no-tunnel': { type: 'boolean' },
       'dry-run': { type: 'boolean' },
     },
   })
@@ -339,16 +322,10 @@ function main() {
   const settingsFile = join(home, '.ultimate/settings.json')
   const settings = existsSync(settingsFile)
     ? (JSON.parse(readFileSync(settingsFile, 'utf8')) as {
-        cloud?: { machine?: string; tunnels?: Record<string, string> }
+        cloud?: { machine?: string }
       })
     : {}
   const machine = values.machine ?? settings.cloud?.machine ?? hostname()
-  const known = Boolean(settings.cloud?.tunnels?.[machine])
-  const tunnel = !values['no-tunnel'] && known
-  if (tunnel && !existsSync(wranglerBin(clone))) {
-    console.error(`${wranglerBin(clone)} is missing: run pnpm install first.`)
-    process.exit(1)
-  }
   const options = {
     clone,
     project: resolve(values.project ?? clone),
@@ -356,18 +333,7 @@ function main() {
     node: process.execPath,
     machine,
     path: loginPath(process.env.PATH ?? ''),
-    tunnel,
   }
-  if (values['no-tunnel']) console.log('Skipping the tunnel (--no-tunnel).')
-  else if (!known)
-    console.log(
-      [
-        `Skipping the tunnel: cloud.tunnels in ${settingsFile} has no entry for "${machine}".`,
-        `  1. On a machine where Wrangler is logged in: pnpm exec wrangler tunnel create ultimate-${machine}`,
-        `  2. Add "${machine}": "<tunnel id>" to cloud.tunnels on the deploying machine.`,
-        '  3. Ask @cloudflare to redeploy, then run pnpm setup:machine again.',
-      ].join('\n'),
-    )
 
   const mkdir = (dir: string) => {
     if (existsSync(dir)) return

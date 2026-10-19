@@ -20,7 +20,7 @@ export type Definition = {
   thinking?: string
   tools?: string[]
   isolate?: 'none' | 'worktree'
-  resident?: boolean | 'machine'
+  resident?: boolean | 'machine' | 'everywhere'
   onFailure?: 'diagnose' | 'fix'
 }
 /** A definition file that failed to parse, with the reason. */
@@ -53,7 +53,7 @@ export type DefinitionFields = {
   thinking?: string
   tools?: string[]
   isolate?: 'none' | 'worktree'
-  resident?: boolean | 'machine'
+  resident?: boolean | 'machine' | 'everywhere'
   onFailure?: 'diagnose' | 'fix'
 }
 

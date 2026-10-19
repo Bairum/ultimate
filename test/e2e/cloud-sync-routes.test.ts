@@ -43,7 +43,7 @@ describe.skipIf(cloudSkip)(
       const root = await temp('cloud-sync-routes-')
       const repo = await repository(root, KEY, ['a', 'b'])
       cloud = await worker(root, token)
-      project = projectApi(cloud.url, 'e2e-sync-routes')
+      project = projectApi(cloud.url, KEY, token)
       const secrets = { ULTIMATE_CLOUD_SNAPSHOT_KEY: snapshotKey }
       a = await host(root, 'a', {
         project: repo.project,

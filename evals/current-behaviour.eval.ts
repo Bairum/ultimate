@@ -282,7 +282,7 @@ test('cloudflare sends one final verification report only to the requester', asy
       disable: ['codemode'],
     },
     toolResults: {
-      bash: 'Version v2 is live. / returns 302; /sync returns 401; x-ultimate-cloud-version: v2',
+      bash: 'Version v2 is live. / returns 302; /sync/directory returns 401',
       cloudflare_observability: JSON.stringify({ invocations: 100, errors: 0, version: 'v2' }),
       message: 'Message sent.',
     },

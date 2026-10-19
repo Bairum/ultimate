@@ -47,6 +47,10 @@ With cloud sync configured (`cloud.url` and `ULTIMATE_CLOUD_TOKEN`, see `cloud/R
 
 `state` returns `{ machine, providers: ProviderHealth[] }` for this machine (machine from cloud settings, else the hostname). A faux server answers a fixed demo: `openai-codex` ok, `anthropic` failing with `invalid_grant` 3 hours ago, `claude-code` unknown.
 
+## Feedback
+
+The write that turns a provider failing (from ok or unknown) calls the `health.feedback` extension point (`api.ts`) once, in the home whose call or ping made it; later failures of a failing provider call nothing until it worked again. Sync implements it in project homes, waking the project's @sync with one `sync.health` input; in the machine home nothing provides it.
+
 ## Status line
 
 In every home the status line polls `state` every minute and shows an amber `<provider> failing` (or `2 providers failing`) only while a provider fails; its popover lists each failing provider's error and age. A move's checks step also refuses a failing default provider (`cloud/login.ts`).

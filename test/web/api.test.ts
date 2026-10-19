@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ActionError, createApi, MachineOfflineError } from '../../web/src/sdk/api.ts'
+import { ActionError, createApi } from '../../web/src/sdk/api.ts'
 import { createStore } from '../../web/src/sdk/store.ts'
 import { actionRef } from '../../shared/extension-api.ts'
 import type { SystemInfo } from '../../shared/protocol.ts'
@@ -63,42 +63,12 @@ describe('extension actions', () => {
     await expect(missing.api.action(ref('notes', 'nope'))).rejects.toMatchObject({ status: 404 })
   })
 
-  it('distinguishes expected replica unavailability from real server failures', async () => {
-    const offline = setup(() => json(503, { error: 'The machine is offline', offline: true }))
-    await expect(offline.api.action(ref('onboarding', 'status'))).rejects.toBeInstanceOf(
-      MachineOfflineError,
-    )
-    await expect(
-      offline.api.updateUi({ set: { 'shell.conversation': 26 } }),
-    ).rejects.toBeInstanceOf(MachineOfflineError)
-    await expect(offline.api.abort()).rejects.toBeInstanceOf(MachineOfflineError)
-
+  it('fails a 503 like any other server error', async () => {
     const unavailable = setup(() => json(503, { error: 'Service unavailable' }))
     await expect(unavailable.api.action(ref('onboarding', 'status'))).rejects.toBeInstanceOf(
       ActionError,
     )
     await expect(unavailable.api.updateUi({ set: {} })).rejects.toMatchObject({ status: 503 })
-    const failed = setup(() => json(500, { offline: true, error: 'Unexpected failure' }))
-    await expect(failed.api.updateUi({ set: {} })).rejects.toMatchObject({ status: 500 })
-  })
-
-  it('notices a new cloud deploy on any response, failures included', async () => {
-    const store = createStore()
-    const versions = ['deploy-1', 'deploy-2']
-    const api = createApi(store, {
-      fetch: async () =>
-        Response.json(
-          { error: 'Unknown project' },
-          { status: 404, headers: { 'x-ultimate-cloud-version': versions.shift() ?? 'deploy-2' } },
-        ),
-    })
-    await expect(api.updateUi({ set: {} })).rejects.toMatchObject({ status: 404 })
-    expect(store.getState().notices).toEqual([])
-    await expect(api.history(1, 10)).rejects.toMatchObject({ status: 404 })
-    await expect(api.updateUi({ set: {} })).rejects.toMatchObject({ status: 404 })
-    expect(store.getState().notices.map((notice) => notice.message)).toEqual([
-      'Ultimate was updated',
-    ])
   })
 
   it('passes an abort through as an abort, not an action failure', async () => {

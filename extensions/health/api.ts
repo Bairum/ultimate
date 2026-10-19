@@ -13,3 +13,11 @@ export interface HealthService {
 }
 /** Provider health; `want` it, since health is optional. */
 export const HealthApi = defineApi<HealthService>()('health')
+
+/** What health reports to whoever listens: a provider that turned failing here. */
+export interface HealthFeedbackService {
+  /** `provider` turned failing (from ok or unknown) with a call or ping at `at`; called once per such turn. */
+  failing(input: { provider: string; at: number; error?: string }): Promise<void>
+}
+/** Health's feedback point; sync provides it, health `want`s it. */
+export const HealthFeedback = defineApi<HealthFeedbackService>()('health.feedback')
