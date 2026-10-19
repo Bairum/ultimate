@@ -4,7 +4,16 @@ The Worker serves Ultimate's static UI, a directory, and one SQLite-backed Durab
 
 ## New machine
 
-To add a machine to the projects a deployed cloud already holds (see [Deploy](#deploy) for the first one):
+To add a machine to the projects a deployed cloud already holds. Joining needs no Cloudflare dashboard, no Access
+apps, no Worker secrets, no R2 bucket and no deploy from the new machine: those exist once, for the whole fleet, and
+[Deploy](#deploy) covers only that first setup. A cloud exists when its URL answers the sync token:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $ULTIMATE_CLOUD_TOKEN" https://<hostname>/sync/directory
+```
+
+`200` means join with the steps below; `401` means the token is wrong. Follow [Deploy](#deploy) only when the user
+confirms that no cloud exists yet. @sync in the machine home guides a join.
 
 1. Clone Ultimate, then in the clone run `pnpm install` and `pnpm link --global`.
 2. Set up by hand:
@@ -16,11 +25,13 @@ To add a machine to the projects a deployed cloud already holds (see [Deploy](#d
          the other machines. These are static values you chose at deploy time, not rotating logins, so the same value
          works on every machine: read them in the Secrets panel of a machine that has them and enter them here, or copy
          `~/.ultimate/secrets.json` and `chmod 600` it; never print it.
-   - [ ] Set `cloud.url` and `cloud.machine` in `~/.ultimate/settings.json` (step 5 of [Deploy](#deploy)).
-   - [ ] Create the machine's tunnel (`pnpm exec wrangler tunnel create ultimate-<machine>` from any logged-in
-         machine), add it to `cloud.tunnels` on the deploying machine, and deploy again (step 6 of
-         [Deploy](#deploy)). Without it the project shows in the cloud only read-only, as if offline, while that
-         machine runs it.
+   - [ ] Set the cloud in `~/.ultimate/settings.json`: `{ "cloud": { "url": "wss://<hostname>", "machine": "<machine>" } }`,
+         the same `url` as on the other machines and this machine's own name (the tunnel map key; it defaults to the
+         OS hostname).
+   - [ ] Get the machine a tunnel. This happens on a machine of the fleet that is logged in to Cloudflare, not on the
+         new one: ask @cloudflare there to create `ultimate-<machine>`, add its ID to `cloud.tunnels` in that
+         machine's settings and redeploy. Without it the project shows in the cloud only read-only, as if offline,
+         while this machine runs it; standby, moves and snapshots work without it.
    - [ ] Run `pnpm setup:machine` in the clone (Linux; `--dry-run` shows the units and commands first). It installs and
          enables the user units `ultimate.service` (`--project <dir>`, default the clone),
          `ultimate-tunnel.service` (Wrangler must be logged in on this machine; skipped until `cloud.tunnels` has

@@ -41,7 +41,13 @@ Then `report {project, text}` the result to that project's @ultimate in a few li
 
 ## A new machine
 
-Guide the user through the New machine checklist in `cloud/README.md` (`pnpm setup:machine` installs the services). Creating its tunnel and redeploying the cloud is for @cloudflare, on a machine logged in to Cloudflare.
+A machine that sets up cloud sync joins the user's existing cloud; it never deploys one. Never suggest Cloudflare Access apps, `wrangler secret put`, an R2 bucket, `pnpm cloud:deploy` or a Wrangler login on the new machine: they exist once for the whole fleet. Follow the New machine checklist in `cloud/README.md`:
+
+1. The user adds `ULTIMATE_CLOUD_TOKEN` and `ULTIMATE_CLOUD_SNAPSHOT_KEY` in Secrets (⌘K → Secrets) with the values the other machines use; you never see or handle them. You write `cloud.url` (the fleet's `wss://<hostname>`) and `cloud.machine` in `~/.ultimate/settings.json`.
+2. Call `fleet`. A project list means the cloud exists and this machine is in. `401` means the token is wrong; ask the user to check it. Only when the user confirms there is no cloud yet does [Deploy](cloud/README.md#deploy) apply, and that is @cloudflare's job, not yours.
+3. The machine logs in to its model providers itself (⌘K → Log in to a provider).
+4. `pnpm setup:machine` in the clone installs the services (systemd on Linux, launchd on macOS); run it with `--dry-run` first and show the plan.
+5. The tunnel is made by @cloudflare on a fleet machine logged in to Cloudflare: it creates `ultimate-<machine>`, adds it to `cloud.tunnels` there and redeploys. Tell the user that until then the cloud shows this machine's projects read-only while it runs them.
 
 ## Talking to the user
 
