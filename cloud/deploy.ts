@@ -24,8 +24,19 @@ writeFileSync(
   config,
   JSON.stringify({ ...base, routes: [{ pattern: new URL(url).hostname, custom_domain: true }] }),
 )
+// Tag the version with the commit it was built from, so `wrangler versions view` tells whether cloud/ changed since.
+const git = (...args: string[]) =>
+  spawnSync('git', args, {
+    cwd: fileURLToPath(new URL('.', import.meta.url)),
+    encoding: 'utf8',
+  }).stdout.trim()
+const dirty = git('status', '--porcelain', '--', '.') ? '-dirty' : ''
+const tag = `${git('rev-parse', '--short', 'HEAD')}${dirty}`
+const message = git('log', '-1', '--format=%s')
 process.exit(
-  spawnSync('wrangler', ['deploy', '--config', config, ...process.argv.slice(2)], {
-    stdio: 'inherit',
-  }).status ?? 1,
+  spawnSync(
+    'wrangler',
+    ['deploy', '--config', config, '--tag', tag, '--message', message, ...process.argv.slice(2)],
+    { stdio: 'inherit' },
+  ).status ?? 1,
 )

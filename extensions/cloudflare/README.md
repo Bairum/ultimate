@@ -1,6 +1,6 @@
 # Cloudflare observability
 
-Server-only built-in, inert until `cloudflare_observability` is called. Its single deferred tool is offered only to agent definitions that name it, including this repository's resident `@cloudflare` (`.ultimate/agents/cloudflare.md`). No web facet or dependencies.
+Server-only built-in, inert until `cloudflare_observability` is called. Its single deferred tool is offered only to agent definitions that name it, including the built-in @sync (`agents/sync.md`), which keeps the user's Worker deployed. No web facet or dependencies.
 
 ## Setup
 
@@ -25,4 +25,4 @@ Output is JSON: `matched`, `received`, `shown`, `truncated`, then `events`, newe
 
 Token occurrences are redacted before string truncation and again from the complete serialized output. Network exceptions and API error bodies are withheld rather than echoed. This is not a general log-secret scrubber: do not log credentials in the Worker.
 
-API contract checked against [Run a query](https://developers.cloudflare.com/api/resources/workers/subresources/observability/subresources/telemetry/methods/query/) on 2026-10-17. Tests stub fetch; no test contacts Cloudflare. `@cloudflare` deploys only on request, verifies routes and telemetry, rolls back on rising errors, and cleans up probes. This extension performs no deployment automatically.
+API contract checked against [Run a query](https://developers.cloudflare.com/api/resources/workers/subresources/observability/subresources/telemetry/methods/query/) on 2026-10-17. Tests stub fetch; no test contacts Cloudflare. @sync deploys only on request, verifies routes and telemetry, and rolls back on rising errors. This extension performs no deployment automatically.
