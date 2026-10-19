@@ -147,7 +147,7 @@ it.concurrent("lists a root's newest landings, notes, branches and compactions, 
 const landed = (entry: number, sha: string, base?: string) =>
   ({ entry, type: 'landed', sha, commits: 1, ...(base ? { base } : {}) }) as const
 
-it('links each landing to its GitHub compare range, from its base or the landing before it', () => {
+it('links each landing to its DiffsHub compare range, from its base or the landing before it', () => {
   const links = compareLinks(
     'github.com/hazat/ultimate',
     [
@@ -160,10 +160,10 @@ it('links each landing to its GitHub compare range, from its base or the landing
     undefined,
   ).map((event) => (event.type === 'landed' ? event.compare : event.type))
   expect(links).toEqual([
-    'https://github.com/hazat/ultimate/compare/bbb...ccc',
+    'https://diffshub.com/hazat/ultimate/compare/bbb...ccc',
     'compacted',
-    'https://github.com/hazat/ultimate/compare/aaa...bbb',
-    'https://github.com/hazat/ultimate/compare/zzz...aaa',
+    'https://diffshub.com/hazat/ultimate/compare/aaa...bbb',
+    'https://diffshub.com/hazat/ultimate/compare/zzz...aaa',
     // The oldest listed landing without a base and no older one known: a count without a link.
     undefined,
   ])
@@ -171,7 +171,7 @@ it('links each landing to its GitHub compare range, from its base or the landing
     compareLinks('github.com/hazat/ultimate', [landed(3, 'zzz')], 'yyy').map(
       (event) => event.type === 'landed' && event.compare,
     ),
-  ).toEqual(['https://github.com/hazat/ultimate/compare/yyy...zzz'])
+  ).toEqual(['https://diffshub.com/hazat/ultimate/compare/yyy...zzz'])
 })
 
 it.concurrent('branches from a tally: the root gets the prompt node, the branch starts from the tally and its prompt', async () => {

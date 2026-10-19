@@ -21,6 +21,7 @@ import type { WorkspaceConversation as ConversationSummary } from './data.tsx'
 import { CommitCount, LandingCard, useGithubRepo } from './landing.tsx'
 import { LanderAskEntry, LanderLogEntry, LanderReport, WorkspaceCall } from './log.tsx'
 import { DiskAction, InfoAction, StatsAction } from './refs.ts'
+import { compareUrl } from '../../lib/compare.ts'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { Row, Rows } from '@/components/ui/rows'
@@ -90,7 +91,7 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
             <CommitCount
               className="text-muted-foreground"
               count={commits.length + more}
-              href={github && rangeBase ? `${github}/compare/${rangeBase}...${sha}` : undefined}
+              href={github && rangeBase ? compareUrl(github, rangeBase, sha) : undefined}
             />
           </span>
         }

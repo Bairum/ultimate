@@ -49,7 +49,7 @@ export function Open({
 }
 
 let repo: Promise<string | null> | undefined
-/** The project's GitHub repository URL, or null off GitHub; asked once per page. */
+/** The project's `github.com/<owner>/<repo>`, or null off GitHub; asked once per page. */
 export function useGithubRepo() {
   const [url, setUrl] = useState<string | null>()
   useEffect(() => {
@@ -66,7 +66,7 @@ export function useGithubRepo() {
   return url
 }
 
-/** "3 commits", linking to the landing's compare range on GitHub when there is one. */
+/** "3 commits", linking to the landing's compare range on DiffsHub when there is one. */
 export function CommitCount({
   count,
   href,

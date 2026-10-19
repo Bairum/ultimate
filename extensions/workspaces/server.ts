@@ -59,11 +59,11 @@ async function setupGit(host: ExtensionHost) {
 }
 
 export const actions = {
-  /** `https://github.com/<owner>/<repo>` of the project's `origin`, or null off GitHub: landing cards link ranges. */
-  github: implementAction(GithubAction, async (_args, { host }) => {
-    const repo = await githubRepo(host.projectRoot)
-    return repo ? `https://${repo}` : null
-  }),
+  /** `github.com/<owner>/<repo>` of the project's `origin`, or null off GitHub: landing cards link ranges. */
+  github: implementAction(
+    GithubAction,
+    async (_args, { host }) => (await githubRepo(host.projectRoot)) ?? null,
+  ),
   pending: implementAction(PendingAction, (args, { host }) => {
     const ids = args && typeof args === 'object' && !Array.isArray(args) ? args.ids : undefined
     if (

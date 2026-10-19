@@ -107,7 +107,7 @@ test('E3 edits and commits stay in the isolated checkout', async () => {
     })
     const c = await ultimate.conversation({ id: created.id as ConversationId })
     const turn = await c.run(
-      "Add NOTES.md containing 'isolated', commit it with git user.name=Eval and user.email=eval@example.invalid, then report workspace status including the workspace branch name and its commits ahead. Do not land or push.",
+      "Add NOTES.md containing 'isolated', commit it with git user.name=Eval and user.email=eval@example.invalid, then call workspace status and report the workspace branch name and its commits ahead. Do not land or push.",
     )
     const { result: info } = await ultimate.action('workspaces', 'info', { id: c.id })
     expect(await readFile(join(info.path, 'NOTES.md'), 'utf8')).toMatch(/isolated/)
