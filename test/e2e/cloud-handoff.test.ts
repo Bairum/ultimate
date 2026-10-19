@@ -160,8 +160,8 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
     expect((await files(a.home)).filter((file) => /^state\..*sqlite$/.test(file))).toEqual([
       'state.sqlite',
     ])
-    // Plus A's `cloud.lease` releasing event, recorded just before it closed storage, so the snapshot carries it.
-    expect(counts(join(a.home, 'state.sqlite'))).toEqual({ ...before, entries: before.entries + 1 })
+    // A recorded `cloud.move` started and `cloud.lease` releasing before closing storage; the snapshot carries both.
+    expect(counts(join(a.home, 'state.sqlite'))).toEqual({ ...before, entries: before.entries + 2 })
     // B holds all of A's history, and its own `ultimate.started` and `cloud.lease` acquired. On top of it: B's own notice from the refused move ("Move here failed: Missing
     // secrets"), raised on standby and recorded once B's storage opened, and the finished move reported once to B's
     // own @sync, whose standing conversation it creates and whose faux run then answers.
@@ -173,7 +173,7 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
     expect(onB.kinds).toContain('event.ultimate.notice')
     expect(onB.moves).toEqual([moved.transition.id])
     expect(onB.kinds).toEqual(
-      expect.arrayContaining(['event.ultimate.started', 'event.cloud.lease']),
+      expect.arrayContaining(['event.ultimate.started', 'event.cloud.lease', 'event.cloud.move']),
     )
     expect(git(repo.clones.b, 'rev-parse', 'refs/heads/ultimate/e2e-from-a')).toBe(
       git(repo.project, 'rev-parse', 'HEAD'),
@@ -195,11 +195,11 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
     expect(step(moved.transition, 'handover')?.state).toBe('skipped')
     await until(async () => (await project.info()).lease?.machine === 'a' && (await serving(a)))
     expect((await project.info()).lease).toMatchObject({ machine: 'a', epoch: 3 })
-    // A took B's snapshot and recorded its start and its `cloud.lease` acquired on top.
+    // A took B's snapshot and recorded its start, `cloud.lease` acquired and `cloud.move` done on top.
     const released = counts(join(b.home, 'state.sqlite'))
     expect(counts(join(a.home, 'state.sqlite'))).toEqual({
       ...released,
-      entries: released.entries + 2,
+      entries: released.entries + 3,
     })
   }, 180_000)
 
