@@ -14,7 +14,7 @@ export type BoardMessage = {
   at: number
   reply: boolean
   re?: number
-  state: 'sent' | 'delivered' | 'answered' | 'failed'
+  state: 'sent' | 'delivered' | 'answered' | 'dismissed' | 'failed'
   entry?: number
   answer?: number
   error?: string

@@ -1,85 +1,63 @@
 # Questions
 
-Optional answer cards for @ultimate's questions to the user, in its own transcript. Two things ask:
-
-- **A reply-expected Board message to the user.** @ultimate's `message { to: 'user', text, reply: true }` (the
-  default) makes board emit `board.asked` in the transaction that appends the message; questions' `asked` reactor
-  records the request and creates the extraction task in one transaction, once per message. One-way messages, user
-  posts and messages to conversations never do. These explicit asks bypass the final-answer punctuation gate, so
-  requests such as “Please confirm whether to proceed” still extract. The card shows under the outgoing `message` tool
-  card in the sender's transcript, through board's `MessageAnswers` point; board's `AnswerWaits` point counts an
-  asking final answer among what waits on the user.
-- **@ultimate's final answer to a typed input.** Only in the standing `ultimate` conversation (the `Standing` index
-  of `subagents`), and only when the answer settles a plain `pi.user` input: answers to Board messages, Board
-  replies, and every other conversation's answers never trigger it. The card shows under that final answer.
-
-Final answers pass a deterministic gate before any model call: their last blank-line-delimited paragraph must contain
-`?` or a line starting with a numbered/lettered option (`1.`, `1)`, `a)`, `A.`). Earlier questions or lists alone do not
-qualify. The extractor receives the latest settled typed user input with the reply, both labelled as untrusted data.
+Answer cards and the Questions panel for @ultimate's questions to the user. One thing asks: a reply-expected Board
+message to the user. @ultimate's `message { to: 'user', text, reply: true }` (the default) makes board emit
+`board.asked` in the transaction that appends the message; questions' `asked` reactor records the request and creates
+the extraction task in one transaction, once per message. One-way messages, user posts and messages to conversations
+never do. Final answers never ask: @ultimate's instructions put every decision in such a message.
 
 The configured summary model extracts only decisions and options present in the text, using `QUESTIONS_SYSTEM`;
-only decisions available now count, not pending work or a future branch proposal. This rule also covers Board asks;
-rhetorical closers, offers, empty results and model failures produce no card. Extraction memoizes its model and
-response and accounts usage on the task's conversation.
+only decisions available now count, not pending work or a future branch proposal. Rhetorical closers, offers, empty
+results and model failures produce no extracted questions. Extraction memoizes its model and response and accounts
+usage on the root.
+
+A question stays open until the user answers it (its card, or a Reply to that message) or dismisses it. Typed input,
+answers to other messages and agent messages leave it open. While it is open, board starts each of the asker's runs
+with a line listing it (see [Board](../board/README.md)).
 
 ## State
 
-The root's `questions.board` document (conversation scope, latest history, initial on fork) contains:
-
-- `requested: number[]` and `asked: Record<string, Question[]>` for Board messages. The root-owned background task
-  `questions.board-extract` (input `{ messageId, text }`) deduplicates by Board message id; `asked[String(messageId)]`
-  is written only for a nonempty result while the message remains open (`to === 'user'`, `reply`,
-  `state === 'delivered'`). Both are pruned to ids still in the Board log when writing.
-- `yielded` and `reply?: { conversation, entry, questions }` for @ultimate's answers. A `GenerationTask` `onYield`
-  hook creates one `questions.reply-extract` task per generation, owned by @ultimate's conversation, in the commit
-  that advances `yielded`, so a replayed hook creates nothing twice. The task waits for the generation, confirms its
-  answer settled a `pi.user` input, extracts, and writes only if no later typed input or reset follows that answer.
-  Board deliveries use `board.message` / `board.reply` entry kinds, not `pi.user`: those deliveries and the answers
-  they wake leave the card open, including when extraction finishes after them. Only a committed `pi.user`, a
-  `pi.reset`, or an answer to the card closes it. The extension checks committed user inputs and resets immediately,
-  and checks again on open for ones it missed. One slot is enough: every eligible newer final answer settles a new
-  typed input, which already closed the old card. Agent-woken answers never extract or replace it.
-
-Reopening resumes durable work without repeating a memoized response or creating duplicate cards.
+The root's `questions.board` document (conversation scope, latest history, initial on fork) holds
+`requested: number[]` and `asked: Record<string, Question[]>`. The root-owned background task
+`questions.board-extract` (input `{ messageId, text }`) deduplicates by Board message id; `asked[String(messageId)]` is
+written only for a nonempty result while the message remains open (`to === 'user'`, `reply`, `state === 'delivered'`).
+Both are pruned to ids still in the Board log when writing. Reopening resumes durable work without repeating a
+memoized response or creating duplicate cards.
 
 ## Card
 
-Confirmations offer Yes/No; choices show the extracted options and their recommended marker. Both offer “Something
-else…” with an inline field. Send answers is enabled after at least one answer; omitted questions stay out. On
-phones, one question shows at a time with Back/Next. On desktop, 1–9 and Enter act on the shown conversation's
-still-open final-answer card even across newer messages, else its newest open message card, without intercepting
-input/textarea editing.
+Under the outgoing `message` card in @ultimate's transcript, through board's `MessageAnswers` point, and in the
+Questions panel. Confirmations offer Yes/No; choices show the extracted options and their recommended marker. Both
+offer “Something else…” with an inline field. Send answers is enabled after at least one answer; omitted questions stay
+out. Dismiss closes the message without an answer. A message without extracted questions shows only Dismiss and a
+hint to reply in the composer. On phones, one question shows at a time with Back/Next. On desktop, 1–9 and Enter act
+on the shown conversation's newest open card, without intercepting input/textarea editing; cards in the panel take no
+keys.
 
-A message card disappears once its message is answered: by its card or a Board Reply to that message. Typed input,
-answers to other messages and agent messages leave it open. A final-answer card disappears when
-typed user input or a reset follows the answer, or once its answer is claimed.
+## Questions panel
+
+A right-panel tab listing every message that waits on the user, newest first: the asker, how long ago, the message,
+its card and Dismiss, and a Show in chat link. It lists only what is open, so a question leaves it once answered or
+dismissed. The amber count next to the top-bar @ultimate button opens it from any surface; ⌘K “Show open questions”
+does too.
 
 ## Actions
 
-Both are user-only and validate the extracted questions, refusing unknown or duplicate answers. Answers are
-formatted as `Q: …\nA: …` blocks separated by blank lines.
+Both are user-only.
 
-- `answer { messageId, answers: [{ question, answer }] }` posts a normal user Board reply to the sender with
-  `re: messageId` and returns `{ id }`. Board admission atomically verifies that the original remains open, so
-  concurrent answers produce exactly one reply; normal Board delivery wakes the sender.
-- `reply { entryId, answers }` refuses unless `entryId` has an open card with no later typed user input or reset,
-  and claims the card by clearing `reply` in the same commit, so of concurrent
-  calls exactly one wins and the rest are refused. It then submits a plain input in @ultimate's conversation with
-  `requestId: questions:<entryId>` and `whenBusy: 'reject'`; if the submit fails, a compensating commit restores the
-  claim when no newer `reply` replaced it, so the user can retry. Without an input-placement hook, an input or reset
-  can still land between the claim and the submit; we accept that window of milliseconds because the Q/A text is
-  self-contained and the user's own words.
+- `answer { messageId, answers: [{ question, answer }] }` validates the extracted questions, refusing unknown or
+  duplicate answers, and posts a normal user Board reply to the sender with `re: messageId` and `Q: …\nA: …` blocks,
+  returning `{ id }`. Board admission atomically verifies that the original remains open, so concurrent answers produce
+  exactly one reply; normal Board delivery wakes the sender.
+- `dismiss { messageId }` marks the message `dismissed` and posts a one-way user note to the sender with `re`, in one
+  commit, returning `{ id }`. The note reaches the sender as a note: it reads it with its next input, and no run
+  starts. A message that is no longer open is refused.
 
-Retired transcript question and answer entries are hidden rather than exposing their raw JSON; only open
-@ultimate questions get interactive cards.
+Retired transcript question and answer entries are hidden rather than exposing their raw JSON.
 
 ## Faux
 
-On a faux instance, open @ultimate (Agents tab → ultimate) and type:
-
-- `questions demo`: @ultimate messages the user with a confirmation and a recommended choice, then says `Sent.`;
-  the card appears under the message.
-- `ask demo`: @ultimate's final answer is the same two decisions; the card appears under the answer.
-
-Extraction uses the faux model by default (explicit summary-model settings still win), and an answer gets the
-scripted reply without tokens.
+On a faux instance, open @ultimate (Agents tab → ultimate) and type `questions demo`: @ultimate messages the user with
+a confirmation and a recommended choice, then says `Sent.`; the card appears under the message and in the panel.
+Extraction uses the faux model by default (explicit summary-model settings still win), and an answer gets the scripted
+reply without tokens.

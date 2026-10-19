@@ -45,6 +45,8 @@ export default defineWebExtension({
     'board.reply': BoardInput,
     // The message's row already says it woke the agent: `action`.
     'board.wake': () => null,
+    // The agent's reminder of the questions still open; the user sees them in the Questions panel.
+    'board.open': () => null,
     'pi.assistant': ChatAnswer,
   },
   tools: { message: MessageCall, branch: BranchCall },

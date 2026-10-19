@@ -191,8 +191,6 @@ export default async function fauxExtension(host: ExtensionHost) {
         'The preview is ready. Two decisions before continuing:\n\nShould we keep the preview running?\n1. Yes\n2. No\n\nWhich layout should we use?\n1. Compact — fits the existing cards (recommended)\n2. Spacious — more room between options'
       if (last?.role === 'user' && last.content === 'questions demo')
         return tool('message', { to: 'user', text: decisions })
-      if (last?.role === 'user' && last.content === 'ask demo')
-        return fauxAssistantMessage([fauxText(decisions)])
       if (
         last?.role === 'user' &&
         typeof last.content === 'string' &&

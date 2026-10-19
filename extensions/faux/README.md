@@ -4,7 +4,7 @@ Send `questions demo` to preview the questions card: a yes/no question and a cho
 In @ultimate's conversation, send `messages demo` to send the user a one-way update and a question, or `message #<id>` or `message @<name>`
 (optionally `one-way`) to message another conversation, previewing the outgoing message cards; paste images with it to forward them (`images: 'latest'`).
 In @ultimate's conversation, `chat demo` (typed, or posted to @ultimate) runs tools, starts a `landing demo` branch
-that reports a landing back, and sends you a one-way update and a question; `ask demo` asks another question. A reply
+that reports a landing back, and sends you a one-way update and a question; `ask demo` asks another question in a message. A reply
 from another conversation gets a short acknowledgement.
 In @ultimate's conversation, `cards demo` produces one of each card its chat folds to one line: it starts a
 `landing demo` branch, messages it, calls the `seedCards {from}` action through codemode (messages, a reply, a report,

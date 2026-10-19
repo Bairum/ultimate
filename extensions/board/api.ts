@@ -18,7 +18,7 @@ export type BoardMessage = {
   at: number
   reply: boolean
   re?: number
-  state: 'sent' | 'delivered' | 'answered' | 'failed'
+  state: 'sent' | 'delivered' | 'answered' | 'dismissed' | 'failed'
   entry?: EntryId
   answer?: EntryId
   error?: string
@@ -42,6 +42,8 @@ export const Board = defineDoc<{ messages: BoardMessage[]; next: number }>({
 export type BoardService = {
   /** Reply `text` from the user to open Board message `messageId`; returns the reply's message id. */
   answer(messageId: number, text: string, ctx: Context): Promise<number>
+  /** Close open Board message `messageId` unanswered; its sender gets a one-way note. Returns the note's message id. */
+  dismiss(messageId: number, ctx: Context): Promise<number>
   /** Send a one-way message from conversation `from` to `to` (`#id`, `@name` or `user`), once per `requestId`. */
   send(
     from: number,

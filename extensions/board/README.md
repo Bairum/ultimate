@@ -60,7 +60,14 @@ Sending to `user` writes a message
 shown in @ultimate's transcript; it starts no run.
 A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers that
 message: a user Reply with `re` (an answer card, or a typed Reply) marks only that message answered, in the reply's
-commit. Plain input, new posts and answers to other questions leave it open.
+commit. Plain input, new posts and answers to other questions leave it open. The service's `dismiss` closes it as
+`dismissed` instead, with a one-way user note to the sender (`re`, delivered as a note: no run starts) in the same
+commit.
+
+While the sender has questions open, the input that starts its next run goes in after a `board.open` entry, placed
+by the patched `beforeInput` hook in the input's commit: one user-role line listing each open message's id, first
+line and age. It renders nothing in the transcript. It is per input rather than a system-prompt section, so the
+prompt stays cached; nothing is added while nothing is open.
 
 Reply-expected agent messages to `user` also request question extraction in the append transaction through the
 optional questions service. The sender's outgoing `message` card in its transcript shows extracted decisions
@@ -116,8 +123,8 @@ so nested codemode calls stay distinct.
 
 Ultimate answers the user's typed input directly in its conversation. To relay a branch result, decision or landing
 to the user, Ultimate sends one consolidated `message {to: 'user', text}` when the needed replies have arrived.
-It appears there as a bubble with an answer card for questions. Decisions use a reply-expected message or the final
-answer to the user's input, ending with numbered options; reports that need no answer use `reply: false`.
+It appears there as a bubble with an answer card for questions. Decisions use a reply-expected message, ending with
+numbered options; reports that need no answer use `reply: false`.
 
 ## Document and typed inputs
 

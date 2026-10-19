@@ -89,16 +89,12 @@ describe('board chat', () => {
           ...messages,
           { ...base, id: 9, from: 2, to: 'user', state: 'answered' },
           { ...base, id: 10, from: 2, to: 'user', state: 'sent' },
+          { ...base, id: 11, from: 2, to: 'user', state: 'dismissed' },
         ],
-        next: 11,
+        next: 12,
       }),
     ).toBe(1)
     expect(waitingOnUser({ messages: [], next: 1 })).toBe(0)
-  })
-  it("counts @ultimate's asking final answer as one more", () => {
-    expect(waitingOnUser({ messages, next: 9 }, true)).toBe(2)
-    expect(waitingOnUser({ messages: [], next: 1 }, true)).toBe(1)
-    expect(waitingOnUser({ messages: [], next: 1 }, false)).toBe(0)
   })
   it('shows elapsed minutes, hours and days without future negative times', () => {
     expect(relativeTime(1000, 0)).toBe('now')
@@ -217,9 +213,8 @@ describe('conversation state', () => {
     expect(conversationState({ ...primary, runState: 'queued' }, board())).toBe('working')
   })
 
-  it('waits only for the primary agent with an open question to the user or an asking answer', () => {
+  it('waits only for the primary agent with an open question to the user', () => {
     expect(conversationState({ ...primary, runState: 'answered' }, toUser)).toBe('waits')
-    expect(conversationState({ ...primary, runState: 'answered' }, board(), true)).toBe('waits')
     expect(conversationState({ ...primary, runState: 'answered' }, board())).toBe('idle')
     expect(
       conversationState({ ...primary, runState: 'answered' }, board({ state: 'answered' })),
@@ -228,9 +223,7 @@ describe('conversation state', () => {
 
   it('never waits for a subagent or another conversation, even with open messages to the user', () => {
     for (const kind of ['subagent', 'other'] as const)
-      expect(conversationState({ id: 2, kind, runState: 'answered' }, toUser, true)).not.toBe(
-        'waits',
-      )
+      expect(conversationState({ id: 2, kind, runState: 'answered' }, toUser)).not.toBe('waits')
   })
 
   it('awaits the primary agent while its reply-expected message to it is open', () => {

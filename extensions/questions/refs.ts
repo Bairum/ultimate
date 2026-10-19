@@ -8,7 +8,7 @@ import type { QuestionsBoard } from './types.ts'
 /** One answered question: the question's text and the chosen or typed answer. */
 export type Answer = { question: string; answer: string }
 
-/** Extracted questions by Board message id, and those of @ultimate's latest final answer, on conversation 1. */
+/** Extracted questions by Board message id, on conversation 1. */
 export const QuestionsDoc = docRef<QuestionsBoard>('questions.board')
 
 /**
@@ -20,10 +20,10 @@ export const AnswerAction = actionRef<{ messageId: number; answers: Answer[] }, 
   'answer',
 )
 /**
- * `{ entryId, answers }` → `{}`: answer the questions of @ultimate's current final answer `entryId` as a typed input in
- * its conversation. One call wins; fails when the answer is no longer current or its conversation is busy.
+ * `{ messageId }` → `{ id }`: close open Board message `messageId` without an answer; its sender gets a one-way note,
+ * `id`, that starts no run. Fails when the message no longer waits on the user.
  */
-export const ReplyAction = actionRef<{ entryId: number; answers: Answer[] }, Record<string, never>>(
+export const DismissAction = actionRef<{ messageId: number }, { id: number }>(
   'questions',
-  'reply',
+  'dismiss',
 )

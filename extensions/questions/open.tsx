@@ -9,52 +9,31 @@ export type Message = {
   reply: boolean
   state: string
 }
-/** The fields of a transcript entry that tell an input from the rest. */
-type Entry = { id: number; kind: string; input?: boolean }
 
-/** The questions of a Board message while it still waits on the user's reply; none once it is answered. */
+/** Whether a message to the user still waits on their answer or dismissal. */
+export const waitsOnUser = (message: Message) =>
+  message.to === 'user' && message.reply && message.state === 'delivered'
+
+/** The questions of a Board message while it still waits on the user's reply; none once it is answered or dismissed. */
 export function openQuestions(board: Doc, message: Message) {
-  return message.to === 'user' && message.reply && message.state === 'delivered'
-    ? (board?.asked[String(message.id)] ?? [])
-    : []
+  return waitsOnUser(message) ? (board?.asked[String(message.id)] ?? []) : []
 }
+
+/** Every message that waits on the user, newest first. */
+export const waiting = <M extends Message>(messages: readonly M[]) =>
+  messages.filter(waitsOnUser).toReversed()
 
 /** The newest message showing an answer card: only it takes the desktop 1–9 and Enter keys. */
 export function newestAsked(board: Doc, messages: readonly Message[]) {
   return messages.findLast((message) => openQuestions(board, message).length > 0)?.id
 }
 
-/**
- * Questions stay open across agent deliveries and answers, until typed user input or reset follows them.
- */
-export function replyQuestions(
-  board: Doc,
-  conversation: number | undefined,
-  entry: number,
-  transcript: readonly Entry[],
-) {
-  const reply = board?.reply
-  if (!reply || reply.conversation !== conversation || reply.entry !== entry) return []
-  return transcript.some(
-    (item) => item.id > entry && (item.kind === 'pi.user' || item.kind === 'pi.reset'),
-  )
-    ? []
-    : reply.questions
-}
-
-/**
- * The card taking desktop keys: an open final-answer card keeps precedence even across newer messages;
- * otherwise the newest open message to the user takes them.
- */
-export function keyCard(
+/** The card taking desktop keys on a conversation's page: its newest open message with an answer card. */
+export const keyCard = (
   board: Doc,
   conversation: number | undefined,
   messages: readonly Message[],
-  transcript: readonly Entry[],
-) {
-  const reply = board?.reply
-  if (reply && replyQuestions(board, conversation, reply.entry, transcript).length)
-    return `reply:${reply.entry}`
+) => {
   const id = newestAsked(
     board,
     messages.filter((message) => message.from === conversation),

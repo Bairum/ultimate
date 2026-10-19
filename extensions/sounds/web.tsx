@@ -3,12 +3,11 @@ import { useEffect, useState } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
-import { cn, defineWebExtension, useDocOf, useExtensionUiState, useTasks } from '@/sdk'
+import { cn, defineWebExtension, useDocOf, useExtensionUiState } from '@/sdk'
 import { BoardDoc, emptyBoard } from '../board/ui.tsx'
 import { OverviewDoc, usePrimaryAgent } from '../conversations/ui.tsx'
-import { QuestionsDoc } from '../questions/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
-import { listener, settle, sounds } from './cues.ts'
+import { listener, sounds } from './cues.ts'
 import type { Cue, Sound } from './cues.ts'
 import { play } from './tones.ts'
 
@@ -42,35 +41,21 @@ async function announce(cue: Cue) {
 function Player() {
   const overview = useDocOf(1, OverviewDoc)
   const board = useDocOf(1, BoardDoc)
-  const questions = useDocOf(1, QuestionsDoc)
   const name = usePrimaryAgent()
   const agent = useDocOf(1, StandingDoc)?.[name]
-  const tasks = useTasks()
-  const extracting = Object.values(tasks?.tasks ?? {}).some(
-    (task) => task.kind === 'questions.reply-extract' && task.conversationId === agent,
-  )
   const { muted, off } = useSettings()
   const [hear] = useState(listener)
-  const [tick, setTick] = useState(0)
   useEffect(() => {
-    if (!overview || agent === undefined) return undefined
-    const { due, waiting } = hear(
-      {
-        agent,
-        row: overview.conversations[agent],
-        messages: (board ?? emptyBoard).messages,
-        asked: questions?.reply,
-        extracting,
-      },
-      Date.now(),
-    )
+    if (!overview || agent === undefined) return
+    const due = hear({
+      agent,
+      row: overview.conversations[agent],
+      messages: (board ?? emptyBoard).messages,
+    })
     for (const cue of due)
       if (!muted && !off.includes(cue.sound))
         announce(cue).catch((error: unknown) => console.warn('Sound failed', error))
-    if (!waiting) return undefined
-    const timer = setTimeout(() => setTick((count) => count + 1), settle)
-    return () => clearTimeout(timer)
-  }, [hear, overview, board, questions, agent, extracting, muted, off, tick])
+  }, [hear, overview, board, agent, muted, off])
   return null
 }
 

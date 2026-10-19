@@ -137,7 +137,7 @@ and restarts land on the same view. The `surfaces` extension tells the agent whi
 - Press `Ctrl+Alt+B` for the right panel: Info (machine, process, storage, build, extensions, skills), Agents, Tasks,
   Documents (the plan, the codemode store, and every other extension document), Workspaces, Extensions and more, each
   a tab.
-- Use the top-bar **@ultimate** button or first sidebar row to ask for work, explore an idea, or start an independent line of work. Its messages and questions appear in its transcript, with answer cards beneath questions.
+- Use the top-bar **@ultimate** button or first sidebar row to ask for work, explore an idea, or start an independent line of work. Its messages and questions appear in its transcript, with answer cards beneath questions; open questions also wait in the right panel's Questions tab, and the amber count next to the button opens it, until you answer or dismiss them.
 
 ## How it is put together
 

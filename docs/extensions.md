@@ -84,7 +84,7 @@ extension depending on an optional one. The core layers, lowest first, each depe
 Where a lower extension needs something a higher one knows, it declares the contract and the higher one fills it:
 server extension points (`conversations.trees` and `conversations.release` from conversations, `workspaces.handoff`
 from workspaces), web points (`conversations.phase`, `conversations.task`, `conversations.unsummarized`,
-`board.message-answers`, `board.answer-waits`, `lineage.empty-root`), or durable events (`board.asked`,
+`board.message-answers`, `lineage.empty-root`), or durable events (`board.asked`,
 `models.login-changed`). Optional extensions plug into the core the same way: phase, plan and questions provide
 points and react to events; the core never imports them. A web point is `definePoint` in the owner's `ui.tsx`,
 rendered with `<Provided>` and filled by `provides` in another facet (see

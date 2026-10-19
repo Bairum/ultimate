@@ -9,12 +9,11 @@ import {
   StatusLine,
   useDocOf,
   useExtensionUiState,
-  Provided,
   useConversations,
   useNow,
   useUltimate,
 } from '@/sdk'
-import { AnswerWaits, BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
+import { BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
 import { useOverview, usePrimaryAgent } from '../conversations/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { LaneTree } from './hierarchy.tsx'
@@ -43,7 +42,7 @@ function useStates() {
   const conversations = useConversations()
   const name = usePrimaryAgent()
   const primary = useDocOf(1, StandingDoc)?.[name]
-  return (lane: Lane, answerWaits: boolean) => {
+  return (lane: Lane) => {
     const id = lane.conversation
     const own = conversations.find((item) => item.id === id)
     const state = conversationState(
@@ -55,7 +54,6 @@ function useStates() {
         primary,
       },
       board,
-      answerWaits,
     )
     return laneState(lane, state, overview[id] !== undefined)
   }
@@ -100,14 +98,6 @@ const dot = 'inline-block size-1.5 rounded-full'
 
 /** Agent Lanes on top, the stream of everything below; both live while on screen. */
 function System() {
-  return (
-    <Provided input={null} point={AnswerWaits}>
-      {(asks) => <Lanes answerWaits={!!asks} />}
-    </Provided>
-  )
-}
-
-function Lanes({ answerWaits }: { answerWaits: boolean }) {
   const live = useLive()
   const [stored, setWindow] = useExtensionUiState<WindowName>('window', '30m')
   const window: WindowName = Object.hasOwn(windows, stored) ? (stored as WindowName) : '30m'
@@ -122,7 +112,7 @@ function Lanes({ answerWaits }: { answerWaits: boolean }) {
   const lanes = useLanes(range, live)
   const stateOf = useStates()
   const list = lanes.data?.lanes ?? []
-  const states = new Map(list.map((lane) => [lane.conversation, stateOf(lane, answerWaits)]))
+  const states = new Map(list.map((lane) => [lane.conversation, stateOf(lane)]))
   // A parent listed only to hold its children's place did not work in the window: it is no agent at work.
   const worked = list.filter((lane) => lane.runs.length > 0)
   const running = worked.filter((lane) => states.get(lane.conversation) === 'running').length
