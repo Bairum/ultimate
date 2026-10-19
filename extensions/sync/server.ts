@@ -105,12 +105,13 @@ export async function localAction<T>(
   extension: string,
   name: string,
   args: JsonValue = {},
+  timeout = 15000,
 ) {
   const response = await deps.fetch(`${url}/api/extensions/${extension}/actions/${name}`, {
     method: 'POST',
     headers: { Origin: url, 'Content-Type': 'application/json' },
     body: JSON.stringify({ args }),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(timeout),
   })
   return (await answer<{ result: T }>(response, `${extension}.${name} at ${url}`)).result
 }
@@ -164,6 +165,7 @@ async function local(deps: SyncDeps, home: Home): Promise<LocalProject & { key?:
     ...(state?.login ? { login: state.login } : {}),
     stale,
     keptRefs,
+    ...(state?.lastBackup ? { lastBackupAt: state.lastBackup.at } : {}),
   }
 }
 
@@ -189,6 +191,9 @@ export async function fleet(deps: SyncDeps): Promise<Fleet> {
   const listed = typeof directory === 'string' ? [] : directory
   const projects: FleetProject[] = listed.map((project) => {
     const mine = locals.find((item) => item.key === project.key)
+    // This machine's own record is fresher than the cloud's while it writes the project.
+    const lastBackupAt =
+      (mine?.role === 'writer' ? mine.lastBackupAt : undefined) ?? project.lastBackupAt
     return {
       key: project.key,
       name: project.name,
@@ -197,6 +202,7 @@ export async function fleet(deps: SyncDeps): Promise<Fleet> {
         .filter((machine) => machine.role === 'standby')
         .map(({ machine, connected, lastSeen }) => ({ machine, connected, lastSeen })),
       ...(project.transition ? { transition: project.transition } : {}),
+      ...(lastBackupAt ? { lastBackupAt } : {}),
       ...(mine ? { local: strip(mine) } : {}),
     }
   })
@@ -271,6 +277,28 @@ export async function move(
     body: { machine: input.to, ...force },
   })
   return { id, key: project.key, target: input.to, local: false }
+}
+
+/** Back up `project` now through its writer's home on this machine; the writer keeps the lease. */
+export async function backup(deps: SyncDeps, name: string) {
+  const current = await fleet(deps)
+  const project = find(current.projects, name)
+  if (!project.local?.url)
+    throw new Error(`${project.name} has no running project home on this machine`)
+  if (project.local.role !== 'writer')
+    throw new Error(
+      `${project.name} runs on ${project.writer.machine ?? 'no machine'}; back it up there`,
+    )
+  // The action resolves once the whole database is uploaded, which may take as long as a release.
+  const done = await localAction<{ id: string; at: number; bytes: number }>(
+    deps,
+    project.local.url,
+    'cloud',
+    'backup',
+    {},
+    10 * 60_000,
+  )
+  return { key: project.key, ...done }
 }
 
 /** Stop a move: through the local project when this machine is its target, else through the cloud. */
@@ -411,6 +439,7 @@ export const demoFleet = (userHome: string, now = Date.now()): Fleet => ({
       key: 'github.com/hazat/ultimate',
       name: 'ultimate',
       writer: { machine: 'haza-pc', online: true },
+      lastBackupAt: now - 2 * 24 * HOUR,
       standbys: [
         { machine: 'rog', connected: true, lastSeen: Date.now() },
         { machine: 'mac', connected: false, lastSeen: Date.now() - 86400000 },
@@ -459,6 +488,7 @@ export const demoFleet = (userHome: string, now = Date.now()): Fleet => ({
       key: 'github.com/hazat/blog',
       name: 'blog',
       writer: { machine: 'rog', online: true },
+      lastBackupAt: now - 3 * HOUR,
       standbys: [{ machine: 'haza-pc', connected: true, lastSeen: Date.now() }],
       // A move the writer holds while two conversations still run.
       transition: {
@@ -608,6 +638,17 @@ export default function sync(host: ExtensionHost) {
         }),
         async execute(input) {
           const result = await move(deps, input)
+          return { output: json(result), details: result }
+        },
+      }),
+      defineTool({
+        name: 'backup',
+        deferred: true,
+        description:
+          'Back up a project (key or name) now: its writer on this machine uploads an encrypted snapshot of its database and ultimate/* branches and keeps running it. Resolves once uploaded with the snapshot id, time and size. Refused when the project runs on another machine or a move is in flight.',
+        parameters: Type.Object({ project: Type.String({ minLength: 1 }) }),
+        async execute({ project }) {
+          const result = await backup(deps, project)
           return { output: json(result), details: result }
         },
       }),

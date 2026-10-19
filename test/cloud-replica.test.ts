@@ -176,6 +176,28 @@ it('drops the retired conversation copy on wake and keeps the lease, machines an
 
 const types = (messages: CloudMessage[]) => messages.map((message) => message.type)
 
+it('records the writer’s backup for the directory without touching the lease, and ignores a standby’s', () => {
+  const { connect, updates, instance } = shared()
+  const desk = connect()
+  desk.receive(hello({ machine: 'desk' }))
+  const laptop = connect()
+  laptop.receive(hello({ machine: 'laptop', root: '/other', lastBackupAt: 3 }))
+  const lease = structuredClone(instance.store.lease())
+  laptop.receive({ type: 'backup', at: 4 })
+  expect(instance.store.lastBackupAt()).toBeUndefined()
+  desk.receive({ type: 'backup', at: 0 })
+  expect(instance.store.lastBackupAt()).toBeUndefined()
+  desk.receive({ type: 'backup', at: 7 })
+  expect(instance.store.lastBackupAt()).toBe(7)
+  expect(updates.at(-1)?.lastBackupAt).toBe(7)
+  expect(instance.store.lease()).toEqual(lease)
+  // A hello without one keeps the recorded time; a hello with one replaces it.
+  desk.receive(hello({ machine: 'desk' }))
+  expect(instance.store.lastBackupAt()).toBe(7)
+  desk.receive(hello({ machine: 'desk', lastBackupAt: 9 }))
+  expect(instance.store.lastBackupAt()).toBe(9)
+})
+
 describe('project replica sockets', () => {
   it('registers an unknown project with its first machine as writer at epoch 1', () => {
     const { instance, connect, updates } = shared()

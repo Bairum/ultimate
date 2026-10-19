@@ -21,6 +21,8 @@ export interface Project {
   }[]
   /** The latest move, running or ended. */
   transition?: Transition
+  /** When a writer last finished a backup ("Back up now"), as that machine reported it. */
+  lastBackupAt?: number
 }
 export type Presence = Omit<Project, 'slug'>
 /** What a machine may report: its name, at most 16 providers, names and errors bounded. */

@@ -30,5 +30,9 @@ export interface CloudState {
   key?: string
   /** While sync runs: the model login this machine's agents run with; a move here fails its checks without one. */
   login?: ModelLogin
+  /** The last backup this machine finished: snapshot id, when, and the bytes before compression. */
+  lastBackup?: { id: string; at: number; bytes: number }
+  /** The running backup's upload, in bytes. */
+  backup?: { done: number; total: number }
   lastError?: string
 }

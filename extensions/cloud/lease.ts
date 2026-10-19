@@ -77,7 +77,17 @@ export interface LeaseState {
   key?: string
   /** The model login this machine's agents run with; a move here fails its checks without one. */
   login: ModelLogin
+  /** The last backup this machine finished (`cloud-backup.json`). */
+  lastBackup?: Backup
+  /** The running backup's upload. */
+  backup?: { done: number; total: number }
   lastError?: string
+}
+/** A backup: a snapshot uploaded by the writer without releasing; `bytes` is the database and bundle before compression. */
+export interface Backup {
+  id: string
+  at: number
+  bytes: number
 }
 
 const SECRET = 'ULTIMATE_CLOUD_SNAPSHOT_KEY'
@@ -175,6 +185,10 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   let autoClaim = options.autoClaim
   let progress: LeaseState['progress']
   let lastError: string | undefined
+  /** `<home>/cloud-backup.json`: the last backup, kept apart from the lease file, which a backup never touches. */
+  const backupPath = join(host.home, 'cloud-backup.json')
+  let lastBackup: Backup | undefined
+  let backingUp: { done: number; total: number } | undefined
   let idleSince: number | undefined
   let idleTimer: ReturnType<typeof setInterval> | undefined
   let pendingRelease:
@@ -241,6 +255,15 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     if (intent.download) await rm(intent.download, { force: true })
     await rm(claimPath, { force: true })
   }
+  const loaded = readFile(backupPath, 'utf8').then(
+    (text) => {
+      const saved = JSON.parse(text) as Backup & { key?: string }
+      if (saved.key === identity.key)
+        lastBackup ??= { id: saved.id, at: saved.at, bytes: saved.bytes }
+    },
+    // No backup yet.
+    () => undefined,
+  )
   // A previous process may have died mid-snapshot or mid-download: only a claim in flight keeps its download.
   const tidy = (async () => {
     const intent = await readIntent()
@@ -372,6 +395,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         if (moving?.transition.id === id) cancel()
       },
       transition: () => moving?.transition.id ?? releasingFor,
+      lastBackupAt: () => lastBackup?.at,
       hello: () => {
         if (pendingClaim) pendingClaim.reconnected = true
       },
@@ -985,6 +1009,56 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       }
     })
 
+  /**
+   * Upload a backup: a snapshot of the open database and the `ultimate/*` branches, as a release uploads, while this
+   * machine keeps serving and keeps the lease. It never touches the lease, its epoch or `cloud-lease.json`. Refused
+   * unless this machine serves as the writer with nothing else in flight; resolves once it is uploaded.
+   */
+  const backup = async () => {
+    const state = sync?.state()
+    if (backingUp) throw new Error('a backup is already running')
+    if (mode !== 'serving' || !serving() || state?.role !== 'writer' || state.epoch === undefined)
+      throw new Error('This machine does not run the project; back it up on its writer')
+    if (moving || holding || releasingFor || pendingRelease || progress)
+      throw new Error('A move or release is in flight')
+    // Set before the first await, so a second call refuses at once.
+    backingUp = { done: 0, total: 0 }
+    try {
+      const key = await secret()
+      if (!key) throw new Error(missingKey)
+      await loaded
+      const manifest = await deps.snapshots.uploadSnapshot({
+        url: options.url,
+        token: options.token,
+        secret: key,
+        key: snapshotKey(),
+        epoch: state.epoch,
+        machine: options.machine,
+        database,
+        repo: host.projectRoot,
+        signal: AbortSignal.timeout(MOVE_CAP),
+        progress: (done, total) => {
+          backingUp = { done, total }
+        },
+      })
+      const done: Backup = {
+        id: manifest.id,
+        at: Date.now(),
+        bytes: manifest.database.bytes + (manifest.bundle?.bytes ?? 0),
+      }
+      await writeJson(backupPath, { key: identity.key, ...done })
+      lastBackup = done
+      sync?.send({ type: 'backup', at: done.at })
+      lastError = undefined
+      return done
+    } catch (error) {
+      fail(`Backup failed: ${error instanceof Error ? error.message : String(error)}`)
+      throw error
+    } finally {
+      backingUp = undefined
+    }
+  }
+
   /** The process stops: release within the supervisor's shutdown, or keep the lease and open normally next time. */
   const stopRelease = async () => {
     const state = sync?.state()
@@ -1053,9 +1127,12 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         ...(ran ? { ran: structuredClone(ran) } : {}),
         ...(state?.project ? { key: state.project.key } : {}),
         login: await loginHere(),
+        ...(lastBackup ? { lastBackup: { ...lastBackup } } : {}),
+        ...(backingUp ? { backup: { ...backingUp } } : {}),
         lastError,
       }
     },
+    backup,
     /**
      * Start taking the project here: prepare, then claim a free lease or have the online writer release it first.
      * `force` continues although secrets are missing; `by` says who started it, this machine's page unless @sync.

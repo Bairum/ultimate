@@ -97,6 +97,23 @@ async function againstOld(old: Handler, request: Request) {
   }
 }
 
+it('a presence naming the last backup reaches a directory on older code, which lists it unchanged', async () => {
+  // Replicas on new code add `lastBackupAt` to the presence they POST; the old handler stores the value as sent.
+  const presence: Presence = {
+    key: 'github.com/o/app',
+    name: 'app',
+    writer: { machine: 'desk', online: true },
+    machines: [{ machine: 'desk', role: 'writer', connected: true, lastSeen: 1 }],
+    lastBackupAt: 5,
+  }
+  const old = directoryBeforeHealth(store)
+  const response = await old(
+    new Request('https://directory/update', { method: 'POST', body: JSON.stringify(presence) }),
+  )
+  expect(response.status).toBe(204)
+  expect(store.list()).toEqual([{ ...presence, slug: 'app' }])
+})
+
 it('health reported to a directory still on code from before the route gets a 404 the reporter retries', async () => {
   const health: MachineHealth = { machine: 'desk', at: 1, providers: [] }
   const response = await againstOld(
