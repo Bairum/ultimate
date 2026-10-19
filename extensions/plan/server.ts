@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { BACKGROUND_CONTEXT as background } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import {
   defineDoc,
@@ -79,14 +78,13 @@ const required = (value: string | undefined, field: string) => {
 
 /**
  * Rewrite the index entries of `coordinator` from its plan. A link that is new or whose task title changed renames
- * the child after its task. `overwrite: false` keeps children another coordinator already claims.
+ * the child after its task.
  */
 async function reindex(
   tx: Tx,
   host: Pick<ExtensionHost, 'metadata'>,
   coordinator: ConversationId,
   plan: { epics: Record<string, Epic> },
-  overwrite = true,
 ) {
   const index = await tx.doc(TaskIndex, ROOT_CONVERSATION_ID)
   const previous = { ...index.children }
@@ -97,7 +95,6 @@ async function reindex(
       if (task.child === undefined) continue
       const child = String(task.child)
       const before = previous[child]
-      if (!overwrite && before && before.coordinator !== coordinator) continue
       index.children[child] = {
         coordinator,
         epic: epic.key,
@@ -112,34 +109,6 @@ async function reindex(
       if (renamed && (await tx.conversation(task.child as ConversationId)))
         (await tx.doc(host.metadata, task.child as ConversationId)).title = task.title
     }
-  }
-}
-
-/** Index every top-level conversation's plan once the harness opens; only those can edit a plan. */
-async function backfill(host: Pick<ExtensionHost, 'harness' | 'metadata'>) {
-  const harness = host.harness()
-  const coordinators: ConversationId[] = []
-  await harness.commit(async (tx) => {
-    let cursor: Cursor | undefined
-    do {
-      const page = await tx.scanConversations({}, 256, cursor)
-      for (const conversation of page.items)
-        if (!conversation.owner) coordinators.push(conversation.id)
-      cursor = page.next
-    } while (cursor !== undefined)
-  }, background)
-  for (const id of coordinators) {
-    const plan = await harness.snapshot(Plan, id, background)
-    if (
-      !Object.values(plan?.epics ?? {}).some((epic) =>
-        Object.values(epic.tasks).some((task) => task.child !== undefined),
-      )
-    )
-      continue
-    await harness.commit(
-      async (tx) => reindex(tx, host, id, await tx.doc(Plan, id), false),
-      background,
-    )
   }
 }
 
@@ -169,7 +138,6 @@ async function answered(tx: Tx, id: ConversationId, at: number) {
 }
 
 export default (host: ExtensionHost) => {
-  host.onOpen(() => backfill(host))
   return defineExtension({
     name: 'plan',
     hooks: [
