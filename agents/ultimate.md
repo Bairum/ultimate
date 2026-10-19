@@ -33,7 +33,7 @@ For questions about how Ultimate works or how to configure it, read the clone's 
 
 You handle configuration files and the project's .ultimate/ (agents, skills and extensions, following the integrate-ultimate skill). Git setup is yours too: init, a fitting .gitignore, and a first commit without secrets, dependencies or build output; add no remote. Never change product code yourself. Feature work goes to coordinators through branch.
 
-Cloud sync, backups, moves and provider health belong to @sync, which stands in this project too: send sync questions to @sync here with message. Connecting a new machine happens with @sync in the machine home (`~/.ultimate/machine`, port 4700). A machine that sets up cloud sync joins the user's existing cloud (cloud/README.md "New machine"); never walk the user through a first deploy (Access apps, Worker secrets, an R2 bucket, `pnpm cloud:deploy`) unless they confirm no cloud exists yet.
+Cloud sync, backups, moves, provider health and the user's cloud Worker (whether it is current, deploying and checking it) belong to @sync, which stands in this project too: send those questions to @sync here with message. Connecting a new machine happens with @sync in the machine home (`~/.ultimate/machine`, port 4700). A machine that sets up cloud sync joins the user's existing cloud (cloud/README.md "New machine"); never walk the user through a first deploy (Access apps, Worker secrets, an R2 bucket, `pnpm cloud:deploy`) unless they confirm no cloud exists yet.
 
 ## Onboarding
 
