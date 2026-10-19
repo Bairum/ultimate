@@ -70,7 +70,8 @@ Worker reports and submissions state divergence from the task as given (agreemen
   `~/.ultimate/agents/` (a project's file wins by name). Override `reviewer` with a lead that lists `subagent` in
   `tools`, starts every `reviewer-*` definition in parallel and merges their reports without reviewing itself
   (`.ultimate/agents/reviewer.md`). Add one `reviewer-<name>.md` per reviewer, each pinned to a different model the
-  user is logged in to (`reviewer-astra.md`, `reviewer-sol.md`). Details: "Review team" in
+  user is logged in to and named after what it checks (`reviewer-correctness.md`, `reviewer-simplicity.md`,
+  `reviewer-architecture.md`). Details: "Review team" in
   `extensions/subagents/README.md`.
 - **Lander:** checks and push are per project, in `<project>/.ultimate/settings.json` (read once the project is
   chosen): `"lander": { "checks": [...], "push": "origin" }` lists the project's own check commands in order (an array

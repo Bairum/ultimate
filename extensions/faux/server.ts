@@ -17,6 +17,9 @@ import { NoticeEvent } from '../../shared/events.ts'
 import { Branched, LineageApi, Rooted } from '../lineage/api.ts'
 import { SubmissionLanded } from '../workspaces/api.ts'
 import { seedLanes, stopCalling } from './lanes.ts'
+import { codemodeSteps } from './codemode.ts'
+import { SummaryDoc as CodemodeSummaries } from '../codemode/api.ts'
+import type { CallSummary } from '../codemode/refs.ts'
 
 const messageText = (content: unknown) =>
   typeof content === 'string'
@@ -64,6 +67,20 @@ export default async function fauxExtension(host: ExtensionHost) {
           return text.includes('(slow)')
             ? new Promise((done) => setTimeout(() => done(answer), 6000))
             : answer
+        }
+        // Codemode summaries: one line from the calls, an effect when one writes.
+        if (system.content.startsWith('Summarize what a codemode script')) {
+          const { calls } = JSON.parse(messageText(last?.content)) as {
+            calls: { name: string; args: string }[]
+          }
+          const writes = calls.filter((call) => /^(write|edit|ultimate\.action)$/.test(call.name))
+          const reads = calls.length - writes.length
+          const line = writes.length
+            ? `Wrote ${writes.length} change${writes.length === 1 ? '' : 's'} (${writes.map((call) => call.name).join(', ')}) after ${reads} lookup${reads === 1 ? '' : 's'}`
+            : `Looked up ${calls.map((call) => call.name.replace('ultimate.', '')).join(', ')}`
+          return fauxAssistantMessage([
+            fauxText(JSON.stringify({ line, effect: writes.length > 0 })),
+          ])
         }
         if (system.content.startsWith("List the decisions a coding agent's final reply"))
           return fauxAssistantMessage([
@@ -191,8 +208,6 @@ export default async function fauxExtension(host: ExtensionHost) {
         'The preview is ready. Two decisions before continuing:\n\nShould we keep the preview running?\n1. Yes\n2. No\n\nWhich layout should we use?\n1. Compact — fits the existing cards (recommended)\n2. Spacious — more room between options'
       if (last?.role === 'user' && last.content === 'questions demo')
         return tool('message', { to: 'user', text: decisions })
-      if (last?.role === 'user' && last.content === 'ask demo')
-        return fauxAssistantMessage([fauxText(decisions)])
       if (
         last?.role === 'user' &&
         typeof last.content === 'string' &&
@@ -282,6 +297,43 @@ export default async function fauxExtension(host: ExtensionHost) {
           { stopReason: 'toolUse' },
         )
       }
+      if (transcript.messages[asked]?.content === 'codemode steps demo') {
+        // A long run of codemode steps between ordinary tools: read-only, mutating, a one-call label and a failure.
+        const steps: FauxContentBlock[][] = [
+          [
+            fauxToolCall('codemode', {
+              code: "const a = await ultimate.api('conversations'); return a.slice(0, 200)",
+            }),
+          ],
+          [
+            fauxToolCall('codemode', {
+              code: "const ov = await ultimate.doc('ultimate.conversation-overview', 1); const g = await ultimate.taskGraph(); return Object.keys(ov).concat(Object.keys(g))",
+            }),
+          ],
+          [fauxToolCall('bash', { command: `grep -n before ${shellPath} | head -3` })],
+          [
+            fauxToolCall('codemode', {
+              code: `const source = await tools.read({ path: ${JSON.stringify(scratch)} }); await tools.write({ path: ${JSON.stringify(scratch)}, content: source.replace('before', 'after') }); return 'written'`,
+            }),
+          ],
+          [fauxToolCall('read', { path: scratch })],
+          [
+            fauxToolCall('codemode', {
+              code: "const entries = await ultimate.entries(1, { limit: 5 }); const hits = await ultimate.search('demo', { limit: 3 }); return { entries: entries.length, hits: hits.length }",
+            }),
+          ],
+          [fauxToolCall('edit', { path: scratch, oldText: 'after', newText: 'before' })],
+          [fauxToolCall('codemode', { code: 'throw new Error("no such conversation")' })],
+        ]
+        const step = transcript.messages
+          .slice(asked)
+          .filter((message) => message.role === 'toolResult').length
+        return step < steps.length
+          ? fauxAssistantMessage(steps[step], { stopReason: 'toolUse' })
+          : fauxAssistantMessage([
+              fauxText('Checked the contracts and docs, swapped the scratch text and put it back.'),
+            ])
+      }
       if (
         last?.role === 'toolResult' &&
         last.toolName === 'codemode' &&
@@ -352,6 +404,10 @@ export default async function fauxExtension(host: ExtensionHost) {
           ? fauxAssistantMessage([steps[step]], { stopReason: 'toolUse' })
           : fauxAssistantMessage([fauxText('Messages demo complete.')])
       }
+      if (last?.role === 'user' && last.content === 'seed codemode')
+        return tool('codemode', {
+          code: "return await ultimate.action('faux', 'seedCodemode', { conversation: (await ultimate.uiState()).conversationId ?? 1 })",
+        })
       if (transcript.messages[asked]?.content === 'cards demo') {
         const results = transcript.messages
           .slice(asked)
@@ -851,6 +907,67 @@ export const actions = {
    * Faux only: `{conversation, count}` appends about `count` entries to `conversation` in turns of four: a user input,
    * an assistant with a tool call, its result, and a Markdown answer. Previews a long transcript and its scrollback.
    */
+  /**
+   * Faux only: `{ conversation }` → a past run of @ultimate's real codemode calls between bash and read steps, with the
+   * lines the summary model wrote for them, followed by its answer. Previews codemode cards and folded runs.
+   */
+  async seedCodemode(args: JsonValue, { host }: ActionContext) {
+    if (!host.faux) throw new Error('seedCodemode runs only under faux')
+    const { conversation } = (args ?? {}) as { conversation?: unknown }
+    if (typeof conversation !== 'number') throw new Error('conversation must be a conversation id')
+    const id = conversation as ConversationId
+    const at = Date.now() - 10 * 60_000
+    await host.harness().commit(async (tx) => {
+      await tx.appendEntry(id, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: 'wrap up the finished branches', timestamp: at }],
+      })
+      const lines: Record<string, CallSummary> = {}
+      for (const [index, step] of codemodeSteps.entries()) {
+        const call = `seed-codemode-${id}-${index}`
+        const time = at + (index + 1) * 20_000
+        await tx.appendEntry(id, {
+          kind: 'pi.assistant',
+          model: [
+            fauxAssistantMessage([fauxToolCall(step.tool, step.args, { id: call })], {
+              stopReason: 'toolUse',
+              timestamp: time,
+            }),
+          ],
+        })
+        await tx.appendEntry(id, {
+          kind: 'pi.tool-result',
+          model: [
+            {
+              role: 'toolResult',
+              toolCallId: call,
+              toolName: step.tool,
+              content: [{ type: 'text', text: step.result }],
+              ...(step.details ? { details: step.details } : {}),
+              isError: step.error ?? false,
+              timestamp: time + 900,
+            },
+          ],
+        })
+        if (step.summary) lines[call] = step.summary
+      }
+      Object.assign((await tx.doc(CodemodeSummaries, id)).calls, lines)
+      await tx.appendEntry(id, {
+        kind: 'pi.assistant',
+        model: [
+          fauxAssistantMessage(
+            [
+              fauxText(
+                'Concluded the six finished branches and paused the overnight timer. #34790 stays: it is owned by the root.',
+              ),
+            ],
+            { timestamp: at + 9 * 60_000 },
+          ),
+        ],
+      })
+    }, BACKGROUND_CONTEXT)
+    return { seeded: codemodeSteps.length }
+  },
   async seedHistory(args: JsonValue, { host }: ActionContext) {
     if (!host.faux) throw new Error('seedHistory runs only under faux')
     const { conversation, count = 1000 } = (args ?? {}) as {

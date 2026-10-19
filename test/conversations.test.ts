@@ -21,7 +21,7 @@ afterAll(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()))
 })
 
-/** A faux server whose project also enables subagents (for an owned child) and surfaces. */
+/** A faux server whose project also enables subagents (for an owned child). */
 async function launch() {
   const home = await temp('ultimate-conversations-')
   const projectRoot = join(home, 'project')
@@ -30,7 +30,7 @@ async function launch() {
     join(projectRoot, '.ultimate/settings.json'),
     JSON.stringify({
       summaryModel: 'unavailable/test',
-      extensions: { enable: ['subagents', 'surfaces'] },
+      extensions: { enable: ['subagents'] },
     }),
   )
   const server = await fauxServer({
@@ -73,61 +73,34 @@ async function launch() {
       post(server, `/api/extensions/conversations/actions/${name}`, { args }),
   }
 }
-/** The conversation ids a conversations section lists. */
-const listed = (text: string | undefined) =>
-  [...(text ?? '').matchAll(/^- #(\d+) /gm)].map((match) => Number(match[1]))
-
-it.concurrent('tells each top-level conversation about the others, and the surface on screen', async () => {
+it.concurrent('tells each top-level conversation about the others in a fixed text', async () => {
   const { server, home, summary, create, message, render } = await launch()
   const root = ROOT_CONVERSATION_ID
-  expect(await render('conversations', root)).toBeUndefined()
+  const fixed = await render('conversations', root)
+  expect(fixed).toMatch(new RegExp(`^You are conversation #${root}\\. `))
+  expect(fixed).toContain('`ultimate.conversations()`')
 
-  // An owned child (a subagent) is never listed and gets neither section.
+  // An owned child (a subagent) gets no section.
   await post(server, '/api/conversations/1/submit', { text: 'delegate to worker' })
   await server.harness.waitForIdle(context)
   const child = server.api.conversations().find((item) => item.label === 'worker')!
   expect(child.inputAt).toEqual(expect.any(Number))
   expect(child.parentConversationId).toBe(root)
   expect(child.branchOf).toBeUndefined()
-  expect(await render('conversations', root)).toBeUndefined()
   expect(await render('conversations', child.id as ConversationId)).toBeUndefined()
-  expect(await render('surfaces', child.id as ConversationId)).toBeUndefined()
 
-  // Empty conversations, titled or not, are never listed.
-  const empty = await create({ title: 'Empty' })
-  await create()
-  expect(await render('conversations', root)).toBeUndefined()
-
+  // Other conversations starting, working elsewhere or concluding never change the text.
   const other = await create()
   await message(other, 'Fix the parser', 2000)
-  expect(listed(await render('conversations', root))).toEqual([other])
-  const seen = await render('conversations', other)
-  expect(seen).toMatch(new RegExp(`^You are conversation #${other}\\.`))
-  expect(listed(seen)).toEqual([root])
-  expect(await render('conversations', empty)).toContain(`- #${other} Fix the parser\n`)
-
-  // A conversation in another directory says where it works.
   const elsewhere = await create({ cwd: home })
   await message(elsewhere, 'Elsewhere', 3000)
-  expect(await render('conversations', root)).toContain(
-    `- #${elsewhere} Elsewhere (cwd: ${home})\n`,
-  )
-
-  // At most the 10 most recently active, by id; concluded ones are left out before the cut.
-  const recent: ConversationId[] = []
-  for (let index = 0; index < 9; index++) {
-    recent.push(await create())
-    await message(recent[index], `Recent ${index}`, 4000 + index)
-  }
-  expect(listed(await render('conversations', root))).toEqual([elsewhere, ...recent])
   await post(server, '/api/extensions/conversations/actions/conclude', {
-    args: { ids: [recent[0]] },
+    args: { ids: [other] },
   })
-  expect(listed(await render('conversations', root))).toEqual([
-    other,
-    elsewhere,
-    ...recent.slice(1),
-  ])
+  expect(await render('conversations', root)).toBe(fixed)
+  expect(await render('conversations', elsewhere)).toBe(
+    fixed!.replace(`#${root}.`, `#${elsewhere}.`),
+  )
 
   // An ownerless fork is top-level, but its inherited history is tracked separately.
   const view = await server.root.viewState(context)
@@ -153,7 +126,6 @@ it.concurrent('tells each top-level conversation about the others, and the surfa
     await stream.close()
   }
   expect(await render('conversations', fork.id)).toContain(`You are conversation #${fork.id}.`)
-  expect(listed(await render('conversations', root))).toContain(fork.id)
   await until(async () => {
     try {
       const manifest = JSON.parse(
@@ -166,10 +138,6 @@ it.concurrent('tells each top-level conversation about the others, and the surfa
   })
   const manifest = JSON.parse(await readFile(join(server.host.home, 'conversations.json'), 'utf8'))
   expect(manifest.some((item: { id: number }) => item.id === child.id)).toBe(false)
-
-  // Every top-level conversation gets the surface line.
-  for (const id of [root, other, empty, fork.id])
-    expect(await render('surfaces', id)).toBe('The user is looking at the Agent surface (agent).')
 })
 
 it.concurrent('renames top-level conversations', async () => {

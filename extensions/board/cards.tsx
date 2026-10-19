@@ -44,7 +44,7 @@ import {
 } from './data.tsx'
 import { BoardDoc } from './refs.ts'
 import type { BoardMessage } from './refs.ts'
-import { MessageAnswers } from './ui.tsx'
+import { MessageAnswers } from './points.tsx'
 
 /** What an optional extension shows under a message to the user: questions' answer card. */
 const Answers = ({ message }: { message: BoardMessage }) => (
@@ -78,7 +78,7 @@ export function Address({ id, mark = false }: { id: number | 'user'; mark?: bool
   )
 }
 
-function Body({ text }: { text: string }) {
+export function Body({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false)
   return (
     <>

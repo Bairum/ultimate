@@ -256,35 +256,10 @@ export default (host: ExtensionHost) => {
           topLevel.set(input.conversationId, !own.owner)
         }
         if (!topLevel.get(input.conversationId)) return undefined
-        const concluded = (await host.uiState(caller))['ext.conversations.concluded']
-        // Only membership, titles and cwds go in, so the text changes rarely and prompt caches stay warm.
-        const others = host
-          .conversations()
-          .filter(
-            (summary) =>
-              summary.id !== input.conversationId &&
-              summary.parentConversationId === undefined &&
-              summary.inputAt !== undefined &&
-              !(Array.isArray(concluded) && concluded.includes(summary.id)),
-          )
-          .toSorted((a, b) => b.inputAt! - a.inputAt!)
-          .slice(0, 10)
-          .toSorted((a, b) => a.id - b.id)
-        const projectCount = (await host.projects()).filter((project) => !project.current).length
-        const projectLine = projectCount
-          ? `${projectCount} other ${projectCount === 1 ? 'project exists' : 'projects exist'}; in codemode, \`ultimate.projects()\` lists them with their conversations and URL when running.`
-          : undefined
-        if (!others.length) return projectLine
+        // Fixed text: a changed system prompt costs the prompt cache, and the list of others changed nearly every turn.
         return [
-          `You are conversation #${input.conversationId}. Other conversations in this project, each a separate agent with its own context:`,
-          ...others.map(
-            (summary) =>
-              `- #${summary.id} ${summary.title ?? 'untitled'}` +
-              (summary.cwd === input.agent.cwd ? '' : ` (cwd: ${summary.cwd})`),
-          ),
-          '',
-          'They work in the same checkout unless a cwd says otherwise: check `git status` before broad changes, never revert or reformat changes you did not make, and coordinate through the user. In codemode, `ultimate.entries(id)` shows what another conversation did and `ultimate.taskGraph()` whether it is working.',
-          ...(projectLine ? ['', projectLine] : []),
+          `You are conversation #${input.conversationId}. Other conversations in this project are separate agents with their own context, and some may work in your checkout: check \`git status\` before broad changes, never revert or reformat changes you did not make, and coordinate through the user.`,
+          'In codemode, `ultimate.conversations()` lists them with title, cwd and whether they are busy or concluded; `ultimate.entries(id)` shows what one did; `ultimate.projects()` lists other projects.',
         ].join('\n')
       }),
     ],

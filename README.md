@@ -120,9 +120,8 @@ See [discovery and settings](docs/settings.md) for precedence, enabling extensio
 
 A surface is a full-screen app made of extensions: the **Agent** surface is the conversation you start with; another
 can be anything you build. Switch in the title bar, `⌘K` → "Switch to …", or `mod+1…9`. The agent
-stays docked on every surface and knows which one you are looking at, and the choice is durable: reloads, other tabs,
-and restarts land on the same view. The `surfaces` extension tells the agent which surface you are viewing, and
-`documents` provides the Documents tab; surface UI contributions themselves work without either.
+stays docked on every surface, and the choice is durable: reloads, other tabs, and restarts land on the same view.
+`documents` provides the Documents tab; surface UI contributions themselves work without it.
 
 ## What to try
 
@@ -141,7 +140,7 @@ and restarts land on the same view. The `surfaces` extension tells the agent whi
 - Press `Ctrl+Alt+B` for the right panel: Info (machine, process, storage, build, extensions, skills), Agents, Tasks,
   Documents (the plan, the codemode store, and every other extension document), Workspaces, Extensions and more, each
   a tab.
-- Use the top-bar **@ultimate** button or first sidebar row to ask for work, explore an idea, or start an independent line of work. Its messages and questions appear in its transcript, with answer cards beneath questions.
+- Use the top-bar **@ultimate** button or first sidebar row to ask for work, explore an idea, or start an independent line of work. Its messages and questions appear in its transcript, with answer cards beneath questions; open questions also wait in the right panel's Questions tab, and the amber count next to the button opens it, until you answer or dismiss them.
 
 ## How it is put together
 

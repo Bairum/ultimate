@@ -4,24 +4,19 @@ import { describe, expect, inject, test } from 'vitest'
 import { askSummaryModel } from '../extensions/conversations/summary.ts'
 import { DEFAULT_SUMMARY_MODEL } from '../extensions/conversations/summary-model.ts'
 import { parseSummaryModel } from '../extensions/conversations/summary-model-ref.ts'
-import {
-  asksUser,
-  parseQuestions,
-  questionContext,
-  QUESTIONS_SYSTEM,
-} from '../extensions/questions/server.ts'
+import { parseQuestions, QUESTIONS_SYSTEM } from '../extensions/questions/server.ts'
 import type { TurnUsage } from './reporter.ts'
 import { ultimateQuestionCorpus } from './ultimate-question-corpus.ts'
 
 /** Extract with the default summary model, as the questions extension does, and record the call's usage. */
-async function extract(reply: string, userInput?: string) {
+async function extract(reply: string) {
   const parsed = parseSummaryModel(DEFAULT_SUMMARY_MODEL)!
   const model = { provider: parsed.provider, id: parsed.id, thinking: parsed.thinking ?? 'off' }
   const started = performance.now()
   const response = await askSummaryModel(
     await ModelRuntime.create(),
     QUESTIONS_SYSTEM,
-    userInput === undefined ? reply : questionContext(reply, userInput),
+    reply,
     AbortSignal.timeout(120_000),
     { model },
   )
@@ -46,22 +41,19 @@ I started #130966 to design what you describe:
 
 It changes nothing until you pick from its proposal.`
 
-  test('the exact #97078/131003 answer is gated and asks nothing even on the Board path', async () => {
-    expect(asksUser(branchStarted)).toBe(false)
-    expect(await extract(branchStarted, 'You get the intent though, right?')).toEqual([])
+  test('the exact #97078/131003 answer asks nothing', async () => {
+    expect(await extract(branchStarted)).toEqual([])
   })
 
   test('waiting for a branch report is not a decision available now', async () => {
     const reply =
       'Waiting for #130966 to report back. Once its proposal arrives, you can choose whether to proceed.'
-    expect(asksUser(reply)).toBe(false)
-    expect(await extract(reply, 'Please have a branch investigate the design.')).toEqual([])
+    expect(await extract(reply)).toEqual([])
   })
 
   test('a land-or-change decision is available now', async () => {
     const reply = 'Should I land it? 1. Yes 2. Change something first'
-    expect(asksUser(reply)).toBe(true)
-    const questions = await extract(reply, 'Review the fix and tell me the next step.')
+    const questions = await extract(reply)
     expect(questions).toHaveLength(1)
     expect(questions[0].text).toMatch(/land/i)
     // F9 permits a confirm for a direct permission request even when alternatives are listed.

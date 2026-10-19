@@ -127,8 +127,47 @@ const Started = defineDoc<{ by?: number; yielded?: number }>({
   fork: 'initial',
   initial: () => ({}),
 })
-/** A reply-enabled message to the user that the user has not answered yet. */
+/** A reply-enabled message to the user that the user has neither answered nor dismissed yet. */
 const openQuestion = (m: BoardMessage) => m.to === 'user' && m.reply && m.state === 'delivered'
+/** A question in one line: its first line that asks something, else its first line, clipped. */
+export const gist = (text: string) => {
+  const lines = text
+    .split('\n')
+    .map((line) => line.replace(/\*\*/g, '').trim())
+    .filter(Boolean)
+  const line = lines.find((candidate) => candidate.includes('?')) ?? lines[0] ?? ''
+  return line.length > 100 ? `${line.slice(0, 99)}…` : line
+}
+/**
+ * The input that starts a run of the conversation that asked the user questions goes in after a line naming those still
+ * open, so the agent treats them as unanswered. A per-input entry, not a system-prompt section, keeps the prompt cached.
+ */
+export async function openQuestionsNote(tx: Tx, conversationId: ConversationId, now: number) {
+  const open = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.filter(
+    (m) => openQuestion(m) && m.from === conversationId,
+  )
+  if (!open.length) return undefined
+  const ago = (at: number) => {
+    const minutes = Math.max(0, Math.round((now - at) / 60_000))
+    return minutes < 1
+      ? 'just now'
+      : minutes < 60
+        ? `${minutes}m ago`
+        : `${Math.round(minutes / 60)}h ago`
+  }
+  const text = `Open questions to the user, unanswered until they answer or dismiss them:\n${open
+    .map((m) => `- message ${m.id}: ${gist(m.text)} (asked ${ago(m.at)})`)
+    .join('\n')}`
+  return {
+    entries: [
+      {
+        kind: 'board.open',
+        data: { ids: open.map((m) => m.id) },
+        model: [{ role: 'user' as const, content: text, timestamp: now }],
+      },
+    ],
+  }
+}
 async function append(tx: Tx, input: Omit<BoardMessage, 'id' | 'at'>) {
   const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
   const message = { ...input, id: log.next++, at: Date.now() }
@@ -700,6 +739,8 @@ async function send(
     steer?: boolean
     re?: number
     images?: ImagesRef
+    /** The user's reply `re` dismisses that question instead of answering it. */
+    dismiss?: boolean
   },
   ctx: Context,
   taskId?: TaskId,
@@ -758,10 +799,10 @@ async function send(
       input.images === undefined
         ? undefined
         : await resolveImages(tx, from as ConversationId, input.images)
-    // Only a Reply answers a question to the user, and only the one it replies to.
+    // Only a Reply answers a question to the user, and only the one it replies to; a dismissal closes it unanswered.
     if (from === 'user' && input.re !== undefined)
       for (const m of (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages)
-        if (openQuestion(m) && m.id === input.re) m.state = 'answered'
+        if (openQuestion(m) && m.id === input.re) m.state = input.dismiss ? 'dismissed' : 'answered'
     if (from !== 'user' && input.reply !== false) {
       const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
       const pending = log.messages.find(
@@ -854,6 +895,29 @@ export default function board(host: ExtensionHost) {
         messageId,
       )
     },
+    dismiss: async (messageId, ctx) => {
+      const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx)
+      const message = log?.messages.find((m) => m.id === messageId)
+      if (!message || !openQuestion(message)) throw new Error('These questions are no longer open')
+      // A one-way note: the asker reads it with its next input, and no run starts for it.
+      return send(
+        host,
+        'user',
+        {
+          to: `#${message.from}`,
+          text: `The user dismissed your question (message ${messageId}): ${gist(message.text)}\nIt is closed without an answer; ask again only if it still matters.`,
+          reply: false,
+          re: messageId,
+          dismiss: true,
+        },
+        ctx,
+        undefined,
+        undefined,
+        undefined,
+        messageId,
+        true,
+      )
+    },
     send: (from, input, requestId, ctx) =>
       send(host, from, input, ctx, undefined, undefined, requestId),
   })
@@ -867,6 +931,8 @@ export default function board(host: ExtensionHost) {
     tasks: [delivery(host), route(host)],
     hooks: [
       hook(GenerationTask, {
+        // Pi upstream: @earendil-works/pi-durable@1.3.0 — patched transactional beforeInput hook.
+        beforeInput: (_input, api) => openQuestionsNote(api.tx, api.conversationId, Date.now()),
         onYield: async (_answer, api, ctx) => {
           const by = (await api.snapshot(Started, api.conversationId, ctx))?.by
           if (by === undefined) return undefined

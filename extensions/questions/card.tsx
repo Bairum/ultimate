@@ -1,13 +1,11 @@
 import { CheckIcon, MessageCircleQuestionIcon } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { api, cn, errorMessage, useConversation, useDocOf, useTranscript, useViewport } from '@/sdk'
-import type { EntryRecord } from '@/sdk'
+import { api, cn, errorMessage, useConversation, useDocOf, useViewport } from '@/sdk'
 import { BoardDoc } from '../board/ui.tsx'
-import { keyCard, openQuestions, replyQuestions } from './open.tsx'
+import { keyCard, openQuestions } from './open.tsx'
 import type { Message } from './open.tsx'
-import { AnswerAction, QuestionsDoc, ReplyAction } from './refs.ts'
+import { AnswerAction, DismissAction, QuestionsDoc } from './refs.ts'
 import type { Answer } from './refs.ts'
 import type { Question } from './types.ts'
 
@@ -25,50 +23,36 @@ function useKeys(card: string) {
   const board = useDocOf(1, QuestionsDoc)
   const messages = useDocOf(1, BoardDoc)?.messages ?? []
   const conversation = useConversation((value) => value.id)
-  return keyCard(board, conversation, messages, useTranscript()) === card
+  return keyCard(board, conversation, messages) === card
 }
 
-/** The answer card under an open message to the user; renders nothing without extracted questions. */
-export function MessageQuestions({ message }: { message: Message }) {
+/**
+ * The answer card of a message that waits on the user: its extracted questions, or only Dismiss while none were
+ * extracted. `keys` (default: the shown conversation decides) whether it takes the desktop 1–9 and Enter keys.
+ */
+export function MessageQuestions({
+  message,
+  keys,
+  className,
+}: {
+  message: Message
+  keys?: boolean
+  className?: string
+}) {
   const questions = openQuestions(useDocOf(1, QuestionsDoc), message)
   const card = `message:${message.id}`
-  const keys = useKeys(card)
-  if (!questions.length) return null
+  const shown = useKeys(card)
+  if (message.to !== 'user' || !message.reply || message.state !== 'delivered') return null
   return (
     <Card
       card={card}
       questions={questions}
-      keys={keys}
+      keys={questions.length > 0 && (keys ?? shown)}
       submit={(answers) => api.action(AnswerAction, { messageId: message.id, answers })}
+      reply={(text) => api.action(AnswerAction, { messageId: message.id, text })}
+      dismiss={() => api.action(DismissAction, { messageId: message.id })}
+      {...(className === undefined ? {} : { className })}
     />
-  )
-}
-
-/** A final answer, followed by the answer card for its questions while it is @ultimate's current answer. */
-export function ReplyQuestions({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
-  const conversation = useConversation((value) => value.id)
-  const questions = replyQuestions(
-    useDocOf(1, QuestionsDoc),
-    conversation,
-    entry.id,
-    useTranscript(),
-  )
-  const card = `reply:${entry.id}`
-  const keys = useKeys(card)
-  if (!questions.length) return core
-  return (
-    <div className="flex flex-col gap-3">
-      {core}
-      <section className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20">
-        <Card
-          card={card}
-          questions={questions}
-          keys={keys}
-          className=""
-          submit={(answers) => api.action(ReplyAction, { entryId: entry.id, answers })}
-        />
-      </section>
-    </div>
   )
 }
 
@@ -77,14 +61,20 @@ function Card({
   questions,
   keys,
   submit,
+  reply,
+  dismiss,
   className = 'border-t border-border/60',
 }: {
   card: string
   questions: Question[]
   keys: boolean
   submit: (answers: Answer[]) => Promise<unknown>
+  reply: (text: string) => Promise<unknown>
+  dismiss: () => Promise<unknown>
   className?: string
 }) {
+  const [text, setText] = useState('')
+  const root = useRef<HTMLDivElement>(null)
   const [answers, setAnswers] = useState<Record<number, string>>({})
   const [custom, setCustom] = useState<Record<number, boolean>>({})
   const [current, setCurrent] = useState(0)
@@ -102,18 +92,19 @@ function Card({
     setAnswers((old) => ({ ...old, [index]: other ? '' : value.label }))
     setCurrent(index)
   }
-  const send = async () => {
-    if (!answered.length || sending) return
+  const run = async (action: () => Promise<unknown>) => {
+    if (sending) return
     setSending(true)
     setError(undefined)
     try {
-      await submit(answered)
+      await action()
     } catch (failure) {
       setError(errorMessage(failure))
     } finally {
       setSending(false)
     }
   }
+  const send = () => (answered.length ? run(() => submit(answered)) : Promise.resolve())
   useEffect(() => {
     if (!keys || phone || sending) return undefined
     const key = (event: KeyboardEvent) => {
@@ -123,7 +114,10 @@ function Card({
         event.metaKey ||
         event.ctrlKey ||
         event.altKey ||
-        target?.closest('input, textarea, select, [contenteditable="true"]')
+        target?.closest('input, textarea, select, [contenteditable="true"]') ||
+        // Outside this card, another card, a control or the Questions panel keeps its own keys.
+        (!root.current?.contains(target) &&
+          target?.closest('[data-questions-card], [data-open-questions], button, a'))
       )
         return
       if (/^[1-9]$/.test(event.key)) {
@@ -138,8 +132,48 @@ function Card({
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
   })
+  // Nothing extracted to answer with buttons: a reply field for this message, and Dismiss.
+  if (!questions.length)
+    return (
+      <form
+        className={cn(className, 'flex flex-wrap items-center gap-2 px-3 py-2')}
+        data-questions-card={card}
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (text.trim()) void run(() => reply(text.trim()))
+        }}
+      >
+        <MessageCircleQuestionIcon className="size-3.5 shrink-0 text-brand" />
+        <input
+          aria-label="Your answer"
+          placeholder="Your answer…"
+          value={text}
+          disabled={sending}
+          onChange={(event) => setText(event.target.value)}
+          className="min-h-8 min-w-0 flex-1 basis-40 rounded border border-border bg-background px-2 py-1 text-sm outline-none focus:border-brand/60"
+        />
+        <Button
+          variant="ghost"
+          size="xs"
+          type="button"
+          disabled={sending}
+          onClick={() => void run(dismiss)}
+          title="Close it without an answer; the agent gets a note"
+        >
+          Dismiss
+        </Button>
+        <Button size="xs" type="submit" disabled={!text.trim() || sending}>
+          {sending ? 'Sending…' : 'Send'}
+        </Button>
+        {error && (
+          <p role="alert" className="w-full text-xs text-error">
+            {error}
+          </p>
+        )}
+      </form>
+    )
   return (
-    <div className={className} data-questions-card={card}>
+    <div className={className} data-questions-card={card} ref={root}>
       <div className="flex items-center gap-2 px-3 pt-2 font-mono text-[11px] text-muted-foreground">
         <MessageCircleQuestionIcon className="size-3.5 text-brand" />
         <span className="text-foreground">
@@ -215,7 +249,7 @@ function Card({
               </fieldset>
             ),
         )}
-        <div className="flex items-center gap-2 border-t border-border/60 pt-2">
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border/60 pt-2">
           {phone ? (
             <>
               <Button
@@ -226,8 +260,8 @@ function Card({
               >
                 Back
               </Button>
-              <span className="font-mono text-[10px] text-muted-foreground">
-                {current + 1} of {questions.length}
+              <span className="font-mono text-[10px] whitespace-nowrap text-muted-foreground">
+                {current + 1}/{questions.length}
               </span>
               {current < questions.length - 1 && (
                 <Button variant="ghost" size="xs" onClick={() => setCurrent(current + 1)}>
@@ -244,10 +278,15 @@ function Card({
           )}
           <Button
             className="ml-auto"
-            size="sm"
-            disabled={!answered.length || sending}
-            onClick={() => void send()}
+            variant="ghost"
+            size={phone ? 'xs' : 'sm'}
+            disabled={sending}
+            onClick={() => void run(dismiss)}
+            title="Close it without an answer; the agent gets a note"
           >
+            Dismiss
+          </Button>
+          <Button size="sm" disabled={!answered.length || sending} onClick={() => void send()}>
             {sending ? 'Sending…' : 'Send answers'}
           </Button>
         </div>

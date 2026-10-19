@@ -68,7 +68,7 @@ export const ToolHeader = ({ className, name, state, title, meta, ...props }: To
     {...props}
   >
     <ToolStatusIcon state={state} />
-    <span className="shrink-0 font-medium text-foreground">{name}</span>
+    {name && <span className="shrink-0 font-medium text-foreground">{name}</span>}
     <span className="min-w-0 flex-1 truncate text-muted-foreground">{title}</span>
     {meta && (
       <span className="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground tabular-nums">

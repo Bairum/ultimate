@@ -223,8 +223,6 @@ function Tree({ waiting }: { waiting: number }) {
             primary: ultimateId,
           },
           board,
-          // `waiting` already counts the open questions; it waits on you exactly when that count is above zero.
-          waiting > 0,
         )
       : waiting > 0
         ? 'waits'

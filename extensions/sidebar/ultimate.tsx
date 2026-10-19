@@ -1,18 +1,13 @@
 import type { ReactNode } from 'react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn, Provided, useDocOf, useStore, useTasks, useUltimate } from '@/sdk'
-import { AnswerWaits, BoardDoc, emptyBoard, waitingOnUser } from '../board/ui.tsx'
+import { BoardDoc, emptyBoard, waitingOnUser } from '../board/ui.tsx'
 import { AgentMark, ConversationPhase, useOverview, usePrimaryAgent } from '../conversations/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 
-/** Renders with how many of @ultimate's messages and final answers wait on the user's answer. */
+/** Renders with how many questions wait on the user's answer or dismissal. */
 export function WaitingOnUser({ children }: { children: (waiting: number) => ReactNode }) {
-  const board = useDocOf(1, BoardDoc) ?? emptyBoard
-  return (
-    <Provided input={null} point={AnswerWaits}>
-      {(asks) => children(waitingOnUser(board, asks))}
-    </Provided>
-  )
+  return children(waitingOnUser(useDocOf(1, BoardDoc) ?? emptyBoard))
 }
 
 /** A busy standing agent's word: its classified phase, lower case like its idle line, else "working". */
@@ -51,35 +46,50 @@ export function UltimateButton() {
             const word = workingWord(phase)
             const label = working ? word : waiting ? `${waiting} waiting on you` : 'idle'
             return (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    aria-current={active ? 'page' : undefined}
-                    aria-label={`Talk to @${name} (${label})`}
-                    className={cn(
-                      'flex h-5 shrink-0 items-center gap-1.5 rounded-sm px-1.5 transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
-                      active && 'text-foreground',
-                    )}
-                    data-ultimate-button
-                    onClick={() => void talkToUltimate(actions)}
-                    type="button"
-                  >
-                    <AgentMark
-                      name={name}
-                      presence={working ? 'working' : waiting ? 'waiting' : undefined}
-                      size="sm"
-                    />
-                    @{name}
-                    {working && word !== 'working' && <span className="text-brand">{word}</span>}
-                    {waiting > 0 && (
-                      <span className="text-amber-700 dark:text-amber-300">{waiting}</span>
-                    )}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  Talk to @{name} · {label}
-                </TooltipContent>
-              </Tooltip>
+              <>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      aria-current={active ? 'page' : undefined}
+                      aria-label={`Talk to @${name} (${label})`}
+                      className={cn(
+                        'flex h-5 shrink-0 items-center gap-1.5 rounded-sm px-1.5 transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
+                        active && 'text-foreground',
+                      )}
+                      data-ultimate-button
+                      onClick={() => void talkToUltimate(actions)}
+                      type="button"
+                    >
+                      <AgentMark
+                        name={name}
+                        presence={working ? 'working' : waiting ? 'waiting' : undefined}
+                        size="sm"
+                      />
+                      @{name}
+                      {working && word !== 'working' && <span className="text-brand">{word}</span>}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Talk to @{name} · {label}
+                  </TooltipContent>
+                </Tooltip>
+                {waiting > 0 && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        aria-label={`${waiting} ${waiting === 1 ? 'question waits' : 'questions wait'} on you`}
+                        className="-ml-1 flex h-5 shrink-0 items-center rounded-sm bg-amber-500/15 px-1.5 text-amber-700 transition-colors outline-none hover:bg-amber-500/25 focus-visible:ring-1 focus-visible:ring-ring dark:text-amber-300"
+                        data-questions-count
+                        onClick={() => actions.openPanel('questions')}
+                        type="button"
+                      >
+                        {waiting}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>{waiting} waiting on you · open Questions</TooltipContent>
+                  </Tooltip>
+                )}
+              </>
             )
           }}
         </Provided>

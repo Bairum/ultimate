@@ -6,10 +6,8 @@ button for each; the choices live in `ext.sounds.muted` and `ext.sounds.off`.
 
 Only the primary standing agent sounds, read from the root's documents:
 
-- **Needs input:** its reply-expected `message` to the user (`board`), or its answer to your typed input that carries
-  an open question card (`questions.board` reply).
-- **Finished:** its one-way `message` to the user, or its answer to your typed input without a card. Such an answer
-  waits while its question extraction (`questions.reply-extract`) runs, and two seconds for one to start.
+- **Needs input:** its reply-expected `message` to the user (`board`); every question goes that way.
+- **Finished:** its one-way `message` to the user, or its answer to your typed input.
 - **Failed:** its run ended in an error (`ultimate.conversation-overview`); a stop or a reset does not.
 
 Nothing else sounds: branches, workers, the lander, other standing agents, messages to you from anyone else, landings,

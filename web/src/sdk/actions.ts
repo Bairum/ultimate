@@ -18,7 +18,7 @@ export const shellKeys = {
   conversation: 'shell.conversation',
   /** The chosen surface's id. */
   surface: 'shell.surface',
-  /** `{ id, title }` of the surface on screen, which the agent's prompt names (extensions/surfaces). */
+  /** `{ id, title }` of the surface on screen: what rendered, so Agent after a chosen surface that failed. */
   shownSurface: 'shell.shownSurface',
   panel: 'shell.panel',
   panelOpen: 'shell.panelOpen',

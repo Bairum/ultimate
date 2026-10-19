@@ -18,3 +18,23 @@
 - `tsconfig.json` (server, tests, tooling) references `tsconfig.web.json` (browser: `web/src`, `extensions/**/*.tsx`).
   `pnpm check` type-checks both; with plain `tsc`, run `tsc -b`.
 - The standalone server shuts down on SIGINT/SIGTERM; reopening resumes durable work.
+
+## Starting fresh
+
+`pnpm reset [dir] [--machine] [--dry-run] [--yes]` starts a project's Ultimate (or with `--machine` the machine home) from
+an empty state. It deletes nothing: `state.sqlite`, `trace.sqlite`, parked `state.stale-*` databases (each with its
+`-wal`/`-shm`), `conversations.json`, `previews.json` and `supervisor.log` move to
+`~/.ultimate/backups/reset-<time>/<home>/`, and it prints that folder and the `mv` that restores it.
+
+- Stop Ultimate first (`systemctl --user stop ultimate`, or `ultimate-machine` for `--machine`); it refuses while the
+  home's lock is held, and holds it while it moves files.
+- Kept: settings, secrets, logins, `project.json`, the lander checkout, worktrees and `ultimate/*` branches. It lists
+  worktrees with uncommitted changes and branches not merged into the project's HEAD.
+- Cloud sync: a clean stop releases the lease after uploading a snapshot of the old state. The reset records the new
+  empty database as that snapshot in `cloud-lease.json`, so after starting, **Move here** once takes the project with
+  the fresh state, without a download. The old history then lives in the backup folder and in older cloud backups
+  until they are pruned. It refuses on standby behind another machine, while a move to this machine is in flight, and
+  when this machine still holds the lease (a stop that did not release): start and stop Ultimate cleanly first.
+- It checks all of this again under the lock, and journals its progress in `<home>/reset.json`: an interrupted reset
+  finishes into the same backup when run again, and `ultimate` refuses to start while the journal exists. The fresh database is recorded in `cloud-lease.json` before any file
+  moves, so a claim never installs the old snapshot over it.

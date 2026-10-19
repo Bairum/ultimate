@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { copyFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -43,6 +43,7 @@ import {
 } from './cloud-lease-fixture.ts'
 import { eventHost, temp, until } from './helpers.ts'
 import { LeaseChanged } from '../extensions/cloud/refs.ts'
+import { apply, plan } from '../scripts/reset.ts'
 
 it('releases an idle writer, and another machine prepares and takes over the same history', async () => {
   snapshotFetch()
@@ -1418,4 +1419,31 @@ it('relinks a renamed repository to its old replica and forgets the lease epoch'
   })
   expect(store.target('github.com/o/renamed')).toBe('github.com/o/project')
   expect(existsSync(join(home, 'cloud-lease.json'))).toBe(false)
+})
+
+it('claims a reset home as its released snapshot: no download, the fresh database opens', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const desk = await machine('desk', project, root)
+  await writer(desk)
+  const fresh = await inventory(desk.harness())
+  await desk
+    .harness()
+    .commit(
+      (tx) => tx.appendEntry(ROOT_CONVERSATION_ID, { kind: 'lease-test.entry', data: {} }),
+      context,
+    )
+  await idleRelease(desk)
+  await desk.close()
+  const reset = await plan(desk.home, await temp('ultimate-reset-backups-'))
+  expect(reset).toMatchObject({ cloud: true })
+  await apply(reset)
+  expect(readdirSync(reset.backup)).toContain('state.sqlite')
+  const restarted = await machine('desk', project, root, { home: desk.home })
+  await writer(restarted)
+  expect(restarted.snapshots.downloadSnapshot).not.toHaveBeenCalled()
+  expect(states(await restarted.transition())).toMatchObject({ download: 'skipped', claim: 'done' })
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 2 })
+  expect((await inventory(restarted.harness())).entries).toBe(fresh.entries)
 })

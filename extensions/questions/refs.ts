@@ -8,22 +8,23 @@ import type { QuestionsBoard } from './types.ts'
 /** One answered question: the question's text and the chosen or typed answer. */
 export type Answer = { question: string; answer: string }
 
-/** Extracted questions by Board message id, and those of @ultimate's latest final answer, on conversation 1. */
+/** Extracted questions by Board message id, on conversation 1. */
 export const QuestionsDoc = docRef<QuestionsBoard>('questions.board')
 
 /**
- * `{ messageId, answers }` → `{ id }`: answer the questions of open Board message `messageId` with a Board reply to its
- * sender; `id` is the reply's message id. Fails when the message no longer waits on the user.
+ * `{ messageId, answers }` or `{ messageId, text }` → `{ id }`: answer open Board message `messageId` with a Board reply
+ * to its sender, from its extracted questions or as free text; `id` is the reply's message id. Fails when the message
+ * no longer waits on the user.
  */
-export const AnswerAction = actionRef<{ messageId: number; answers: Answer[] }, { id: number }>(
-  'questions',
-  'answer',
-)
+export const AnswerAction = actionRef<
+  { messageId: number; answers?: Answer[]; text?: string },
+  { id: number }
+>('questions', 'answer')
 /**
- * `{ entryId, answers }` → `{}`: answer the questions of @ultimate's current final answer `entryId` as a typed input in
- * its conversation. One call wins; fails when the answer is no longer current or its conversation is busy.
+ * `{ messageId }` → `{ id }`: close open Board message `messageId` without an answer; its sender gets a one-way note,
+ * `id`, that starts no run. Fails when the message no longer waits on the user.
  */
-export const ReplyAction = actionRef<{ entryId: number; answers: Answer[] }, Record<string, never>>(
+export const DismissAction = actionRef<{ messageId: number }, { id: number }>(
   'questions',
-  'reply',
+  'dismiss',
 )

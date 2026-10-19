@@ -6,14 +6,11 @@ export function answeredMessages(messages: BoardMessage[], conversation: number,
 }
 
 export const emptyBoard: BoardData = { messages: [], next: 1 }
-/**
- * What waits on the user's answer: each open question message to the user, and @ultimate's current final answer as one
- * more when it asks (`answerWaits`, from the `AnswerWaits` point).
- */
-export const waitingOnUser = (board: BoardData, answerWaits = false) =>
+/** What waits on the user: each question to the user they have neither answered nor dismissed. */
+export const waitingOnUser = (board: BoardData) =>
   board.messages.filter(
     (message) => message.to === 'user' && message.reply && message.state === 'delivered',
-  ).length + (answerWaits ? 1 : 0)
+  ).length
 
 /**
  * Where a conversation stands, the one state every view shows:
@@ -39,11 +36,10 @@ export function conversationState(
     primary?: number
   },
   board: BoardData,
-  answerWaits = false,
 ): ConversationState {
   const { id, kind, runState } = conversation
   if (conversation.busy || runState === 'working' || runState === 'queued') return 'working'
-  if (kind === 'primary' && waitingOnUser(board, answerWaits) > 0) return 'waits'
+  if (kind === 'primary' && waitingOnUser(board) > 0) return 'waits'
   if (
     kind !== 'subagent' &&
     board.messages.some(
@@ -113,6 +109,7 @@ export const isOpen = (message: BoardMessage) =>
 export function messageStatus(message: BoardMessage) {
   if (message.state === 'failed') return 'failed'
   if (message.state === 'answered') return 'answered'
+  if (message.state === 'dismissed') return 'dismissed'
   if (isOpen(message)) return message.to === 'user' ? 'yours' : 'waiting'
   if (message.state === 'sent') return 'sending'
   return message.re === undefined ? 'one-way' : 'reply'
@@ -134,6 +131,7 @@ export function outgoingState(
   if (!message) return running ? 'sending' : undefined
   if (message.state === 'failed') return 'failed'
   if (message.state === 'answered') return 'answered'
+  if (message.state === 'dismissed') return 'dismissed'
   if (message.state === 'sent') return 'sending'
   if (!message.reply) return 'delivered'
   return toUser ? 'awaiting your reply' : 'awaiting reply'
