@@ -92,7 +92,7 @@ export default async function fauxExtension(host: ExtensionHost) {
             ),
           ])
         if (
-          system.content.startsWith('Assess the latest') ||
+          system.content.startsWith('Describe the latest') ||
           system.content.startsWith('Summarize the initial') ||
           system.content.startsWith('Refresh a coding')
         ) {
