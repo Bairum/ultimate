@@ -232,12 +232,14 @@ describe('conversation state', () => {
       )
   })
 
-  it('awaits another agent while its reply-expected message to it is open', () => {
-    const branch = { id: 5, kind: 'other' as const, runState: 'answered' as const }
+  it('awaits the primary agent while its reply-expected message to it is open', () => {
+    const branch = { id: 5, kind: 'other' as const, runState: 'answered' as const, primary: 3 }
     for (const state of ['sent', 'delivered'] as const)
       expect(conversationState(branch, board({ from: 5, to: 3, state }))).toBe('awaiting')
     expect(conversationState(branch, board({ from: 5, to: 3, state: 'answered' }))).toBe('idle')
     expect(conversationState(branch, board({ from: 5, to: 3, reply: false }))).toBe('idle')
+    // A coordinator's question to its own worker waits on no one the user watches.
+    expect(conversationState(branch, board({ from: 5, to: 9 }))).toBe('idle')
   })
 
   it('failed when its latest input ended without an answer', () => {
