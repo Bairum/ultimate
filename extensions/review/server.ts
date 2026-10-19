@@ -1,13 +1,21 @@
 import type { Context } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { defineEntry, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import { git, isolatable } from '../../lib/git.ts'
+import { primaryAgent } from '../../lib/machine.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { SubagentsApi } from '../subagents/api.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
+import { checkReview, reviewText } from './comments.ts'
+import type { ReviewComments } from './comments.ts'
 import { reviewDiff } from './diff.ts'
-import { DiffAction, RangesAction } from './refs.ts'
+import { DiffAction, RangesAction, RecipientAction, SendAction } from './refs.ts'
 import type { ReviewRange } from './refs.ts'
+
+/** A review the user sent: the input its recipient reads as `reviewText`; card.tsx renders it. */
+export const ReviewCommentsEntry = defineEntry<ReviewComments>('review.comments')
 
 const index = (host: ExtensionHost, ctx: Context) =>
   host.harness().snapshot(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID, ctx)
@@ -78,6 +86,7 @@ async function ranges(host: ExtensionHost): Promise<ReviewRange[]> {
       group: 'Branches',
       label: titles.get(id) ?? `#${id}`,
       detail: `#${id} · ${ago(Number(at))}`,
+      conversation: id,
     })
   }
   for (const { data, at } of landings)
@@ -86,6 +95,7 @@ async function ranges(host: ExtensionHost): Promise<ReviewRange[]> {
       group: 'Landings',
       label: data.feature ? `${data.feature} · ${data.title}` : data.title || data.sha.slice(0, 7),
       detail: `${data.sha.slice(0, 7)} · ${data.commitCount} commit${data.commitCount === 1 ? '' : 's'} · ${ago(Date.parse(at) / 1000)}`,
+      conversation: data.conversationId,
     })
   for (const line of commits.split('\n').filter(Boolean)) {
     const [sha, at, subject] = line.split('\t') as [string, string, string]
@@ -99,6 +109,51 @@ async function ranges(host: ExtensionHost): Promise<ReviewRange[]> {
   return list
 }
 
+const known = (host: ExtensionHost, id: number) =>
+  host.conversations().some((conversation) => conversation.id === id)
+
+/** Who a review of `spec` goes to unless the user picks another: see `RecipientAction`. */
+async function recipient(host: ExtensionHost, spec: string): Promise<number> {
+  const owner = async () => {
+    if (spec.startsWith('branch:')) {
+      const branch = spec.slice('branch:'.length)
+      const items = Object.entries((await index(host, context))?.items ?? {})
+      return Number(items.find(([, item]) => item.branch === branch)?.[0]) || undefined
+    }
+    const range = /^[^.]+\.\.\.([^.]+)$/.exec(spec)
+    if (range) {
+      const landings = await host.eventLog.recent({ events: [SubmissionLanded], limit: 200 })
+      const sha = await git(
+        host.projectRoot,
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        '--end-of-options',
+        `${range[1]}^{commit}`,
+      )
+      return landings.find(({ data }) => data.sha === sha)?.data.conversationId
+    }
+    if (spec === 'uncommitted' || spec.startsWith('-')) return undefined
+    const trailer = await git(
+      host.projectRoot,
+      'log',
+      '-1',
+      '--format=%(trailers:key=Ultimate-Conversation,valueonly)',
+      '--end-of-options',
+      spec,
+    )
+    return Number(trailer.split('\n')[0]) || undefined
+  }
+  const found = await owner().catch(
+    // An unknown ref or a missing repository has no owner: the review goes to the primary agent.
+    () => undefined,
+  )
+  if (found !== undefined && known(host, found)) return found
+  return host.need(SubagentsApi).standing(primaryAgent(host.projectRoot, host.userHome), context)
+}
+
+export const userActions = ['send']
+
 export const actions = {
   diff: implementAction(DiffAction, async (args, { host, signal }) => {
     const input = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
@@ -109,6 +164,31 @@ export const actions = {
     })
   }),
   ranges: implementAction(RangesAction, (_args, { host }) => ranges(host)),
+  recipient: implementAction(RecipientAction, async (args, { host }) => {
+    const spec = args && typeof args === 'object' && !Array.isArray(args) ? args.spec : undefined
+    if (typeof spec !== 'string') throw new Error('Expected { spec }')
+    return { conversation: await recipient(host, spec) }
+  }),
+  send: implementAction(SendAction, async (args, { host }) => {
+    const id =
+      args && typeof args === 'object' && !Array.isArray(args) ? args.conversation : undefined
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || !known(host, id))
+      throw new Error('conversation must be an existing conversation id')
+    const review = checkReview(args)
+    const conversation = await host.harness().conversation(id as ConversationId, context)
+    if (!conversation) throw new Error(`No conversation #${id}`)
+    await conversation.submit(
+      {
+        type: 'input',
+        content: reviewText(review),
+        entry: { kind: ReviewCommentsEntry.kind, data: review },
+        // A review is the user's input: it steers a busy recipient as a message typed into it would.
+        whenBusy: 'steer',
+      },
+      context,
+    )
+    return { conversation: id }
+  }),
 }
 
 export default { name: 'review' }

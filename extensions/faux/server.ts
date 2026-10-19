@@ -501,6 +501,21 @@ export default async function fauxExtension(host: ExtensionHost) {
       }
       if (last?.role === 'user' && messageText(last.content).startsWith('Reply from #'))
         return fauxAssistantMessage([fauxText('Noted; nothing else is needed from it.')])
+      // A review sent from the Review surface: acknowledge each place it names.
+      const review =
+        last?.role === 'user'
+          ? /^Review of `(.+)` \((\d+) comments?\)/.exec(messageText(last.content))
+          : null
+      if (review) {
+        const places = [
+          ...messageText(last!.content).matchAll(/^`([^`\n]+:\d+(?:-\d+)?)` \((?:old|new)\)$/gm),
+        ]
+        return fauxAssistantMessage([
+          fauxText(
+            `Thanks for the review of \`${review[1]}\`. I will address ${review[2]} comment${review[2] === '1' ? '' : 's'}:\n\n${places.map((place) => `- \`${place[1]}\``).join('\n')}`,
+          ),
+        ])
+      }
       // A one-way message with the given text, to preview how its recipient's row shows triage.
       const tell =
         last?.role === 'user'
