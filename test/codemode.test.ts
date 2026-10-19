@@ -7,6 +7,7 @@ import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import {
   copyApis,
+  eventHost,
   fauxServer as createServer,
   until,
   temp,
@@ -15,7 +16,8 @@ import {
   post,
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
-import { Store } from '../extensions/codemode/server.ts'
+import { Store, SummaryDoc } from '../extensions/codemode/server.ts'
+import { Summarized } from '../extensions/codemode/refs.ts'
 import planExtension from '../extensions/plan/server.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -54,10 +56,8 @@ async function fixture() {
       .replace("'../../lib/agents.ts'", JSON.stringify(resolve('lib/agents.ts')))
       .replace("'../../lib/api-files.ts'", JSON.stringify(resolve('lib/api-files.ts'))),
   )
-  await cp(
-    resolve('extensions/codemode/projects.ts'),
-    join(ultimateRoot, 'extensions/codemode/projects.ts'),
-  )
+  for (const file of ['api.ts', 'projects.ts', 'refs.ts', 'summary.ts'])
+    await cp(resolve('extensions/codemode', file), join(ultimateRoot, 'extensions/codemode', file))
   const options = {
     ultimateRoot,
     projectRoot: ultimateRoot,
@@ -310,7 +310,7 @@ it('discovers extension contracts: summaries first, then one api.ts and refs.ts 
     server,
     `const apis = await ultimate.apis();
     let unknown;
-    try { await ultimate.api('codemode') } catch (error) { unknown = error.message }
+    try { await ultimate.api('no-such-extension') } catch (error) { unknown = error.message }
     return { apis, source: await ultimate.api('contract-test'), unknown };`,
   )
   const value = result.data.details.value as {
@@ -334,7 +334,7 @@ it('discovers extension contracts: summaries first, then one api.ts and refs.ts 
       `// contract-test/refs.ts: the browser contract: documents, actions (call them with ultimate.action) and events\n${refs}`,
   )
   expect(value.unknown).toMatch(
-    /^No enabled extension "codemode" with an api\.ts or refs\.ts; known: .*\bcontract-test\b/,
+    /^No enabled extension "no-such-extension" with an api\.ts or refs\.ts; known: .*\bcontract-test\b/,
   )
 })
 
@@ -390,6 +390,32 @@ it('reserves trust and secret writes for the UI while allowing normal actions', 
   expect(normal.data.isError).not.toBe(true)
   expect(normal.data.details.value).toEqual([
     expect.objectContaining({ name: 'TEST_KEY', set: true }),
+  ])
+})
+
+it('logs ultimate helper calls and labels a one-call script by its call id, with an event', async () => {
+  const { server } = await fixture()
+  const result = await run(server, `return (await ultimate.conversations()).length`)
+  expect(result.data.details.calls.map((call) => [call.name, call.status])).toEqual([
+    ['ultimate.conversations', 'ok'],
+  ])
+  const view = await server.root.viewState(context)
+  const call = view.value.entries.findLast((entry) => entry.kind === 'pi.tool-result')!
+  const callId = call.model?.[0]?.role === 'toolResult' ? call.model[0].toolCallId : ''
+  view.dispose()
+  expect(await server.harness.snapshot(SummaryDoc, server.root.id, context)).toEqual({
+    calls: { [callId]: { line: 'Listed the conversations' } },
+  })
+  const events = await eventHost(() => server.harness, 'test').eventLog.recent({
+    events: [Summarized],
+  })
+  expect(events.map((event) => event.data)).toEqual([
+    {
+      conversation: server.root.id,
+      call: callId,
+      line: 'Listed the conversations',
+      effect: false,
+    },
   ])
 })
 
@@ -533,6 +559,29 @@ it("reads another running project's history through its API, and names a project
   const unknown = await run(server, `return await ultimate.entries(1, { project: 'nope' })`)
   expect(unknown.text).toContain('Unknown project nope')
   expect(unknown.text).toContain('poe2-rust')
+})
+
+it('lists conversations with their title and cwd, since the prompt no longer does', async () => {
+  const { server } = await fixture()
+  const create = async (title: string) =>
+    ((await post(server, '/api/conversations', { title })).data as { id: number }).id
+  const open = await create('Parser work')
+  const done = await create('Old work')
+  // The conversations extension owns concluding; this fixture loads only codemode, so write its UI state directly.
+  await post(server, '/api/ui', { set: { 'ext.conversations.concluded': [done] } })
+  const result = await run(server, `return await ultimate.conversations()`)
+  expect(result.data.isError).toBe(false)
+  const listed = result.data.details.value as { id: number }[]
+  expect(listed.find((item) => item.id === open)).toMatchObject({
+    title: 'Parser work',
+    cwd: expect.any(String),
+    busy: false,
+  })
+  expect(listed.find((item) => item.id === open)).not.toHaveProperty('concluded')
+  expect(listed.find((item) => item.id === done)).toMatchObject({
+    title: 'Old work',
+    concluded: true,
+  })
 })
 
 it('reads stored history and documents from before a reset', async () => {

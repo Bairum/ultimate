@@ -33,7 +33,7 @@ on hover, since it described the root's history before it held a context) and th
   a state (`submitted` or `landing` while the lander has it, the working phase while it works, amber `awaiting @ultimate`
   while a reply-enabled message it sent @ultimate is open, red `failed`, else `idle`) and its age; clicking opens it.
 - **Landed**: the last three landings from lineage's `recent {id, types: ['landed']}`, as the shipped feature's tag
-  (its title when it has none, the full title on hover) and a commit count linking the GitHub compare range
+  (its title when it has none, the full title on hover) and a commit count linking the compare range on DiffsHub
   (`CommitCount` from workspaces; no link without a GitHub `origin`), with the age. Clicking the feature opens the root
   at that landing note. `N more` unfolds up to ten; the fold state is kept in `ext.conversations.landingsOpen`.
 

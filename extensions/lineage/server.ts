@@ -43,6 +43,7 @@ import { CompactAction, RecentAction, TallyDoc } from './refs.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import type { Tree } from './catchup.ts'
 import type { RootEvent } from './types.ts'
+import { compareUrl } from '../../lib/compare.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
 
 export type BranchImage = { data: string; mimeType: string }
@@ -966,7 +967,7 @@ function rootEvent(entry: EntryRecord): RootEvent | undefined {
 }
 
 /**
- * Each landing's GitHub compare URL, `base...sha`, when the project's `origin` is on GitHub. A landing from before notes
+ * Each landing's DiffsHub compare URL, `base...sha`, when the project's `origin` is on GitHub. A landing from before notes
  * recorded their base takes the landing before it, which is where the lander's serial queue left the target.
  */
 async function withCompare(
@@ -989,7 +990,7 @@ export function compareLinks(
   return events.map((event) => {
     if (event.type !== 'landed') return event
     const base = event.base ?? landings[landings.indexOf(event) + 1]?.sha ?? older
-    return base ? { ...event, compare: `https://${remote}/compare/${base}...${event.sha}` } : event
+    return base ? { ...event, compare: compareUrl(remote, base, event.sha) } : event
   })
 }
 

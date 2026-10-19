@@ -14,7 +14,7 @@ vi.mock('@/sdk', () => ({
   useWorkspaceIndex: () => ({ queue: [], results: {} }),
 }))
 vi.mock('../../extensions/workspaces/landing.tsx', () => ({
-  useGithubRepo: () => 'https://github.com/HazAT/ultimate',
+  useGithubRepo: () => 'github.com/hazat/ultimate',
   CommitCount: ({ count, href }: { count: number; href?: string }) =>
     createElement('a', { href }, `${count} commits`),
 }))
@@ -89,7 +89,7 @@ it('shows one row per event of its kinds, newest first as given, with what happe
       kind: 'workspaces.landed',
       text: 'Activity Feed Show recent events 3 commits 5m',
       opens: '#12/40',
-      href: 'https://github.com/HazAT/ultimate/compare/9057c43...45a315f0',
+      href: 'https://diffshub.com/hazat/ultimate/compare/9057c43...45a315f0',
       amber: false,
     },
     {

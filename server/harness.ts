@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { mkdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { projectHome } from './project.ts'
@@ -169,6 +170,9 @@ export async function prepareHarness(options: HostOptions) {
       let harness: Harness | undefined
       let storage: Awaited<ReturnType<typeof openNodeSqliteStorage>> | undefined
       try {
+        // An interrupted `pnpm reset` left the home half moved: no path opens it until the reset finishes.
+        if (existsSync(join(home, 'reset.json')))
+          throw new Error(`A reset of ${home} was interrupted; finish it with pnpm reset first`)
         storage = await openNodeSqliteStorage(database)
         harness = await Harness.open(
           storage,

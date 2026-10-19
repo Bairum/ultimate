@@ -24,6 +24,7 @@ export type {
   SlotName,
   SurfaceContribution,
   ToolCallView,
+  ToolLineRenderer,
   ToolRenderer,
   UltimateActions,
   UltimateContext,

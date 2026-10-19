@@ -2,6 +2,7 @@ import { GitForkIcon, GitMergeIcon, ScrollTextIcon, TriangleAlertIcon } from 'lu
 import type { ReactNode } from 'react'
 import { cn, events, useUltimate } from '@/sdk'
 import type { EventData, EventRecord } from '@/sdk'
+import { compareUrl } from '../../lib/compare.ts'
 import { NoticeEvent } from '../../shared/events.ts'
 import { ConversationRef, FeatureTag } from '../conversations/ui.tsx'
 import { Branched, Rooted } from '../lineage/ui.tsx'
@@ -116,7 +117,7 @@ function Landing({ event, now }: Props<typeof SubmissionLanded>) {
         <CommitCount
           className="text-muted-foreground/80"
           count={landing.commitCount}
-          href={github ? `${github}/compare/${landing.base}...${landing.sha}` : undefined}
+          href={github ? compareUrl(github, landing.base, landing.sha) : undefined}
         />
       }
     >
