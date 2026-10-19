@@ -1,4 +1,6 @@
 import { cn, Provided } from '@/sdk'
+import { stateTone, stateWord } from '../board/ui.tsx'
+import type { ConversationState } from '../board/ui.tsx'
 import type { useWorkspaceIndex } from '../workspaces/ui.tsx'
 import { ConversationPhase, FeatureTag } from '../conversations/ui.tsx'
 
@@ -20,12 +22,12 @@ export function ago(at: number, now: number) {
 
 /**
  * The lander's line: "fixing" or "diagnosing" while its model works on a failure, a pulsing "landing" while it lands,
- * its working phase (or "working") while it answers someone, else "idle"; then its latest landing's feature, short sha and age, and how many
+ * its working phase (or "working") while it answers someone, else its conversation state (failed, awaiting, idle); then its latest landing's feature, short sha and age, and how many
  * submissions wait in its queue.
  */
 export function LanderState(props: LanderProps) {
   return (
-    <Provided input={props.working ? props.id : undefined} point={ConversationPhase}>
+    <Provided input={props.state === 'working' ? props.id : undefined} point={ConversationPhase}>
       {(phase) => <PhasedLanderState {...props} phase={phase?.word} />}
     </Provided>
   )
@@ -34,10 +36,10 @@ type LanderProps = {
   id: number
   index: ReturnType<typeof useWorkspaceIndex>
   now: number
-  working: boolean
+  state: ConversationState
 }
 
-function PhasedLanderState({ id, index, now, working, phase }: LanderProps & { phase?: string }) {
+function PhasedLanderState({ id, index, now, state, phase }: LanderProps & { phase?: string }) {
   const source = Object.entries(index.landerConversations).find(([, lander]) => lander === id)?.[0]
   const current = index.queue.find((item) => item.source === source && item.state === 'landing')
   const queued = index.queue.filter(
@@ -50,15 +52,15 @@ function PhasedLanderState({ id, index, now, working, phase }: LanderProps & { p
         ? 'diagnosing'
         : current
           ? 'landing'
-          : working
+          : state === 'working'
             ? (phase ?? 'working')
-            : 'idle'
+            : undefined
   const last = Object.values(index.results).findLast((result) => result.lander === id && result.sha)
   const at = last?.steps.at(-1)?.at
   return (
     <>
-      {label === 'idle' ? (
-        <span className="shrink-0">idle</span>
+      {label === undefined ? (
+        <span className={cn('shrink-0', stateTone[state])}>{stateWord(state)}</span>
       ) : (
         <span
           className={cn(

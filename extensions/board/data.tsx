@@ -56,6 +56,21 @@ export function conversationState(
   return 'idle'
 }
 
+/** A state in the sidebar's and System's lower-case words; `waiting` counts what waits on you. */
+export function stateWord(state: ConversationState, waiting = 0) {
+  if (state === 'waits') return waiting > 0 ? `${waiting} waiting on you` : 'waits on you'
+  return state === 'awaiting' ? 'awaiting @ultimate' : state
+}
+
+/** The text colour each state is said in; working's comes from its phase, idle is quiet. */
+export const stateTone: Partial<Record<ConversationState, string>> = {
+  working: 'text-brand',
+  waits: 'text-amber-700 dark:text-amber-300',
+  awaiting: 'text-amber-700/80 dark:text-amber-300/70',
+  done: 'text-success',
+  failed: 'text-error',
+}
+
 type Conversation = {
   label?: string
   title?: string

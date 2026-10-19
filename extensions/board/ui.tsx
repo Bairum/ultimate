@@ -6,7 +6,14 @@ import type { ReactNode } from 'react'
 import { definePoint } from '@/sdk'
 import type { BoardMessage } from './refs.ts'
 
-export { conversationState, emptyBoard, isOpen, waitingOnUser } from './data.tsx'
+export {
+  conversationState,
+  emptyBoard,
+  isOpen,
+  stateTone,
+  stateWord,
+  waitingOnUser,
+} from './data.tsx'
 export type { ConversationState } from './data.tsx'
 export { Asked, BoardDoc, MessageSent } from './refs.ts'
 

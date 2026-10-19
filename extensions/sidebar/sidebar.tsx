@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
   api,
+  cn,
   errorMessage,
   useDocOf,
   useNow,
@@ -28,7 +29,7 @@ import {
   useWorkspaceIndex,
 } from '../workspaces/ui.tsx'
 import { Row, ChildRow, StandingRow } from './rows.tsx'
-import { BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
+import { BoardDoc, conversationState, emptyBoard, stateTone, stateWord } from '../board/ui.tsx'
 import { inFlight, RootRow } from './root.tsx'
 import { useRoots } from '../lineage/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
@@ -244,19 +245,13 @@ function Tree({ waiting }: { waiting: number }) {
         shown={shown}
       >
         {lander ? (
-          <LanderState id={conversation.id} index={workspaceIndex} now={now} working={busy} />
+          <LanderState id={conversation.id} index={workspaceIndex} now={now} state={state} />
         ) : (
           <>
             {state === 'working' && conversation ? (
               <StandingPhase id={conversation.id} />
-            ) : state === 'waits' ? (
-              <span className="shrink-0 text-amber-700 dark:text-amber-300">
-                {waiting} waiting on you
-              </span>
-            ) : state === 'failed' ? (
-              <span className="shrink-0 text-error">failed</span>
             ) : (
-              <span className="shrink-0">idle</span>
+              <span className={cn('shrink-0', stateTone[state])}>{stateWord(state, waiting)}</span>
             )}
             {latest > 0 && (
               <span

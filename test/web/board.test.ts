@@ -3,6 +3,7 @@ import { accentIndex, accentOf } from '../../extensions/board/accent.tsx'
 import {
   answeredMessages,
   conversationState,
+  stateWord,
   messageStatus,
   outgoingState,
   relativeTime,
@@ -244,6 +245,18 @@ describe('conversation state', () => {
     expect(conversationState({ ...branch, kind: 'subagent' }, board({ from: 5, to: 3 }))).toBe(
       'done',
     )
+  })
+
+  it('says every state in a word, so a standing row or lane never falls back to idle', () => {
+    // A standing agent (not the primary) asking @ultimate shows it, rather than idle.
+    const standing = { id: 7, kind: 'other' as const, runState: 'answered' as const, primary: 3 }
+    expect(stateWord(conversationState(standing, board({ from: 7, to: 3 })))).toBe(
+      'awaiting @ultimate',
+    )
+    expect(stateWord('waits', 2)).toBe('2 waiting on you')
+    expect(stateWord('failed')).toBe('failed')
+    expect(stateWord('done')).toBe('done')
+    expect(stateWord('idle')).toBe('idle')
   })
 
   it('failed when its latest input ended without an answer', () => {

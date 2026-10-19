@@ -4,6 +4,7 @@ import type { CSSProperties } from 'react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn, formatDuration, useConversations, useUltimate } from '@/sdk'
 import type { ConversationSummary } from '@/sdk'
+import { stateTone, stateWord } from '../board/ui.tsx'
 import type { ConversationState } from '../board/ui.tsx'
 import { AgentMark, agentTitle, ConversationRef } from '../conversations/ui.tsx'
 import { block, duration, label, ticks } from './layout.ts'
@@ -225,22 +226,9 @@ export function Guide({
   )
 }
 
-const stateWords: Record<LaneState, string> = {
-  running: 'running',
-  waits: 'waits on you',
-  awaiting: 'awaiting @ultimate',
-  done: 'done',
-  failed: 'failed',
-  idle: 'idle',
-}
-
-const stateTones: Partial<Record<LaneState, string>> = {
-  running: 'text-brand',
-  waits: 'text-amber-700 dark:text-amber-300',
-  awaiting: 'text-amber-700/80 dark:text-amber-300/70',
-  done: 'text-success',
-  failed: 'text-error',
-}
+/** A lane says its conversation's state in the sidebar's words; only an open run says "running". */
+const laneWord = (state: LaneState) => (state === 'running' ? 'running' : stateWord(state))
+const laneTone = (state: LaneState) => stateTone[state === 'running' ? 'working' : state]
 
 /**
  * One agent's lane: who it is (its mark and name, its model, its state) on the left, its runs on the timeline on the
@@ -319,7 +307,7 @@ export function LaneRow({
                 />
               )}
               <span className="flex min-w-0 items-center gap-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
-                <span className={cn('shrink-0', stateTones[state])}>{stateWords[state]}</span>
+                <span className={cn('shrink-0', laneTone(state))}>{laneWord(state)}</span>
                 {lane.agent && !standing && <span className="shrink-0">· {lane.agent}</span>}
                 {lane.model && <span className="truncate">· {modelName(lane.model)}</span>}
               </span>
