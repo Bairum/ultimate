@@ -327,14 +327,12 @@ function TranscriptEntries() {
           .map((entry) => entry.id),
       )
       // Rows the reader sees: top-level rows, and the rows inside an opened run instead of the run itself, whose top stays
-      // put while a page reaches into it and grows it above them. Inner rows skip the one sharing the run's id.
+      // put while a page reaches into it and grows it above them; an inner anchor is found inside its run only.
       const shown = (contentRef.current?.querySelectorAll(':scope > [data-entry-id]') ??
         []) as Iterable<Element>
       const candidates = [...shown]
         .flatMap((row) => {
-          const inside = [...row.querySelectorAll('[data-entry-id]')].filter(
-            (part) => part.getAttribute('data-entry-id') !== row.getAttribute('data-entry-id'),
-          )
+          const inside = [...row.querySelectorAll('[data-entry-id]')]
           return inside.length ? inside : [row]
         })
         .filter(
