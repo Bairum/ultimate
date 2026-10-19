@@ -1,7 +1,8 @@
-// Installs Ultimate, the machine's Cloudflare tunnel and the machine home as systemd user units, and enables
-// linger so they start at boot without a login. Usage: pnpm setup:machine [--project <dir>] [--machine <name>]
-// [--no-tunnel] [--dry-run]. See "New machine" in cloud/README.md.
-import { execFileSync } from 'node:child_process'
+// Installs Ultimate, the machine's Cloudflare tunnel and the machine home as services: on Linux systemd user units
+// with linger, so they start at boot without a login; on macOS launchd agents in ~/Library/LaunchAgents, which run
+// while the user is logged in. Usage: pnpm setup:machine [--project <dir>] [--machine <name>] [--no-tunnel]
+// [--dry-run]. See "New machine" in cloud/README.md.
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, hostname, userInfo } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -27,6 +28,16 @@ export interface UnitOptions {
 export interface Unit {
   name: string
   content: string
+}
+
+/** One service, as both the systemd unit and the launchd agent run it. */
+interface Service {
+  unit: string
+  label: string
+  description: string
+  cwd: string
+  env: Record<string, string>
+  args: string[]
 }
 
 function unit(description: string, service: string[]) {
@@ -116,61 +127,202 @@ export function loginPath(
   return [login, current].filter(Boolean).join(':')
 }
 
-/** Renders the unit files; pure, so the side effects stay in main. Throws for a path systemd would misread. */
-export function renderUnits(options: UnitOptions): Unit[] {
-  const { clone, project, home, node, machine } = options
-  checkPaths({ clone, project, home, node })
-  // pnpm run prepends node_modules/.bin folders and its own version-pinned folder (.tools/@pnpm+exe/<version>),
-  // which disappears when pnpm updates itself; a unit must depend on neither. An entry systemd would misread is left
-  // out rather than escaped.
-  const user = options.path
+/**
+ * The services' PATH: node's folder, the user's absolute entries, then the system folders. pnpm run prepends
+ * node_modules/.bin folders and its own version-pinned folder (.tools/@pnpm+exe/<version>), which disappears when pnpm
+ * updates itself; a service must depend on neither. `misread` drops entries the service format cannot hold as is.
+ */
+export function servicePath(node: string, path: string, misread?: RegExp) {
+  const user = path
     .split(':')
     .filter(
       (entry) =>
         entry.startsWith('/') &&
         !entry.includes('/node_modules/') &&
         !entry.includes('/.tools/') &&
-        !special.test(entry),
+        !misread?.test(entry),
     )
-  const path = [...new Set([dirname(node), ...user, '/usr/local/bin', '/usr/bin', '/bin'])].join(
-    ':',
-  )
+  return [...new Set([dirname(node), ...user, '/usr/local/bin', '/usr/bin', '/bin'])].join(':')
+}
+
+function services(options: UnitOptions, path: string): Service[] {
+  const { clone, project, home, node, machine } = options
   const ultimate = join(clone, 'bin/ultimate.ts')
-  const units = [
+  const env = { PATH: path, ULTIMATE_NO_OPEN: '1' }
+  const list: Service[] = [
     {
-      name: 'ultimate.service',
-      content: unit(`Ultimate (${project})`, [
-        `WorkingDirectory=${project}`,
-        `Environment=PATH=${path}`,
-        'Environment=ULTIMATE_NO_OPEN=1',
-        `ExecStart=${node} ${ultimate}`,
-      ]),
+      unit: 'ultimate.service',
+      label: 'com.ultimate.app',
+      description: `Ultimate (${project})`,
+      cwd: project,
+      env,
+      args: [node, ultimate],
     },
     {
-      name: 'ultimate-machine.service',
-      content: unit(`Ultimate machine home (${machine})`, [
-        `WorkingDirectory=${clone}`,
-        `Environment=PATH=${path}`,
-        'Environment=ULTIMATE_NO_OPEN=1',
-        `ExecStart=${node} ${ultimate} --port ${machinePort} --no-open ${join(home, '.ultimate/machine')}`,
-      ]),
+      unit: 'ultimate-machine.service',
+      label: 'com.ultimate.machine',
+      description: `Ultimate machine home (${machine})`,
+      cwd: clone,
+      env,
+      args: [
+        node,
+        ultimate,
+        '--port',
+        String(machinePort),
+        '--no-open',
+        join(home, '.ultimate/machine'),
+      ],
     },
   ]
   if (options.tunnel)
-    units.push({
-      name: 'ultimate-tunnel.service',
-      content: unit(`Ultimate Cloudflare tunnel (ultimate-${machine})`, [
-        `WorkingDirectory=${clone}`,
-        `Environment=PATH=${path}`,
-        `ExecStart=${node} ${wranglerBin(clone)} tunnel run ultimate-${machine}`,
-      ]),
+    list.push({
+      unit: 'ultimate-tunnel.service',
+      label: 'com.ultimate.tunnel',
+      description: `Ultimate Cloudflare tunnel (ultimate-${machine})`,
+      cwd: clone,
+      env: { PATH: path },
+      args: [node, wranglerBin(clone), 'tunnel', 'run', `ultimate-${machine}`],
     })
-  return units
+  return list
+}
+
+/** Renders the unit files; pure, so the side effects stay in main. Throws for a path systemd would misread. */
+export function renderUnits(options: UnitOptions): Unit[] {
+  const { clone, project, home, node } = options
+  checkPaths({ clone, project, home, node })
+  // An entry systemd would misread is left out rather than escaped.
+  const path = servicePath(node, options.path, special)
+  return services(options, path).map((service) => ({
+    name: service.unit,
+    content: unit(service.description, [
+      `WorkingDirectory=${service.cwd}`,
+      ...Object.entries(service.env).map(([key, value]) => `Environment=${key}=${value}`),
+      `ExecStart=${service.args.join(' ')}`,
+    ]),
+  }))
+}
+
+export interface Agent {
+  label: string
+  /** The plist file name in ~/Library/LaunchAgents. */
+  name: string
+  content: string
+}
+
+const xml = (value: string) =>
+  value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;')
+
+const string = (value: string) => `<string>${xml(value)}</string>`
+
+/** The log file launchd writes an agent's stdout and stderr to. */
+export const agentLog = (home: string, label: string) =>
+  join(home, 'Library/Logs/ultimate', `${label}.log`)
+
+/**
+ * Renders the launchd agents; pure, so the side effects stay in main. Plists escape every value, so no path is
+ * refused. KeepAlive restarts an agent only after a failed exit, as Restart=on-failure does: bin/ultimate.ts exits 0
+ * when asked to stop, and an agent that keeps coming back after a deliberate stop would fight the user.
+ */
+export function renderAgents(options: UnitOptions): Agent[] {
+  const path = servicePath(options.node, options.path)
+  return services(options, path).map(({ label, cwd, env, args }) => {
+    const log = agentLog(options.home, label)
+    return {
+      label,
+      name: `${label}.plist`,
+      content: [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+        '<plist version="1.0">',
+        '<dict>',
+        '  <key>Label</key>',
+        `  ${string(label)}`,
+        '  <key>ProgramArguments</key>',
+        '  <array>',
+        ...args.map((arg) => `    ${string(arg)}`),
+        '  </array>',
+        '  <key>WorkingDirectory</key>',
+        `  ${string(cwd)}`,
+        '  <key>EnvironmentVariables</key>',
+        '  <dict>',
+        ...Object.entries(env).flatMap(([key, value]) => [
+          `    <key>${xml(key)}</key>`,
+          `    ${string(value)}`,
+        ]),
+        '  </dict>',
+        '  <key>RunAtLoad</key>',
+        '  <true/>',
+        '  <key>KeepAlive</key>',
+        '  <dict>',
+        '    <key>SuccessfulExit</key>',
+        '    <false/>',
+        '  </dict>',
+        '  <key>StandardOutPath</key>',
+        `  ${string(log)}`,
+        '  <key>StandardErrorPath</key>',
+        `  ${string(log)}`,
+        '</dict>',
+        '</plist>',
+        '',
+      ].join('\n'),
+    }
+  })
+}
+
+/** Both agents run bin/ultimate.ts, so a supervised run may be inside either. */
+const ultimateAgents = ['com.ultimate.app', 'com.ultimate.machine']
+
+export interface AgentState {
+  label: string
+  file: string
+  state: 'new' | 'replaced' | 'unchanged'
+}
+
+/**
+ * Loads the agents into the user's GUI domain. A new or replaced agent is booted out and bootstrapped again, which
+ * restarts it on the new plist; an unchanged one is bootstrapped only when not loaded. The replaced agent this
+ * script runs inside is left alone: launchd sets XPC_SERVICE_NAME to the job's label, and under Ultimate's supervisor
+ * either Ultimate agent may be the one. `launchctl` runs one command and returns its exit status.
+ */
+export function loadAgents(
+  agents: AgentState[],
+  uid: number,
+  env: { XPC_SERVICE_NAME?: string; ULTIMATE_SUPERVISED?: string },
+  launchctl: (args: string[]) => number,
+  log: (line: string) => void,
+) {
+  const domain = `gui/${uid}`
+  for (const { label, file, state } of agents) {
+    const target = `${domain}/${label}`
+    if (state === 'unchanged') {
+      if (launchctl(['print', target]) !== 0) launchctl(['bootstrap', domain, file])
+      continue
+    }
+    const inside =
+      state === 'replaced' &&
+      ((env.ULTIMATE_SUPERVISED === '1' && ultimateAgents.includes(label)) ||
+        env.XPC_SERVICE_NAME === label)
+    if (inside) {
+      log(`${label} changed: restart it yourself.`)
+      continue
+    }
+    // Fails when the agent is not loaded yet, which is just what bootout should leave behind.
+    launchctl(['bootout', target])
+    if (launchctl(['bootstrap', domain, file]) !== 0)
+      throw new Error(`launchctl bootstrap ${domain} ${file} failed.`)
+  }
 }
 
 function main() {
-  if (process.platform !== 'linux') {
-    console.error('Linux systemd only.')
+  if (process.platform !== 'linux' && process.platform !== 'darwin') {
+    console.error(
+      `pnpm setup:machine supports Linux (systemd) and macOS (launchd), not ${process.platform}.`,
+    )
     process.exit(1)
   }
   const { values } = parseArgs({
@@ -197,7 +349,7 @@ function main() {
     console.error(`${wranglerBin(clone)} is missing: run pnpm install first.`)
     process.exit(1)
   }
-  const units = renderUnits({
+  const options = {
     clone,
     project: resolve(values.project ?? clone),
     home,
@@ -205,7 +357,7 @@ function main() {
     machine,
     path: loginPath(process.env.PATH ?? ''),
     tunnel,
-  })
+  }
   if (values['no-tunnel']) console.log('Skipping the tunnel (--no-tunnel).')
   else if (!known)
     console.log(
@@ -217,33 +369,63 @@ function main() {
       ].join('\n'),
     )
 
+  const mkdir = (dir: string) => {
+    if (existsSync(dir)) return
+    console.log(`$ mkdir -p ${dir}`)
+    if (!dry) mkdirSync(dir, { recursive: true })
+  }
+  /** Writes each changed file and says whether it is new, replaced or unchanged. */
+  const write = (dir: string, files: { name: string; content: string }[]) =>
+    files.map(({ name, content }) => {
+      const file = join(dir, name)
+      const current = existsSync(file) ? readFileSync(file, 'utf8') : undefined
+      const state = current === content ? 'unchanged' : current === undefined ? 'new' : 'replaced'
+      if (state === 'unchanged') {
+        console.log(`${file}: unchanged`)
+        if (dry) console.log(content)
+      } else {
+        console.log(`${file}: ${state}\n${content}`)
+        if (!dry) writeFileSync(file, content)
+      }
+      return { name, file, state } as const
+    })
+  mkdir(join(home, '.ultimate/machine'))
+
+  if (process.platform === 'darwin') {
+    const agents = renderAgents(options)
+    const dir = join(home, 'Library/LaunchAgents')
+    mkdir(dir)
+    mkdir(join(home, 'Library/Logs/ultimate'))
+    const written = write(dir, agents)
+    loadAgents(
+      agents.map(({ label }, index) => ({ label, ...written[index] })),
+      process.getuid!(),
+      process.env,
+      (args) => {
+        // print only asks whether an agent is loaded, so it runs on a dry run too.
+        if (args[0] === 'print')
+          return spawnSync('launchctl', args, { stdio: 'ignore' }).status ?? 1
+        console.log(`$ launchctl ${args.join(' ')}`)
+        if (dry) return 0
+        return spawnSync('launchctl', args, { stdio: 'inherit' }).status ?? 1
+      },
+      console.log,
+    )
+    console.log('The agents run while you are logged in.')
+    if (dry) console.log('Dry run: nothing changed.')
+    return
+  }
+
+  const units = renderUnits(options)
   const run = (command: string, args: string[]) => {
     console.log(`$ ${command} ${args.join(' ')}`)
     if (!dry) execFileSync(command, args, { stdio: 'inherit' })
   }
   const dir = join(home, '.config/systemd/user')
-  const machineHome = join(home, '.ultimate/machine')
-  if (!existsSync(machineHome)) {
-    console.log(`$ mkdir -p ${machineHome}`)
-    if (!dry) mkdirSync(machineHome, { recursive: true })
-  }
-  if (!existsSync(dir)) {
-    console.log(`$ mkdir -p ${dir}`)
-    if (!dry) mkdirSync(dir, { recursive: true })
-  }
-  const changed: string[] = []
-  for (const { name, content } of units) {
-    const file = join(dir, name)
-    const current = existsSync(file) ? readFileSync(file, 'utf8') : undefined
-    if (current === content) {
-      console.log(`${file}: unchanged`)
-      if (dry) console.log(content)
-      continue
-    }
-    console.log(`${file}: ${current === undefined ? 'new' : 'replaced'}\n${content}`)
-    if (current !== undefined) changed.push(name)
-    if (!dry) writeFileSync(file, content)
-  }
+  mkdir(dir)
+  const changed = write(dir, units)
+    .filter(({ state }) => state === 'replaced')
+    .map(({ name }) => name)
   run('systemctl', ['--user', 'daemon-reload'])
   run('systemctl', ['--user', 'enable', '--now', ...units.map(({ name }) => name)])
   // Restarting the unit this script runs inside would kill the script with it.
