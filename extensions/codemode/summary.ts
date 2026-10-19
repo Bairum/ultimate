@@ -80,23 +80,36 @@ const SAFE_WORD = /^[\w.,:;!?()#@/~+-]{1,60}$/
 const OPAQUE =
   /^(?:(?:ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox[abps]-|AKIA|eyJ)[\w+/=-]{4,}|[\w+/=-]{32,}|(?=[\w+/=-]*\d)(?=[\w+/=-]*[a-z])[\w+/=-]{20,})$/i
 
+/** A word that names a credential, so the word after it is one: `password:`, `Bearer`, `--token`, `Basic`. */
+const CREDENTIAL_NAME =
+  /(secret|token|passw|pwd|pass\b|key|auth|bearer|cookie|credential|session)[\w-]*[:=]?$/i
+/** An auth scheme word, which names a credential only right after an authorization header name. */
+const SCHEME = /^["']?(basic|digest|negotiate|ntlm)$/i
+
+/** Whether one word may leave as it is. */
+function safeWord(word: string) {
+  return (
+    SAFE_WORD.test(word) &&
+    // A URL with credentials before its host (`https://user:pass@host`).
+    !/:\/\/[^/]*@/.test(word) &&
+    !word.split(/[/:]/).some((part) => OPAQUE.test(part.replace(/[.,;!?()]+$/, '')))
+  )
+}
+
 /**
  * `text` with every word that is not plainly safe replaced by `[…]`: an allowlist, so a credential in a format no rule
- * names still never leaves. A word after "bearer" goes too.
+ * names still never leaves. The word after one that names a credential (`password:`, `Basic`, `--token`) goes too.
  */
 export function scrub(text: string) {
-  let bearer = false
+  let named = false
+  let header = false
   return text
     .split(/(\s+)/)
     .map((word) => {
       if (!word.trim()) return word
-      const safe =
-        !bearer &&
-        SAFE_WORD.test(word) &&
-        // A URL with credentials before its host (`https://user:pass@host`).
-        !/:\/\/[^/]*@/.test(word) &&
-        !word.split(/[/:]/).some((part) => OPAQUE.test(part.replace(/[.,;!?()]+$/, '')))
-      bearer = /^bearer$/i.test(word)
+      const safe = !named && safeWord(word)
+      named = CREDENTIAL_NAME.test(word) || (header && SCHEME.test(word))
+      header = /auth\w*:$/i.test(word)
       return safe ? word : '[…]'
     })
     .join('')
@@ -107,10 +120,15 @@ function cleanArgs(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(cleanArgs)
   if (value && typeof value === 'object')
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        key,
-        SECRET_KEY.test(key) ? '[redacted]' : cleanArgs(item),
-      ]),
+      Object.entries(value).map(([key, item], index) =>
+        // A key is text too: one that is not a plain name is replaced, and keeps its place.
+        safeWord(key) && /^[A-Za-z_$][\w$-]*$/.test(key)
+          ? [
+              key,
+              SECRET_KEY.test(key) || CREDENTIAL_NAME.test(key) ? '[redacted]' : cleanArgs(item),
+            ]
+          : [`[…${index}]`, '[redacted]'],
+      ),
     )
   return value
 }

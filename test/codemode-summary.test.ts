@@ -105,6 +105,39 @@ it('drops quoted, JSON and unnamed credentials, since only plain words leave', (
   expect(input).not.toContain('q9Zr7vLm')
 })
 
+it('drops the word after a credential name, and unsafe object keys, through summaryInput', () => {
+  const input = summaryInput([
+    {
+      name: 'bash',
+      args: {
+        command:
+          'curl -H "Authorization: Basic dXNlcjpwYXNz" x; echo password: hunter2 token: q9Zr7vLm --api-key zzKey1',
+      },
+      status: 'ok',
+    },
+    {
+      name: 'ultimate.action',
+      args: ['secrets', 'set', { nested: { ghp_abcdefghij1234567890: 'v', session: 's3ss10n' } }],
+      status: 'ok',
+    },
+    {
+      name: 'write',
+      args: { q9Zr7vLmq9Zr7vLmq9Zr7vLmq9Zr7vLm42: 'x', path: 'notes.md' },
+      status: 'ok',
+    },
+  ])
+  for (const secret of [
+    'dXNlcjpwYXNz',
+    'hunter2',
+    'q9Zr7vLm',
+    'zzKey1',
+    'ghp_abcdefghij',
+    's3ss10n',
+  ])
+    expect(input).not.toContain(secret)
+  expect(input).toContain('notes.md')
+})
+
 it('keeps ordinary prose, ids and paths as they are', () => {
   for (const text of [
     'basic checks passed for #190416',
