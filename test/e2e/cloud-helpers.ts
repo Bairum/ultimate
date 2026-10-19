@@ -347,6 +347,38 @@ export function projectApi(cloud: string, key: string, token: string) {
 export const serving = async (machine: Host) =>
   (await fetch(`${machine.url}/api/models`)).status === 200
 
+/**
+ * A database's conversation and entry ids, its entry kinds, and the transition ids of its `sync.move` entries,
+ * read-only.
+ */
+export function ids(database: string) {
+  const db = new DatabaseSync(database, { readOnly: true })
+  try {
+    const column = (sql: string) =>
+      db
+        .prepare(sql)
+        .all()
+        .map((row) => Object.values(row)[0])
+    const moves = column('SELECT record FROM entries').flatMap((record) => {
+      const entry = JSON.parse(String(record)) as {
+        kind: string
+        data?: { transition?: { id: string } }
+      }
+      return entry.kind === 'sync.move' && entry.data?.transition ? [entry.data.transition.id] : []
+    })
+    return {
+      conversations: column('SELECT id FROM conversations'),
+      entries: column('SELECT id FROM entries'),
+      kinds: column('SELECT record FROM entries').map(
+        (record) => (JSON.parse(String(record)) as { kind: string }).kind,
+      ),
+      moves,
+    }
+  } finally {
+    db.close()
+  }
+}
+
 /** Conversation and entry counts of a database, read-only. */
 export function counts(database: string) {
   const db = new DatabaseSync(database, { readOnly: true })

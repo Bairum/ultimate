@@ -13,6 +13,9 @@ import { parseDefinition } from '../lib/agents.ts'
 import sync, {
   backup,
   backupText,
+  projectActions,
+  scoped,
+  syncDeps,
   cancel,
   createWatcher,
   fleet,
@@ -427,6 +430,10 @@ it('wakes the machine home’s @sync once per move here that failed, and leaves 
   await watcher.tick()
   moved = transition({ id: 't3', target: 'mac', from: 'haza-pc' })
   await watcher.tick()
+  // A finished move here that the project already reported, after the project moved on and left this machine a
+  // standby with that move still retained: not reported again.
+  moved = transition()
+  await watcher.tick()
   expect(submitted).toEqual([])
   // A move here that failed left the project on standby here: only the machine home can report it.
   moved = failedHere({ id: 't4' })
@@ -577,6 +584,85 @@ it('scopes a project home’s fleet to its own project and the machines that run
   expect(await projectFleet(deps, '/u/Projects/elsewhere')).toMatchObject({ projects: [] })
 })
 
+it('reads its own project in a project home through the real deps, reaching itself at its own address', async () => {
+  const { deps: cloud, requests } = fake()
+  // The host lists this home as current (no lock of its own while it runs) and another project that runs.
+  const self = {
+    userHome: '/u',
+    faux: false,
+    notice: () => {},
+    want: () => undefined,
+    system: () => ({ process: { url: 'http://127.0.0.1:4747' } }),
+    projects: async () => [
+      {
+        root: '/u/Projects/ultimate',
+        name: 'ultimate',
+        home: '/u/.ultimate/projects/u',
+        current: true,
+        conversations: [],
+      },
+      {
+        root: '/u/Projects/blog',
+        name: 'blog',
+        home: '/u/.ultimate/projects/b',
+        current: false,
+        running: { pid: 2, url: 'http://127.0.0.1:4748' },
+        conversations: [],
+      },
+    ],
+  } as unknown as ExtensionHost
+  const real = syncDeps(self, true)
+  const homes = () => real.homes()
+  const deps = scoped({ ...cloud, homes }, '/u/Projects/ultimate')
+  expect(await deps.homes()).toEqual([
+    {
+      root: '/u/Projects/ultimate',
+      name: 'ultimate',
+      home: '/u/.ultimate/projects/u',
+      url: 'http://127.0.0.1:4747',
+    },
+  ])
+  // Without `current`, as the machine home lists them, a home never lists itself.
+  expect((await syncDeps(self).homes()).map((home) => home.root)).toEqual(['/u/Projects/blog'])
+  const value = await projectFleet(deps, '/u/Projects/ultimate')
+  expect(value.projects).toMatchObject([
+    { key: 'github.com/hazat/ultimate', local: { url: 'http://127.0.0.1:4747' } },
+  ])
+  expect(requests.some((request) => request.url.includes(':4748'))).toBe(false)
+  // Its backup goes to its own server.
+  const { deps: writing } = fake({
+    state: () => ({ status: 'on', machine: 'rog', role: 'writer', free: false, missing: [] }),
+  })
+  const act = projectActions(
+    scoped({ ...writing, homes }, '/u/Projects/ultimate'),
+    '/u/Projects/ultimate',
+  )
+  expect(await act.backup('ultimate')).toMatchObject({ key: 'github.com/hazat/ultimate', id: 'b1' })
+})
+
+it('refuses another project in a project home before any request goes out', async () => {
+  const other: Project = {
+    ...directory[0],
+    key: 'github.com/hazat/blog',
+    name: 'blog',
+    slug: 'blog',
+  }
+  const { deps, requests } = fake({ directory: () => Response.json([...directory, other]) })
+  const act = projectActions(scoped(deps, '/u/Projects/ultimate'), '/u/Projects/ultimate')
+  const reads = () =>
+    requests.filter((request) => /moveHere|cancel|backup|\/sync\/move/.test(request.url))
+  await expect(act.move({ project: 'blog', to: 'rog' })).rejects.toThrow('Unknown project blog')
+  await expect(act.move({ project: 'github.com/hazat/blog' })).rejects.toThrow('Unknown project')
+  await expect(act.cancel('blog')).rejects.toThrow('Unknown project blog')
+  await expect(act.backup('blog')).rejects.toThrow('Unknown project blog')
+  expect(reads()).toEqual([])
+  // Its own project goes through.
+  expect(await act.move({ project: 'ultimate', to: 'mac' })).toMatchObject({ id: 'remote-1' })
+  expect(reads().map((request) => request.url)).toEqual([
+    'https://cloud.example/sync/move?project=github.com%2Fhazat%2Fultimate',
+  ])
+})
+
 it('names who started a move in the input that wakes @sync', () => {
   const project = {
     key: 'github.com/hazat/ultimate',
@@ -705,9 +791,9 @@ it('matches a relinked checkout by the key the cloud admitted, and resolves it b
   })
 })
 
-it('wakes @sync for the move this machine ran even after a newer one replaced it', async () => {
-  // Between two ticks this machine's move ended and another started; the cloud now reports the newer one.
-  const ran = transition({ id: 'mine' })
+it('wakes @sync for the failed move this machine ran even after a newer one replaced it', async () => {
+  // Between two ticks this machine's move failed and another started; the cloud now reports the newer one.
+  const ran = failedHere({ id: 'mine' })
   const newer = transition({
     id: 'newer',
     target: 'haza-pc',

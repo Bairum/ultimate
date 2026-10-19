@@ -12,6 +12,7 @@ import {
   counts,
   git,
   host,
+  ids,
   projectApi,
   repository,
   secretValue,
@@ -160,12 +161,16 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
       'state.sqlite',
     ])
     expect(counts(join(a.home, 'state.sqlite'))).toEqual(before)
-    // Plus B's own notice from the refused move ("Move here failed: Missing secrets"), raised on standby and recorded
-    // once B's storage opened: the event log conversation with its first event.
-    expect(counts(join(b.home, 'state.sqlite'))).toEqual({
-      conversations: before.conversations + 1,
-      entries: before.entries + 1,
-    })
+    // B holds all of A's history. On top of it: B's own notice from the refused move ("Move here failed: Missing
+    // secrets"), raised on standby and recorded once B's storage opened, and the finished move reported once to B's
+    // own @sync, whose standing conversation it creates and whose faux run then answers.
+    const history = ids(join(a.home, 'state.sqlite'))
+    await until(() => ids(join(b.home, 'state.sqlite')).moves.length === 1)
+    const onB = ids(join(b.home, 'state.sqlite'))
+    expect(onB.conversations).toEqual(expect.arrayContaining(history.conversations))
+    expect(onB.entries).toEqual(expect.arrayContaining(history.entries))
+    expect(onB.kinds).toContain('event.ultimate.notice')
+    expect(onB.moves).toEqual([moved.transition.id])
     expect(git(repo.clones.b, 'rev-parse', 'refs/heads/ultimate/e2e-from-a')).toBe(
       git(repo.project, 'rev-parse', 'HEAD'),
     )

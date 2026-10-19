@@ -128,7 +128,21 @@ interface ClaimIntent {
   snapshot: { id: string; epoch: number }
   download?: string
   hash: string
+  /** The move that wrote the intent, reported once it opens after a restart. */
+  transition?: Transition
 }
+
+/** `transition` as it ends once its claim won at `epoch`: the claim step done, nothing left to cancel. */
+const finished = (transition: Transition, epoch: number): Transition => ({
+  ...structuredClone(transition),
+  step: 'claim',
+  cancellable: false,
+  steps: transition.steps.map((step) =>
+    step.name === 'claim'
+      ? { ...step, state: 'done', detail: `Runs here from epoch ${epoch}` }
+      : { ...step },
+  ),
+})
 
 /** Move a SQLite database with its `-wal` and `-shm`; never deletes one. */
 async function moveDatabase(from: string, to: string) {
@@ -191,6 +205,8 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   const backupPath = join(host.home, 'cloud-backup.json')
   let lastBackup: Backup | undefined
   let backingUp: { done: number; total: number } | undefined
+  /** Settles when the running backup ended; a release waits for it. */
+  let backupRun: Promise<void> | undefined
   let idleSince: number | undefined
   let idleTimer: ReturnType<typeof setInterval> | undefined
   let pendingRelease:
@@ -234,6 +250,10 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       })
       .catch((error: unknown) => host.notice(`Cloud feedback: ${String(error)}`))
   const tell = (backup: BackupReport) => feedback((point) => point.backup(backup))
+  const reportMoved = (moved: Transition) =>
+    feedback((point) =>
+      point.moved({ key: snapshotKey(), machine: options.machine, transition: moved }),
+    )
   const serving = () => {
     try {
       host.harness()
@@ -345,6 +365,8 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     if (!download && !(await holds(database, intent.hash)))
       download = (await fetchSnapshot(intent.snapshot.id)).database
     await openAsWriter(state.epoch, download)
+    // The move a crash interrupted after its claim won: report it as done, once (the feedback keys it by its id).
+    if (intent.transition) await reportMoved(finished(intent.transition, state.epoch))
     return true
   }
   /** The local database is the snapshot `snapshot`: the last release recorded it and its content is unchanged. */
@@ -763,6 +785,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         snapshot,
         ...(downloaded ? { download: downloaded } : {}),
         hash,
+        transition: finished(transition, state.epoch! + 1),
       } satisfies ClaimIntent)
       const done = Promise.withResolvers<boolean>()
       pendingClaim = { epoch: state.epoch!, done, reconnected: false }
@@ -794,13 +817,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     try {
       await openAsWriter(claimed, downloaded)
       // Storage is open: the project's @sync hears it here, once, and checks this machine's health.
-      await feedback((point) =>
-        point.moved({
-          key: snapshotKey(),
-          machine: options.machine,
-          transition: structuredClone(transition),
-        }),
-      )
+      await reportMoved(structuredClone(transition))
       return true
     } catch (error) {
       fail(
@@ -867,8 +884,12 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     }
   }
 
-  /** Release from a serving writer: storage closes, the snapshot goes up, the lease is freed. */
+  /**
+   * Release from a serving writer: storage closes, the snapshot goes up, the lease is freed. A running backup finishes
+   * first, so storage never closes under its upload.
+   */
   const release = async (info: JsonObject) => {
+    await backupRun
     const state = sync?.state()
     if (mode !== 'serving' || state?.role !== 'writer' || state.epoch === undefined) return false
     const key = await secret()
@@ -1042,6 +1063,15 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       throw new Error('A move or release is in flight')
     // Set before the first await, so a second call refuses at once.
     backingUp = { done: 0, total: 0 }
+    const uploading = upload(state.epoch)
+    // A release waits for it, whatever its outcome; the caller gets the outcome.
+    backupRun = uploading.then(
+      () => undefined,
+      () => undefined,
+    )
+    return uploading
+  }
+  const upload = async (epoch: number) => {
     const started = Date.now()
     try {
       const key = await secret()
@@ -1052,7 +1082,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         token: options.token,
         secret: key,
         key: snapshotKey(),
-        epoch: state.epoch,
+        epoch,
         machine: options.machine,
         database,
         repo: host.projectRoot,
@@ -1079,14 +1109,22 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       throw error
     } finally {
       backingUp = undefined
+      backupRun = undefined
     }
   }
 
-  /** The process stops: release within the supervisor's shutdown, or keep the lease and open normally next time. */
+  /**
+   * The process stops: release within the supervisor's shutdown, or keep the lease and open normally next time. A
+   * backup still uploading keeps it too: its upload outlasts the stop budget, and storage must not close under it.
+   */
   const stopRelease = async () => {
     const state = sync?.state()
     disconnect()
     if (state?.role !== 'writer' || state.epoch === undefined || host.standby()) return
+    if (backingUp) {
+      host.notice('Kept the lease on stop: a backup was still uploading.')
+      return
+    }
     const key = await secret()
     if (!key) {
       host.notice(`Kept the lease on stop: ${SECRET} is missing.`)

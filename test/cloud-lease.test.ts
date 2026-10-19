@@ -1165,6 +1165,79 @@ it('reports each backup and a move that ended here once, to the feedback point o
   expect(deskHeard.events).toHaveLength(2)
 })
 
+it('lets an idle release that falls due mid-backup wait for the upload, then release coherently', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const gate = Promise.withResolvers<void>()
+  const started = Promise.withResolvers<void>()
+  const order: string[] = []
+  const deferred = {
+    ...snapshot,
+    uploadSnapshot: vi.fn<typeof snapshot.uploadSnapshot>(async (o) => {
+      // The first upload is the backup, held open; the next is the release's.
+      if (order.length === 0) {
+        order.push('backup start')
+        started.resolve()
+        await gate.promise
+        const manifest = await snapshot.uploadSnapshot(o)
+        order.push('backup end')
+        return manifest
+      }
+      order.push('release')
+      return snapshot.uploadSnapshot(o)
+    }),
+  }
+  const desk = await machine('desk', project, root, { snapshots: deferred })
+  await writer(desk)
+  const backingUp = desk.lease.backup()
+  await started.promise
+  // The idle deadline passes while the backup uploads: the release queues behind it, storage stays open.
+  const start = Date.now()
+  expect(await desk.lease.checkIdle(start)).toBe(false)
+  const releasing = desk.lease.checkIdle(start + 10 * MINUTE)
+  await new Promise((resolve) => setImmediate(resolve))
+  expect(desk.serving()).toBe(true)
+  expect(desk.host.standby()).toBeUndefined()
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+  gate.resolve()
+  const done = await backingUp
+  expect(await releasing).toBe(true)
+  // The backup finished on open storage before the release closed it and uploaded its own snapshot.
+  expect(order).toEqual(['backup start', 'backup end', 'release'])
+  const lease = project.replica.store.lease()!
+  expect(lease).toMatchObject({ machine: null, epoch: 1 })
+  expect(lease.snapshot?.id).not.toBe(done.id)
+  expect(desk.host.standby()).toMatchObject({ reason: 'Released · resume here' })
+})
+
+it('keeps the lease on stop while a backup still uploads', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  const gate = Promise.withResolvers<void>()
+  const started = Promise.withResolvers<void>()
+  const deferred = {
+    ...snapshot,
+    uploadSnapshot: vi.fn<typeof snapshot.uploadSnapshot>(async (o) => {
+      started.resolve()
+      await gate.promise
+      return snapshot.uploadSnapshot(o)
+    }),
+  }
+  const desk = await machine('desk', project, root, { snapshots: deferred })
+  await writer(desk)
+  const backingUp = desk.lease.backup()
+  await started.promise
+  await desk.lease.stopRelease()
+  expect(desk.notices).toContain('Kept the lease on stop: a backup was still uploading.')
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+  expect(desk.serving()).toBe(true)
+  gate.resolve()
+  await backingUp
+  expect(deferred.uploadSnapshot).toHaveBeenCalledOnce()
+})
+
 it('refuses a second backup while one runs, during a release, and on a standby', async () => {
   snapshotFetch()
   const project = cloud()

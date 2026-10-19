@@ -52,7 +52,14 @@ export interface SyncDeps {
   health(): Promise<ProviderHealth[]>
 }
 
-export function syncDeps(host: ExtensionHost): SyncDeps {
+/**
+ * The deps over the host. `homes` lists the other project homes on this machine; with `current`, this home too, reached
+ * at its own address, as a project home's @sync needs.
+ */
+export function syncDeps(
+  host: Pick<ExtensionHost, 'projects' | 'system' | 'userHome' | 'faux' | 'notice' | 'want'>,
+  current = false,
+): SyncDeps {
   return {
     async cloud() {
       const config = await cloudConfig(host)
@@ -60,14 +67,18 @@ export function syncDeps(host: ExtensionHost): SyncDeps {
     },
     async homes() {
       return (await host.projects()).flatMap((project) =>
-        project.current || !project.root
+        (project.current && !current) || !project.root
           ? []
           : [
               {
                 root: project.root,
                 name: project.name,
                 home: project.home,
-                ...(project.running ? { url: project.running.url } : {}),
+                ...(project.current
+                  ? { url: host.system().process.url }
+                  : project.running
+                    ? { url: project.running.url }
+                    : {}),
               },
             ],
       )
@@ -369,7 +380,8 @@ export function createWatcher(
           if (candidate && !seen.has(candidate.id)) seen.set(candidate.id, candidate)
         for (const moved of seen.values()) {
           if (submitted.has(moved.id) || !ended(moved)) continue
-          if (moved.target !== machine || state.role === 'writer') continue
+          // Only a failed move: a finished one reported in the project's home, also once it moves on later.
+          if (moved.target !== machine || !moved.error || state.role === 'writer') continue
           const key = state.key ?? (await deps.identity(home.root))?.key ?? ''
           await submit({
             project: { key, name: home.name, root: home.root },
@@ -655,11 +667,28 @@ export async function projectFleet(deps: SyncDeps, root: string): Promise<Fleet>
   }
 }
 
-/** This project home's deps: the fleet and its moves see only this project. */
-const scoped = (deps: SyncDeps, root: string): SyncDeps => ({
+/** This project home's deps: the fleet and its moves see only this project, its own home included. */
+export const scoped = (deps: SyncDeps, root: string): SyncDeps => ({
   ...deps,
   homes: async () => (await deps.homes()).filter((home) => home.root === root),
 })
+
+/**
+ * A project home's tools: each resolves its project in `projectFleet`, so a name outside this project is refused before
+ * any move, cancel or backup request goes out.
+ */
+export function projectActions(deps: SyncDeps, root: string) {
+  // `find` throws for a name outside the scoped fleet, naming the one project there is.
+  const inScope = async (name: string) => void find((await projectFleet(deps, root)).projects, name)
+  return {
+    move: async (input: Parameters<typeof move>[1]) => (
+      await inScope(input.project),
+      move(deps, input)
+    ),
+    cancel: async (name: string) => (await inScope(name), cancel(deps, name)),
+    backup: async (name: string) => (await inScope(name), backup(deps, name)),
+  }
+}
 
 /**
  * In a project home, feedback reaches this project's @sync: backups from the lease, a move that ended here, and a
@@ -690,7 +719,11 @@ function feedback(host: ExtensionHost) {
 const json = (value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }]
 
 /** @sync's tools: across the fleet in the machine home, or for this project only in a project home. */
-function tools(host: ExtensionHost, deps: SyncDeps, read: () => Promise<Fleet>, here: string) {
+function tools(
+  read: () => Promise<Fleet>,
+  act: Pick<ReturnType<typeof projectActions>, 'move' | 'cancel' | 'backup'>,
+  here: string,
+) {
   return [
     defineTool({
       name: 'fleet',
@@ -720,7 +753,7 @@ function tools(host: ExtensionHost, deps: SyncDeps, read: () => Promise<Fleet>, 
         ),
       }),
       async execute(input) {
-        const result = await move(deps, input)
+        const result = await act.move(input)
         return { output: json(result), details: result }
       },
     }),
@@ -731,7 +764,7 @@ function tools(host: ExtensionHost, deps: SyncDeps, read: () => Promise<Fleet>, 
         'Back up a project (key or name) now: its writer on this machine uploads an encrypted snapshot of its database and ultimate/* branches and keeps running it. Resolves once uploaded with the snapshot id, time and size. Refused when the project runs on another machine or a move is in flight.',
       parameters: Type.Object({ project: Type.String({ minLength: 1 }) }),
       async execute({ project }) {
-        const result = await backup(deps, project)
+        const result = await act.backup(project)
         return { output: json(result), details: result }
       },
     }),
@@ -741,7 +774,7 @@ function tools(host: ExtensionHost, deps: SyncDeps, read: () => Promise<Fleet>, 
       description: 'Cancel a project’s move until its claim is sent.',
       parameters: Type.Object({ project: Type.String({ minLength: 1 }) }),
       async execute({ project }) {
-        const result = await cancel(deps, project)
+        const result = await act.cancel(project)
         return { output: json(result), details: result }
       },
     }),
@@ -755,10 +788,13 @@ export default function sync(host: ExtensionHost) {
   host.need(SecretsApi)
   if (!isMachineHome(host.projectRoot, host.userHome)) {
     feedback(host)
-    const deps = scoped(syncDeps(host), host.projectRoot)
+    const deps = scoped(syncDeps(host, true), host.projectRoot)
     const read = async () =>
       host.faux ? demoProjectFleet(host.userHome) : projectFleet(deps, host.projectRoot)
-    return defineExtension({ name: 'sync', tools: tools(host, deps, read, 'This project') })
+    return defineExtension({
+      name: 'sync',
+      tools: tools(read, projectActions(deps, host.projectRoot), 'This project'),
+    })
   }
   const deps = syncDeps(host)
   const watcher = createWatcher(deps, (input) => submitMove(host, input))
@@ -785,6 +821,14 @@ export default function sync(host: ExtensionHost) {
   const read = async () => (host.faux ? demoFleet(host.userHome) : fleet(deps))
   return defineExtension({
     name: 'sync',
-    tools: tools(host, deps, read, 'Every machine and project'),
+    tools: tools(
+      read,
+      {
+        move: (input) => move(deps, input),
+        cancel: (name) => cancel(deps, name),
+        backup: (name) => backup(deps, name),
+      },
+      'Every machine and project',
+    ),
   })
 }

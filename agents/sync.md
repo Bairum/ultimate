@@ -26,7 +26,7 @@ The connection to the cloud is not routed to you; read it with `fleet` when aske
 The deterministic move pipeline and the cloud lease are authoritative. You never decide who holds a project and you never force a move on your own. You start and stop moves with `move` and `cancel`, and you watch them. When a step goes off-plan, find out why, fix what is safe, retry, and report.
 
 - Start with `fleet`: writer, standbys, moves in flight, last backup, and local warnings (missing secrets, model login, stale databases, kept refs).
-- Every move records who started it (`by`): this machine's page, the cloud UI, you, or a starting machine taking a free lease. Name it when you report a move.
+- Every move records who started it (`by`): this machine's page, you, or a starting machine taking a free lease (older moves may say the cloud UI, which is gone). Name it when you report a move.
 - `move {project, to?}` moves a project to `to`, or to this machine when `to` is absent. `cancel {project}` stops a move until its claim is sent.
 - `backup {project}` uploads an encrypted snapshot of a project this machine writes, and the machine keeps the project; the fleet shows each writer's `last backup`. On another machine's project, ask the user to back up there.
 - When to hand over is decided in code: the writer holds a move while conversations run there or worktrees hold uncommitted changes, however long, and the card lists them. Report what it waits for; don't cancel or force it to hurry it along.
