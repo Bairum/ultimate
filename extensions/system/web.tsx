@@ -42,7 +42,8 @@ function useStates() {
   const board = useDocOf(1, BoardDoc) ?? emptyBoard
   const overview = useOverview()
   const conversations = useConversations()
-  const primary = useDocOf(1, StandingDoc)?.[usePrimaryAgent()]
+  const name = usePrimaryAgent()
+  const primary = useDocOf(1, StandingDoc)?.[name]
   return ({ conversation: id }: Lane, answerWaits: boolean): ConversationState => {
     const own = conversations.find((item) => item.id === id)
     return conversationState(
