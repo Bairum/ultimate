@@ -1,13 +1,71 @@
 import { join } from 'node:path'
 import { formatSkillsForPrompt, loadProjectContextFiles } from '@earendil-works/pi-coding-agent'
-import { defineExtension, section } from '@earendil-works/pi-durable'
+import {
+  defineDoc,
+  defineExtension,
+  GenerationTask,
+  hook,
+  section,
+} from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
 export const order = -100
 
+/** The build a conversation's last run started on; a fork starts from its parent's. */
+const SeenBuild = defineDoc<{ id?: string }>({
+  kind: 'prompt.build',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'current',
+  initial: () => ({}),
+})
+export const docs = [SeenBuild]
+
+/** What changed since build `seen`: the changes of every later build in this process, or nothing when it is older. */
+export function buildNote(build: ReturnType<ExtensionHost['build']>, seen: string) {
+  const since = build.history.findIndex((entry) => entry.id === seen)
+  const changed =
+    since < 0 ? [] : [...new Set(build.history.slice(since + 1).flatMap((entry) => entry.changed))]
+  return (
+    `Build changed: ${seen} → ${build.id} · generation ${build.generation}` +
+    (changed.length ? ` · changed: ${changed.join(', ')}` : '')
+  )
+}
+
 export default function prompt(host: ExtensionHost) {
   return defineExtension({
     name: 'prompt',
+    hooks: [
+      // Pi upstream: @earendil-works/pi-durable@1.3.0 — patched transactional beforeInput hook.
+      // The build is a note on the input that starts a run, not a system-prompt section: every hot reload changed that
+      // section, and a changed system prompt rewrites the whole prompt cache. A conversation's first run records it.
+      hook(GenerationTask, {
+        beforeInput: async (_input, { tx, conversationId }) => {
+          const build = host.build()
+          const seen = await tx.doc(SeenBuild, conversationId)
+          if (seen.id === build.id) return undefined
+          const previous = seen.id
+          seen.id = build.id
+          if (previous === undefined) return undefined
+          return {
+            entries: [
+              {
+                kind: 'prompt.build',
+                data: { from: previous, to: build.id },
+                model: [
+                  {
+                    role: 'user' as const,
+                    content: buildNote(build, previous),
+                    timestamp: Date.now(),
+                  },
+                ],
+              },
+            ],
+          }
+        },
+      }),
+    ],
     sections: [
       section(
         'identity',
@@ -40,7 +98,7 @@ export default function prompt(host: ExtensionHost) {
                 '- Subagents are separate conversations with their own context. Give them self-contained tasks.',
               ]
             : []),
-          '- The build line at the end of this prompt names exactly the code you are running. When it changes during a conversation, you were hot-swapped: your tools, prompt, or UI may be different now. Find out what changed (the changed list, `git log`/`git diff`' +
+          '- When a "Build changed" note arrives with your input, you were hot-swapped: your tools, prompt, or UI may be different now. Find out what changed (the changed list, `git log`/`git diff`' +
             (has('codemode') ? ', `ultimate.extensions()`' : '') +
             ') and test new behaviour before relying on it.',
           ...(has('screenshot')
@@ -105,13 +163,6 @@ export default function prompt(host: ExtensionHost) {
         return `Work checkout (effective cwd): ${cwd}\nHost project: ${host.projectRoot}\nRunning Ultimate host: ${host.ultimateRoot}\nUI: ${host.system().process.url} (shared host)\nDirect project edits to the effective cwd. Host-scoped config and extensions remain loaded from the host project and Ultimate clone; edits in a separate checkout do not hot-reload the running host.`
       }),
       section('cwd', (input) => input.env?.cwd ?? input.agent.cwd ?? host.projectRoot),
-      section('build', () => {
-        const build = host.build()
-        return (
-          `Ultimate build ${build.id} · generation ${build.generation} · core ${build.core.slice(0, 12)} · ${Object.keys(build.extensions).length} extensions` +
-          (build.changed.length ? `\nChanged in this build: ${build.changed.join(', ')}` : '')
-        )
-      }),
     ],
   })
 }

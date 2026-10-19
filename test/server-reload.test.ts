@@ -34,17 +34,44 @@ describe('server reload', () => {
     )
     await post(server, '/api/conversations/1/submit', { text: 'after' })
     await server.harness.waitForIdle(context)
-    const view = await server.root.viewState(context)
-    const systems = view.value.entries.filter((entry) => entry.kind === 'pi.system')
+    const entries = async () => {
+      const view = await server.root.viewState(context)
+      const all = view.value.entries
+      view.dispose()
+      return all
+    }
+    const afterChange = await entries()
+    // The counter's own section changed; the build is never part of the system prompt.
+    const systems = afterChange.filter((entry) => entry.kind === 'pi.system')
     expect(systems.length).toBeGreaterThan(1)
-    expect(JSON.stringify(systems.at(-1))).toContain(`Ultimate build ${second.id}`)
-    view.dispose()
+    expect(JSON.stringify(systems)).not.toContain(first.id)
+    // The first run recorded its build silently; the run after the reload gets one note, right before its input.
+    const notes = afterChange.filter((entry) => entry.kind === 'prompt.build')
+    expect(notes).toHaveLength(1)
+    expect(notes[0].model?.[0]?.content).toBe(
+      `Build changed: ${first.id} → ${second.id} · generation 1 · changed: extensions/counter`,
+    )
+    const users = afterChange.filter((entry) => entry.model?.[0]?.role === 'user')
+    expect(users.map((entry) => entry.kind).slice(-2)).toEqual(['prompt.build', 'pi.user'])
+
+    // A build that changes no section leaves the system prompt as it was; only the note says so.
     await writeFile(
       join(options.ultimateRoot, 'extensions/web-only/web.tsx'),
       'export default () => "changed"',
     )
     await until(() => server.host.build().id !== second.id)
-    expect(server.host.build().changed).toEqual(['extensions/web-only'])
+    const third = server.host.build()
+    expect(third.changed).toEqual(['extensions/web-only'])
+    await post(server, '/api/conversations/1/submit', { text: 'web only' })
+    await server.harness.waitForIdle(context)
+    await post(server, '/api/conversations/1/submit', { text: 'unchanged' })
+    await server.harness.waitForIdle(context)
+    const later = (await entries()).filter((entry) => entry.id > afterChange.at(-1)!.id)
+    expect(later.filter((entry) => entry.kind === 'pi.system')).toEqual([])
+    // Exactly one note for the change, none for the unchanged build after it.
+    expect(later.filter((entry) => entry.kind === 'prompt.build').map((e) => e.data)).toEqual([
+      { from: second.id, to: third.id },
+    ])
     await stream.close()
   })
   it('rejects foreign Hosts on API and Vite and accepts localhost Origin', async () => {
