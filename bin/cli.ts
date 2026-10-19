@@ -8,7 +8,7 @@ import { readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadProjectContextFiles, main } from '@earendil-works/pi-coding-agent'
+import { loadProjectContextFiles, main, SettingsManager } from '@earendil-works/pi-coding-agent'
 import { projectHome } from '../server/project.ts'
 import { projectSkills } from '../server/skills.ts'
 
@@ -44,8 +44,15 @@ function recoveryPrompt(host: CliHost) {
 ${context}`
 }
 
-/** Pi's arguments: Ultimate's context and skills instead of Pi's personal ones, then the user's own arguments. */
+/**
+ * Pi's arguments: Ultimate's prompt, context and skills instead of Pi's personal ones (an explicit system prompt also
+ * stops Pi discovering SYSTEM.md and APPEND_SYSTEM.md), the harness's default model, then the user's own arguments,
+ * which win.
+ */
 export function cliArgs(host: CliHost, args: string[]) {
+  const settings = SettingsManager.create(host.projectRoot)
+  const provider = settings.getDefaultProvider()
+  const model = settings.getDefaultModel()
   const claudeCode = fileURLToPath(
     import.meta.resolve('@earendil-works/pi-claude-code/src/index.ts'),
   )
@@ -58,8 +65,9 @@ export function cliArgs(host: CliHost, args: string[]) {
     claudeCode,
     '--session-dir',
     join(host.home, 'cli-sessions'),
-    '--append-system-prompt',
+    '--system-prompt',
     recoveryPrompt(host),
+    ...(provider && model ? ['--model', `${provider}/${model}`] : []),
     ...args,
   ]
 }
