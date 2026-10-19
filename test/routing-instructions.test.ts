@@ -10,6 +10,7 @@ test.each([
   'Without workers, fix the typo directly; avoid planning and skip independent review.',
   'Directly fix the typo without an epic, workers, or review.',
   'Fix the typo directly, review your diff, test and submit. No epic or workers.',
+  'Small, clear change: replace the typo in README.md, verify the diff and submit.',
 ])('tiny instructions allow negated workflow mentions: %s', (prompt) => {
   expect(routingInstructions(prompt)).toMatchObject({
     direct: true,
@@ -40,6 +41,13 @@ test.each([
   'No need to implement directly; plan the feature, use workers and require review.',
 ])('feature instructions require affirmative plan, workers and review: %s', (prompt) => {
   expect(routingInstructions(prompt)).toMatchObject({ plan: true, workers: true, review: true })
+})
+
+test('assessment counts only when it is asked for', () => {
+  expect(routingInstructions('Assess first and send one assessment; build nothing.').assess).toBe(
+    true,
+  )
+  expect(routingInstructions('Fix it directly; no assessment needed.').assess).toBe(false)
 })
 
 test.each([

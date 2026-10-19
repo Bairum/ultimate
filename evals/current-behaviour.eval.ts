@@ -49,13 +49,19 @@ test.for([
   {
     size: 'tiny',
     request: 'Fix the typo "teh" to "the" in README.md.',
-    expected: { direct: true, plan: false, workers: false, reviewer: false },
+    expected: { direct: true, plan: false, workers: false, reviewer: false, assess: false },
   },
   {
     size: 'feature',
     request:
-      'Build persistent multi-user notifications: database schema and migrations, server subscriptions, a notification inbox UI, and integration tests. Implement it, using the normal project workflow.',
+      'Build persistent multi-user notifications: database schema and migrations, server subscriptions, a notification inbox UI, and integration tests. I already know what I want, so skip the assessment and implement it now, using the normal project workflow.',
     expected: { plan: true, workers: true, review: true },
+  },
+  {
+    size: 'unassessed feature',
+    request:
+      'Add persistent multi-user notifications: database schema and migrations, server subscriptions, a notification inbox UI, and integration tests.',
+    expected: { assess: true },
   },
 ])('standing agent sizes a $size request before routing', async ({ request, expected }) => {
   const ultimate = await start({

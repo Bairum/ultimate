@@ -9,14 +9,17 @@ export function routingInstructions(prompt: string) {
     .map((clause) => clause.split(/\b(?:no|not|don't|without|skip|avoid|neither)\b/i)[0])
   const affirmative = clauses.join('\n')
   return {
-    direct: clauses.some(
-      (clause) =>
-        /\b(?:fix|implement|correct|edit|handle|make)\b/i.test(clause) &&
-        /\b(?:directly|yourself|minimal|exact|only)\b/i.test(clause),
-    ),
+    direct:
+      /\bsmall,? clear change\b/i.test(affirmative) ||
+      clauses.some(
+        (clause) =>
+          /\b(?:fix|implement|correct|edit|handle|make)\b/i.test(clause) &&
+          /\b(?:directly|yourself|minimal|exact|only)\b/i.test(clause),
+      ),
     plan: /\b(?:plan|planning|epics?)\b/i.test(affirmative),
     workers: /\b(?:workers?|delegat(?:e|ing|ion))\b/i.test(affirmative),
     reviewer: /\b(?:reviewers?|independent review|review agent)\b/i.test(affirmative),
     review: /\breview(?:ers?)?\b/i.test(affirmative),
+    assess: /\bassess(?:es|ing|ment)?\b/i.test(affirmative),
   }
 }
