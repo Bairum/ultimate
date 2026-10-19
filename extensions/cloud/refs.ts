@@ -39,3 +39,31 @@ export const LeaseChanged = defineEvent<{
   writer: string
   change: 'acquired' | 'releasing'
 }>('cloud.lease')
+/**
+ * A backup of project `project` (its key) on the serving writer: `started` when the upload begins, `done` with the
+ * bytes before compression and its duration, `failed` with a short classified `reason` (never the raw error).
+ */
+export const BackupEvent = defineEvent<
+  | { phase: 'started'; project: string }
+  | { phase: 'done'; project: string; bytes: number; ms: number }
+  | { phase: 'failed'; project: string; ms: number; reason: string }
+>('cloud.backup')
+/**
+ * Move `id` of project `project` from `from` (null: the lease was free) to `to`. The writer records `started` when the
+ * target asks it to release, and `failed` with the target's failed `step` and a classified `reason` when the move ends
+ * and it keeps the project; the target records `done` once it opened storage. A target on standby has no storage, so
+ * a move from a free lease records only `done`, and its failures stay in the move card.
+ */
+export const MoveEvent = defineEvent<
+  | { phase: 'started'; project: string; id: string; from: string | null; to: string }
+  | { phase: 'done'; project: string; id: string; from: string | null; to: string; ms: number }
+  | {
+      phase: 'failed'
+      project: string
+      id: string
+      from: string | null
+      to: string
+      step: string
+      reason: string
+    }
+>('cloud.move')

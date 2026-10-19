@@ -18,6 +18,8 @@ import { readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { JsonObject } from '@earendil-works/pi-durable'
+import type { JsonValue } from '@earendil-works/chord'
+import type { EventToken } from '../../shared/events.ts'
 import { exec as run } from '../../lib/exec.ts'
 import { applyWaiting, handoverDetail, LEFT_LIMITS } from '../../cloud/protocol.ts'
 import type { MoveBy, Transition, TransitionStep } from '../../cloud/protocol.ts'
@@ -38,7 +40,7 @@ import {
 import type { LeaseFile } from '../../lib/database-files.ts'
 import { fetchOrigin } from './fetch.ts'
 import { modelLogin, noLogin } from './login.ts'
-import { LeaseChanged } from './refs.ts'
+import { BackupEvent, LeaseChanged, MoveEvent } from './refs.ts'
 import type { ModelLogin } from './types.ts'
 import type { Connect, startSync, SyncOptions, SyncState } from './server.ts'
 import type { databaseHash, downloadSnapshot, uploadSnapshot } from './snapshot.ts'
@@ -165,6 +167,28 @@ const foreground = (graph: Parameters<typeof foregroundTasks>[0]) => foregroundT
 const clipTo = (text: string, max: number) =>
   text.length > max ? `…${text.slice(-(max - 1))}` : text
 const clip = (text: string) => clipTo(text, 500)
+/** Classified failure reasons, first match wins: an event names one of these, never the raw error. */
+const REASONS: [RegExp, string][] = [
+  [/^Cancelled$/, 'cancelled'],
+  [/ disconnected$/, 'a machine disconnected'],
+  [/^Missing ULTIMATE_CLOUD_SNAPSHOT_KEY/, 'missing snapshot key'],
+  [/^Missing secrets/, 'missing secrets'],
+  [/No model login|is failing here/, 'no model login'],
+  [/^git \w+ failed/, 'git failed'],
+  [/^pnpm install failed/, 'install failed'],
+  [/took the project first/, 'lost the claim'],
+  [/not connected|is offline/, 'cloud unreachable'],
+  [/integrity|verification|does not match/, 'integrity check failed'],
+  [/timeout|timed out|aborted/i, 'timed out'],
+  [/Releasing the lease failed/, 'release failed'],
+]
+/** `reason` of a failed `cloud.backup` or `cloud.move`: a known cause, an HTTP status, or `failed`. */
+export function classify(error: string) {
+  const known = REASONS.find(([pattern]) => pattern.test(error))
+  if (known) return known[1]
+  const status = /(?:returned|:)\s*([45]\d\d)\b/.exec(error)
+  return status ? `HTTP ${status[1]}` : 'failed'
+}
 const runs = (count: number) => `${count} running ${count === 1 ? 'task' : 'tasks'}`
 const changes = (paths: string[]) =>
   `${paths.length} ${paths.length === 1 ? 'worktree' : 'worktrees'} with uncommitted changes`
@@ -241,15 +265,31 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
    * nothing: a write before parking would change the database it compares with the released snapshot. A failure only
    * reports.
    */
-  const announce = async (epoch: number, change: 'acquired' | 'releasing') => {
+  const announce = (epoch: number, change: 'acquired' | 'releasing') =>
+    record(LeaseChanged, { epoch, writer: options.machine, change })
+  /**
+   * Commit one cloud event on its own, right after the change it records: cloud state lives outside storage, so it
+   * cannot share that change's commit. Only while storage is open; a failure only reports.
+   */
+  const record = async <D extends JsonValue>(event: EventToken<D>, data: D) => {
     if (!serving()) return
     await host
       .harness()
-      .commit(
-        (tx) => host.emit(tx, LeaseChanged, { epoch, writer: options.machine, change }),
-        context,
-      )
+      .commit((tx) => host.emit(tx, event, data), context)
       .catch(report)
+  }
+  /** The move `transition` ended here, storage open: record it and tell the project's @sync. */
+  const moved = async (transition: Transition) => {
+    const { id, from, target: to, startedAt } = transition
+    await record(MoveEvent, {
+      phase: 'done',
+      project: snapshotKey(),
+      id,
+      from,
+      to,
+      ms: Date.now() - startedAt,
+    })
+    await reportMoved(transition)
   }
   /** Feedback goes to whoever provides `cloud.feedback` (@sync); a failure to deliver it never fails the lease. */
   const feedback = (send: (point: FeedbackService) => Promise<void>) =>
@@ -260,10 +300,8 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       })
       .catch((error: unknown) => host.notice(`Cloud feedback: ${String(error)}`))
   const tell = (backup: BackupReport) => feedback((point) => point.backup(backup))
-  const reportMoved = (moved: Transition) =>
-    feedback((point) =>
-      point.moved({ key: snapshotKey(), machine: options.machine, transition: moved }),
-    )
+  const reportMoved = (transition: Transition) =>
+    feedback((point) => point.moved({ key: snapshotKey(), machine: options.machine, transition }))
   const serving = () => {
     try {
       host.harness()
@@ -370,7 +408,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       download = (await fetchSnapshot(intent.snapshot.id)).database
     await openAsWriter(state.epoch, download)
     // The move a crash interrupted after its claim won: report it as done, once (the feedback keys it by its id).
-    if (intent.transition) await reportMoved(finished(intent.transition, state.epoch))
+    if (intent.transition) await moved(finished(intent.transition, state.epoch))
     return true
   }
   /** The local database is the snapshot `snapshot`: the last release recorded it and its content is unchanged. */
@@ -823,7 +861,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     try {
       await openAsWriter(claimed, downloaded)
       // Storage is open: the project's @sync hears it here, once, and checks this machine's health.
-      await reportMoved(structuredClone(transition))
+      await moved(structuredClone(transition))
       return true
     } catch (error) {
       fail(
@@ -967,10 +1005,28 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       if (mode !== 'serving' || sync?.state().role !== 'writer') return false
       // Only this transition's own end counts: roles sent before it was reported may still be on their way.
       const ended = (state: SyncState) => state.transition?.id === id && !!state.transition.error
-      const stopped = () => {
+      const project = snapshotKey()
+      const failed = (step: string, error: string) =>
+        record(MoveEvent, {
+          phase: 'failed',
+          project,
+          id,
+          from: options.machine,
+          to: by,
+          step,
+          reason: classify(error),
+        })
+      const stopped = async () => {
         host.notice(`The move to ${by} stopped; this machine keeps the project`)
+        const transition = sync?.state().transition
+        if (transition?.id === id)
+          await failed(
+            transition.steps.find((step) => step.state === 'failed')?.name ?? transition.step,
+            transition.error ?? 'stopped',
+          )
         return false
       }
+      await record(MoveEvent, { phase: 'started', project, id, from: options.machine, to: by })
       // An unforced move cannot release on worktrees it could not check: the error holds it like dirty ones.
       const scan = (): Promise<{ dirty: string[]; unchecked?: string }> =>
         dirtyWorktrees().then(
@@ -1068,7 +1124,10 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       releasingFor = id
       try {
         // The standby page's cloud facet explains the move, and that "Move here" pulls it back.
-        return await release({ reason: `Moved to ${by}`, explained: true })
+        const released = await release({ reason: `Moved to ${by}`, explained: true })
+        // Storage open again: the release failed before it was sent, and this machine serves on.
+        if (!released) await failed('handover', 'Releasing the lease failed')
+        return released
       } finally {
         releasingFor = undefined
       }
@@ -1098,6 +1157,8 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   }
   const upload = async (epoch: number) => {
     const started = Date.now()
+    const project = snapshotKey()
+    await record(BackupEvent, { phase: 'started', project })
     try {
       const key = await secret()
       if (!key) throw new Error(missingKey)
@@ -1125,11 +1186,19 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       lastBackup = done
       sync?.send({ type: 'backup', at: done.at })
       lastError = undefined
-      await tell({ ok: true, ...done, ms: done.at - started })
+      const ms = done.at - started
+      await record(BackupEvent, { phase: 'done', project, bytes: done.bytes, ms })
+      await tell({ ok: true, ...done, ms })
       return done
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       fail(`Backup failed: ${message}`)
+      await record(BackupEvent, {
+        phase: 'failed',
+        project,
+        ms: Date.now() - started,
+        reason: classify(message),
+      })
       await tell({ ok: false, at: Date.now(), error: message })
       throw error
     } finally {

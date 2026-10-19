@@ -42,8 +42,27 @@ import {
   writer,
 } from './cloud-lease-fixture.ts'
 import { eventHost, temp, until } from './helpers.ts'
-import { LeaseChanged } from '../extensions/cloud/refs.ts'
+import { BackupEvent, LeaseChanged, MoveEvent } from '../extensions/cloud/refs.ts'
+import { classify } from '../extensions/cloud/lease.ts'
+import type { Harness } from '@earendil-works/pi-durable'
+
+/** The data of `cloud.backup` or `cloud.move` events in `harness`, oldest first. */
+const cloudEvents = async (harness: () => Harness, event: typeof BackupEvent | typeof MoveEvent) =>
+  (await eventHost(harness, 'test').eventLog.recent({ events: [event] }))
+    .map((record) => record.data)
+    .toReversed()
 import { apply, plan } from '../scripts/reset.ts'
+
+it('classifies a failure into a short reason, never echoing the raw error', () => {
+  expect(classify('PUT /sync/snapshots: 503')).toBe('HTTP 503')
+  expect(classify('Snapshot db-0 returned 404')).toBe('HTTP 404')
+  expect(classify('Cancelled')).toBe('cancelled')
+  expect(classify('git fetch failed: git@github.com: Permission denied (publickey).')).toBe(
+    'git failed',
+  )
+  expect(classify('desk disconnected')).toBe('a machine disconnected')
+  expect(classify('Bearer sk-secret-token rejected')).toBe('failed')
+})
 
 it('releases an idle writer, and another machine prepares and takes over the same history', async () => {
   snapshotFetch()
@@ -810,6 +829,12 @@ it('moves from @sync: the online writer drains, and every step reaches its socke
   await writer(laptop)
   expect(project.replica.store.lease()).toMatchObject({ machine: 'laptop', epoch: 2 })
   expect(project.replica.store.transition()).toMatchObject({ id, by: 'sync' })
+  // The desk's `started` came with the snapshot; the laptop records `done` once it opened storage.
+  const move = { project: KEY, id, from: 'desk', to: 'laptop' }
+  expect(await cloudEvents(laptop.harness, MoveEvent)).toEqual([
+    { phase: 'started', ...move },
+    { phase: 'done', ...move, ms: expect.any(Number) },
+  ])
   expect(desk.host.standby()).toMatchObject({ reason: 'Moved to laptop', explained: true })
   expect(states(project.replica.store.transition())).toMatchObject({
     handover: 'done',
@@ -838,6 +863,13 @@ it('cancels from the cloud UI during the handover, and the draining writer keeps
   expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
   expect(desk.serving()).toBe(true)
   expect(desk.snapshots.uploadSnapshot).not.toHaveBeenCalled()
+  // The writer that kept the project records the move's start and its end at the target's failed step.
+  const move = { project: KEY, id, from: 'desk', to: 'laptop' }
+  await until(async () => (await cloudEvents(desk.harness, MoveEvent)).length === 2)
+  expect(await cloudEvents(desk.harness, MoveEvent)).toEqual([
+    { phase: 'started', ...move },
+    { phase: 'failed', ...move, step: 'handover', reason: 'cancelled' },
+  ])
 })
 
 it('keeps the project when the move is cancelled while it scans for uncommitted work', async () => {
@@ -1148,6 +1180,13 @@ it('reports each backup and a move that ended here once, to the feedback point o
       kind: 'backup',
       value: { ok: false, at: expect.any(Number), error: 'PUT /sync/snapshots: 503' },
     },
+  ])
+  // Each backup is `started`, then `done` with its size or `failed` with a classified reason.
+  expect(await cloudEvents(desk.harness, BackupEvent)).toEqual([
+    { phase: 'started', project: KEY },
+    { phase: 'done', project: KEY, bytes: done.bytes, ms: expect.any(Number) },
+    { phase: 'started', project: KEY },
+    { phase: 'failed', project: KEY, ms: expect.any(Number), reason: 'HTTP 503' },
   ])
 
   await sleep(desk.harness(), true)

@@ -62,6 +62,19 @@ Lease transitions are durable events too: `cloud.lease` `{ epoch, writer, change
 it to release, so the uploaded snapshot carries it to the next writer. A writer the cloud replaced records nothing: a
 write then would change the database it compares with the released snapshot before parking it.
 
+Backups and moves are events as well, for the System stream. Like `cloud.lease`, each commits on its own right after
+the change it records, because that change happens outside storage (an upload, a lease), and only while storage is
+open. A failure carries a classified `reason` (`classify` in `lease.ts`: `cancelled`, `git failed`, `HTTP 503`, …,
+else `failed`), never the raw error, so no provider text or secret reaches the log.
+
+- `cloud.backup` (`BackupEvent`): `started` `{ project }` as the upload begins, then `done` `{ bytes, ms }` or
+  `failed` `{ ms, reason }`.
+- `cloud.move` (`MoveEvent`) `{ project, id, from, to }`: the writer records `started` when the target asks it to
+  release (the released snapshot carries it), and `failed` `{ step, reason }` with the target's failed step when the
+  move ends and it keeps the project, or `handover` when its release failed. The target records `done` `{ ms }` once
+  it opened storage, also when a restart finishes a won claim. A standby has no storage, so a target's failure
+  before the claim, and a move from a free lease until its `done`, show only in the move card.
+
 The idle check runs every minute, or four times within a shorter `cloud.idleRelease` (fractions of a minute are allowed, for tests).
 
 The web facet (`web.tsx`) shows where the project runs and moves it. It polls `state` (every second while a move runs or a release uploads) and acts with `moveHere` and `cancel`.

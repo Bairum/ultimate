@@ -42,9 +42,10 @@ message's answer card) and `models.login-changed` (health resets the provider's 
 the system stream: `ultimate.started` (storage opened: generation, build), `subagents.started` (a subagent,
 automation run, new standing agent or branch configured: agent, model, thinking, parent), `board.sent` (a message
 posted: ids, `reply`, `steer`, never the text), `workspaces.check` (each lander check run: command, result, ms),
-`conversations.compacted`, `health.changed` (a provider's state flipped) and `cloud.lease` (lease acquired or
-releasing). The last three follow state outside the caller's commit (Pi's compaction, the machine's health file, the
-lease's storage switch), so each commits on its own right after it. Something the user must see
+`conversations.compacted`, `health.changed` (a provider's state flipped), `cloud.lease` (lease acquired or
+releasing), `cloud.backup` and `cloud.move` (started, done or failed). The last five follow state outside the
+caller's commit (Pi's compaction, the machine's health file, the lease's storage switch, an upload), so each commits
+on its own right after it. Something the user must see
 exactly once and that feeds the result the owner reports, like the lander's deploy handoff, stays a call, idempotent by
 request id; when it calls up the layering, it goes through an extension point (below).
 `host.harness().subscribeCommits` remains for watching Pi's own records (entries, tasks, submissions, conversation
