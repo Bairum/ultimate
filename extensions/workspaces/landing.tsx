@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MentionText } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
-import { api, useConversations, useUltimate } from '@/sdk'
+import { api, Fold, useConversations, useUltimate } from '@/sdk'
 import { FeatureTag } from '../conversations/ui.tsx'
 import { GithubAction } from './refs.ts'
 import type { ConversationSubject } from '../conversations/types.ts'
@@ -124,72 +124,94 @@ export function Subject({
 
 export type LandingTone = 'landed' | 'pushFailed' | 'failed'
 const tones = {
-  landed: ['border-l-success/70', 'text-success', CheckIcon],
-  pushFailed: ['border-l-warning/70', 'text-warning', TriangleAlertIcon],
-  failed: ['border-l-error/70', 'text-error', XIcon],
+  landed: ['border-l-success/70', 'text-success', CheckIcon, 'landed'],
+  pushFailed: ['border-l-warning/70', 'text-warning', TriangleAlertIcon, 'push failed'],
+  failed: ['border-l-error/70', 'text-error', XIcon, 'not landed'],
 } as const
 
 /**
  * A landing as one card: the feature it lands (tag, title, summary) from its conversation's summary at submit time,
  * the outcome's headline, then `children` (commits, flaky checks, steps). The lander's log, the submitter's report and
- * the root's note all show it.
+ * the root's note all show it. In a chat it folds to one line: the outcome, the feature, `sha`.
  */
 export function LandingCard({
+  card,
   tone,
   headline,
   subject,
   from,
+  sha,
   at,
   divergence,
   sourceEntry,
   children,
 }: {
+  /** The entry that shows it, which keeps its fold state. */
+  card: number
   tone: LandingTone
   headline: ReactNode
   subject?: ConversationSubject
   /** The submitting conversation. */
   from: number
+  /** The landed commit, for the folded line. */
+  sha?: string
   at?: ReactNode
   divergence?: string
   sourceEntry?: number
   children?: ReactNode
 }) {
-  const [border, color, Icon] = tones[tone]
+  const [border, color, Icon, label] = tones[tone]
   return (
-    <section
-      className={cn(
-        'min-w-0 rounded-md border border-l-2 border-border bg-muted/20 font-mono text-[12px]',
-        border,
-      )}
-      data-landing={tone}
+    <Fold
+      card={card}
+      summary={
+        <>
+          <Icon className={cn('size-3 shrink-0', color)} />
+          <span className={cn('shrink-0', color)}>{label}</span>
+          {subject?.feature && <FeatureTag className="shrink-0" feature={subject.feature} />}
+          <span className="min-w-0 truncate text-foreground/80">
+            {subject?.title ?? `#${from}`}
+          </span>
+          {subject?.title && <span className="shrink-0">#{from}</span>}
+          {sha && <span className="shrink-0">· {sha.slice(0, 7)}</span>}
+        </>
+      }
     >
-      <header className="space-y-1 border-b border-border/60 px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon className={cn('size-3.5 shrink-0', color)} />
-          <Subject className="flex-1" from={from} subject={subject} />
-          {sourceEntry !== undefined && <Open id={from} entry={sourceEntry} />}
-        </div>
-        {subject?.summary && (
-          <p className="pl-5.5 font-sans text-[12.5px] leading-relaxed text-muted-foreground">
-            {subject.summary}
-          </p>
+      <section
+        className={cn(
+          'min-w-0 rounded-md border border-l-2 border-border bg-muted/20 font-mono text-[12px]',
+          border,
         )}
-      </header>
-      <div className="space-y-1.5 px-3 py-2.5 pl-8.5">
-        <div className="flex items-start gap-2">
-          <span className="min-w-0 flex-1 break-words text-foreground/90">{headline}</span>
-          {at}
+        data-landing={tone}
+      >
+        <header className="space-y-1 border-b border-border/60 px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <Icon className={cn('size-3.5 shrink-0', color)} />
+            <Subject className="flex-1" from={from} subject={subject} />
+            {sourceEntry !== undefined && <Open id={from} entry={sourceEntry} />}
+          </div>
+          {subject?.summary && (
+            <p className="pl-5.5 font-sans text-[12.5px] leading-relaxed text-muted-foreground">
+              {subject.summary}
+            </p>
+          )}
+        </header>
+        <div className="space-y-1.5 px-3 py-2.5 pl-8.5">
+          <div className="flex items-start gap-2">
+            <span className="min-w-0 flex-1 break-words text-foreground/90">{headline}</span>
+            {at}
+          </div>
+          {divergence && (
+            <p className="flex items-baseline gap-2 text-muted-foreground">
+              <span className="shrink-0 text-[11px]">Diverged</span>
+              <span className="min-w-0 font-sans text-[12.5px] break-words">
+                <MentionText text={divergence} />
+              </span>
+            </p>
+          )}
+          {children}
         </div>
-        {divergence && (
-          <p className="flex items-baseline gap-2 text-muted-foreground">
-            <span className="shrink-0 text-[11px]">Diverged</span>
-            <span className="min-w-0 font-sans text-[12.5px] break-words">
-              <MentionText text={divergence} />
-            </span>
-          </p>
-        )}
-        {children}
-      </div>
-    </section>
+      </section>
+    </Fold>
   )
 }

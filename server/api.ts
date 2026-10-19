@@ -23,6 +23,7 @@ import { EVENT_LOG_LABEL } from './events.ts'
 import { admit } from './request-security.ts'
 import type { Access } from './request-security.ts'
 import { conversationIndex } from './project.ts'
+import { windowOps, windowView } from './view-window.ts'
 
 class HttpError extends Error {
   status: number
@@ -346,7 +347,8 @@ export async function createApi(
       const { send } = sse
       send('system', system.current())
       send('conversations', summaries)
-      send('view', watch.value)
+      let { view, trimmed } = windowView(watch.value)
+      send('view', view)
       send('ui', { value: ui!.value! })
       ui!.start(async (_value, ops) => {
         send('uiOps', { ops })
@@ -361,8 +363,14 @@ export async function createApi(
         })
       }
       events.listeners.add(send)
-      watch.start(async (_value, ops) => {
-        send('ops', ops)
+      watch.start(async (value, ops) => {
+        const rebased = windowOps(ops, trimmed)
+        if (rebased) send('ops', rebased)
+        else {
+          // A head marker or a replaced view starts the window afresh; the client resyncs on every `view`.
+          ;({ view, trimmed } = windowView(value))
+          send('view', view)
+        }
       })
       let stopped = false
       const stop = async () => {
@@ -416,20 +424,30 @@ export async function createApi(
         if (request.method === 'GET' && history) {
           const id = Number(history[1])
           const before = Number(url.searchParams.get('before'))
-          if (!Number.isSafeInteger(id) || id < 1 || !Number.isSafeInteger(before) || before < 1)
+          // `after` bounds the page from below, so a reveal reads down to one entry in large pages.
+          const after = url.searchParams.has('after') ? Number(url.searchParams.get('after')) : 0
+          if (
+            !Number.isSafeInteger(id) ||
+            id < 1 ||
+            !Number.isSafeInteger(before) ||
+            before < 1 ||
+            !Number.isSafeInteger(after) ||
+            after < 0
+          )
             throw new HttpError(400, 'Invalid history cursor or conversation id')
           const conversation = await harness.conversation(id as ConversationId, context)
           if (!conversation) throw new HttpError(404, 'Unknown conversation')
+          const size = after ? 512 : 64
           const page = await conversation.entries(
-            { maxEntryId: (before - 1) as EntryId },
-            65,
+            { maxEntryId: (before - 1) as EntryId, ...(after && { minEntryId: after as EntryId }) },
+            size + 1,
             undefined,
             context,
           )
-          const entries = page.items.slice(0, 64)
+          const entries = page.items.slice(0, size)
           json(200, {
             entries,
-            before: page.items.length > 64 ? entries.at(-1)!.id : undefined,
+            before: page.items.length > size ? entries.at(-1)!.id : undefined,
           })
           return true
         }

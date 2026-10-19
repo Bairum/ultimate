@@ -3,7 +3,14 @@ import { useEffect, useState } from 'react'
 import { MentionText } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { defineWebExtension, formatBytes, useAction, useConversation, useUltimate } from '@/sdk'
+import {
+  defineWebExtension,
+  formatBytes,
+  useAction,
+  useConversation,
+  useTranscript,
+  useUltimate,
+} from '@/sdk'
 import {
   stateLabel,
   useLanderQueue,
@@ -54,22 +61,23 @@ function LandingNote({ entry }: { entry: EntryRecord }) {
   const github = useGithubRepo()
   // A note from before landings recorded their base: the landing before it, where the lander's serial queue left the
   // target.
-  const previous = useConversation((conversation) =>
-    base
-      ? undefined
-      : (
-          conversation.entries.findLast(
-            (other) =>
-              other.kind === 'lineage.note' &&
-              other.id < entry.id &&
-              (other.data as { source?: string })?.source === 'lander',
-          )?.data as { sha?: string } | undefined
-        )?.sha,
-  )
+  const transcript = useTranscript()
+  const previous = base
+    ? undefined
+    : (
+        transcript.findLast(
+          (other) =>
+            other.kind === 'lineage.note' &&
+            other.id < entry.id &&
+            (other.data as { source?: string })?.source === 'lander',
+        )?.data as { sha?: string } | undefined
+      )?.sha
   const rangeBase = base ?? previous
   return (
     <div data-lineage-note="lander">
       <LandingCard
+        card={entry.id}
+        sha={sha}
         from={from}
         sourceEntry={at}
         divergence={divergence}

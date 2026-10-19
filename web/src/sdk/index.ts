@@ -41,6 +41,8 @@ export {
 } from '../app/primitives.tsx'
 /** Isolates another extension's component you render, such as a document renderer: it throws into an error card. */
 export { ExtensionBoundary } from '../app/boundary.tsx'
+/** A card that folds to one quiet line in a chat, and whether one is open; the reader's choice survives reloads. */
+export { Fold, useFold } from '../app/fold.tsx'
 /** Renders with the value another extension provides for your point; see `definePoint`. */
 export { Provided } from '../app/boundary.tsx'
 export { api } from './client.ts'

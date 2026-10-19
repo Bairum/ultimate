@@ -11,10 +11,11 @@ import {
   cn,
   defineWebExtension,
   formatTime,
-  useConversation,
   useRestart,
   useSystem,
   useToolDuration,
+  useFold,
+  useTranscript,
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 
@@ -328,8 +329,10 @@ function Restarted({ from, to }: { from: number; to: number }) {
  */
 // Pi upstream: @earendil-works/pi-durable@1.3.0 src/harness/prompt.ts — internal remove-all pi.system entry immediately precedes a reordered re-add, hidden here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
 function SystemEntry({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
-  const entries = useConversation((conversation) => conversation.entries)
+  const entries = useTranscript()
   const system = useSystem()
+  // In a chat its open state is kept like a card's; elsewhere it opens and closes on its own.
+  const fold = useFold(entry.id)
   const message = systemOf(entry)
   if (!message?.sections) return core
   const index = entries.findIndex((candidate) => candidate.id === entry.id)
@@ -363,7 +366,10 @@ function SystemEntry({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   const added = message.toolsAdded?.map((tool) => tool.name) ?? []
   const removed = message.toolsRemoved?.map((tool) => tool.name) ?? []
   return (
-    <Collapsible className="group/reload">
+    <Collapsible
+      className="group/reload"
+      {...(fold.folds && { open: fold.open, onOpenChange: fold.setOpen })}
+    >
       <CollapsibleTrigger className="w-full">
         <div className="flex items-center gap-3 font-mono text-[11px] text-muted-foreground/80 before:h-px before:flex-1 before:bg-brand/25 after:h-px after:flex-1 after:bg-brand/25 hover:text-muted-foreground">
           <span className="flex min-w-0 items-center gap-1.5">
