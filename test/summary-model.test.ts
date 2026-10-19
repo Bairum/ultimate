@@ -20,8 +20,8 @@ import { actions } from '../extensions/conversations/server.ts'
 import { parseSummaryModel } from '../extensions/conversations/summary-model-ref.ts'
 import { summaryModel as resolveSummaryModel } from '../extensions/conversations/summary-model.ts'
 import {
-  AssessmentAccepted,
   IntentSummarized,
+  ReplySummarized,
   requestSummary,
   SpawnSummarized,
   Summaries,
@@ -55,7 +55,7 @@ afterEach(async () => {
   for (const close of cleanups.splice(0)) await close()
 })
 
-/** A summary provider whose models answer with a valid assessment; `requests` records what was asked. */
+/** A summary provider whose models answer with a valid reply summary; `requests` records what was asked. */
 function summaryProvider(provider: string, ids: string[]) {
   const handle = fauxProvider({ provider, models: ids.map((id) => ({ id, reasoning: true })) })
   const requests: { model: string; reasoning: SimpleStreamOptions['reasoning'] }[] = []
@@ -69,7 +69,6 @@ function summaryProvider(provider: string, ids: string[]) {
         const answer = {
           ...fauxAssistantMessage(
             JSON.stringify({
-              assessment: 'done',
               activity: 'Implemented the change.',
               title: 'Implement the change',
               summary: 'Implemented the change.',
@@ -170,7 +169,7 @@ async function launch({
     tasks: async () => (await harness.inspect(context)).tasks,
     assessed: async () =>
       (await root.context(context)).entries.flatMap((entry) =>
-        AssessmentAccepted.is(entry) ? [entry.data] : [],
+        ReplySummarized.is(entry) ? [entry.data] : [],
       ),
     entries: async () => (await root.context(context)).entries,
     /** Request a spawn refresh for the latest answer, as a subagent start does. */
@@ -221,7 +220,9 @@ it('asks the configured summary model with its thinking level and records it', a
   await f.submit()
   await until(async () => (await f.read())?.assessmentStatus === 'ready')
   expect(f.requests()).toEqual([{ model: 'acme/mini', reasoning: 'low' }])
-  expect(await f.assessed()).toMatchObject([{ value: 'done', model: 'acme/mini' }])
+  expect(await f.assessed()).toMatchObject([
+    { activity: 'Implemented the change.', model: 'acme/mini' },
+  ])
   expect(await f.ledger()).toEqual(['faux/faux-1', 'acme/mini'])
 })
 

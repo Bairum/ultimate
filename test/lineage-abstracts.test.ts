@@ -232,7 +232,6 @@ it.concurrent('summarizes a branch into its title and its abstract in the tree r
               : undefined) as NonNullable<SummaryHost['want']>,
         },
         async () => ({
-          assessment: 'done',
           activity: 'Finished the new work.',
           title: 'Summarized branch',
           summary: 'Finished the new work.',
