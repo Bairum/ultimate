@@ -28,6 +28,7 @@ import { AutomationsApi } from '../automations/api.ts'
 import { Feedback } from './api.ts'
 import type { BackupReport, FeedbackService } from './api.ts'
 import { readSecret, secretMetadata } from '../../lib/secrets.ts'
+import { fetchOrigin } from './fetch.ts'
 import { modelLogin, noLogin } from './login.ts'
 import { LeaseChanged } from './refs.ts'
 import type { ModelLogin } from './types.ts'
@@ -44,7 +45,7 @@ export interface LeaseOptions extends SyncOptions {
 export type Exec = (
   command: string,
   args: string[],
-  options: { cwd: string; signal: AbortSignal; timeout?: number },
+  options: { cwd: string; signal: AbortSignal; timeout?: number; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string }>
 export interface LeaseDeps {
   sync: typeof startSync
@@ -602,7 +603,9 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   const fastForward = async (step: TransitionStep, signal: AbortSignal) => {
     const git = async (...args: string[]) => {
       try {
-        return (await execute('git', args, { cwd: host.projectRoot, signal })).stdout.trim()
+        // Never prompt: a move runs unattended, so an HTTPS fetch without a login must fail rather than hang.
+        const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        return (await execute('git', args, { cwd: host.projectRoot, signal, env })).stdout.trim()
       } catch (error) {
         if (signal.aborted) throw signal.reason
         throw new Error(`git ${args[0]} failed: ${tail(error)}`, { cause: error })
@@ -610,7 +613,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     }
     if (await git('status', '--porcelain', '--untracked-files=no'))
       throw new Error('The checkout has uncommitted changes')
-    await git('fetch', '--quiet', 'origin')
+    await fetchOrigin(git)
     const remote = await git('symbolic-ref', '--short', 'refs/remotes/origin/HEAD').catch(() => {
       throw new Error('origin has no default branch; run git remote set-head origin --auto')
     })
