@@ -1,6 +1,6 @@
 // Harness tests use the faux provider without token pacing.
 import { idleNeed, temp, removeTemp } from './helpers.ts'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, expect, it } from 'vitest'
@@ -50,6 +50,7 @@ async function fixture() {
   prepared.registry.install(defineExtension({ name: 'owned', tools: [tool] }))
   let host!: OpenHost
   let service!: SubagentsService
+  const openers: (() => Promise<void>)[] = []
   const backend = subagents({
     ...prepared,
     harness: () => host.harness,
@@ -62,7 +63,7 @@ async function fixture() {
     resource: (_key, create) => create(),
     extensions: () => [],
     notice: () => {},
-    onOpen: () => {},
+    onOpen: (callback) => openers.push(callback),
     onClose: () => {},
   })
   prepared.registry.install(backend)
@@ -71,7 +72,10 @@ async function fixture() {
   await mkdir(join(path, 'agents'))
   const file = join(path, 'agents/x.md')
   await writeFile(file, definition('Original'))
-  return { path, prepared, host, service, file }
+  const reopen = async () => {
+    for (const callback of openers) await callback()
+  }
+  return { path, prepared, host, service, file, reopen }
 }
 
 it('gives coordinator guidance only to agents with subagent, retaining definitions for branch and automation', async () => {
@@ -154,6 +158,26 @@ it('keeps one ownerless standing conversation, refreshes its definition and recr
   database.prepare('DELETE FROM conversations WHERE id = ?').run(id)
   database.close()
   expect(await service.standing('x', ctx)).not.toBe(id)
+})
+
+it('retires a standing agent whose definition is deleted on the next open, but keeps a broken one', async () => {
+  const { service, host, path, file, reopen } = await fixture()
+  const id = await service.standing('x', ctx)
+  await writeFile(file, '---\nname: x\nresident: [\n---\nBroken')
+  await reopen()
+  expect(await host.harness.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)).toEqual({ x: id })
+  expect(await host.harness.snapshot(Metadata, id, ctx)).toMatchObject({ label: 'agent' })
+  await rm(file)
+  await writeFile(
+    join(path, 'agents/y.md'),
+    '---\nname: y\ndescription: Kept\nresident: true\n---\nY',
+  )
+  const kept = await service.standing('y', ctx)
+  await reopen()
+  expect(await host.harness.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)).toEqual({ y: kept })
+  expect(await host.harness.snapshot(Metadata, id, ctx)).toEqual({ title: '@x' })
+  const retired = await host.harness.conversation(id, ctx)
+  expect(await retired!.agent(ctx)).toMatchObject({ instructions: 'Original' })
 })
 
 it('keeps a model chosen in the standing conversation across refreshes unless the definition pins one', async () => {

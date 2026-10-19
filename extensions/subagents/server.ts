@@ -583,6 +583,31 @@ export default function subagents(
     ).definitions.filter((definition) =>
       residentHere(definition.resident, host.projectRoot, host.userHome),
     )
+  /** Drops standing agents whose definition is gone; their conversations become ordinary ones. A file that fails
+   * to parse keeps its agent, so a typo does not retire it. */
+  const pruneRetired = async (ctx: Context) => {
+    const { definitions, errors } = await discoverAgents(
+      host.ultimateRoot,
+      host.projectRoot,
+      host.userHome,
+      host.modelRuntime,
+    )
+    const kept = new Set([
+      ...definitions
+        .filter((definition) => residentHere(definition.resident, host.projectRoot, host.userHome))
+        .map((definition) => definition.name),
+      ...errors.map((error) => error.name),
+    ])
+    await host.harness().commit(async (tx) => {
+      const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
+      for (const name of Object.keys(index)) {
+        if (kept.has(name)) continue
+        const id = index[name]
+        delete index[name]
+        if (await tx.conversation(id)) delete (await tx.doc(host.metadata, id)).label
+      }
+    }, ctx)
+  }
   host.implement(SubagentsApi, {
     createChild,
     async residents(_ctx) {
@@ -591,10 +616,12 @@ export default function subagents(
     async standing(name, ctx) {
       const definitions = await residentDefinitions()
       const definition = definitions.find((item) => item.name === name)
-      if (!definition)
+      if (!definition) {
+        await pruneRetired(ctx)
         throw new Error(
           `Unknown standing agent @${name}. Standing agents: ${definitions.map((item) => `@${item.name}`).join(', ') || 'none'}`,
         )
+      }
       const root = (await host.harness().conversation(ROOT_CONVERSATION_ID, ctx))!
       const main = await root.agent(ctx)
       return host.harness().commit(async (tx) => {
@@ -701,6 +728,7 @@ export default function subagents(
     await recovery
   })
   host.onOpen(async () => {
+    await pruneRetired(BACKGROUND_CONTEXT)
     unsubscribe?.()
     // Not a reactor: subagent answers settle as Pi submission records, not domain events.
     unsubscribe = host.harness().subscribeCommits((publication) => {
