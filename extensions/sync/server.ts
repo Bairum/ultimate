@@ -16,7 +16,9 @@ import { projectIdentity } from '../../lib/project-identity.ts'
 import { Feedback } from '../cloud/api.ts'
 import type { CloudState } from '../cloud/types.ts'
 import { HealthApi, HealthFeedback } from '../health/api.ts'
+import { SecretsApi } from '../secrets/api.ts'
 import { SubagentsApi } from '../subagents/api.ts'
+import { join, joinState, saveCloud } from './join.ts'
 import { ended } from './moves.ts'
 import type {
   BackupEnded,
@@ -27,7 +29,7 @@ import type {
   MoveEnded,
 } from './types.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { HomeAction, TransitionAction } from './refs.ts'
+import { HomeAction, JoinAction, JoinStateAction, TransitionAction } from './refs.ts'
 
 /** A project home on this machine; `url` while its server runs. */
 export interface Home {
@@ -614,7 +616,23 @@ export const actions = {
     if (typeof project !== 'string') throw new Error('project is required')
     return transition(syncDeps(host), project)
   }),
+  /** Whether this machine joined the fleet: `cloud.url` and both secrets, without their values. */
+  joinState: implementAction(JoinStateAction, (_args, { host }) => joinState(host.userHome)),
+  /** User-only: the Join card's submit; checks the cloud, then stores the secrets and settings. */
+  join: implementAction(JoinAction, async (args, { host }) => {
+    const secrets = host.need(SecretsApi)
+    return join(
+      {
+        fetch: (input, init) => fetch(input, init),
+        setSecret: (name, value) => secrets.set(name, value),
+        saveCloud: saveCloud(host.userHome),
+      },
+      args && typeof args === 'object' && !Array.isArray(args) ? args : {},
+    )
+  }),
 }
+/** The Join card's secrets never come from an agent. */
+export const userActions = ['join']
 
 /**
  * The fleet as this project home's @sync sees it: only this project, its own home first; the machines that run it
@@ -734,6 +752,7 @@ export default function sync(host: ExtensionHost) {
   // Resolved where they are called; declared here so the catalogue lists them. Health is optional.
   host.want(HealthApi)
   host.need(SubagentsApi)
+  host.need(SecretsApi)
   if (!isMachineHome(host.projectRoot, host.userHome)) {
     feedback(host)
     const deps = scoped(syncDeps(host), host.projectRoot)

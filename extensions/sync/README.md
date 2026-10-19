@@ -46,7 +46,20 @@ A move that failed on its way to this machine leaves the project's home on stand
 
 Each tick considers both transitions `cloud.state` names: `transition` (the move this machine runs, or else the latest one the cloud reported) and `ran` (the last move this machine ran itself, kept in memory by the project home's lease even after a newer move replaces it in the cloud). A failed attempt retried within 5 s wakes @sync only for the retry. A failed move whose project home restarts before the next tick is not seen, because `ran` lives in the project home's memory: run `fleet` to see the latest moves.
 
+## Join your fleet
+
+On a machine without cloud sync (`cloud.url` or either secret missing), @sync's empty conversation shows the **Join your fleet** card under its intro (`intro.card`), in the machine home and in project homes; ⌘K → **Join cloud fleet** opens it in a dialog anywhere. It takes the cloud URL (`wss://` or `https://`), the machine name (prefilled with `cloud.machine` or the hostname) and the two secrets, as password fields without a `<form>`, like the Secrets panel. Submit calls the user-only `join` action (`join.ts`):
+
+1. The URL becomes `wss://<host>` (a loopback `ws://`/`http://` URL stays `ws://`, for `pnpm cloud:dev`), and the machine name must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`.
+2. `GET https://<host>/sync/directory` with the bearer token: 200 passes; 401 answers "The cloud refused the token"; anything else "Cannot reach <host>". Nothing is stored on failure.
+3. Both secrets go through the secrets extension's `SecretsApi.set` (the store the Secrets panel writes), then `cloud.url` and `cloud.machine` merge into `~/.ultimate/settings.json`, keeping other keys.
+4. It returns the cloud's project names.
+
+The card shows the steps (Check cloud → Save secrets → Save settings → Done) like the move card, the error under the failed step, and on success a Next block: `pnpm setup:machine` to copy, a restart of Ultimate and the machine home (the cloud facet reads its config once when it starts), and the cloud's projects. A re-run with the same values passes. Once joined, the card reads "Joined as <machine> · <host>" with a Change link; the empty conversation then shows no card. Secret values never reach a model, the trace (`token`/`snapshotKey` are redacted) or the transcript, and agents cannot call `join`.
+
 ## Actions
 
 - `home` (project homes): `{ url }` of this machine's running machine home, @sync's conversation when it exists, or null.
 - `transition { project }`: the project's current move, from its local server or the cloud, for the move card.
+- `joinState`: `{ joined?: { url, host, machine }, url?, machine, missing }`, this machine's cloud setup without secret values.
+- `join { url, machine, token, snapshotKey }` (user-only): the Join card's submit, above.

@@ -429,9 +429,10 @@ and docs of every matching facet combine. Renderers check `useChat()`, that test
 workspace outcomes and scripts its log says messaged you, and shows its messages to you as bubbles. Revealing an entry
 in a folded run opens the run.
 
-`intro` says what a matching conversation is before its first message: `{ when(conversation), title, hint?, placeholder? }`
+`intro` says what a matching conversation is before its first message: `{ when(conversation), title, hint?, placeholder?, card? }`
 replaces the empty state's line under ULTIMATE, adds a hint below it, and sets the composer's placeholder while it is
-idle. The last matching facet wins. `sync` uses it for @sync in the machine home.
+idle; `card`, a component, renders under the empty state, such as a setup card the conversation needs first. The last
+matching facet wins. `sync` uses it for @sync, with its Join your fleet card.
 
 ### Entry renderers
 

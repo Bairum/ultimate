@@ -140,8 +140,9 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
       title: isString,
       hint: optional(isString),
       placeholder: optional(isString),
+      card: optional(isComponent),
     }),
-    'a { when, title, hint?, placeholder? } object',
+    'a { when, title, hint?, placeholder?, card? } object',
   ],
   documents: [
     arrayOf(
@@ -430,14 +431,17 @@ export function documentItems(records: readonly ExtensionRecord[]): Map<string, 
   return byKind
 }
 
-/** The last facet's intro whose `when` matches `conversation`; a throwing `when` is reported and skipped. */
+/**
+ * The last facet's intro whose `when` matches `conversation`, with the facet's name and version for its card's error
+ * boundary; a throwing `when` is reported and skipped.
+ */
 export function introOf(
   records: readonly ExtensionRecord[],
   conversation: ConversationSummary | undefined,
   report: (extension: string, error: unknown) => void,
-): IntroContribution | undefined {
+): (IntroContribution & { extension: string; version: number }) | undefined {
   if (!conversation) return undefined
-  return records.findLast(({ name, extension }) => {
+  const record = records.findLast(({ name, extension }) => {
     if (!extension?.intro) return false
     try {
       return extension.intro.when(conversation)
@@ -445,7 +449,14 @@ export function introOf(
       report(name, error)
       return false
     }
-  })?.extension?.intro
+  })
+  return (
+    record?.extension?.intro && {
+      ...record.extension.intro,
+      extension: record.name,
+      version: record.version,
+    }
+  )
 }
 
 export function composerRenderers(

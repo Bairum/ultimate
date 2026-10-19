@@ -1,6 +1,7 @@
 import {
   ArchiveIcon,
   CheckIcon,
+  ChevronRightIcon,
   LoaderCircleIcon,
   ServerIcon,
   TriangleAlertIcon,
@@ -8,15 +9,16 @@ import {
   XIcon,
 } from 'lucide-react'
 import { useEffect } from 'react'
+import type { ReactNode } from 'react'
 import {
   cn,
   defineWebExtension,
-  Fold,
   formatBytes,
   formatDuration,
   provide,
   shortenPath,
   useAction,
+  useFold,
   useSystem,
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
@@ -24,6 +26,7 @@ import type { ProviderHealth } from '../../cloud/protocol.ts'
 import { TransitionAction } from './refs.ts'
 import { MoveHelp, phaseOf, TransitionCard } from '../cloud/ui.tsx'
 import { AskSync } from './ui.tsx'
+import { JoinDialog, JoinIntro, joinDialog } from './join.tsx'
 import { polling } from './moves.ts'
 import type { BackupEnded, Fleet, FleetProject, HealthTurned, MoveEnded } from './types.ts'
 
@@ -274,11 +277,53 @@ function MoveCall({ call, core }: { call: ToolCallView; core: React.ReactNode })
   return <TransitionCard transition={transition} />
 }
 
+/** The chevron of a fold: right while folded, down while open. */
+const Chevron = ({ open }: { open: boolean }) => (
+  <ChevronRightIcon className={cn('size-3 shrink-0 transition-transform', open && 'rotate-90')} />
+)
+
+/**
+ * A card that folds in a chat to `summary`, like `Fold`, but shows once when open: the card's own header folds it
+ * again (`children` gets that `fold`), instead of the summary line standing above a header that repeats it. Outside a
+ * chat it is the card alone, without `fold`.
+ */
+function Folding({
+  card,
+  summary,
+  children,
+}: {
+  card: number
+  summary: ReactNode
+  children: (fold?: () => void) => ReactNode
+}) {
+  const { folds, open, setOpen } = useFold(card)
+  if (!folds) return children()
+  if (open)
+    return (
+      <div className="min-w-0" data-fold="open">
+        {children(() => setOpen(false))}
+      </div>
+    )
+  return (
+    <div className="min-w-0" data-fold="closed">
+      <button
+        aria-expanded={false}
+        className="flex w-fit max-w-full min-w-0 cursor-pointer items-center gap-1.5 overflow-hidden font-mono text-[11px] whitespace-nowrap text-muted-foreground/70 hover:text-muted-foreground"
+        onClick={() => setOpen(true)}
+        type="button"
+      >
+        {summary}
+        <Chevron open={false} />
+      </button>
+    </div>
+  )
+}
+
 /** The input that wakes @sync after a move to this machine ended. */
 function MoveEntry({ entry }: { entry: EntryRecord }) {
   const data = entry.data as unknown as MoveEnded
   return (
-    <Fold
+    <Folding
       card={entry.id}
       summary={
         <>
@@ -287,14 +332,28 @@ function MoveEntry({ entry }: { entry: EntryRecord }) {
         </>
       }
     >
-      <div className="space-y-1.5" data-sync-move={data.transition.id}>
-        <div className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
-          <TruckIcon className="size-3.5 text-brand" />
-          Move of {data.project.name} ended · @sync checks it
+      {(fold) => (
+        <div className="space-y-1.5" data-sync-move={data.transition.id}>
+          <button
+            aria-expanded={fold ? true : undefined}
+            className={cn(
+              'flex max-w-full min-w-0 items-center gap-1.5 font-mono text-[11px] text-muted-foreground',
+              fold && 'cursor-pointer hover:text-foreground/80',
+            )}
+            disabled={!fold}
+            onClick={fold}
+            type="button"
+          >
+            <TruckIcon className="size-3.5 shrink-0 text-brand" />
+            <span className="min-w-0 truncate">
+              Move of {data.project.name} ended · @sync checks it
+            </span>
+            {fold && <Chevron open />}
+          </button>
+          <TransitionCard transition={data.transition} />
         </div>
-        <TransitionCard transition={data.transition} />
-      </div>
-    </Fold>
+      )}
+    </Folding>
   )
 }
 
@@ -308,6 +367,7 @@ function EventCard({
   title,
   detail,
   at,
+  fold,
   ...data
 }: {
   ok: boolean
@@ -315,6 +375,8 @@ function EventCard({
   title: React.ReactNode
   detail?: string
   at: number
+  /** Folds the card back to its summary line: its header is then the toggle. */
+  fold?: () => void
 } & Record<`data-${string}`, string>) {
   return (
     <section
@@ -324,17 +386,33 @@ function EventCard({
       )}
       {...data}
     >
-      <header className="flex min-w-0 items-center gap-2 py-1.5 pr-3 pl-3">
-        {ok ? (
-          <CheckIcon className="size-3.5 shrink-0 text-success" />
-        ) : (
-          <XIcon className="size-3.5 shrink-0 text-error" />
-        )}
-        {icon}
-        <span className="min-w-0 flex-1 truncate text-[12px] text-foreground/90">{title}</span>
-        <span className="shrink-0 text-muted-foreground/70" title={new Date(at).toLocaleString()}>
-          {new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </span>
+      <header>
+        <button
+          aria-expanded={fold ? true : undefined}
+          className={cn(
+            'flex w-full min-w-0 items-center gap-2 py-1.5 pr-3 pl-3 text-left',
+            fold && 'cursor-pointer hover:bg-accent/30',
+          )}
+          disabled={!fold}
+          onClick={fold}
+          type="button"
+        >
+          {ok ? (
+            <CheckIcon className="size-3.5 shrink-0 text-success" />
+          ) : (
+            <XIcon className="size-3.5 shrink-0 text-error" />
+          )}
+          {icon}
+          <span className="min-w-0 flex-1 truncate text-[12px] text-foreground/90">{title}</span>
+          <span className="shrink-0 text-muted-foreground/70" title={new Date(at).toLocaleString()}>
+            {new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+          {fold && (
+            <span className="text-muted-foreground/70">
+              <Chevron open />
+            </span>
+          )}
+        </button>
       </header>
       {detail && (
         <p className="border-t border-border/60 px-3 py-1.5 break-words whitespace-pre-wrap text-error/90">
@@ -352,7 +430,7 @@ function BackupEntry({ entry }: { entry: EntryRecord }) {
     ? `Backed up · ${formatBytes(report.bytes)} · ${formatDuration(report.ms)}`
     : 'Backup failed'
   return (
-    <Fold
+    <Folding
       card={entry.id}
       summary={
         <>
@@ -363,20 +441,23 @@ function BackupEntry({ entry }: { entry: EntryRecord }) {
         </>
       }
     >
-      <EventCard
-        at={report.at}
-        data-sync-backup-entry={report.ok ? 'done' : 'failed'}
-        icon={<ArchiveIcon className="size-3.5 shrink-0 text-muted-foreground" />}
-        ok={report.ok}
-        title={
-          <>
-            {summary}
-            <span className="text-muted-foreground/60"> · {project.name}</span>
-          </>
-        }
-        {...(report.ok ? {} : { detail: report.error })}
-      />
-    </Fold>
+      {(fold) => (
+        <EventCard
+          at={report.at}
+          data-sync-backup-entry={report.ok ? 'done' : 'failed'}
+          icon={<ArchiveIcon className="size-3.5 shrink-0 text-muted-foreground" />}
+          ok={report.ok}
+          title={
+            <>
+              {summary}
+              <span className="text-muted-foreground/60"> · {project.name}</span>
+            </>
+          }
+          {...(fold ? { fold } : {})}
+          {...(report.ok ? {} : { detail: report.error })}
+        />
+      )}
+    </Folding>
   )
 }
 
@@ -384,7 +465,7 @@ function BackupEntry({ entry }: { entry: EntryRecord }) {
 function HealthEntry({ entry }: { entry: EntryRecord }) {
   const data = entry.data as unknown as HealthTurned
   return (
-    <Fold
+    <Folding
       card={entry.id}
       summary={
         <>
@@ -393,15 +474,18 @@ function HealthEntry({ entry }: { entry: EntryRecord }) {
         </>
       }
     >
-      <EventCard
-        at={data.at}
-        data-sync-health-entry={data.provider}
-        icon={<TriangleAlertIcon className="size-3.5 shrink-0 text-muted-foreground" />}
-        ok={false}
-        title={`${data.provider} failing on this machine`}
-        {...(data.error ? { detail: data.error } : {})}
-      />
-    </Fold>
+      {(fold) => (
+        <EventCard
+          at={data.at}
+          data-sync-health-entry={data.provider}
+          icon={<TriangleAlertIcon className="size-3.5 shrink-0 text-muted-foreground" />}
+          ok={false}
+          title={`${data.provider} failing on this machine`}
+          {...(fold ? { fold } : {})}
+          {...(data.error ? { detail: data.error } : {})}
+        />
+      )}
+    </Folding>
   )
 }
 
@@ -423,7 +507,12 @@ export default defineWebExtension({
     title: '@sync moves your projects between machines and backs them up.',
     hint: 'Ask for the fleet, or: back up this project.',
     placeholder: 'Ask @sync about your machines…',
+    card: JoinIntro,
   },
   entries: { 'sync.move': MoveEntry, 'sync.backup': BackupEntry, 'sync.health': HealthEntry },
+  slots: { overlay: [JoinDialog] },
+  commands: [
+    { id: 'sync.join', title: 'Join cloud fleet', run: (context) => context.open(joinDialog) },
+  ],
   provides: [provide(MoveHelp, () => <AskSync />)],
 })

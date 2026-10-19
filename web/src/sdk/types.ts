@@ -186,6 +186,8 @@ export interface IntroContribution {
   title: string
   hint?: string
   placeholder?: string
+  /** Shown under the empty state, such as a setup card the conversation needs first. */
+  card?: ComponentType
 }
 
 /**
