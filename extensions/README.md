@@ -635,12 +635,9 @@ usually docked beside it. The `documents` extension provides the Documents tab.
 - **Durable**: the choice is UI state `shell.surface`; it survives reloads and restarts and follows every tab. Until the
   user picks one, a project's `.ultimate/settings.json` (`{ "defaultSurface": "commits" }`) chooses, if that surface
   is installed.
-- **The agent knows**: each top-level conversation's system prompt names the surface ("The user is looking at the
-  Commits surface (commits).", from `extensions/surfaces`), so "this list" in a message means yours. The line changes
-  only when the surface does.
 - **Failure**: if the chosen surface is not installed, or its component throws, Agent shows instead, with a notice; a
   fixed version comes back on its own. If even Agent fails, a bare header, conversation, and status line remain. The
-  prompt, the window title, and `surface` below name what is on screen, so Agent while it stands in.
+  window title and `surface` below name what is on screen, so Agent while it stands in.
 - `useUltimate().surface` and `context.surface` give the id of the surface on screen.
 
 The contribution:

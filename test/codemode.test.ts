@@ -537,14 +537,34 @@ it("reads another running project's history through its API, and names a project
 
 it('lists conversations with their title and cwd, since the prompt no longer does', async () => {
   const { server } = await fixture()
-  const { id } = (await post(server, '/api/conversations', { title: 'Parser work' })).data as {
-    id: number
-  }
+  const create = async (title: string) =>
+    ((await post(server, '/api/conversations', { title })).data as { id: number }).id
+  const open = await create('Parser work')
+  const done = await create('Old work')
+  // The conversations extension owns concluding; this fixture loads only codemode, so write its UI state directly.
+  await post(server, '/api/ui', { set: { 'ext.conversations.concluded': [done] } })
+  await run(server, `return 1`)
+  await until(
+    () =>
+      server.api.conversations().find((item) => item.id === server.root.id)?.inputAt !== undefined,
+  )
   const result = await run(server, `return await ultimate.conversations()`)
   expect(result.data.isError).toBe(false)
-  const found = (result.data.details.value as { id: number }[]).find((item) => item.id === id)
-  expect(found).toMatchObject({ title: 'Parser work', cwd: expect.any(String), busy: false })
-  expect(found).not.toHaveProperty('concluded')
+  const listed = result.data.details.value as { id: number }[]
+  expect(listed.find((item) => item.id === open)).toMatchObject({
+    title: 'Parser work',
+    cwd: expect.any(String),
+    busy: false,
+  })
+  expect(listed.find((item) => item.id === open)).not.toHaveProperty('concluded')
+  // The root ran a script before, so its latest input time is known.
+  expect(listed.find((item) => item.id === server.root.id)).toMatchObject({
+    inputAt: expect.any(Number),
+  })
+  expect(listed.find((item) => item.id === done)).toMatchObject({
+    title: 'Old work',
+    concluded: true,
+  })
 })
 
 it('reads stored history and documents from before a reset', async () => {
