@@ -532,10 +532,9 @@ function lineage(host: ExtensionHost) {
         const report = `lander:${submission}`
         // The lander sends the report before its task moves on: once its conversation is idle without one (an aborted
         // lander), none comes, and the branch stays open.
-        const landerIdle = (async () => {
-          await (await runtime.conversation(lander as ConversationId, ctx))?.waitForIdle(ctx)
-          return 'idle' as const
-        })()
+        // Started only while no report exists, and only ever awaited through Promise.race, which handles its rejection
+        // when this task's context is cancelled.
+        let landerIdle: Promise<'idle'> | undefined
         for (;;) {
           // Subscribed before reading, so the report's settlement after the read still ends the wait.
           const changed = Promise.withResolvers<void>()
@@ -555,7 +554,17 @@ function lineage(host: ExtensionHost) {
             if (record?.status === 'done' || record?.status === 'unanswered') break
             // Admitted, the report settles on its own; before that, the lander going idle means none is coming.
             const woke = await awaitWithContext(
-              record ? changed.promise : Promise.race([changed.promise, landerIdle]),
+              record
+                ? changed.promise
+                : Promise.race([
+                    changed.promise,
+                    (landerIdle ??= (async () => {
+                      await (
+                        await runtime.conversation(lander as ConversationId, ctx)
+                      )?.waitForIdle(ctx)
+                      return 'idle' as const
+                    })()),
+                  ]),
               ctx,
             )
             if (woke === 'idle') {
