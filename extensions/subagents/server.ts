@@ -518,16 +518,19 @@ export const actions = {
       resident !== 'everywhere'
     )
       throw new Error('resident must be a boolean, machine or everywhere')
-    if (create === true) {
-      const { definitions } = await discoverAgents(
-        host.ultimateRoot,
-        host.projectRoot,
-        host.userHome,
-        host.modelRuntime,
+    const { definitions } = await discoverAgents(
+      host.ultimateRoot,
+      host.projectRoot,
+      host.userHome,
+      host.modelRuntime,
+    )
+    const existing = definitions.find((definition) => definition.name === name)
+    if (create === true && existing) throw new Error(`A definition named ${name} exists already`)
+    // The form shows the merged definition; saving it would write the overlays' additions into a whole copy.
+    if (existing?.overlays?.length)
+      throw new Error(
+        `${name} is extended by ${existing.overlays.join(', ')}: edit that file to change its additions`,
       )
-      if (definitions.some((definition) => definition.name === name))
-        throw new Error(`A definition named ${name} exists already`)
-    }
     return saveDefinition(
       host,
       host.modelRuntime,

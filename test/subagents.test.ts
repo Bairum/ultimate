@@ -1764,6 +1764,56 @@ describe('subagents', () => {
     expect(JSON.stringify(view.value.entries)).toContain('Child: follow-up')
     view.dispose()
   })
+  it('extends an earlier definition with an addTools overlay and refuses other fields', async () => {
+    const repo = await directory(),
+      home = await directory(),
+      cwd = await directory()
+    await mkdir(join(repo, 'agents'))
+    await mkdir(join(home, '.ultimate/agents'), { recursive: true })
+    await mkdir(join(cwd, '.ultimate/agents'), { recursive: true })
+    const modelRuntime = await ModelRuntime.create()
+    await writeFile(join(repo, 'agents/scout.md'), definition())
+    await writeFile(
+      join(repo, 'agents/open.md'),
+      definition().replace('name: scout', 'name: open').replace('tools: [read, bash]\n', ''),
+    )
+    await writeFile(
+      join(home, '.ultimate/agents/scout.md'),
+      '---\nname: scout\naddTools: [write, read]\n---\n',
+    )
+    await writeFile(
+      join(cwd, '.ultimate/agents/scout.md'),
+      '---\nname: scout\naddTools: [laravel]\n---\n\nUse laravel for the database.\n',
+    )
+    await writeFile(
+      join(cwd, '.ultimate/agents/open.md'),
+      '---\nname: open\naddTools: [laravel]\n---\n',
+    )
+    for (const [name, text] of [
+      ['pinned', '---\nname: scout\naddTools: [x]\nmodel: anthropic/claude-opus-4-8\n---\n'],
+      ['empty', '---\nname: scout\naddTools: []\n---\n'],
+      ['orphan', '---\nname: nobody\naddTools: [x]\n---\n'],
+    ])
+      await writeFile(join(cwd, `.ultimate/agents/${name}.md`), text)
+    new ProjectTrustStore(join(home, '.ultimate')).set(cwd, true)
+    const found = await discoverAgents(repo, cwd, home, modelRuntime)
+    const scout = found.definitions.find((agent) => agent.name === 'scout')!
+    expect(scout).toMatchObject({
+      source: 'builtin',
+      path: join(repo, 'agents/scout.md'),
+      tools: ['read', 'bash', 'write', 'laravel'],
+      instructions: `Original instructions\n\n## Project additions\n\nUse laravel for the database.`,
+      overlays: [join(home, '.ultimate/agents/scout.md'), join(cwd, '.ultimate/agents/scout.md')],
+    })
+    // A definition that inherits every tool stays without a list.
+    expect(found.definitions.find((agent) => agent.name === 'open')?.tools).toBeUndefined()
+    expect(Object.fromEntries(found.errors.map((file) => [file.name, file.error]))).toEqual({
+      empty: expect.stringContaining('addTools must be a nonempty list'),
+      orphan: expect.stringContaining('needs an earlier definition named nobody'),
+      pinned: expect.stringContaining('not model'),
+    })
+    expect(found.replaced).toEqual([])
+  })
   it('discovers model and thinking settings and reports unknown models', async () => {
     const repo = await directory(),
       home = await directory(),
@@ -1949,6 +1999,29 @@ describe('subagents', () => {
     await expect(
       actions.deleteDefinition({ name: 'scout', scope: 'builtin' }, ctx),
     ).rejects.toThrow('scope must be user or project')
+  })
+  it('refuses to save a definition an overlay extends, so its additions never become a whole copy', async () => {
+    const { prepared, opened, userHome } = await fixture()
+    const ctx = {
+      host: { ...prepared, harness: () => opened.harness },
+    } as unknown as ActionContext
+    const overlay = join(userHome, '.ultimate/agents/scout.md')
+    await mkdir(join(userHome, '.ultimate/agents'), { recursive: true })
+    await writeFile(overlay, '---\nname: scout\naddTools: [write]\n---\nMore.\n')
+    await expect(
+      actions.saveDefinition(
+        {
+          name: 'scout',
+          scope: 'user',
+          frontmatter: { description: 'Search', tools: ['read', 'bash', 'write'] },
+          instructions: 'Original instructions\n\n## User additions\n\nMore.',
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(`scout is extended by ${overlay}`)
+    expect(await readFile(overlay, 'utf8')).toBe(
+      '---\nname: scout\naddTools: [write]\n---\nMore.\n',
+    )
   })
   it('foreground returns the answer, exposes child details, inherits the parent and rereads scout on next start', async () => {
     const { opened, ultimateRoot } = await fixture()

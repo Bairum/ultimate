@@ -2,18 +2,18 @@ What isn't set up on this machine, and what that costs: one status-line item, `�
 something warns. Its popover lists every area with what is set up, what is missing, what the user loses and a fix
 button (a ⌘K command, or the Secrets panel at the missing secret).
 
-| Area              | Warns when                                                                   | Fix               |
-| ----------------- | ---------------------------------------------------------------------------- | ----------------- |
-| Summary model     | the configured model has no login here (the default falls back, see below)   | Summary model…    |
-| Agent models      | a definition pins a model whose provider has no login here                   | Log in            |
-| Agent definitions | a definition file fails to parse                                             |                   |
-| Providers         | a provider's latest call on this machine failed (`health`)                   | Log in again      |
-| Secrets           | an enabled extension lacks a secret it declares                              | the Secrets panel |
-| Extensions        | an enabled extension's server facet failed to load                           | Extensions panel  |
-| Cloud sync        | `cloud.url` is set but `ULTIMATE_CLOUD_TOKEN` or the snapshot key is missing | the Secrets panel |
-| Tailscale         | never; `info` while not published                                            |                   |
-| Lander checks     | never; `info` while `lander.checks` is empty                                 |                   |
-| Worktree setup    | the project is isolatable, has a package manifest, and no worktree setup     |                   |
+| Area              | Warns when                                                                                                                    | Fix               |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| Summary model     | the configured model has no login here (the default falls back, see below)                                                    | Summary model…    |
+| Agent models      | a definition pins a model whose provider has no login here                                                                    | Log in            |
+| Agent definitions | a definition file fails to parse, or a user or project file replaces a built-in whole instead of extending it with `addTools` |                   |
+| Providers         | a provider's latest call on this machine failed (`health`)                                                                    | Log in again      |
+| Secrets           | an enabled extension lacks a secret it declares                                                                               | the Secrets panel |
+| Extensions        | an enabled extension's server facet failed to load                                                                            | Extensions panel  |
+| Cloud sync        | `cloud.url` is set but `ULTIMATE_CLOUD_TOKEN` or the snapshot key is missing                                                  | the Secrets panel |
+| Tailscale         | never; `info` while not published                                                                                             |                   |
+| Lander checks     | never; `info` while `lander.checks` is empty                                                                                  |                   |
+| Worktree setup    | the project is isolatable, has a package manifest, and no worktree setup                                                      |                   |
 
 A definition pinned to a provider without a login still loads (Pi resolves its model among every known model) and
 fails at its first model call, so its row says that.

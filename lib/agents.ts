@@ -23,6 +23,8 @@ export interface AgentDefinition {
   resident?: boolean | 'machine' | 'everywhere'
   /** What the lander does when a submission fails: explain it, or fix it and land. Only the lander reads it. */
   onFailure?: 'diagnose' | 'fix'
+  /** Overlay files whose `addTools` and body discovery merged into this definition, in order. */
+  overlays?: string[]
 }
 export function definitionAgent(
   definition: AgentDefinition | undefined,
@@ -67,6 +69,8 @@ export function definitionAgent(
 export interface AgentDiscovery {
   definitions: (AgentDefinition & { source: Source })[]
   errors: { name: string; path: string; source: Source; error: string }[]
+  /** User and project files that replace a built-in definition whole instead of extending it with `addTools`. */
+  replaced: { name: string; path: string; source: Source }[]
 }
 // Pi's levels; `satisfies` fails the type check when Pi adds or drops one.
 const levels = {
@@ -144,6 +148,31 @@ export function parseDefinition(
   }
 }
 
+/**
+ * An overlay: `name` and `addTools` only, and an optional body. It adds tools to the definition of the same name an
+ * earlier folder holds and appends its body to that definition's instructions, so the earlier file stays the source.
+ */
+export function parseOverlay(text: string, path: string) {
+  const { frontmatter, body } = parseFrontmatter(text)
+  const { name, addTools } = frontmatter
+  const extra = Object.keys(frontmatter).find((key) => key !== 'name' && key !== 'addTools')
+  if (extra) throw new Error(`An overlay sets only name and addTools, not ${extra}`)
+  if (typeof name !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(name))
+    throw new Error('name must be a nonempty identifier')
+  if (
+    !Array.isArray(addTools) ||
+    !addTools.length ||
+    !addTools.every((tool) => typeof tool === 'string')
+  )
+    throw new Error('addTools must be a nonempty list of tool names')
+  return { name, path, addTools: addTools, instructions: body.trim() }
+}
+
+const isOverlay = (text: string) => {
+  const { frontmatter } = parseFrontmatter(text)
+  return typeof frontmatter === 'object' && !Array.isArray(frontmatter) && 'addTools' in frontmatter
+}
+
 /** A definition file read and its model resolved, as discovery and saving accept it. */
 export function readDefinition(
   text: string,
@@ -175,7 +204,10 @@ export function agentRoots(ultimateRoot: string, projectRoot: string, userHome: 
   ]
 }
 
-/** Definitions from `agents/` in Ultimate's clone, `~/.ultimate/`, and the project's `.ultimate/`; later wins by name. */
+/**
+ * Definitions from `agents/` in Ultimate's clone, `~/.ultimate/`, and the project's `.ultimate/`; a later file wins
+ * by name, unless it is an overlay (`addTools`), which extends the earlier one.
+ */
 export async function discoverAgents(
   ultimateRoot: string,
   projectRoot: string,
@@ -184,6 +216,8 @@ export async function discoverAgents(
 ): Promise<AgentDiscovery> {
   const definitions = new Map<string, AgentDefinition & { source: Source }>()
   const errors: AgentDiscovery['errors'] = []
+  const builtins = new Set<string>()
+  const replaced: AgentDiscovery['replaced'] = []
   for (const { source, path: directory } of agentRoots(ultimateRoot, projectRoot, userHome)) {
     let files: string[]
     try {
@@ -196,14 +230,34 @@ export async function discoverAgents(
     for (const file of files.filter((entry) => entry.endsWith('.md')).toSorted()) {
       const path = join(directory, file)
       try {
-        const definition = readDefinition(await readFile(path, 'utf8'), path, modelRuntime)
+        const text = await readFile(path, 'utf8')
+        if (isOverlay(text)) {
+          const overlay = parseOverlay(text, path)
+          const base = definitions.get(overlay.name)
+          if (!base) throw new Error(`addTools needs an earlier definition named ${overlay.name}`)
+          const heading = source === 'user' ? 'User additions' : 'Project additions'
+          definitions.set(overlay.name, {
+            ...base,
+            // A base that inherits every tool already has them; only a list grows.
+            ...(base.tools ? { tools: [...new Set([...base.tools, ...overlay.addTools])] } : {}),
+            instructions: overlay.instructions
+              ? `${base.instructions}\n\n## ${heading}\n\n${overlay.instructions}`
+              : base.instructions,
+            overlays: [...(base.overlays ?? []), path],
+          })
+          continue
+        }
+        const definition = readDefinition(text, path, modelRuntime)
+        if (source === 'builtin') builtins.add(definition.name)
+        else if (builtins.has(definition.name))
+          replaced.push({ name: definition.name, path, source })
         definitions.set(definition.name, { ...definition, source })
       } catch (error) {
         errors.push({ name: file.slice(0, -3), path, source, error: String(error) })
       }
     }
   }
-  return { definitions: [...definitions.values()], errors }
+  return { definitions: [...definitions.values()], errors, replaced }
 }
 
 /** The fields a definition file's frontmatter may carry besides its name; `model` is `provider/id`. */
