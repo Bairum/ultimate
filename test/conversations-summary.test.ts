@@ -24,6 +24,7 @@ import { Metadata } from '../server/metadata.ts'
 import { Overview } from '../extensions/conversations/overview.ts'
 import type { TreesService } from '../extensions/conversations/api.ts'
 import {
+  exchangeMessages,
   generateSummary,
   summaryInput,
   Summaries,
@@ -1032,6 +1033,20 @@ it.concurrent.each([
     summary: 'Summary',
     ...(expected ? { feature: expected } : {}),
   })
+})
+
+const userMessage = (content: string) => ({ role: 'user' as const, content, timestamp: 1 })
+
+it.concurrent('leaves a Play note out of what names and summarizes a conversation', () => {
+  const user = userMessage
+  const entries = [
+    { kind: 'pi.user', model: [user('phases demo')] },
+    { kind: 'pause.note', model: [user('Paused for 1m; the run continued after Play.')] },
+  ] as unknown as Parameters<typeof exchangeMessages>[0]['entries']
+  const contributions = entries.map((entry) => entry.model ?? [])
+  const input = summaryInput(exchangeMessages({ entries, contributions }))
+  expect(input).toContain('user: phases demo')
+  expect(input).not.toContain('Paused for')
 })
 
 it.concurrent('includes the previous feature next to the previous summary in model input', () => {

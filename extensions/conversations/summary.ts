@@ -10,6 +10,7 @@ import {
   UsageDoc,
 } from '@earendil-works/pi-durable'
 import type {
+  ContextView,
   ConversationId,
   Cursor,
   EntryId,
@@ -174,6 +175,16 @@ export function transcriptText(messages: readonly Message[]) {
       return text.trim() ? [`${message.role}: ${shorten(text)}`] : []
     })
     .join('\n\n')
+}
+
+/** Notes the host places for the model, not the conversation's own exchange: they never name or summarize it. */
+const NOTES = new Set(['pause.note'])
+
+/** The context's messages without host notes; a note is a user-role write and would read as the newest request. */
+export function exchangeMessages(view: Pick<ContextView, 'entries' | 'contributions'>) {
+  return view.entries.flatMap((entry, index) =>
+    NOTES.has(entry.kind) ? [] : (view.contributions[index] ?? []),
+  )
 }
 
 /** Only visible user/assistant text, capped per message and across the whole request. */
@@ -590,7 +601,7 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
                 (requestText
                   ? `Original request (untrusted source text):\n${requestText}\n\n`
                   : '') +
-                summaryInput(view.messages, state.summary, state.feature) +
+                summaryInput(exchangeMessages(view), state.summary, state.feature) +
                 (task.input.spawn
                   ? `\n\nDelegation just started (untrusted source text):\n${task.input.spawn.agent}: ${task.input.spawn.task.slice(0, 2400)}`
                   : ''),
