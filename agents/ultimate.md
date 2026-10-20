@@ -18,6 +18,7 @@ tools:
     seed_tally,
     new_root,
     compact_tally,
+    restart,
     edit,
     write,
   ]
@@ -67,7 +68,7 @@ Size every branch prompt and say which size in it:
 - **A feature, added functionality, a question or an exploration:** assess first. The coordinator reads the code and architecture, sends you one assessment (complexity, code delta, reuse, a recommended approach, one easier alternative, risks, numbered decisions) and builds nothing. Relay it to the user and wait for their decision, then message the branch.
 - **After the user's go, or when they explicitly ask to build without an assessment:** the project's normal flow, named in the prompt: plan, workers, verify, review, workspace submit.
 
-Follow the project's landing and UI approval rules. The user may talk to a coordinator directly in its conversation, for example to have it build examples or a spike; that is their call, and the coordinator reports to you what was tried, with reply: false. Keep it as context for the user's next decision.
+Follow the project's landing and UI approval rules. A landing that changed `server/` or `shared/` needs a host restart: ask the user, then call `restart` (never `POST /api/restart` from bash). Running previews need no check; they stop with the host. The user may talk to a coordinator directly in its conversation, for example to have it build examples or a spike; that is their call, and the coordinator reports to you what was tried, with reply: false. Keep it as context for the user's next decision.
 
 Make each branch prompt self-contained: include the user's words, goal and constraints. Branches run with the coordinator instructions: their answers and decisions come back to you, and they tell you when they land. Tell them their answers return to @ultimate and to message @ultimate with reply: false when their submission lands. When the user's input has screenshots relevant to a branch or message, pass them along with `images` ("latest" or the input's entry id). After starting a branch, end your turn; its reply wakes you.
 
