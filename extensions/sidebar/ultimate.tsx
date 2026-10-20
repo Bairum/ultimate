@@ -4,6 +4,7 @@ import { cn, ParkedRuns, Provided, useDocOf, useStore, useTasks, useUltimate } f
 import { BoardDoc, emptyBoard, waitingOnUser } from '../board/ui.tsx'
 import { AgentMark, ConversationPhase, useOverview, usePrimaryAgent } from '../conversations/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
+import { primaryLabel } from './label.ts'
 
 /** Renders with how many questions wait on the user's answer or dismissal. */
 export function WaitingOnUser({ children }: { children: (waiting: number) => ReactNode }) {
@@ -39,9 +40,10 @@ function PrimaryButton({ parked }: { parked?: ReadonlySet<number> }) {
   const tasks = useTasks()
   const runState = useOverview()[id ?? -1]?.runState
   const shown = useStore((state) => state.view?.conversation.id ?? state.requested)
+  const paused = id !== undefined && parked?.has(id) === true
   const working =
     id !== undefined &&
-    !parked?.has(id) &&
+    !paused &&
     (runState === 'working' ||
       Object.values(tasks?.tasks ?? {}).some(
         (task) => !task.background && task.conversationId === id,
@@ -53,7 +55,7 @@ function PrimaryButton({ parked }: { parked?: ReadonlySet<number> }) {
         <Provided input={working ? id : undefined} point={ConversationPhase}>
           {(phase) => {
             const word = workingWord(phase)
-            const label = working ? word : waiting ? `${waiting} waiting on you` : 'idle'
+            const label = primaryLabel({ paused, working, word, waiting })
             return (
               <>
                 <Tooltip>
@@ -76,6 +78,7 @@ function PrimaryButton({ parked }: { parked?: ReadonlySet<number> }) {
                       />
                       @{name}
                       {working && word !== 'working' && <span className="text-brand">{word}</span>}
+                      {paused && <span className="text-warning">paused</span>}
                     </button>
                   </TooltipTrigger>
                   <TooltipContent>

@@ -896,6 +896,42 @@ it('a paused writer keeps the project when another machine asks it to move, forc
   expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
 })
 
+it('keeps the project when the user pauses while a forced move scans for uncommitted work', async () => {
+  const project = cloud()
+  const { root } = await checkout()
+  const scanning = Promise.withResolvers<void>()
+  const resume = Promise.withResolvers<void>()
+  let paused = false
+  const desk = await machine('desk', project, root, {
+    paused: () => paused,
+    git: async (args) => {
+      if (args[0] !== 'status') return
+      scanning.resolve()
+      await resume.promise
+    },
+  })
+  await writer(desk)
+  const laptop = await machine('laptop', project, root)
+  await standbyOn(laptop)
+  const { id } = laptop.lease.moveHere({ force: true })
+  await scanning.promise
+  // Pause lands while the scan runs; the scan then finds a clean checkout.
+  paused = true
+  resume.resolve()
+  await until(() =>
+    desk.notices.includes('Move to laptop waits: Ultimate is paused; press Play first'),
+  )
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+  expect(desk.serving()).toBe(true)
+  expect(desk.snapshots.uploadSnapshot).not.toHaveBeenCalled()
+  expect((await project.api('/api/cloud/cancel', {})).status).toBe(202)
+  await until(() =>
+    desk.notices.includes('The move to laptop stopped; this machine keeps the project'),
+  )
+  expect(await laptop.transition()).toMatchObject({ id, error: 'Cancelled' })
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+})
+
 it('keeps the project when the move is cancelled while it scans for uncommitted work', async () => {
   const project = cloud()
   const { root } = await checkout()

@@ -1289,7 +1289,7 @@ function LiveStatus(props: {
   )
 }
 
-function LiveLines({
+export function LiveLines({
   live,
   busy,
   partial,
@@ -1300,11 +1300,22 @@ function LiveLines({
   partial: AssistantMessage | undefined
   parked: boolean
 }) {
-  const retry = live.generation?.retry
+  // Parked by a pause, nothing of the run executes, a retry's backoff and a deferred poll included: the paused line
+  // replaces every other one and no clock ticks until Play.
+  const paused = busy && parked
+  const retry = paused ? undefined : live.generation?.retry
   const running = (live.tools ?? []).some((slot) => slot.status !== 'done')
   const idle = busy && !shows(partial) && !running
-  // Parked by a pause, nothing of the run executes: the clock stops until Play.
-  const now = useNow(100, !!retry || (idle && !parked))
+  const now = useNow(100, !paused && (!!retry || idle))
+  if (paused)
+    return (
+      <div className="flex flex-col gap-1 font-mono text-[12px] text-muted-foreground">
+        <span className="flex items-center gap-2 text-warning" data-paused-run>
+          <PauseIcon className="size-3" />
+          paused · runs on Play
+        </span>
+      </div>
+    )
   const lines: ReactNode[] = []
   if (retry)
     lines.push(
@@ -1322,14 +1333,7 @@ function LiveLines({
         {`compacting context · ${compaction.reason}${compaction.attempt > 1 ? ` · attempt ${compaction.attempt}` : ''}…`}
       </Shimmer>,
     )
-  if (busy && parked && lines.length === 0)
-    lines.push(
-      <span className="flex items-center gap-2 text-warning" data-paused-run key="paused">
-        <PauseIcon className="size-3" />
-        paused · runs on Play
-      </span>,
-    )
-  else if (idle && lines.length === 0) {
+  if (idle && lines.length === 0) {
     const run = live.run?.taskId
     if (run !== undefined && !runSeen.has(run)) runSeen.set(run, Date.now())
     const since = run === undefined ? undefined : runSeen.get(run)

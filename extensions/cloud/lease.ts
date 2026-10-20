@@ -940,6 +940,11 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     await backupRun
     const state = sync?.state()
     if (mode !== 'serving' || state?.role !== 'writer' || state.epoch === undefined) return false
+    // A paused writer keeps the project: nothing closes storage under the held runs.
+    if (paused()) {
+      fail(`Release refused: ${PAUSED}`)
+      return false
+    }
     const key = await secret()
     if (!key) {
       fail(missingKey)
@@ -1084,8 +1089,9 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
             // Scanned once the drained runs have written theirs, so the target hears which worktrees hold it.
             const before = changed
             ;({ dirty, unchecked } = await scan())
-            // The move may have ended while the scan ran.
+            // The move may have ended, or the user paused, while the scan ran.
             if (cancelled || ended(sync.state())) return stopped()
+            if (paused()) continue
             if (force) {
               if (await noBackup()) break
               continue

@@ -1,14 +1,21 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { defineExtension, defineTask, defineTool, LiveDoc } from '@earendil-works/pi-durable'
+import {
+  defineExtension,
+  defineTask,
+  defineTool,
+  GenerationTask,
+  hook,
+  LiveDoc,
+} from '@earendil-works/pi-durable'
 import type { ConversationId, Harness } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import { prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
-import pauseExtension, { actions } from '../extensions/pause/server.ts'
+import pauseExtension, { actions, passive } from '../extensions/pause/server.ts'
 import { lasted } from '../extensions/pause/lasted.ts'
 import { PauseApi } from '../extensions/pause/api.ts'
 import { apis, removeTemps, temp, until } from './helpers.ts'
@@ -284,6 +291,64 @@ it('notes a run whose last answer arrived while the pause drained', async () => 
   expect(notes).toHaveLength(1)
   expect(notes[0].data).toMatchObject({ finished: true })
   expect(notes[0].model?.[0]?.content).toMatch(/^Paused for \d+s after this run's last answer\.$/)
+})
+
+it('leaves no note when the run handed over during the drain and its successor was stopped', async () => {
+  const f = await fixture()
+  // The first answer continues the run: its generation completes and hands the run to a successor, while paused.
+  let continued = false
+  f.prepared.registry.install(
+    defineExtension({
+      name: 'pause-handover',
+      hooks: [
+        hook(GenerationTask, {
+          onYield: () => {
+            if (continued) return undefined
+            continued = true
+            return { continue: 'keep going' }
+          },
+        }),
+      ],
+    }),
+  )
+  const answer = Promise.withResolvers<void>()
+  let asked = false
+  f.prepared.faux!.setResponses([
+    async () => {
+      asked = true
+      await answer.promise
+      return fauxAssistantMessage([fauxText('first answer')])
+    },
+    () => fauxAssistantMessage([fauxText('B done')]),
+  ])
+  const { root, harness } = await f.open()
+  const a = await root.submit({ type: 'input', content: 'A' }, context)
+  await until(() => asked)
+  await f.action('pause')
+  const recorded = (await f.action('state')).running[0].task
+  answer.resolve()
+  // The recorded generation completed by handing over; the successor is held.
+  await until(
+    async () => (await harness.getTask(recorded as never, context))?.state.status === 'terminal',
+  )
+  expect(continued).toBe(true)
+  await root.abort(context)
+  expect((await a.wait(context)).status).toBe('unanswered')
+  const b = await root.submit({ type: 'input', content: 'B' }, context)
+  await f.action('play')
+  await b.wait(context)
+  const entries = (await root.context(context)).entries
+  expect(entries.filter((entry) => entry.kind === 'pause.note')).toEqual([])
+})
+
+/** A task record as `running()` reads it: it decides by task kind and checkpoint phase only. */
+const at = (kind: string, phase: string) => ({ kind, state: { checkpoint: { phase } } })
+
+it('counts a board delivery as running: it may ask the summary model to triage', () => {
+  expect(passive(at('board.delivery', 'deliver'))).toBe(false)
+  expect(passive(at('ultimate.subagent-reporter', 'deliver'))).toBe(true)
+  expect(passive(at('board.route', 'observe'))).toBe(true)
+  expect(passive(at('conversations.summary', 'generate'))).toBe(false)
 })
 
 it('stays Pausing… while a background task executes, not for passive waiters', async () => {

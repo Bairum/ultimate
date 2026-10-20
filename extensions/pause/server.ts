@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId, Cursor, TaskId } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor, SubmissionId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { PauseApi } from './api.ts'
@@ -40,18 +40,18 @@ function serial<T>(host: Pick<ExtensionHost, 'resource'>, work: () => Promise<T>
 
 /**
  * Background phases that only wait on other work (a run, a submission, a timer), which a pause holds: they never end
- * while paused and execute nothing meanwhile, so they never keep the pause from being safe.
+ * while paused and execute nothing meanwhile, so they never keep the pause from being safe. `board.delivery` is not
+ * one: its `deliver` phase may ask the summary model to triage a message.
  */
 const PASSIVE: Record<string, string[]> = {
   'ultimate.subagent-reporter': ['deliver', 'retry'],
   'ultimate.automation-scheduler': ['sleep'],
   'ultimate.automation-run': ['deliver'],
-  'board.delivery': ['deliver'],
   'board.route': ['observe'],
   'conversations.summary': ['observe'],
   'lineage.notify': ['wait'],
 }
-const passive = (record: { kind: string; state: unknown }) => {
+export const passive = (record: { kind: string; state: unknown }) => {
   const phase = (record.state as { checkpoint?: { phase?: string } }).checkpoint?.phase
   return !!phase && (PASSIVE[record.kind] ?? []).includes(phase)
 }
@@ -148,10 +148,13 @@ async function noted(host: Host, id: ConversationId, recorded: { task: number; i
       (recorded.input !== undefined && run.inputs[0] === recorded.input))
   )
     return 'continued'
-  const task = await harness.getTask(recorded.task as TaskId, context)
-  return task?.state.status === 'terminal' && task.state.outcome.status === 'completed'
-    ? 'finished'
-    : undefined
+  // Only the recorded input's own answer counts as the run finishing: a completed generation may have handed the run
+  // to a successor that was stopped, leaving the input unanswered.
+  if (recorded.input === undefined) return undefined
+  const input = await (
+    await harness.submission(recorded.input as SubmissionId, context)
+  )?.status(context)
+  return input?.status === 'done' ? 'finished' : undefined
 }
 
 /**
