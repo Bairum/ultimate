@@ -10,6 +10,7 @@ import type {
   SubmitRequest,
   SubmitResponse,
   UiUpdateRequest,
+  UiUpdateResponse,
 } from '../../../shared/protocol.ts'
 import type { ActionRef } from '../../../shared/extension-api.ts'
 import { errorMessage } from './format.ts'
@@ -153,7 +154,7 @@ export function createApi(store: Store, options: { fetch?: typeof fetch } = {}) 
       }
     },
     /** Write durable UI state; prefer `useUiState`, which batches and applies writes at once. */
-    updateUi: (change: UiUpdateRequest) => post<EmptyResponse>('/api/ui', change),
+    updateUi: (change: UiUpdateRequest) => post<UiUpdateResponse>('/api/ui', change),
   }
 }
 export type Api = ReturnType<typeof createApi>

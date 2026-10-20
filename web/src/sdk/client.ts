@@ -39,10 +39,23 @@ export const uiState = createUiState(api.updateUi, {
 /** Installed web facets of `extensions/*`. */
 export const registry = createRegistry()
 
+/** The server process the UI state came from: another one may have started from other storage. */
+let server: string | undefined
+/** The previous process's UI state, still in the store until the new stream's `ui` replaces it. */
+let stale: unknown
 store.subscribe(() => {
   const { shared, ui, system } = store.getState()
   if (system && !registry.getReady().ready) registry.receiveSystem()
-  if (shared) {
+  // The stream sends `system` before `ui`, so a new process's snapshot finds the revisions forgotten.
+  const process = system && `${system.process.pid}:${system.process.generation}`
+  if (process !== server) {
+    if (server !== undefined) {
+      uiState.restarted()
+      stale = shared
+    }
+    server = process
+  }
+  if (shared && shared !== stale) {
     if (!initialized) {
       // Receive the saved shell first, but do not follow it until the explicit URL has won.
       uiState.receive(shared)

@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { JsonValue } from '@earendil-works/chord'
-import { createUiState, WRITE_MARKER } from '../../web/src/sdk/ui-state.ts'
-import type { UiUpdateRequest } from '../../shared/protocol.ts'
+import { createUiState } from '../../web/src/sdk/ui-state.ts'
+import { UI_REVISION } from '../../shared/protocol.ts'
+import type { UiUpdateRequest, UiUpdateResponse } from '../../shared/protocol.ts'
 
 /**
- * A tab against a fake server. A request is committed (`commit(i)`, returning the snapshot the stream would deliver)
- * and acknowledged (`ack(i)`) separately, so tests choose the order in which the stream and the HTTP answer arrive.
+ * A tab against a fake server that counts `ui.rev` as `POST /api/ui` does. A request is committed (`commit(i)`,
+ * returning the snapshot the stream would deliver) and acknowledged (`ack(i)`) separately, so tests choose the order
+ * in which the stream and the HTTP answer arrive.
  */
 function setup() {
   let doc: Record<string, JsonValue> = {}
+  const revs: number[] = []
   const requests: {
     change: UiUpdateRequest
     ack: () => void
@@ -17,13 +20,19 @@ function setup() {
   const errors: unknown[] = []
   const state = createUiState(
     (change) =>
-      new Promise((resolve, reject) =>
-        requests.push({ change, ack: () => resolve({ ok: true }), fail: reject }),
-      ),
-    { delayMs: 5, tab: 'me', onError: (error) => errors.push(error) },
+      new Promise<UiUpdateResponse>((resolve, reject) => {
+        const index = requests.length
+        requests.push({
+          change,
+          ack: () => resolve({ ok: true, rev: revs[index] }),
+          fail: reject,
+        })
+      }),
+    { delayMs: 5, onError: (error) => errors.push(error) },
   )
   const apply = (set: Record<string, JsonValue> = {}, remove: readonly string[] = []) => {
-    doc = { ...doc, ...set }
+    const rev = (typeof doc[UI_REVISION] === 'number' ? doc[UI_REVISION] : 0) + 1
+    doc = { ...doc, ...set, [UI_REVISION]: rev }
     for (const key of remove) delete doc[key]
     return { ...doc }
   }
@@ -31,18 +40,20 @@ function setup() {
     state,
     requests,
     errors,
-    commit: (index: number) =>
-      apply(requests[index].change.set, requests[index].change.delete ?? []),
+    commit: (index: number) => {
+      const snapshot = apply(requests[index].change.set, requests[index].change.delete ?? [])
+      revs[index] = snapshot[UI_REVISION] as number
+      return snapshot
+    },
     ack: (index: number) => requests[index].ack(),
-    /** Another tab's write. */
-    other: (set: Record<string, JsonValue>) => apply({ ...set, [WRITE_MARKER]: 'other:1' }),
+    /** Another tab's or device's commit. */
+    other: (set: Record<string, JsonValue>) => apply(set),
     start: (set: Record<string, JsonValue>) => state.receive(apply(set)),
   }
 }
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())
 const wait = (ms = 20) => vi.advanceTimersByTimeAsync(ms)
-const marker = (batch: number) => ({ [WRITE_MARKER]: `me:${batch}` })
 
 describe('durable UI state', () => {
   it('applies writes at once, sends them coalesced, and keeps them until the stream shows them', async () => {
@@ -60,19 +71,12 @@ describe('durable UI state', () => {
 
     await wait()
     expect(requests.map((request) => request.change)).toEqual([
-      {
-        set: { 'shell.panelOpen': true, 'shell.panel': 'info', ...marker(1) },
-        delete: ['shell.surface'],
-      },
+      { set: { 'shell.panelOpen': true, 'shell.panel': 'info' }, delete: ['shell.surface'] },
     ])
-    // A stream update from before the write does not undo it.
-    state.receive({ 'shell.panelOpen': false, 'shell.surface': 'example', other: 1 })
-    expect(state.get('shell.panelOpen')).toBe(true)
-    expect(state.get('other')).toBe(1)
-
     const committed = commit(0)
     ack(0)
     await wait()
+    expect(state.get('shell.panelOpen')).toBe(true)
     state.receive(committed)
     // Confirmed: a later change from another tab shows through at once.
     state.receive(other({ 'shell.panelOpen': false }))
@@ -81,7 +85,7 @@ describe('durable UI state', () => {
   })
 
   it('sends one batch at a time, so the server commits writes in order', async () => {
-    const { state, requests, ack, start } = setup()
+    const { state, requests, commit, ack, start } = setup()
     start({ panel: 'start' })
     state.set('panel', 'first')
     await wait()
@@ -89,15 +93,60 @@ describe('durable UI state', () => {
     state.set('panel', 'third')
     await wait()
     expect(requests).toHaveLength(1)
+    commit(0)
     ack(0)
     await wait()
     expect(requests.map((request) => request.change.set)).toEqual([
-      { panel: 'first', ...marker(1) },
-      { panel: 'third', ...marker(2) },
+      { panel: 'first' },
+      { panel: 'third' },
     ])
   })
 
-  it('confirms by write identity: A → B → A never flashes B', async () => {
+  it('keeps the newest write when a reconnect delivers a snapshot from between two writes', async () => {
+    // System, then Agent, both answered; the stream reconnects and lags far behind both.
+    const { state, commit, ack, start } = setup()
+    start({ 'shell.surface': 'agent' })
+    state.set('shell.surface', 'system')
+    await wait()
+    const between = commit(0)
+    ack(0)
+    await wait()
+    state.set('shell.surface', 'agent')
+    await wait()
+    const latest = commit(1)
+    ack(1)
+    await wait(5000)
+    expect(state.get('shell.surface')).toBe('agent')
+    state.receive(between)
+    expect(state.get('shell.surface')).toBe('agent')
+    state.receive(latest)
+    expect(state.get('shell.surface')).toBe('agent')
+  })
+
+  it('drops a snapshot older than one already shown', async () => {
+    const { state, other, start } = setup()
+    start({ panel: 'start' })
+    const older = other({ panel: 'older' })
+    const newer = other({ panel: 'newer' })
+    state.receive(newer)
+    state.receive(older)
+    expect(state.get('panel')).toBe('newer')
+  })
+
+  it('lets another tab’s later write win over this tab’s confirmed one', async () => {
+    const { state, commit, ack, other, start } = setup()
+    start({ panel: 'start' })
+    state.set('panel', 'mine')
+    await wait()
+    const mine = commit(0)
+    ack(0)
+    await wait()
+    state.receive(mine)
+    state.receive(other({ panel: 'theirs' }))
+    expect(state.get('panel')).toBe('theirs')
+  })
+
+  it('confirms by revision: A → B → A never flashes B', async () => {
     const { state, requests, commit, ack, start } = setup()
     start({ panel: 'start' })
     // info, tasks, info: each committed and answered, while the stream lags behind all three.
@@ -126,9 +175,6 @@ describe('durable UI state', () => {
     expect(state.get('panel')).toBe('info')
     state.receive(third)
     expect(state.get('panel')).toBe('info')
-    // Settled by identity: another tab's later write shows at once.
-    state.receive({ ...third, panel: 'agents', [WRITE_MARKER]: 'other:1' })
-    expect(state.get('panel')).toBe('agents')
   })
 
   it('keeps its write when another tab wrote the same key just before', async () => {
@@ -145,6 +191,73 @@ describe('durable UI state', () => {
     expect(state.get('panel')).toBe('mine')
     state.receive(mine)
     expect(state.get('panel')).toBe('mine')
+  })
+
+  it('confirms a write whose commit the stream showed before its answer', async () => {
+    const { state, commit, ack, other, start } = setup()
+    start({ panel: 'start' })
+    state.set('panel', 'mine')
+    await wait()
+    state.receive(commit(0))
+    state.receive(other({ panel: 'theirs' }))
+    // Not yet answered: the write still shows.
+    expect(state.get('panel')).toBe('mine')
+    ack(0)
+    await wait()
+    expect(state.get('panel')).toBe('theirs')
+  })
+
+  it('takes a restarted server’s snapshot whatever its revision', async () => {
+    const { state, commit, ack, start } = setup()
+    start({ panel: 'start' })
+    state.set('panel', 'mine')
+    await wait()
+    state.receive(commit(0))
+    ack(0)
+    await wait()
+    // `pnpm reset` and a restart: the new storage counts from scratch.
+    state.restarted()
+    state.receive({ panel: 'fresh', [UI_REVISION]: 1 })
+    expect(state.get('panel')).toBe('fresh')
+  })
+
+  it('keeps an acknowledged write shown across a restart until the new snapshot arrives', async () => {
+    const { state, commit, ack, start } = setup()
+    start({ 'shell.surface': 'agent' })
+    state.set('shell.surface', 'system')
+    await wait()
+    commit(0)
+    ack(0)
+    await wait()
+    // The old process goes away before the stream showed the write; nothing rolls the surface back meanwhile.
+    state.restarted()
+    await wait(5000)
+    expect(state.get('shell.surface')).toBe('system')
+    // The new process's first snapshot is the truth, whatever its revision.
+    state.receive({ 'shell.surface': 'system', [UI_REVISION]: 1 })
+    state.receive({ 'shell.surface': 'review', [UI_REVISION]: 2 })
+    expect(state.get('shell.surface')).toBe('review')
+  })
+
+  it('ignores an old server’s late reply and sends unsent edits to the new one', async () => {
+    const { state, requests, commit, ack, start } = setup()
+    start({ panel: 'start' })
+    state.set('panel', 'old')
+    await wait()
+    commit(0)
+    state.set('view', 'unsent')
+    // The old process goes away while its answer is still on the way.
+    state.restarted()
+    expect(state.get('panel')).toBe('old')
+    expect(state.get('view')).toBe('unsent')
+    await wait()
+    expect(requests[1].change.set).toEqual({ view: 'unsent' })
+    ack(0)
+    await wait()
+    state.receive({ panel: 'fresh', [UI_REVISION]: 1 })
+    state.receive({ panel: 'other device', [UI_REVISION]: 2 })
+    expect(state.get('panel')).toBe('other device')
+    expect(state.get('view')).toBe('unsent')
   })
 
   it('skips no-op writes, drops refused writes, and keeps a newer write when an older batch fails', async () => {
@@ -173,25 +286,6 @@ describe('durable UI state', () => {
     // The failed batch's own key reverts; the key written again keeps its newer value and is sent next.
     expect(state.get('view')).toBeUndefined()
     expect(state.get('panel')).toBe('second')
-    expect(requests[1].change.set).toEqual({ panel: 'second', ...marker(2) })
-  })
-
-  it('lets go of an acknowledged write the stream never names', async () => {
-    const errors: unknown[] = []
-    const state = createUiState(async () => ({ ok: true }), {
-      delayMs: 5,
-      settleMs: 30,
-      tab: 'me',
-      onError: (error) => errors.push(error),
-    })
-    state.receive({ panel: 'start' })
-    state.set('panel', 'mine')
-    await wait()
-    // Another tab's commit in the same frame replaced the marker before the stream showed this tab's.
-    state.receive({ panel: 'theirs', [WRITE_MARKER]: 'other:1' })
-    expect(state.get('panel')).toBe('mine')
-    await wait(60)
-    expect(state.get('panel')).toBe('theirs')
-    expect(errors).toHaveLength(0)
+    expect(requests[1].change.set).toEqual({ panel: 'second' })
   })
 })
