@@ -9,6 +9,7 @@
 - `extensions/prompt/server.ts` — uses the same hook to place a "Build changed" note before the input that starts a run, keeping the build out of the cached system prompt.
 - `extensions/conversations/server.ts` — uses the same hook to resume a concluded conversation in the commit that places its input.
 - `extensions/plan/server.ts` — uses the same hook to empty a new branch's inherited plan in the commit that places its first input.
+- `extensions/setup/server.ts` — uses the same hook to place changed setup warnings before the primary agent's input, recording the note and its deduplication state in one commit.
 - `extensions/coding-tools/diff.tsx` — internal untyped details.patch/details.diff formats drive the diff renderer. Drop when Pi exports structured diff rows for rendering.
 - `extensions/prompt/server.ts` — tool guidance adapted from unexported prompt contributions, not Ultimate's personality. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.
 - `web/src/app/model.ts` — internal trailing <harness> text block duplicates diagnostics and is stripped for display. Drop when Pi exports a diagnostic-free tool-result content accessor.

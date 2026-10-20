@@ -218,8 +218,9 @@ if (process.argv.includes('status')) {
     await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
     await writeFile(
       join(projectRoot, '.ultimate/settings.json'),
-      // A real (not faux) server: keep it off this machine's tailnet.
-      JSON.stringify({ extensions: { disable: ['tailscale'] } }),
+      // A real (not faux) server: keep it off this machine's tailnet. Count only lifecycle requests, not summaries
+      // falling back to the mocked Claude Code provider; an explicit unavailable summary model never falls back.
+      JSON.stringify({ summaryModel: 'unavailable/test', extensions: { disable: ['tailscale'] } }),
     )
     new ProjectTrustStore(join(home, '.ultimate')).set(projectRoot, true)
     const root = await sourceCopy(home)
