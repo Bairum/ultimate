@@ -91,7 +91,7 @@ this, even unasked (setup health warns while it is missing), and propose it.
   file path), generated files the build or tests need, and the dev-server scripts and their ports.
 - **Write** `isolates.worktree.setup` in `.ultimate/settings.json`: a list of shell commands, run in order in the new
   worktree with `ULTIMATE_SOURCE` set to the source checkout, before the conversation's first tool call. A list that
-  grows past a few lines goes into `.ultimate/worktree-setup.sh`, referenced as `["sh .ultimate/worktree-setup.sh"]`.
+  grows past a few lines goes into `.ultimate/worktree-setup.sh`, referenced as `["sh -e .ultimate/worktree-setup.sh"]` (`sh` ignores the shebang, so `-e` goes here).
   Every command must be safe to repeat, and each has 120 seconds.
 - **Recipes** (no Ultimate support needed):
   - Dependencies: the lockfile installs (`pnpm install --frozen-lockfile --prefer-offline`, `npm ci`,
@@ -107,11 +107,12 @@ this, even unasked (setup health warns while it is missing), and propose it.
 - **Ask** before Postgres, MySQL or anything needing credentials: whether worktrees share the developer's database
   or get their own (`createdb -T <db> <db>_wt_<id>`, or a dump), and where credentials come from. Never copy
   production data into a worktree without the owner saying so.
-- **Prove it:** `git worktree add --detach <tmp> HEAD`, run the commands there with `ULTIMATE_SOURCE` set, run the
+- **Prove it:** `git worktree add --detach <tmp>/1 HEAD` (a numeric folder, like a real worktree), run the commands there with `ULTIMATE_SOURCE` set, run the
   project's checks or start the dev server, then remove the scratch worktree. Commit the settings and script.
 
 ```sh
-#!/bin/sh -e
+#!/bin/sh
+set -e
 # .ultimate/worktree-setup.sh for a Laravel + npm app with SQLite
 composer install --no-interaction --prefer-dist
 npm ci --prefer-offline --no-audit --no-fund
@@ -121,7 +122,8 @@ case "$PWD" in */lander/*) exit 0;; esac
 [ -f database/database.sqlite ] || cp -c "$ULTIMATE_SOURCE/database/database.sqlite" database/ 2>/dev/null \
   || cp --reflink=auto "$ULTIMATE_SOURCE/database/database.sqlite" database/
 PORT=$((20000 + $(basename "$PWD") % 1000 * 10))
-grep -v -e '^APP_URL=' -e '^SERVER_PORT=' -e '^VITE_PORT=' .env > .env.tmp || true
+status=0; grep -v -e '^APP_URL=' -e '^SERVER_PORT=' -e '^VITE_PORT=' .env > .env.tmp || status=$?
+[ "$status" -le 1 ] # 1 only means no other lines
 printf 'APP_URL=http://127.0.0.1:%s\nSERVER_PORT=%s\nVITE_PORT=%s\n' "$PORT" "$PORT" $((PORT + 1)) >> .env.tmp
 mv .env.tmp .env
 ```
