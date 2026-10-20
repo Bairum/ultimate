@@ -157,6 +157,42 @@ it('records the commits an apply-backend rebase rewrote', async () => {
   ])
 })
 
+it('records each commit of a rebase once, in the call that made it, without a branch', async () => {
+  await git('commit', '--allow-empty', '-m', 'base')
+  await git('checkout', '-b', 'side')
+  await run('bash', ['-c', 'echo a > a && git add a && git commit -qm one'], { cwd })
+  await run('bash', ['-c', 'echo side > f && git add f && git commit -qm two'], { cwd })
+  const two = await git('rev-parse', 'HEAD')
+  await git('checkout', 'main')
+  await run('bash', ['-c', 'echo main > f && git add f && git commit -qm main'], { cwd })
+  await git('checkout', 'side')
+  // `one` applies, `two` conflicts: the call stops mid-rebase.
+  await bash('git rebase -q main').catch(() => undefined)
+  const first = await git('rev-parse', 'HEAD')
+  expect(emitted).toEqual([
+    {
+      conversation: 7,
+      sha: first,
+      parents: [await git('rev-parse', 'main')],
+      repo: cwd,
+      subject: 'one',
+    },
+  ])
+  // Commit times have one-second resolution: let `one` fall before the next call starts.
+  await new Promise((resolve) => setTimeout(resolve, 1100))
+  await bash('echo both > f && git add f && GIT_EDITOR=true git rebase --continue')
+  expect(emitted.slice(1)).toEqual([
+    {
+      conversation: 7,
+      sha: await git('rev-parse', 'HEAD'),
+      parents: [first],
+      repo: cwd,
+      subject: 'two',
+      rewrittenFrom: two,
+    },
+  ])
+})
+
 it('keeps a commit when a squash merge in the same call leaves HEAD on it', async () => {
   await git('commit', '--allow-empty', '-m', 'base')
   await git('checkout', '-b', 'side')

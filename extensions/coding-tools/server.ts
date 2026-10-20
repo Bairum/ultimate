@@ -63,12 +63,15 @@ type Made = {
   common: string
   /** Logged by post-merge: the HEAD before it, to tell a real merge from a fast-forward or squash. */
   merged?: string
+  /** Logged only by post-rewrite, as an apply-backend rebase makes: it may name a commit an earlier call made. */
+  inferred?: true
   rewrittenFrom?: string
 }
 
 /**
  * The commits a bash call that started at `started` (ms) made, from its hook log at `path`, which this removes. A
- * commit or rewrite line confirms a commit; a post-merge line only proposes one.
+ * commit line confirms a commit; a merge or rewrite line alone only proposes one, and a rewrite line otherwise adds
+ * `rewrittenFrom` to the commit's own record.
  */
 async function madeCommits(path: string, conversation: number, started: number) {
   const log = await readFile(path, 'utf8').catch(() => '')
@@ -78,15 +81,18 @@ async function madeCommits(path: string, conversation: number, started: number) 
     const [kind, sha, branch, toplevel, common, extra] = line.split('\t')
     if (!sha || !common || !['commit', 'merge', 'rewrite'].includes(kind)) continue
     const known = made.get(sha)
-    if (kind === 'merge' && known) continue
+    if (known && kind === 'rewrite') {
+      if (extra) known.rewrittenFrom = extra
+      continue
+    }
+    if (known && kind === 'merge') continue
     made.set(sha, {
       sha,
       ...(branch ? { branch } : {}),
       toplevel,
       common,
       ...(kind === 'merge' ? { merged: extra ?? '' } : {}),
-      ...(kind === 'rewrite' && extra ? { rewrittenFrom: extra } : {}),
-      ...(kind !== 'rewrite' && known?.rewrittenFrom ? { rewrittenFrom: known.rewrittenFrom } : {}),
+      ...(kind === 'rewrite' ? { inferred: true, ...(extra ? { rewrittenFrom: extra } : {}) } : {}),
     })
   }
   const byRepo = Map.groupBy(made.values(), (commit) => commit.common)
@@ -113,6 +119,9 @@ async function madeCommits(path: string, conversation: number, started: number) 
       const found = details.get(commit.sha)
       if (!found) continue
       const parents = found.parents ? found.parents.split(' ') : []
+      const during = found.time >= Math.floor(started / 1000)
+      // A rebase resumed in this call lists commits an earlier call already recorded.
+      if (commit.inferred && !during) continue
       // A merge commit on the HEAD it started from, with this conversation's trailer, made during this call: not a
       // fast-forward or squash, nor a fast-forward onto an older merge.
       if (
@@ -121,7 +130,7 @@ async function madeCommits(path: string, conversation: number, started: number) 
           parents.length > 1 &&
           parents[0] === commit.merged &&
           found.trailer.trim() === String(conversation) &&
-          found.time >= Math.floor(started / 1000)
+          during
         )
       )
         continue
