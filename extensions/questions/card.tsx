@@ -186,7 +186,7 @@ function Card({
         <span className="text-foreground">
           {questions.length} {questions.length === 1 ? 'question' : 'questions'}
         </span>
-        <span>· Answer what you can</span>
+        {!phone && <span>· Answer what you can</span>}
         {hasPicks && <span>· picks marked</span>}
       </div>
       <div className="space-y-3 px-3 pt-2 pb-3">
