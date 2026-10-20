@@ -1,6 +1,6 @@
 ---
 name: ultimate
-description: "Ultimate itself: the agent you talk to in its own conversation. It starts and steers branches and routes work between agents."
+description: 'Ultimate itself: the agent you talk to in its own conversation. It starts and steers branches and routes work between agents.'
 resident: true
 tools:
   [
