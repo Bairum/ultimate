@@ -14,9 +14,8 @@ export interface HealthEntry {
   lastUsed?: number
   /** The newest auth failure: it alone turns the provider failing. */
   lastAuth?: number
-  /** Transient failures in a row since the last success, and when the first of them happened. */
-  streak?: number
-  since?: number
+  /** The newest `STREAK` transient failures, oldest first; only those newer than `lastOk` count. */
+  transient?: number[]
 }
 
 export type HealthFile = { providers: Record<string, HealthEntry> }
@@ -136,48 +135,42 @@ export function failureKind(error: string): 'auth' | 'capacity' | 'transient' {
 export function state(entry: HealthEntry): ProviderHealth['state'] {
   const ok = entry.lastOk ?? -Infinity
   if (entry.lastAuth !== undefined && entry.lastAuth > ok) return 'failing'
-  const { streak = 0, since, lastFail } = entry
-  if (
-    streak > 0 &&
-    since !== undefined &&
-    since > ok &&
-    (streak >= STREAK || (lastFail ?? since) - since >= STREAK_WINDOW)
-  )
+  const streak = (entry.transient ?? []).filter((at) => at > ok)
+  if (streak.length >= STREAK || (streak.length && streak.at(-1)! - streak[0] >= STREAK_WINDOW))
     return 'failing'
   return entry.lastOk !== undefined ? 'ok' : 'unknown'
 }
 
 /**
- * `before` with `update` applied: timestamps by `merge`, then the failure counted by its kind. An auth failure stamps
- * `lastAuth`; a transient one continues the streak when no success came since its start, else starts one; a success
- * newer than the streak's start ends it.
+ * `before` with `update` merged, its failure counted by kind: an auth failure stamps `lastAuth`, a transient one joins
+ * `transient`, a capacity one only `lastFail` and `error`. A success clears nothing: `state` counts only failures newer
+ * than `lastOk`, so writes arriving out of order still count right.
  */
 export function apply(before: HealthEntry, update: HealthEntry): HealthEntry {
-  const after = merge(before, update)
-  const ok = after.lastOk ?? -Infinity
-  const streaking = !!before.streak && before.since !== undefined && before.since > ok
-  if (streaking) {
-    after.streak = before.streak
-    after.since = before.since
-  }
   const failed = update.lastFail
-  if (failed === undefined || failed <= ok) return after
+  if (failed === undefined) return merge(before, update)
   const kind = failureKind(update.error ?? '')
-  if (kind === 'auth') after.lastAuth = Math.max(failed, after.lastAuth ?? -Infinity)
-  if (kind === 'transient') {
-    after.streak = streaking ? before.streak! + 1 : 1
-    after.since = streaking ? before.since! : failed
-  }
-  return after
+  return merge(before, {
+    ...update,
+    ...(kind === 'auth' ? { lastAuth: failed } : {}),
+    ...(kind === 'transient' ? { transient: [failed] } : {}),
+  })
 }
 
-/** Each timestamp by its maximum; the error belongs to the newest `lastFail`. The streak is `apply`'s business. */
+/**
+ * Each timestamp by its maximum, the newest `STREAK` transient failures of both; the error belongs to the newest
+ * `lastFail`.
+ */
 export function merge(a: HealthEntry, b: HealthEntry): HealthEntry {
   const merged: HealthEntry = {}
   for (const key of STAMPS) {
     const value = Math.max(a[key] ?? -Infinity, b[key] ?? -Infinity)
     if (Number.isFinite(value)) merged[key] = value
   }
+  const transient = [...new Set([...(a.transient ?? []), ...(b.transient ?? [])])]
+    .toSorted((x, y) => x - y)
+    .slice(-STREAK)
+  if (transient.length) merged.transient = transient
   const failed = (b.lastFail ?? -Infinity) >= (a.lastFail ?? -Infinity) ? b : a
   const error = failed.error ?? (failed === b ? a.error : b.error)
   if (merged.lastFail !== undefined && error !== undefined) merged.error = error
@@ -215,11 +208,9 @@ export async function readFileHealth(userHome: string): Promise<HealthFile> {
         if (at !== undefined) entry[key] = at
       }
       if (typeof fields.error === 'string') entry.error = sanitize(fields.error)
-      const streak = stamp(fields.streak)
-      const since = stamp(fields.since)
-      if (streak !== undefined && streak > 0 && since !== undefined) {
-        entry.streak = streak
-        entry.since = since
+      if (Array.isArray(fields.transient)) {
+        const transient = fields.transient.filter((at) => stamp(at) !== undefined) as number[]
+        if (transient.length) entry.transient = transient.toSorted((x, y) => x - y).slice(-STREAK)
       }
       providers[provider] = entry
     }
@@ -231,7 +222,7 @@ export const toHealth = (file: HealthFile): ProviderHealth[] =>
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([provider, entry]) => {
       // The counting fields decide the state; they are not part of what a provider's health shows.
-      const { lastAuth: _auth, streak: _streak, since: _since, ...shown } = entry
+      const { lastAuth: _auth, transient: _transient, ...shown } = entry
       return { provider, state: state(entry), ...shown }
     })
 

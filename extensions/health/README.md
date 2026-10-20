@@ -18,7 +18,7 @@ One file per machine, `~/.ultimate/health.json`, written by every Ultimate home 
 }
 ```
 
-Times are epoch milliseconds. `lastOk` and `lastFail` come from real calls and pings, `lastChecked` from pings only, `lastUsed` from real calls only. Two more fields count failures (`lastAuth`, and `streak` with its start `since`); they decide the state and are not reported.
+Times are epoch milliseconds. `lastOk` and `lastFail` come from real calls and pings, `lastChecked` from pings only, `lastUsed` from real calls only. Two more fields count failures: `lastAuth`, and `transient`, the newest three transient failure times. They decide the state and are not reported. Only failures newer than `lastOk` count, so writes arriving out of order from two homes still give the same state.
 
 ## When a provider is failing
 
@@ -26,7 +26,7 @@ Each failure is classified by its summary (`failureKind` in `store.ts`):
 
 - **auth** (401, 403, `invalid_grant`, `authentication_error`, `revoked`, …) turns the provider `failing` at once: the login is broken.
 - **capacity** (429, 529, `overloaded_error`, rate-limit and quota codes) never does: the provider is busy, not the login. It is kept as the last error only.
-- **transient** (timeouts, network errors, any other failure) turns it `failing` at the third in a row with no success between, or at one 5 minutes or more after the first of the streak.
+- **transient** (timeouts, network errors, any other failure) turns it `failing` at the third in a row with no success between, or at one 5 minutes or more after the first of the streak. Capacity failures neither count toward a streak nor stretch its window.
 
 A success newer than the failures ends both. Otherwise a provider is `ok` once it has a `lastOk`, else `unknown`. Writes read, merge each timestamp by its maximum (the `error` stays with the newest `lastFail`), count the new failure and rename a temporary file into place; two homes writing at once lose at most one event. An error is stored only as a structured summary: the HTTP status (when the message starts with it or names it, `status 401`) and the words of a fixed list of provider error codes and network errors it contains (`invalid_grant`, `rate_limit_error`, `overloaded`, `ECONNREFUSED`, …, `KNOWN` in `store.ts`), or "request failed". Its free text never is, so no request or auth contents reach the file or the cloud; add a code to `KNOWN` to keep it. The cloud report goes out after every tick that pinged, at least hourly, and after a failed attempt on the next tick. A move's checks ping a provider marked failing before they block (`cloud/login.ts`).
 

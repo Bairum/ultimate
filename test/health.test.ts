@@ -50,8 +50,8 @@ it('computes a provider state from its latest success, auth failure and transien
   expect(state({ lastOk: 5, lastFail: 6, lastAuth: 6 })).toBe('failing')
   expect(state({ lastFail: 6, lastAuth: 6 })).toBe('failing')
   expect(state({ lastOk: 7, lastFail: 6, lastAuth: 6 })).toBe('ok')
-  expect(state({ lastOk: 5, lastFail: 8, streak: 3, since: 6 })).toBe('failing')
-  expect(state({ lastOk: 5, lastFail: 8, streak: 2, since: 6 })).toBe('ok')
+  expect(state({ lastOk: 5, lastFail: 8, transient: [6, 7, 8] })).toBe('failing')
+  expect(state({ lastOk: 6, lastFail: 8, transient: [6, 7, 8] })).toBe('ok')
 })
 
 it('classifies failures as auth, capacity or transient', () => {
@@ -99,12 +99,27 @@ it('counts a provider failing only after an auth error or a transient streak', a
       error: '529 overloaded_error',
     },
   ])
+  // A capacity error in a transient streak neither counts nor stretches its 5-minute window.
+  await record(home, 'p', { lastOk: NOW + HOUR + 6 * MINUTE })
+  await fail(NOW + HOUR + 7 * MINUTE, 'ETIMEDOUT')
+  await fail(NOW + HOUR + 13 * MINUTE, '429 rate_limit_error')
+  expect(await states()).toEqual(['ok'])
   // An auth error flips at once, and a later success clears it.
   expect(await fail(NOW + 2 * HOUR, '401 invalid_grant')).toMatchObject({ to: 'failing' })
   expect(await record(home, 'p', { lastOk: NOW + 3 * HOUR })).toMatchObject({
     from: 'failing',
     to: 'ok',
   })
+})
+
+it('counts a transient streak the same whatever order its writes arrive in', async () => {
+  const home = await temp()
+  for (const at of [NOW + 1, NOW + 2, NOW + 3])
+    await record(home, 'p', { lastFail: at, error: 'ETIMEDOUT' })
+  // A success older than all three, written last, leaves them counting.
+  expect(await record(home, 'p', { lastOk: NOW })).toMatchObject({ from: 'failing', to: 'failing' })
+  // One between them breaks the streak.
+  expect(await record(home, 'p', { lastOk: NOW + 2 })).toMatchObject({ to: 'ok' })
 })
 
 it('merges each timestamp by its maximum and keeps the newest failure’s error', () => {

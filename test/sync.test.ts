@@ -563,8 +563,8 @@ it('wakes the project’s @sync once when a provider turns failing, not on its r
   // Working again, then failing again, is a new turn; a transient failure counts only at the third in a row.
   await recordHealth(home.userHome, 'anthropic', { lastOk: 5 }, point)
   await recordHealth(home.userHome, 'anthropic', { lastFail: 6, error: '401 sk-live-abc' }, point)
-  await recordHealth(home.userHome, 'openai', { lastFail: 7, error: 'ETIMEDOUT' }, point)
-  await recordHealth(home.userHome, 'openai', { lastFail: 7, error: 'ETIMEDOUT' }, point)
+  await recordHealth(home.userHome, 'openai', { lastFail: 5, error: 'ETIMEDOUT' }, point)
+  await recordHealth(home.userHome, 'openai', { lastFail: 6, error: 'ETIMEDOUT' }, point)
   await recordHealth(home.userHome, 'openai', { lastFail: 7 }, point)
   expect((await syncEntries(home)).map((entry) => entry.data)).toEqual([
     { provider: 'anthropic', at: 2, error: 'invalid_grant' },
