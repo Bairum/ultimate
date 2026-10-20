@@ -88,7 +88,7 @@ async function summaryArea(host: CheckHost): Promise<SetupIssue> {
  * model among every known model, and fail at their first model call.
  */
 async function agentsArea(host: CheckHost): Promise<SetupIssue[]> {
-  const { definitions, errors } = await discoverAgents(
+  const { definitions, errors, replaced } = await discoverAgents(
     host.ultimateRoot,
     host.projectRoot,
     host.userHome,
@@ -117,10 +117,25 @@ async function agentsArea(host: CheckHost): Promise<SetupIssue[]> {
       summary: `${errors.map((error) => error.name).join(', ')} failed to load`,
       impact: errors[0].error,
     })
+  for (const file of replaced)
+    issues.push({
+      area: 'Agent definitions',
+      status: 'warn',
+      summary: `${shortPath(host, file.path)} replaces the built-in ${file.name}`,
+      impact:
+        'It no longer follows updates to the built-in instructions. Keep only name, addTools and your additions (docs/subagents.md).',
+    })
   if (!issues.length)
     issues.push({ area: 'Agent models', status: 'ok', summary: 'every pinned model has a login' })
   return issues
 }
+
+const shortPath = (host: Pick<CheckHost, 'projectRoot' | 'userHome'>, path: string) =>
+  path.startsWith(`${host.projectRoot}/`)
+    ? path.slice(host.projectRoot.length + 1)
+    : path.startsWith(host.userHome)
+      ? `~${path.slice(host.userHome.length)}`
+      : path
 
 async function providersArea(host: CheckHost): Promise<SetupIssue | undefined> {
   const providers = await host.want(HealthApi)?.providers()

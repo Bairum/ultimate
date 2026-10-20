@@ -323,6 +323,27 @@ it.concurrent('keeps Ultimate answers to board replies out of the log, including
   expect(await log(reopened)).toEqual(before)
 })
 
+it.concurrent('notes an @ultimate overlay as changed instructions and applies its additions', async () => {
+  const f = await fixture()
+  const ultimate = await f.subagents.standing('ultimate', context)
+  await ask(f.server, ultimate, 'first')
+  const overlay = join(f.home, '.ultimate/agents/ultimate.md')
+  await writeFile(overlay, '---\nname: ultimate\naddTools: [write]\n---\n\nWrite notes freely.\n')
+  await ask(f.server, ultimate, 'second')
+  const agent = await (await f.server.harness.conversation(ultimate, context))!.agent(context)
+  expect(agent.instructions).toMatch(
+    /^You are Ultimate[\s\S]*\n\n## User additions\n\nWrite notes freely\.$/,
+  )
+  // A Board refresh applies the definition's tools, the overlay's included.
+  await f.subagents.standing('ultimate', context)
+  const refreshed = await (await f.server.harness.conversation(ultimate, context))!.agent(context)
+  expect(refreshed.tools.map((tool) => tool.name)).toContain('write')
+  const [note] = (await entries(f.server, ultimate)).filter(
+    (entry) => entry.kind === 'prompt.build',
+  )
+  expect(note.data).toEqual({ instructions: ['~/.ultimate/agents/ultimate.md'] })
+})
+
 it.concurrent('re-applies an updated @ultimate definition on a typed input and notes changed instructions once', async () => {
   const f = await fixture()
   const ultimate = await f.subagents.standing('ultimate', context)

@@ -1764,6 +1764,56 @@ describe('subagents', () => {
     expect(JSON.stringify(view.value.entries)).toContain('Child: follow-up')
     view.dispose()
   })
+  it('extends an earlier definition with an addTools overlay and refuses other fields', async () => {
+    const repo = await directory(),
+      home = await directory(),
+      cwd = await directory()
+    await mkdir(join(repo, 'agents'))
+    await mkdir(join(home, '.ultimate/agents'), { recursive: true })
+    await mkdir(join(cwd, '.ultimate/agents'), { recursive: true })
+    const modelRuntime = await ModelRuntime.create()
+    await writeFile(join(repo, 'agents/scout.md'), definition())
+    await writeFile(
+      join(repo, 'agents/open.md'),
+      definition().replace('name: scout', 'name: open').replace('tools: [read, bash]\n', ''),
+    )
+    await writeFile(
+      join(home, '.ultimate/agents/scout.md'),
+      '---\nname: scout\naddTools: [write, read]\n---\n',
+    )
+    await writeFile(
+      join(cwd, '.ultimate/agents/scout.md'),
+      '---\nname: scout\naddTools: [laravel]\n---\n\nUse laravel for the database.\n',
+    )
+    await writeFile(
+      join(cwd, '.ultimate/agents/open.md'),
+      '---\nname: open\naddTools: [laravel]\n---\n',
+    )
+    for (const [name, text] of [
+      ['pinned', '---\nname: scout\naddTools: [x]\nmodel: anthropic/claude-opus-4-8\n---\n'],
+      ['empty', '---\nname: scout\naddTools: []\n---\n'],
+      ['orphan', '---\nname: nobody\naddTools: [x]\n---\n'],
+    ])
+      await writeFile(join(cwd, `.ultimate/agents/${name}.md`), text)
+    new ProjectTrustStore(join(home, '.ultimate')).set(cwd, true)
+    const found = await discoverAgents(repo, cwd, home, modelRuntime)
+    const scout = found.definitions.find((agent) => agent.name === 'scout')!
+    expect(scout).toMatchObject({
+      source: 'builtin',
+      path: join(repo, 'agents/scout.md'),
+      tools: ['read', 'bash', 'write', 'laravel'],
+      instructions: `Original instructions\n\n## Project additions\n\nUse laravel for the database.`,
+      overlays: [join(home, '.ultimate/agents/scout.md'), join(cwd, '.ultimate/agents/scout.md')],
+    })
+    // A definition that inherits every tool stays without a list.
+    expect(found.definitions.find((agent) => agent.name === 'open')?.tools).toBeUndefined()
+    expect(Object.fromEntries(found.errors.map((file) => [file.name, file.error]))).toEqual({
+      empty: expect.stringContaining('addTools must be a nonempty list'),
+      orphan: expect.stringContaining('needs an earlier definition named nobody'),
+      pinned: expect.stringContaining('not model'),
+    })
+    expect(found.replaced).toEqual([])
+  })
   it('discovers model and thinking settings and reports unknown models', async () => {
     const repo = await directory(),
       home = await directory(),
