@@ -3,7 +3,8 @@ import { actionRef } from '../../shared/extension-api.ts'
 import type { ReviewComment } from './types.ts'
 
 /**
- * What to review, as text: `uncommitted` (the work tree against `HEAD`, untracked files included), a commit (`<sha>`
+ * What to review, as text: `uncommitted` (the work tree against `HEAD`, untracked files included; `uncommitted:<id>`
+ * in conversation `id`'s worktree), a commit (`<sha>`
  * or any ref naming one), a range `<a>...<b>` (what `b` changed since it forked from `a`, as a landing's
  * `<base>...<sha>`), or `branch:<name>` (the branch against the target branch it lands on).
  */

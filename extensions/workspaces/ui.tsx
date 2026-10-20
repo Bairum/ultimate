@@ -11,6 +11,7 @@ export {
   InfoAction,
   IsolationAction,
   PendingAction,
+  ProgressAction,
   SubmissionLanded,
   WorkspacesDoc,
 } from './refs.ts'

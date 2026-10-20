@@ -15,6 +15,11 @@ export const WorkspacesDoc = docRef<WorkspaceIndex>('ultimate.workspaces')
 
 /** `{ id }` → conversation `id`'s worktree with its branch, tip and changes, or null when it has none. */
 export const InfoAction = actionRef<{ id: number }, WorkspaceInfo | null>('workspaces', 'info')
+/**
+ * `{ ids }` → the work so far of these conversations' ready worktrees: commits not yet on their target and uncommitted
+ * changes, one entry per id that has a worktree, for the sidebar's in-flight rows.
+ */
+export const ProgressAction = actionRef<{ ids: number[] }, KeptWork[]>('workspaces', 'progress')
 /** `{ ids }` → the unlanded work of these conversations' worktrees, to warn before concluding them. */
 export const PendingAction = actionRef<{ ids: number[] }, KeptWork[]>('workspaces', 'pending')
 /** No arguments → how many worktrees there are in total and in each state, for the workspaces panel. */

@@ -15,7 +15,7 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { NoticeEvent } from '../../shared/events.ts'
 import { Branched, LineageApi, Rooted } from '../lineage/api.ts'
-import { SubmissionLanded } from '../workspaces/api.ts'
+import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import { seedLanes, stopCalling } from './lanes.ts'
 import { codemodeSteps } from './codemode.ts'
 import { SummaryDoc as CodemodeSummaries } from '../codemode/api.ts'
@@ -628,6 +628,16 @@ export default async function fauxExtension(host: ExtensionHost) {
   return defineExtension({ name: 'faux' })
 }
 
+/** `read()`'s value once it is defined, checking every 200 ms for at most a minute. */
+async function until<T>(read: () => Promise<T | undefined>): Promise<T> {
+  for (let tries = 0; tries < 300; tries++) {
+    const value = await read()
+    if (value !== undefined) return value
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  throw new Error('Timed out waiting for a worktree')
+}
+
 /** Landings for `seedLandings`, newest last: sha, base, feature, title, commits. */
 const demoLandings = [
   ['3e55874', 'c4ceeb7', 'Provider Health', 'Track only logged-in providers', 1],
@@ -873,6 +883,48 @@ export const actions = {
       })
     }
     return { seeded: demoLandings.length }
+  },
+  /**
+   * Faux only: two isolated branches of root 1 with work in their worktrees, to preview the root's In flight rows: one
+   * with three commits and an uncommitted edit, one with only uncommitted edits. Needs a project that can isolate.
+   */
+  async seedFlights(_args: JsonValue, { host }: ActionContext) {
+    if (!host.faux) throw new Error('seedFlights runs only under faux')
+    const lineage = host.need(LineageApi)
+    const workspaces = host.need(WorkspacesApi)
+    const ids: number[] = []
+    for (const [prompt, commits, edits] of [
+      ['Show work in flight on the root', 3, 1],
+      ['Tighten the review links', 0, 2],
+    ] as const) {
+      const { id } = await lineage.branch(
+        { from: 1, prompt, isolated: true, deliver: false },
+        BACKGROUND_CONTEXT,
+      )
+      const record = await until(() => workspaces.get(id, BACKGROUND_CONTEXT))
+      await until(async () =>
+        (await workspaces.get(id, BACKGROUND_CONTEXT))?.state === 'ready' ? true : undefined,
+      )
+      for (let n = 1; n <= commits; n++) {
+        await writeFile(join(record.path, `flight-${n}.txt`), `step ${n}\n`)
+        await workspaces.git(record.path, 'add', '-A')
+        await workspaces.git(
+          record.path,
+          '-c',
+          'user.name=Faux',
+          '-c',
+          'user.email=faux@example.com',
+          'commit',
+          '-q',
+          '-m',
+          `feat: step ${n}`,
+        )
+      }
+      for (let n = 1; n <= edits; n++)
+        await writeFile(join(record.path, `edit-${n}.txt`), `draft ${n}\n`)
+      ids.push(id)
+    }
+    return { branches: ids }
   },
   /**
    * Faux only: `{from}` emits a realistic mix of durable events about conversation `from` and its root (the root, the

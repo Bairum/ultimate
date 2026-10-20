@@ -29,6 +29,7 @@ import {
   InfoAction,
   IsolationAction,
   PendingAction,
+  ProgressAction,
   StatsAction,
 } from './refs.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
@@ -64,6 +65,16 @@ export const actions = {
     GithubAction,
     async (_args, { host }) => (await githubRepo(host.projectRoot)) ?? null,
   ),
+  progress: implementAction(ProgressAction, (args, { host }) => {
+    const ids = args && typeof args === 'object' && !Array.isArray(args) ? args.ids : undefined
+    if (
+      !Array.isArray(ids) ||
+      ids.length > 100 ||
+      ids.some((id) => typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1)
+    )
+      throw new Error('Expected at most 100 conversation ids')
+    return workspaces(host).progress(ids as number[], context)
+  }),
   pending: implementAction(PendingAction, (args, { host }) => {
     const ids = args && typeof args === 'object' && !Array.isArray(args) ? args.ids : undefined
     if (
