@@ -112,7 +112,7 @@ function Started({ entry }: { entry: EntryRecord }) {
         aria-expanded={open}
         className="block w-full min-w-0 cursor-pointer px-3 py-2.5 text-left text-[13px] leading-relaxed"
         onClick={() => setOpen((current) => !current)}
-        title={open ? 'Show less' : 'Show the whole prompt'}
+        title={open ? 'Show less' : 'Show more'}
         type="button"
       >
         <span className={cn('block break-words whitespace-pre-wrap', !open && 'line-clamp-3')}>
