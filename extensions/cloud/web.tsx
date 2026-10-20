@@ -4,7 +4,7 @@ import { useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { api, defineWebExtension, errorMessage, Provided, useSystem } from '@/sdk'
+import { api, defineWebExtension, errorMessage, formatBytes, Provided, useSystem } from '@/sdk'
 import type { Transition } from '../../cloud/protocol.ts'
 import type { CloudState } from './types.ts'
 import { movedAway, phaseOf, TransitionCard } from './transition.tsx'
@@ -192,13 +192,17 @@ function BackupRow({ state }: { state: CloudState }) {
             {uploading ? 'Backing up…' : 'Backup'}
           </span>
           <span
-            className="block truncate text-[11px] text-muted-foreground"
+            className="block text-[11px] text-muted-foreground tabular-nums"
             title={lastBackup ? new Date(lastBackup.at).toLocaleString() : undefined}
           >
             {uploading && backup.total > 0
-              ? `${mb(backup.done)} / ${mb(backup.total)} MB`
+              ? `${mb(backup.done)} / ${mb(backup.total)} MB read · ${mb(backup.uploaded)} MB uploaded`
               : lastBackup
-                ? `Last backup: ${since(lastBackup.at)} · ${mb(lastBackup.bytes)} MB`
+                ? `Last backup: ${since(lastBackup.at)} · ${
+                    lastBackup.uploaded === undefined
+                      ? `${mb(lastBackup.bytes)} MB`
+                      : `${mb(lastBackup.uploaded)} MB uploaded (${formatBytes(lastBackup.bytes)} database)`
+                  }`
                 : 'No backup yet'}
           </span>
         </span>

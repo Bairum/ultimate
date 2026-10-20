@@ -18,10 +18,19 @@ export interface SnapshotManifest {
   epoch: number
   createdAt: number
   machine: string
-  database: { sha256: string; bytes: number; chunks: number }
-  bundle?: { sha256: string; bytes: number; chunks: number }
+  database: Part
+  bundle?: Part
 }
-type Part = NonNullable<SnapshotManifest['bundle']>
+/**
+ * One uploaded file: `bytes` before compression, `uploaded` the encrypted chunks put to R2 (compressed, with nonce and
+ * tag per chunk). Snapshots uploaded before `uploaded` was recorded lack it.
+ */
+interface Part {
+  sha256: string
+  bytes: number
+  chunks: number
+  uploaded?: number
+}
 type Kind = 'db' | 'bundle'
 interface Remote {
   url: string
@@ -39,7 +48,11 @@ const BRANCHES = 'refs/heads/ultimate'
 const git = (repo: string, ...args: string[]) =>
   gitIn({ cwd: repo, timeout: 0, maxBuffer: 16 * 1024 * 1024 }, ...args)
 
-/** Copy a closed or open SQLite file consistently (VACUUM INTO via node:sqlite, read-only), compress (zlib zstd), encrypt and upload. */
+/**
+ * Copy a closed or open SQLite file consistently (VACUUM INTO via node:sqlite, read-only), compress (zlib zstd), encrypt
+ * and upload. `progress` gets the bytes read of `total` (both before compression) and the bytes uploaded so far; the
+ * upload's own total is known only at the end, in the manifest.
+ */
 export async function uploadSnapshot(o: {
   url: string
   token: string
@@ -50,7 +63,7 @@ export async function uploadSnapshot(o: {
   database: string
   repo: string
   signal?: AbortSignal
-  progress?: (done: number, total: number) => void
+  progress?: (done: number, total: number, uploaded: number) => void
 }): Promise<SnapshotManifest> {
   const id = `${Date.now().toString(36)}-${randomBytes(8).toString('hex')}`
   const temp = await mkdtemp(join(dirname(o.database), '.snapshot-'))
@@ -64,15 +77,19 @@ export async function uploadSnapshot(o: {
     }
     const sizes = [(await stat(copy)).size, bundle ? (await stat(bundle)).size : 0]
     const total = sizes[0] + sizes[1]
-    const report = (offset: number) => (done: number) => o.progress?.(offset + done, total)
+    const report = (read: number, sent: number) => (done: number, uploaded: number) =>
+      o.progress?.(read + done, total, sent + uploaded)
+    const db = await seal(o, id, 'db', copy, report(0, 0))
     const manifest: SnapshotManifest = {
       id,
       key: o.key,
       epoch: o.epoch,
       createdAt: Date.now(),
       machine: o.machine,
-      database: await seal(o, id, 'db', copy, report(0)),
-      bundle: bundle ? await seal(o, id, 'bundle', bundle, report(sizes[0])) : undefined,
+      database: db,
+      bundle: bundle
+        ? await seal(o, id, 'bundle', bundle, report(sizes[0], db.uploaded!))
+        : undefined,
     }
     // The manifest goes last: it makes the snapshot complete and starts the Worker's retention.
     await put(o, id, 'manifest', encrypt(o, id, 'manifest', 0, true, json(manifest)))
@@ -164,23 +181,26 @@ function decrypt(o: Remote, id: string, kind: string, index: number, last: boole
   }
 }
 
-/** Compress, chunk, encrypt and upload one file, hashing its plaintext. */
+/** Compress, chunk, encrypt and upload one file, hashing its plaintext and counting the bytes put. */
 async function seal(
   o: Remote,
   id: string,
   kind: Kind,
   file: string,
-  progress: (done: number) => void,
+  progress: (done: number, uploaded: number) => void,
 ): Promise<Part> {
   const hash = createHash('sha256')
   let bytes = 0
+  let uploaded = 0
   let chunks = 0
   // One full chunk is held back until the next exists, so the final one is known and marked last.
   let held: Buffer | undefined
   const upload = async (data: Buffer, last: boolean) => {
     const index = chunks++
-    await put(o, id, `${kind}-${index}`, encrypt(o, id, kind, index, last, data))
-    progress(bytes)
+    const sealed = encrypt(o, id, kind, index, last, data)
+    await put(o, id, `${kind}-${index}`, sealed)
+    uploaded += sealed.length
+    progress(bytes, uploaded)
   }
   await pipeline(
     createReadStream(file),
@@ -212,7 +232,7 @@ async function seal(
     },
     { signal: o.signal },
   )
-  return { sha256: hash.digest('hex'), bytes, chunks }
+  return { sha256: hash.digest('hex'), bytes, chunks, uploaded }
 }
 
 /** Download, decrypt and decompress one file, checking its size and plaintext hash. */

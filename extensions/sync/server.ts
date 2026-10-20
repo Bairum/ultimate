@@ -444,7 +444,7 @@ export const submitMove = (host: Pick<ExtensionHost, 'need' | 'harness'>, input:
 
 export const backupText = ({ project, report }: BackupEnded) =>
   report.ok
-    ? `Backup of ${project.name} (${project.key}) finished: snapshot ${report.id}, ${report.bytes} bytes in ${Math.round(report.ms / 1000)} s. No action needed.`
+    ? `Backup of ${project.name} (${project.key}) finished: snapshot ${report.id}, ${report.bytes} bytes${report.uploaded === undefined ? '' : ` (${report.uploaded} uploaded)`} in ${Math.round(report.ms / 1000)} s. No action needed.`
     : `Backup of ${project.name} (${project.key}) failed: ${report.error}\nFind out why from \`fleet\` and this project's state, fix what is safe, and tell the user what you found and propose.`
 
 /** A finished backup is a note in @sync's conversation; a failed one wakes it. Once per backup. */

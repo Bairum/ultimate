@@ -18,14 +18,14 @@ export const MoveHereAction = actionRef<{ force?: boolean; by?: 'local' | 'sync'
   'moveHere',
 )
 /**
- * No arguments → the finished backup `{ id, at, bytes }`: upload an encrypted snapshot of the database and the
+ * No arguments → the finished backup `{ id, at, bytes, uploaded }` (database size, compressed upload): upload an encrypted snapshot of the database and the
  * `ultimate/*` branches while this machine keeps the lease. Only on the serving writer, one at a time, never during a
  * move or release.
  */
-export const BackupAction = actionRef<null, { id: string; at: number; bytes: number }>(
-  'cloud',
-  'backup',
-)
+export const BackupAction = actionRef<
+  null,
+  { id: string; at: number; bytes: number; uploaded?: number }
+>('cloud', 'backup')
 /** No arguments → `{ ok }`: stop the preparing move, until its claim is sent. */
 export const CancelAction = actionRef<null, { ok: boolean }>('cloud', 'cancel')
 /**
@@ -41,11 +41,11 @@ export const LeaseChanged = defineEvent<{
 }>('cloud.lease')
 /**
  * A backup of project `project` (its key) on the serving writer: `started` when the upload begins, `done` with the
- * bytes before compression and its duration, `failed` with a short classified `reason` (never the raw error).
+ * bytes before compression, the compressed bytes uploaded and its duration, `failed` with a short classified `reason` (never the raw error).
  */
 export const BackupEvent = defineEvent<
   | { phase: 'started'; project: string }
-  | { phase: 'done'; project: string; bytes: number; ms: number }
+  | { phase: 'done'; project: string; bytes: number; uploaded: number; ms: number }
   | { phase: 'failed'; project: string; ms: number; reason: string }
 >('cloud.backup')
 /**

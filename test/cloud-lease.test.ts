@@ -1146,6 +1146,14 @@ it('backs up while serving: a manifest, the database and the bundle go up, and t
     id: expect.any(String),
     at: expect.any(Number),
     bytes: expect.any(Number),
+    uploaded: expect.any(Number),
+  })
+  // A database compresses: what went over the wire is well under its size, and both are recorded.
+  expect(done.uploaded).toBeGreaterThan(0)
+  expect(done.uploaded).toBeLessThan(done.bytes / 2)
+  expect(JSON.parse(readFileSync(join(desk.home, 'cloud-backup.json'), 'utf8'))).toMatchObject({
+    bytes: done.bytes,
+    uploaded: done.uploaded,
   })
   // Every part of the snapshot is in R2 under its id: the manifest, the database and the branch bundle.
   const parts = bucket
@@ -1250,7 +1258,13 @@ it('reports each backup and a move that ended here once, to the feedback point o
   // Each backup is `started`, then `done` with its size or `failed` with a classified reason.
   expect(await cloudEvents(desk.harness, BackupEvent)).toEqual([
     { phase: 'started', project: KEY },
-    { phase: 'done', project: KEY, bytes: done.bytes, ms: expect.any(Number) },
+    {
+      phase: 'done',
+      project: KEY,
+      bytes: done.bytes,
+      uploaded: done.uploaded,
+      ms: expect.any(Number),
+    },
     { phase: 'started', project: KEY },
     { phase: 'failed', project: KEY, ms: expect.any(Number), reason: 'HTTP 503' },
   ])
@@ -1382,7 +1396,7 @@ it('refuses a second backup while one runs, during a release, and on a standby',
   const slow = {
     ...snapshot,
     uploadSnapshot: vi.fn<typeof snapshot.uploadSnapshot>(async (o) => {
-      o.progress?.(5, 10)
+      o.progress?.(5, 10, 2)
       started.resolve()
       await gate.promise
       return snapshot.uploadSnapshot(o)
@@ -1395,7 +1409,7 @@ it('refuses a second backup while one runs, during a release, and on a standby',
 
   const first = desk.lease.backup()
   await started.promise
-  expect((await desk.lease.state()).backup).toEqual({ done: 5, total: 10 })
+  expect((await desk.lease.state()).backup).toEqual({ done: 5, total: 10, uploaded: 2 })
   await expect(desk.lease.backup()).rejects.toThrow('a backup is already running')
   gate.resolve()
   await first

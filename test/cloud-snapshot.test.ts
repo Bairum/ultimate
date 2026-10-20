@@ -84,7 +84,7 @@ const count = (path: string, table: string) => {
 let source: string, target: string, worktree: string, dir: string, database: string
 let writer: DatabaseSync
 let manifest: SnapshotManifest
-let progress: [number, number][]
+let progress: [number, number, number][]
 const before: Record<string, string> = {}
 
 beforeAll(async () => {
@@ -142,7 +142,7 @@ beforeAll(async () => {
     machine: 'desk',
     database,
     repo: source,
-    progress: (done, total) => progress.push([done, total]),
+    progress: (done, total, uploaded) => progress.push([done, total, uploaded]),
   })
 })
 afterAll(() => {
@@ -158,7 +158,15 @@ it('round-trips the database and fetches branches without force, keeping conflic
   expect(progress.at(-1)).toEqual([
     manifest.database.bytes + manifest.bundle!.bytes,
     manifest.database.bytes + manifest.bundle!.bytes,
+    manifest.database.uploaded! + manifest.bundle!.uploaded!,
   ])
+  // `uploaded` is exactly what went to R2: every encrypted chunk of the part.
+  const stored = (kind: string) =>
+    [...bucket.objects]
+      .filter(([name]) => name.includes(`/${manifest.id}/${kind}-`))
+      .reduce((sum, [, object]) => sum + object.bytes.length, 0)
+  expect(manifest.database.uploaded).toBe(stored('db'))
+  expect(manifest.bundle!.uploaded).toBe(stored('bundle'))
   // The temporary copies leave nothing next to the database.
   expect(await readdir(join(database, '..'))).toEqual(
     expect.not.arrayContaining([expect.stringMatching(/^\.snapshot-/)]),

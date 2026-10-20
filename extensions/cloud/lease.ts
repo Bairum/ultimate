@@ -96,15 +96,24 @@ export interface LeaseState {
   login: ModelLogin
   /** The last backup this machine finished (`cloud-backup.json`). */
   lastBackup?: Backup
-  /** The running backup's upload. */
-  backup?: { done: number; total: number }
+  /** The running backup: bytes read of `total` (before compression), and compressed bytes uploaded so far. */
+  backup?: { done: number; total: number; uploaded: number }
   lastError?: string
 }
-/** A backup: a snapshot uploaded by the writer without releasing; `bytes` is the database and bundle before compression. */
+/**
+ * A backup: a snapshot uploaded by the writer without releasing; `bytes` is the database and bundle before
+ * compression, `uploaded` what went over the wire (absent in backups recorded before it was counted).
+ */
 export interface Backup {
   id: string
   at: number
   bytes: number
+  uploaded?: number
+}
+
+const megabytes = (bytes: number) => {
+  const value = bytes / 1024 / 1024
+  return value < 10 ? value.toFixed(1) : String(Math.round(value))
 }
 
 const SECRET = 'ULTIMATE_CLOUD_SNAPSHOT_KEY'
@@ -232,7 +241,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   /** `<home>/cloud-backup.json`: the last backup, kept apart from the lease file, which a backup never touches. */
   const backupPath = join(host.home, 'cloud-backup.json')
   let lastBackup: Backup | undefined
-  let backingUp: { done: number; total: number } | undefined
+  let backingUp: LeaseState['backup']
   /** Settles when the running backup ended; a release waits for it. */
   let backupRun: Promise<void> | undefined
   let pendingRelease:
@@ -350,7 +359,12 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     (text) => {
       const saved = JSON.parse(text) as Backup & { key?: string }
       if (saved.key === identity.key)
-        lastBackup ??= { id: saved.id, at: saved.at, bytes: saved.bytes }
+        lastBackup ??= {
+          id: saved.id,
+          at: saved.at,
+          bytes: saved.bytes,
+          ...(saved.uploaded ? { uploaded: saved.uploaded } : {}),
+        }
     },
     // No backup yet.
     () => undefined,
@@ -814,7 +828,14 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         downloaded = result.database
         keptRefs = result.keptRefs
         hash = result.manifest.database.sha256
-        end('done')
+        // The bar counts the database it writes; the wire carried the compressed chunks.
+        const { database: db, bundle } = result.manifest
+        end(
+          'done',
+          db.uploaded === undefined
+            ? undefined
+            : `${megabytes(db.uploaded + (bundle?.uploaded ?? 0))} MB downloaded`,
+        )
       }
 
       begin('branches')
@@ -1162,7 +1183,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     if (moving || holding || releasingFor || pendingRelease || progress)
       throw new Error('A move or release is in flight')
     // Set before the first await, so a second call refuses at once.
-    backingUp = { done: 0, total: 0 }
+    backingUp = { done: 0, total: 0, uploaded: 0 }
     const uploading = upload(state.epoch)
     // A release waits for it, whatever its outcome; the caller gets the outcome.
     backupRun = uploading.then(
@@ -1189,14 +1210,15 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         database,
         repo: host.projectRoot,
         signal: AbortSignal.timeout(MOVE_CAP),
-        progress: (done, total) => {
-          backingUp = { done, total }
+        progress: (done, total, uploaded) => {
+          backingUp = { done, total, uploaded }
         },
       })
       const done: Backup = {
         id: manifest.id,
         at: Date.now(),
         bytes: manifest.database.bytes + (manifest.bundle?.bytes ?? 0),
+        uploaded: (manifest.database.uploaded ?? 0) + (manifest.bundle?.uploaded ?? 0),
       }
       await writeJson(backupPath, { key: identity.key, ...done })
       lastBackup = done
@@ -1207,6 +1229,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         phase: 'done',
         project,
         bytes: done.bytes,
+        uploaded: done.uploaded ?? 0,
         ms,
       })
       await tell({ ok: true, ...done, ms })

@@ -791,6 +791,7 @@ const syncCards = (root: string): { kind: string; data: JsonObject }[] => {
           id: 'faux-backup-1',
           at: at - 3 * 3600_000,
           bytes: 12_582_912,
+          uploaded: 4_194_304,
           ms: 3200,
         },
       },
@@ -982,7 +983,13 @@ export const actions = {
       }
       const project = 'github.com/HazAT/ultimate'
       await host.emit(tx, BackupEvent, { phase: 'started', project })
-      await host.emit(tx, BackupEvent, { phase: 'done', project, bytes: 48_213_504, ms: 75_120 })
+      await host.emit(tx, BackupEvent, {
+        phase: 'done',
+        project,
+        bytes: 48_213_504,
+        uploaded: 15_728_640,
+        ms: 75_120,
+      })
       await host.emit(tx, BackupEvent, { phase: 'started', project })
       await host.emit(tx, BackupEvent, { phase: 'failed', project, ms: 4210, reason: 'HTTP 503' })
       const move = { project, id: 'faux-move', from: 'rog', to: 'haza-pc' }

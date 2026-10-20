@@ -10,7 +10,7 @@ export interface ModelLogin {
 
 /** A backup that finished (`ok`, with the snapshot, its bytes and how long it took) or failed with its reason. */
 export type BackupReport =
-  | { ok: true; id: string; at: number; bytes: number; ms: number }
+  | { ok: true; id: string; at: number; bytes: number; uploaded?: number; ms: number }
   | { ok: false; at: number; error: string }
 
 /** `cloud.state`: whether sync runs, this machine's name and its place in the lease, for the cloud UI. */
@@ -35,9 +35,9 @@ export interface CloudState {
   key?: string
   /** While sync runs: the model login this machine's agents run with; a move here fails its checks without one. */
   login?: ModelLogin
-  /** The last backup this machine finished: snapshot id, when, and the bytes before compression. */
-  lastBackup?: { id: string; at: number; bytes: number }
-  /** The running backup's upload, in bytes. */
-  backup?: { done: number; total: number }
+  /** The last backup this machine finished: snapshot id, when, the bytes before compression and those uploaded. */
+  lastBackup?: { id: string; at: number; bytes: number; uploaded?: number }
+  /** The running backup: bytes read of `total` (before compression), and compressed bytes uploaded so far. */
+  backup?: { done: number; total: number; uploaded: number }
   lastError?: string
 }

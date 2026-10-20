@@ -427,7 +427,11 @@ function EventCard({
 function BackupEntry({ entry }: { entry: EntryRecord }) {
   const { project, report } = entry.data as unknown as BackupEnded
   const summary = report.ok
-    ? `Backed up · ${formatBytes(report.bytes)} · ${formatDuration(report.ms)}`
+    ? `Backed up · ${
+        report.uploaded === undefined
+          ? formatBytes(report.bytes)
+          : `${formatBytes(report.uploaded)} uploaded (${formatBytes(report.bytes)} database)`
+      } · ${formatDuration(report.ms)}`
     : 'Backup failed'
   return (
     <Folding
