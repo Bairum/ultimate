@@ -22,6 +22,7 @@ import type { ActionContext } from '../server/actions.ts'
 import { Metadata } from '../server/metadata.ts'
 import { emit, EventFeed } from '../server/events.ts'
 import board, { actions } from '../extensions/board/server.ts'
+import pauseExtension, { actions as pauseActions } from '../extensions/pause/server.ts'
 import { Board, MessageSent } from '../extensions/board/api.ts'
 import { UserInputEvent } from '../shared/events.ts'
 import type { BoardService } from '../extensions/board/api.ts'
@@ -1289,6 +1290,79 @@ it('recovers once after the answer is recorded but before reply submission', asy
   g.release()
   await until(async () => (await replies(f)).length === 1)
   expect((await f.log())!.messages.filter((m) => m.re === 1)).toHaveLength(1)
+})
+
+/** The pause extension's actions over the fixture's harness. */
+function pauser(f: Awaited<ReturnType<typeof fixture>>) {
+  const resources = new Map<string, unknown>()
+  const host = {
+    harness: () => f.opened.harness,
+    resource: <T>(key: string, create: () => T) => {
+      if (!resources.has(key)) resources.set(key, create())
+      return resources.get(key) as T
+    },
+    onOpen: () => {},
+    implement: () => {},
+    conversations: () => [],
+  } as unknown as ExtensionHost
+  pauseExtension(host)
+  return (name: keyof typeof pauseActions) =>
+    pauseActions[name](null, { host } as unknown as ActionContext)
+}
+it('reaches Paused · safe while a delivery waits for its held recipient to answer', async () => {
+  const f = await fixture()
+  const pause = pauser(f)
+  // A one-way message whose recipient runs two steps: a held tool call, then its answer.
+  await f.send(`#${f.recipient.id}`, 'HOLD', { reply: false })
+  await until(f.holding)
+  const pausing = await pause('pause')
+  expect(pausing.running.map((task) => task.what)).toEqual(['hold'])
+  f.hold.release()
+  // The tool ends; the recipient's next step is held, so its delivery waits on a receipt that settles on Play.
+  await until(async () => (await pause('state')).running.length === 0)
+  const delivery = (await f.opened.harness.inspect(context)).tasks.find(
+    ({ record }) => record.kind === 'board.delivery',
+  )
+  expect(delivery?.state.kind).toBe('running')
+  expect((await f.log())!.messages[0].state).toBe('delivered')
+  await pause('play')
+  await f.recipient.waitForIdle(context)
+  await until(async () =>
+    (await f.opened.harness.inspect(context)).tasks.every(
+      ({ record }) => record.kind !== 'board.delivery',
+    ),
+  )
+})
+it('stays Pausing… while a delivery asks the summary model to triage its message', async () => {
+  const asked = gate()
+  const answer = gate()
+  let asking = false
+  const f = await fixture(undefined, undefined, async () => {
+    asking = true
+    asked.release()
+    await answer.promise
+    return JSON.stringify({ verdict: 'fyi', reason: 'progress only' })
+  })
+  const pause = pauser(f)
+  const recipient = await f.opened.harness.conversation(f.recipient.id, context)
+  await (
+    await recipient!.submit(
+      {
+        type: 'input',
+        content: `SEND ${JSON.stringify({ to: '#1', text: 'Working on it.', reply: false })}`,
+      },
+      context,
+    )
+  ).wait(context)
+  await asked.promise
+  expect(asking).toBe(true)
+  expect((await f.log())!.messages.at(-1)?.triage?.verdict).toBe('assessing')
+  const pausing = await pause('pause')
+  expect(pausing.running.map((task) => task.what)).toEqual(['board.delivery'])
+  answer.release()
+  await until(async () => (await pause('state')).running.length === 0)
+  expect((await f.log())!.messages.at(-1)?.triage?.verdict).toBe('fyi')
+  await pause('play')
 })
 
 /** What the root (standing as @ultimate) holds after #recipient messages it, once that message's triage settled. */
