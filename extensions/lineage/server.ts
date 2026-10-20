@@ -1311,9 +1311,7 @@ export default function lineageExtension(host: ExtensionHost) {
               })
               roots.roots.push(root.id)
               // Called by its title until its summary names it, like a branch by its intent.
-              ;(await tx.doc(host.metadata, root.id)).title = title
-                .replace(/\s+/g, ' ')
-                .slice(0, 80)
+              ;(await tx.doc(host.metadata, root.id)).title = intentLine(title)
               await host.emit(tx, Rooted, { id: root.id, intent: title })
               receipt.roots[api.callId] = root.id
               return root.id
