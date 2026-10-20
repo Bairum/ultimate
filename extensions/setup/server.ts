@@ -176,7 +176,7 @@ function extensionsArea(host: CheckHost): SetupIssue | undefined {
 async function cloudArea(host: CheckHost): Promise<SetupIssue | undefined> {
   // Invalid user settings are reported where settings load; here they count as unset.
   const settings: JsonObject = await readSettings(userSettingsPath(host.userHome)).catch(() => ({}))
-  const cloud = settings.cloud as { url?: unknown; idleRelease?: unknown } | undefined
+  const cloud = settings.cloud as { url?: unknown } | undefined
   if (typeof cloud?.url !== 'string')
     return {
       area: 'Cloud sync',
@@ -194,12 +194,7 @@ async function cloudArea(host: CheckHost): Promise<SetupIssue | undefined> {
       impact: 'Moves and backups between machines fail.',
       fix: { label: 'Add', secret: absent[0] },
     }
-  const idle = typeof cloud.idleRelease === 'number' ? cloud.idleRelease : 10
-  return {
-    area: 'Cloud sync',
-    status: 'ok',
-    summary: idle ? `joined · releases the lease after ${idle}m idle` : 'joined',
-  }
+  return { area: 'Cloud sync', status: 'ok', summary: 'joined' }
 }
 
 function tailscaleArea(host: CheckHost): SetupIssue | undefined {
