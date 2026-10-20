@@ -54,7 +54,7 @@ Propose **2–4 ranked suggestions**, not a catalogue. For each, say what the us
 - **Deliberate costs:** steps that cost money or are irreversible (paid APIs, deploys, publishing) are explicit, human-confirmed clicks.
 - **Secrets stay server-side:** never in tool output, the transcript, or the browser.
 - **Start small:** one or two surfaces that remove the biggest context switch beat a dashboard of everything.
-- **Built-ins:** enable the useful ones. `self` and `instance` are for developing Ultimate itself; leave them off elsewhere.
+- **Built-ins:** enable the useful ones. `self` is for developing Ultimate itself; leave it off elsewhere. Keep `instance` on when the project has its own extensions: coordinators preview them with it.
 
 Ask the user to choose, offering defaults. Ask only questions whose answers change what gets built.
 
