@@ -40,6 +40,7 @@
     "extensions/instance/links.ts",
     "extensions/update/item.ts",
     "extensions/pause/lasted.ts",
+    "extensions/pause/parked.ts",
     "extensions/system/feed.ts",
     "extensions/system/layout.ts",
     "extensions/workspaces/types.ts",

@@ -15,6 +15,7 @@ import {
   CircleStopIcon,
   CopyIcon,
   LinkIcon,
+  PauseIcon,
   RotateCwIcon,
 } from 'lucide-react'
 import {
@@ -58,7 +59,8 @@ import {
 } from '../sdk/hooks.ts'
 import { entryRenderers, messageItems, toolLine } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
-import { ExtensionBoundary } from './boundary.tsx'
+import { ExtensionBoundary, Provided } from './boundary.tsx'
+import { ParkedRuns } from '../sdk/types.ts'
 import { chatRows, runOf, windowGaps, windowKey } from './chat.ts'
 import { useFold } from './fold.tsx'
 import type { ChatPart, WorkRun } from './chat.ts'
@@ -613,7 +615,7 @@ function TranscriptEntries() {
       {partial && (
         <AssistantView busy message={partial} results={results} slots={slots} streaming />
       )}
-      <LiveStatus busy={busy} live={live} partial={partial} />
+      <LiveStatus busy={busy} id={id} live={live} partial={partial} />
       {tailSpace > 0 && (
         <div aria-hidden="true" data-history-anchor-space style={{ height: tailSpace }} />
       )}
@@ -1271,20 +1273,38 @@ function shows(message: AssistantMessage | undefined) {
 /** When this page first saw each run, for the working indicator's clock. */
 const runSeen = new Map<number, number>()
 
-/** What the run is doing when the transcript alone does not show it. */
-function LiveStatus({
-  live,
-  busy,
-  partial,
-}: {
+/** What the run is doing when the transcript alone does not show it; a run a pause parked says so instead. */
+function LiveStatus(props: {
+  id: number | undefined
   live: LiveState
   busy: boolean
   partial: AssistantMessage | undefined
 }) {
+  return (
+    <Provided input={null} point={ParkedRuns}>
+      {(parked) => (
+        <LiveLines {...props} parked={props.id !== undefined && parked?.has(props.id) === true} />
+      )}
+    </Provided>
+  )
+}
+
+function LiveLines({
+  live,
+  busy,
+  partial,
+  parked,
+}: {
+  live: LiveState
+  busy: boolean
+  partial: AssistantMessage | undefined
+  parked: boolean
+}) {
   const retry = live.generation?.retry
   const running = (live.tools ?? []).some((slot) => slot.status !== 'done')
   const idle = busy && !shows(partial) && !running
-  const now = useNow(100, !!retry || idle)
+  // Parked by a pause, nothing of the run executes: the clock stops until Play.
+  const now = useNow(100, !!retry || (idle && !parked))
   const lines: ReactNode[] = []
   if (retry)
     lines.push(
@@ -1302,7 +1322,14 @@ function LiveStatus({
         {`compacting context · ${compaction.reason}${compaction.attempt > 1 ? ` · attempt ${compaction.attempt}` : ''}…`}
       </Shimmer>,
     )
-  if (idle && lines.length === 0) {
+  if (busy && parked && lines.length === 0)
+    lines.push(
+      <span className="flex items-center gap-2 text-warning" data-paused-run key="paused">
+        <PauseIcon className="size-3" />
+        paused · runs on Play
+      </span>,
+    )
+  else if (idle && lines.length === 0) {
     const run = live.run?.taskId
     if (run !== undefined && !runSeen.has(run)) runSeen.set(run, Date.now())
     const since = run === undefined ? undefined : runSeen.get(run)

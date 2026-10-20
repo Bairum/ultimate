@@ -874,6 +874,28 @@ it('cancels from the cloud UI during the handover, and the draining writer keeps
   ])
 })
 
+it('a paused writer keeps the project when another machine asks it to move, forced or not', async () => {
+  const project = cloud()
+  const { root } = await checkout()
+  const desk = await machine('desk', project, root, { paused: () => true })
+  await writer(desk)
+  const laptop = await machine('laptop', project, root)
+  await standbyOn(laptop)
+  const { id } = laptop.lease.moveHere({ force: true })
+  await until(() =>
+    desk.notices.includes('Move to laptop waits: Ultimate is paused; press Play first'),
+  )
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+  expect(desk.serving()).toBe(true)
+  expect(desk.snapshots.uploadSnapshot).not.toHaveBeenCalled()
+  expect((await project.api('/api/cloud/cancel', {})).status).toBe(202)
+  await until(() =>
+    desk.notices.includes('The move to laptop stopped; this machine keeps the project'),
+  )
+  expect(await laptop.transition()).toMatchObject({ id, error: 'Cancelled' })
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
+})
+
 it('keeps the project when the move is cancelled while it scans for uncommitted work', async () => {
   const project = cloud()
   const { root } = await checkout()

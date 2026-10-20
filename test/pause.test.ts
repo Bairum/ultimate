@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { defineExtension, defineTool, LiveDoc } from '@earendil-works/pi-durable'
+import { defineExtension, defineTask, defineTool, LiveDoc } from '@earendil-works/pi-durable'
 import type { ConversationId, Harness } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import { prepareHarness } from '../server/harness.ts'
@@ -19,15 +19,36 @@ afterEach(async () => {
   await removeTemps()
 })
 
+/** A background task that executes until `released`, as a summary streaming a model response does. */
+const streamTask = (released: Promise<void>) =>
+  defineTask<null, { phase: 'stream' }, null>({
+    name: 'pause-test.stream',
+    version: 1,
+    initial: () => ({ phase: 'stream' }),
+    phases: {
+      stream: async (_task, runtime, ctx) => {
+        await released
+        await runtime.commit(
+          () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
+          ctx,
+        )
+      },
+    },
+    abort: (_task, runtime, ctx) =>
+      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+  })
+
 /** A faux harness with the pause extension and a `work` tool that runs until the test releases it, as bash would. */
 async function fixture(home?: string) {
   home ??= await temp('ultimate-pause-')
   const prepared = await prepareHarness({ ultimateRoot: home, userHome: home, home, faux: true })
   let finish: (() => void) | undefined
   let finished = 0
+  const background = Promise.withResolvers<void>()
   prepared.registry.install(
     defineExtension({
       name: 'pause-test',
+      tasks: [streamTask(background.promise)],
       tools: [
         defineTool({
           name: 'work',
@@ -84,6 +105,8 @@ async function fixture(home?: string) {
       return finish
     },
     finished: () => finished,
+    background,
+    stream: streamTask(background.promise),
     async close() {
       await opened!.close()
       hosts.splice(hosts.indexOf(opened!), 1)
@@ -197,6 +220,93 @@ it('leaves a note only on runs that were mid-turn, once, and none on idle conver
   expect(await notes(root.id)).toHaveLength(1)
   expect(await notes(idle.id)).toEqual([])
   expect((await harness.snapshot(LiveDoc, root.id, context))?.run).toBeUndefined()
+})
+
+it('serializes overlapping pause and play: the doc and the scheduler always agree', async () => {
+  const f = await fixture()
+  const { harness } = await f.open()
+  const agree = async () => {
+    const doc = (await f.action('state')).paused
+    expect((await harness.inspect(context)).scheduling).toBe(doc ? 'paused' : 'running')
+    expect(f.paused()).toBe(doc)
+    return doc
+  }
+  await Promise.all([f.action('pause'), f.action('play')])
+  expect(await agree()).toBe(false)
+  await Promise.all([f.action('play'), f.action('pause')])
+  expect(await agree()).toBe(true)
+  await Promise.all([f.action('pause'), f.action('play'), f.action('pause'), f.action('play')])
+  expect(await agree()).toBe(false)
+})
+
+it('leaves no note on a run that started after the paused one was stopped', async () => {
+  const f = await fixture()
+  f.prepared.faux!.setResponses([
+    () => fauxAssistantMessage([fauxToolCall('work', {})], { stopReason: 'toolUse' }),
+    () => fauxAssistantMessage([fauxText('B done')]),
+  ])
+  const { root } = await f.open()
+  await root.submit({ type: 'input', content: 'A' }, context)
+  await until(() => f.finish !== undefined)
+  await f.action('pause')
+  // Stop A while paused: abort handlers run under the hold.
+  const stopping = root.abort(context)
+  f.finish!()
+  await stopping
+  const b = await root.submit({ type: 'input', content: 'B' }, context)
+  await f.action('play')
+  await b.wait(context)
+  const entries = (await root.context(context)).entries
+  expect(entries.filter((entry) => entry.kind === 'pause.note')).toEqual([])
+})
+
+it('notes a run whose last answer arrived while the pause drained', async () => {
+  const f = await fixture()
+  const answer = Promise.withResolvers<void>()
+  let asked = false
+  f.prepared.faux!.setResponses([
+    async () => {
+      asked = true
+      await answer.promise
+      return fauxAssistantMessage([fauxText('final answer')])
+    },
+  ])
+  const { root, harness } = await f.open()
+  const submission = await root.submit({ type: 'input', content: 'go' }, context)
+  await until(() => asked)
+  const pausing = await f.action('pause')
+  expect(pausing.running.map((task) => task.what)).toEqual(['model response'])
+  answer.resolve()
+  await submission.wait(context)
+  expect((await harness.snapshot(LiveDoc, root.id, context))?.run).toBeUndefined()
+  await f.action('play')
+  const notes = (await root.context(context)).entries.filter((entry) => entry.kind === 'pause.note')
+  expect(notes).toHaveLength(1)
+  expect(notes[0].data).toMatchObject({ finished: true })
+  expect(notes[0].model?.[0]?.content).toMatch(/^Paused for \d+s after this run's last answer\.$/)
+})
+
+it('stays Pausing… while a background task executes, not for passive waiters', async () => {
+  const f = await fixture()
+  const { root, harness } = await f.open()
+  await harness.commit(
+    (tx) =>
+      tx.createTask(f.stream, null, {
+        conversationId: root.id,
+        ownership: { kind: 'conversation' },
+        background: true,
+      }),
+    context,
+  )
+  await until(async () =>
+    (await harness.inspect(context)).tasks.some(
+      ({ record, state }) => record.kind === 'pause-test.stream' && state.kind === 'running',
+    ),
+  )
+  const pausing = await f.action('pause')
+  expect(pausing.running.map((task) => task.what)).toEqual(['pause-test.stream'])
+  f.background.resolve()
+  await until(async () => (await f.action('state')).running.length === 0)
 })
 
 it('words how long a pause lasted', () => {

@@ -1062,6 +1062,15 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
             return false
           }
           if (cancelled || ended(sync.state())) return stopped()
+          // Paused: the writer keeps the project, forced or not, until Play or a cancel; the recheck notices Play.
+          if (paused()) {
+            if (reported !== 'paused') {
+              reported = 'paused'
+              host.notice(`Move to ${by} waits: ${PAUSED}`)
+            }
+            await wake.promise
+            continue
+          }
           let waiting: {
             tasks: number
             runs?: string[]

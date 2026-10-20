@@ -1,5 +1,5 @@
 import { HourglassIcon, PauseIcon, PlayIcon } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -8,6 +8,8 @@ import {
   defineWebExtension,
   formatDuration,
   getState,
+  ParkedRuns,
+  provide,
   useAction,
   useDocOf,
   useNow,
@@ -17,6 +19,7 @@ import {
 import type { EntryRecord } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { lasted } from './lasted.ts'
+import { parkedConversations } from './parked.ts'
 import { PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
 import type { PauseNote, PauseState } from './refs.ts'
 
@@ -233,7 +236,9 @@ function Note({ entry }: { entry: EntryRecord }) {
       <span className="flex min-w-0 items-center gap-1.5">
         <PlayIcon className="size-3 shrink-0 text-warning" />
         <span className="text-warning">Paused for {lasted(note.until - note.since)}</span>
-        <span className="truncate">· continued after Play</span>
+        <span className="truncate">
+          · {note.finished ? 'after its last answer' : 'continued after Play'}
+        </span>
       </span>
     </div>
   )
@@ -241,7 +246,15 @@ function Note({ entry }: { entry: EntryRecord }) {
 
 const paused = () => getState().docsOf[1]?.[PauseDoc.kind]?.paused === true
 
+/** The conversations this pause parked, for the transcript and the lists of conversations. */
+function useParked() {
+  const pausedNow = usePaused()
+  const graph = useTasks()
+  return useMemo(() => parkedConversations(graph, pausedNow), [graph, pausedNow])
+}
+
 export default defineWebExtension({
+  provides: [provide(ParkedRuns, useParked)],
   slots: {
     'statusline.right': [
       { component: Item, order: -3 },

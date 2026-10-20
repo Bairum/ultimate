@@ -207,6 +207,13 @@ describe('conversation state', () => {
   const primary = { id: 2, kind: 'primary' as const }
   const toUser = board({ from: 2, to: 'user' })
 
+  it('is paused, not working, while a pause parks its run', () => {
+    expect(conversationState({ ...primary, busy: true, parked: true }, toUser)).toBe('paused')
+    expect(conversationState({ ...primary, runState: 'working', parked: true }, board())).toBe(
+      'paused',
+    )
+  })
+
   it('is working while it runs or has input queued, before anything else', () => {
     expect(conversationState({ ...primary, busy: true }, toUser)).toBe('working')
     expect(conversationState({ ...primary, runState: 'working' }, toUser)).toBe('working')

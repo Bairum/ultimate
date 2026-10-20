@@ -206,6 +206,12 @@ export interface Point<Input, Value> {
   readonly value?: Value
 }
 export const definePoint = <Input, Value>(point: string): Point<Input, Value> => ({ point })
+/**
+ * The conversations whose run a pause of the host parked (the optional `pause` extension provides it): their work is
+ * held, none of it executes, so the transcript and every list of conversations show them paused, not working.
+ * Undefined, as none, while nothing provides it.
+ */
+export const ParkedRuns = definePoint<null, ReadonlySet<number>>('ultimate.parked')
 
 /** What a facet provides for a point: `useValue` is a hook, run once per `<Provided>` with its input. */
 export interface Provision {

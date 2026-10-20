@@ -61,6 +61,7 @@ function useBranchState(
   conversation: ConversationSummary,
   working: boolean,
   phase: { word: string; waiting: boolean } | undefined,
+  parked = false,
 ) {
   const index = useWorkspaceIndex()
   const board = useDocOf(1, BoardDoc) ?? emptyBoard
@@ -70,6 +71,8 @@ function useBranchState(
   const queued = index.queue.find((item) => item.conversationId === conversation.id)
   if (queued?.state === 'landing') return { label: 'landing', tone: 'success' } as const
   if (queued) return { label: 'submitted', tone: 'success' } as const
+  // A pause holds its run: nothing of it executes until Play.
+  if (parked) return { label: 'paused', tone: 'paused' } as const
   // The sidebar's one conversation state; `working` also counts its subagents' runs.
   const state = working
     ? 'working'
@@ -90,12 +93,15 @@ const tones = {
   success: 'text-success',
   brand: 'text-brand',
   waiting: 'text-amber-700 dark:text-amber-300',
+  paused: 'text-warning',
   quiet: 'text-muted-foreground/70',
 }
 
 type FlightProps = {
   conversation: ConversationSummary
   working: boolean
+  /** A pause parked its run. */
+  parked?: boolean
   shown: boolean
   now: number
 }
@@ -112,13 +118,14 @@ function FlightRow(props: FlightProps) {
 function PhasedFlightRow({
   conversation,
   working,
+  parked,
   shown,
   now,
   phase,
 }: FlightProps & { phase?: { word: string; waiting: boolean } }) {
   const actions = useUltimate()
   const feature = useOverview()[conversation.id]?.feature
-  const state = useBranchState(conversation, working, phase)
+  const state = useBranchState(conversation, working, phase, parked)
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
   const title = conversation.title ?? `#${conversation.id}`
   return (
@@ -140,7 +147,7 @@ function PhasedFlightRow({
               'size-1.5 shrink-0 rounded-full',
               state.tone === 'brand'
                 ? 'animate-pulse-dot bg-brand'
-                : state.tone === 'waiting'
+                : state.tone === 'waiting' || state.tone === 'paused'
                   ? 'bg-amber-400'
                   : state.tone === 'success'
                     ? 'bg-success'
@@ -236,7 +243,7 @@ export function RootRow({
   shownId?: number
   working?: 'self' | 'subagents'
   /** Open branches of this tree, newest first, with whether each works. */
-  flights: { conversation: ConversationSummary; working: boolean }[]
+  flights: { conversation: ConversationSummary; working: boolean; parked?: boolean }[]
   now: number
   onTalk: () => void
 }) {
@@ -322,6 +329,7 @@ export function RootRow({
                 conversation={flight.conversation}
                 key={flight.conversation.id}
                 now={now}
+                parked={flight.parked}
                 shown={flight.conversation.id === shownId}
                 working={flight.working}
               />

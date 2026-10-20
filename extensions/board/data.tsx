@@ -14,6 +14,7 @@ export const waitingOnUser = (board: BoardData) =>
 
 /**
  * Where a conversation stands, the one state every view shows:
+ * - `paused`: the host is paused and its run is parked: no task of it executes until Play;
  * - `working`: it runs, or has input queued;
  * - `waits`: the primary agent (@ultimate, @sync in the machine home) has a question open with the user, the only
  *   state that asks the user to act;
@@ -23,7 +24,14 @@ export const waitingOnUser = (board: BoardData) =>
  * - `failed`: its latest input ended without an answer;
  * - `idle`: everything else.
  */
-export type ConversationState = 'working' | 'waits' | 'awaiting' | 'done' | 'failed' | 'idle'
+export type ConversationState =
+  | 'paused'
+  | 'working'
+  | 'waits'
+  | 'awaiting'
+  | 'done'
+  | 'failed'
+  | 'idle'
 
 export function conversationState(
   conversation: {
@@ -32,12 +40,15 @@ export function conversationState(
     kind: 'primary' | 'subagent' | 'other'
     runState?: 'working' | 'queued' | 'idle' | 'answered' | 'error'
     busy?: boolean
+    /** A pause of the host parked its run (the `ParkedRuns` point). */
+    parked?: boolean
     /** The primary agent's conversation, which a branch's open question waits on. */
     primary?: number
   },
   board: BoardData,
 ): ConversationState {
   const { id, kind, runState } = conversation
+  if (conversation.parked) return 'paused'
   if (conversation.busy || runState === 'working' || runState === 'queued') return 'working'
   if (kind === 'primary' && waitingOnUser(board) > 0) return 'waits'
   if (
@@ -60,6 +71,7 @@ export function stateWord(state: ConversationState, waiting = 0) {
 
 /** The text colour each state is said in; working's comes from its phase, idle is quiet. */
 export const stateTone: Partial<Record<ConversationState, string>> = {
+  paused: 'text-warning',
   working: 'text-brand',
   waits: 'text-amber-700 dark:text-amber-300',
   awaiting: 'text-amber-700/80 dark:text-amber-300/70',

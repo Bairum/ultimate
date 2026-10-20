@@ -8,6 +8,8 @@ import {
   api,
   cn,
   errorMessage,
+  ParkedRuns,
+  Provided,
   useDocOf,
   useNow,
   useStore,
@@ -79,11 +81,20 @@ const pinned = (conversation: ConversationSummary) =>
 
 /** The project tree, with owned subagents under each row and earlier/concluded work at the bottom. */
 export function Conversations() {
-  return <WaitingOnUser>{(waiting) => <Tree waiting={waiting} />}</WaitingOnUser>
+  return (
+    <WaitingOnUser>
+      {(waiting) => (
+        <Provided input={null} point={ParkedRuns}>
+          {(parked) => <Tree parked={parked ?? noneParked} waiting={waiting} />}
+        </Provided>
+      )}
+    </WaitingOnUser>
+  )
 }
+const noneParked: ReadonlySet<number> = new Set()
 
 /** The tree, with how many messages and answers wait on the user for @ultimate's row. */
-function Tree({ waiting }: { waiting: number }) {
+function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number> }) {
   const overview = useOverview()
   const board = useDocOf(1, BoardDoc) ?? emptyBoard
   const tasks = useTasks()
@@ -92,10 +103,12 @@ function Tree({ waiting }: { waiting: number }) {
       .filter((task) => !task.background)
       .map((task) => task.conversationId),
   )
-  // The task graph reflects the run; the timestamp/title list can lag.
+  // The task graph reflects the run; the timestamp/title list can lag. A run a pause parked is not working.
   const conversations = useConversations().map((conversation) => ({
     ...conversation,
-    busy: foreground.has(conversation.id) || overview[conversation.id]?.runState === 'working',
+    busy:
+      !parked.has(conversation.id) &&
+      (foreground.has(conversation.id) || overview[conversation.id]?.runState === 'working'),
   }))
   const actions = useUltimate()
   const workspacesEnabled = useSystem()?.extensions.some(
@@ -220,6 +233,7 @@ function Tree({ waiting }: { waiting: number }) {
             kind: isUltimate ? 'primary' : 'other',
             runState: overview[conversation.id]?.runState,
             busy,
+            parked: parked.has(conversation.id),
             primary: ultimateId,
           },
           board,
@@ -272,7 +286,11 @@ function Tree({ waiting }: { waiting: number }) {
           conversation={conversation}
           flights={branchesBelow(conversation.id)
             .filter((branch) => inFlight(branch, workspaceIndex))
-            .map((branch) => ({ conversation: branch, working: working.has(branch.id) }))}
+            .map((branch) => ({
+              conversation: branch,
+              working: working.has(branch.id),
+              parked: parked.has(branch.id),
+            }))}
           key={conversation.id}
           now={now}
           shownId={shownTop?.id}
@@ -288,6 +306,7 @@ function Tree({ waiting }: { waiting: number }) {
         kind: 'other',
         runState: overview[conversation.id]?.runState,
         busy: conversation.busy,
+        parked: parked.has(conversation.id),
         primary: ultimateId,
       },
       board,
@@ -368,6 +387,7 @@ function Tree({ waiting }: { waiting: number }) {
       <div key={conversation.id}>
         {nested ? (
           <ChildRow
+            parked={parked.has(conversation.id)}
             primary={ultimateId}
             conversation={conversation}
             row={overview[conversation.id]}

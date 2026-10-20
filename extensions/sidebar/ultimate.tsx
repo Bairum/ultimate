@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { cn, Provided, useDocOf, useStore, useTasks, useUltimate } from '@/sdk'
+import { cn, ParkedRuns, Provided, useDocOf, useStore, useTasks, useUltimate } from '@/sdk'
 import { BoardDoc, emptyBoard, waitingOnUser } from '../board/ui.tsx'
 import { AgentMark, ConversationPhase, useOverview, usePrimaryAgent } from '../conversations/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
@@ -25,6 +25,14 @@ export function StandingPhase({ id }: { id: number }) {
 
 /** The title bar's way to @ultimate from every surface, with its state and the questions that wait on you. */
 export function UltimateButton() {
+  return (
+    <Provided input={null} point={ParkedRuns}>
+      {(parked) => <PrimaryButton parked={parked} />}
+    </Provided>
+  )
+}
+
+function PrimaryButton({ parked }: { parked?: ReadonlySet<number> }) {
   const actions = useUltimate()
   const name = usePrimaryAgent()
   const id = useDocOf(1, StandingDoc)?.[name]
@@ -33,6 +41,7 @@ export function UltimateButton() {
   const shown = useStore((state) => state.view?.conversation.id ?? state.requested)
   const working =
     id !== undefined &&
+    !parked?.has(id) &&
     (runState === 'working' ||
       Object.values(tasks?.tasks ?? {}).some(
         (task) => !task.background && task.conversationId === id,

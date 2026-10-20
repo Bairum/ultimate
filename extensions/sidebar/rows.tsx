@@ -6,6 +6,7 @@ import {
   EllipsisIcon,
   FileDiffIcon,
   FoldVerticalIcon,
+  PauseIcon,
   PencilIcon,
 } from 'lucide-react'
 import { useRef, useState } from 'react'
@@ -43,6 +44,7 @@ const settled = {
   },
   done: { label: 'Done: its answer went to its parent', word: 'Done', tone: 'text-success' },
   failed: { label: 'Its latest run failed', word: 'Failed', tone: 'text-error' },
+  paused: { label: 'Paused: its run continues on Play', word: 'Paused', tone: 'text-warning' },
 } as const
 
 /** The leading mark: working (pulsing), a settled state's icon, an unseen answer (solid), or an empty slot that keeps titles aligned. */
@@ -82,6 +84,8 @@ function Mark({
                 <CircleHelpIcon className="size-3.5" />
               ) : shown === 'failed' ? (
                 <CircleXIcon className="size-3.5" />
+              ) : shown === 'paused' ? (
+                <PauseIcon className="size-3" />
               ) : (
                 <span
                   className={cn('size-1.5 rounded-full bg-brand', working && 'animate-pulse-dot')}
@@ -417,6 +421,8 @@ type ChildRowProps = {
   shown: boolean
   /** The primary agent's conversation. */
   primary?: number
+  /** A pause parked its run. */
+  parked?: boolean
 }
 
 /** A subagent under its conversation; one working on a plan task leads with its chip and shows the task's title. */
@@ -433,6 +439,7 @@ function TaskedChildRow({
   row,
   shown,
   primary,
+  parked,
   task,
 }: ChildRowProps & { task?: { chip: ReactNode; title: string } }) {
   const actions = useUltimate()
@@ -443,6 +450,7 @@ function TaskedChildRow({
       kind: 'subagent',
       runState: row?.runState,
       busy: conversation.busy,
+      parked,
       primary,
     },
     board,

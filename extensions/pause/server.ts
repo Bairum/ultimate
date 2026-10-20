@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor, TaskId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { PauseApi } from './api.ts'
@@ -27,7 +27,39 @@ const flag = (host: Pick<ExtensionHost, 'resource'>) =>
 const read = async (host: Host) =>
   (await host.harness().snapshot(State, ROOT_CONVERSATION_ID, context)) ?? { paused: false }
 
-/** Foreground tasks with a running invocation: each finishes on its own, then nothing starts after it. */
+/** Run pause, play and the reopen hold one at a time, across reloads: an interleaving could release a paused host. */
+function serial<T>(host: Pick<ExtensionHost, 'resource'>, work: () => Promise<T>): Promise<T> {
+  const queue = host.resource('pause.queue', () => ({
+    chain: Promise.resolve() as Promise<unknown>,
+  }))
+  const next = queue.chain.then(work)
+  // The caller gets the failure; the chain only waits for the work to settle.
+  queue.chain = next.catch(() => undefined)
+  return next
+}
+
+/**
+ * Background phases that only wait on other work (a run, a submission, a timer), which a pause holds: they never end
+ * while paused and execute nothing meanwhile, so they never keep the pause from being safe.
+ */
+const PASSIVE: Record<string, string[]> = {
+  'ultimate.subagent-reporter': ['deliver', 'retry'],
+  'ultimate.automation-scheduler': ['sleep'],
+  'ultimate.automation-run': ['deliver'],
+  'board.delivery': ['deliver'],
+  'board.route': ['observe'],
+  'conversations.summary': ['observe'],
+  'lineage.notify': ['wait'],
+}
+const passive = (record: { kind: string; state: unknown }) => {
+  const phase = (record.state as { checkpoint?: { phase?: string } }).checkpoint?.phase
+  return !!phase && (PASSIVE[record.kind] ?? []).includes(phase)
+}
+
+/**
+ * Tasks with a running invocation that execute something (a model response, a tool, a summary streaming): each
+ * finishes on its own, then nothing starts after it. Passive waiters never count.
+ */
 async function running(host: Host): Promise<RunningTask[]> {
   const harness = host.harness()
   const { tasks } = await harness.inspect(context)
@@ -48,7 +80,7 @@ async function running(host: Host): Promise<RunningTask[]> {
   }
   const result: RunningTask[] = []
   for (const { record, state: inspected } of tasks) {
-    if (inspected.kind !== 'running' || record.background) continue
+    if (inspected.kind !== 'running' || (record.background && passive(record))) continue
     const what =
       record.kind === 'pi.generation'
         ? 'model response'
@@ -77,25 +109,49 @@ async function state(host: Host): Promise<PauseState> {
 }
 
 // Pi upstream: @earendil-works/pi-durable@1.3.0 — patched Harness.hold()/release() keep the scheduler from starting tasks.
-/** Hold the scheduler, then record the pause and the conversations mid-turn now, which Play leaves a note. */
+/** Hold the scheduler, then record the pause and each run mid-turn now (its task and first input), which Play notes. */
 async function pause(host: Host) {
   const harness = host.harness()
   harness.hold()
   flag(host).paused = true
-  const { tasks } = await harness.inspect(context)
-  const runs = [
-    ...new Set(
-      tasks
-        .filter(({ record }) => record.kind === 'pi.generation')
-        .map(({ record }) => record.conversationId),
-    ),
-  ].toSorted((a, b) => a - b)
   await harness.commit(async (tx) => {
     const doc = await tx.doc(State, ROOT_CONVERSATION_ID)
     if (doc.paused) return
+    const runs: NonNullable<PauseDocState['runs']> = {}
+    for (const status of ['pending', 'running', 'waiting'] as const) {
+      let cursor: Cursor | undefined
+      do {
+        const page = await tx.scanTasks({ kind: 'pi.generation', status }, 100, cursor)
+        for (const task of page.items) {
+          const run = (await tx.doc(LiveDoc, task.conversationId)).run
+          if (run?.taskId === task.id)
+            runs[task.conversationId] = { task: task.id, input: run.inputs[0] }
+        }
+        cursor = page.next
+      } while (cursor)
+    }
     Object.assign(doc, { paused: true, since: Date.now(), runs })
   }, context)
   return state(host)
+}
+
+/**
+ * Whether Play notes conversation `id`: its run recorded at the pause continues (the same task, or the run it handed
+ * over to, which keeps its inputs), or it completed during the drain. A run stopped meanwhile, or a new one, gets none.
+ */
+async function noted(host: Host, id: ConversationId, recorded: { task: number; input?: number }) {
+  const harness = host.harness()
+  const run = (await harness.snapshot(LiveDoc, id, context))?.run
+  if (
+    run &&
+    (run.taskId === recorded.task ||
+      (recorded.input !== undefined && run.inputs[0] === recorded.input))
+  )
+    return 'continued'
+  const task = await harness.getTask(recorded.task as TaskId, context)
+  return task?.state.status === 'terminal' && task.state.outcome.status === 'completed'
+    ? 'finished'
+    : undefined
 }
 
 /**
@@ -106,11 +162,22 @@ async function play(host: Host) {
   const harness = host.harness()
   const doc = await read(host)
   if (doc.paused && doc.since !== undefined) {
-    const note: PauseNote = { since: doc.since, until: Date.now() }
-    const content = `Paused for ${lasted(note.until - note.since)}; the run continued after Play.`
-    for (const id of doc.runs ?? []) {
-      if (!(await harness.snapshot(LiveDoc, id as ConversationId, context))?.run) continue
-      const conversation = await harness.conversation(id as ConversationId, context)
+    const until = Date.now()
+    const span = lasted(until - doc.since)
+    for (const [key, recorded] of Object.entries(doc.runs ?? {})) {
+      const id = Number(key) as ConversationId
+      const how = await noted(host, id, recorded)
+      if (!how) continue
+      const note: PauseNote = {
+        since: doc.since,
+        until,
+        ...(how === 'finished' && { finished: true }),
+      }
+      const content =
+        how === 'finished'
+          ? `Paused for ${span} after this run's last answer.`
+          : `Paused for ${span}; the run continued after Play.`
+      const conversation = await harness.conversation(id, context)
       await conversation?.submit(
         {
           type: 'write',
@@ -139,17 +206,19 @@ async function play(host: Host) {
 export default function pauseExtension(host: Host) {
   host.implement(PauseApi, { paused: () => flag(host).paused })
   // The server resumes scheduling only after every opener settled, so a paused host reopens with nothing started.
-  host.onOpen(async () => {
-    const paused = (await read(host)).paused
-    flag(host).paused = paused
-    if (paused) host.harness().hold()
-  })
+  host.onOpen(() =>
+    serial(host, async () => {
+      const paused = (await read(host)).paused
+      flag(host).paused = paused
+      if (paused) host.harness().hold()
+    }),
+  )
   return { name: 'pause' }
 }
 
 export const actions = {
   state: implementAction(StateAction, (_args, { host }) => state(host)),
-  pause: implementAction(PauseAction, (_args, { host }) => pause(host)),
-  play: implementAction(PlayAction, (_args, { host }) => play(host)),
+  pause: implementAction(PauseAction, (_args, { host }) => serial(host, () => pause(host))),
+  play: implementAction(PlayAction, (_args, { host }) => serial(host, () => play(host))),
 }
 export const userActions = ['pause', 'play']

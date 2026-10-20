@@ -6,6 +6,8 @@ import {
   defineWebExtension,
   errorMessage,
   Header,
+  ParkedRuns,
+  Provided,
   StatusLine,
   useDocOf,
   useExtensionUiState,
@@ -37,7 +39,7 @@ function useLive() {
 }
 
 /** Each lane's conversation state, the same the sidebar shows: only the primary agent can wait on you. */
-function useStates() {
+function useStates(parked: ReadonlySet<number>) {
   const board = useDocOf(1, BoardDoc) ?? emptyBoard
   const overview = useOverview()
   const conversations = useConversations()
@@ -52,6 +54,7 @@ function useStates() {
         kind: id === primary ? 'primary' : own?.ownerTaskId !== undefined ? 'subagent' : 'other',
         runState: overview[id]?.runState,
         busy: own?.busy,
+        parked: parked.has(id),
         primary,
       },
       board,
@@ -99,6 +102,15 @@ const dot = 'inline-block size-1.5 rounded-full'
 
 /** Agent Lanes on top, the stream of everything below; both live while on screen. */
 function System() {
+  return (
+    <Provided input={null} point={ParkedRuns}>
+      {(parked) => <Lanes parked={parked ?? noneParked} />}
+    </Provided>
+  )
+}
+const noneParked: ReadonlySet<number> = new Set()
+
+function Lanes({ parked }: { parked: ReadonlySet<number> }) {
   const live = useLive()
   const [stored, setWindow] = useExtensionUiState<WindowName>('window', '30m')
   const window: WindowName = Object.hasOwn(windows, stored) ? (stored as WindowName) : '30m'
@@ -111,7 +123,7 @@ function System() {
   const now = useNow(1000, live)
   const range = windows[window].ms
   const lanes = useLanes(range, live)
-  const stateOf = useStates()
+  const stateOf = useStates(parked)
   const list = lanes.data?.lanes ?? []
   const states = new Map(list.map((lane) => [lane.conversation, stateOf(lane)]))
   // A parent listed only to hold its children's place did not work in the window: it is no agent at work.
