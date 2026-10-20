@@ -41,6 +41,8 @@ export type UpdateState = {
   restart: boolean
   /** The last update this server made, until it restarts. */
   updated?: UpdateResult & { ok: true }
+  /** A preview of another Ultimate: it never checks or updates the clone, and shows no item. */
+  preview?: true
 }
 
 export type UpdateResult =
@@ -58,6 +60,8 @@ export type UpdateResult =
 
 /** No arguments → the clone's update state, from the last fetch (fetched hourly in the background). */
 export const StateAction = actionRef<null, UpdateState>('update', 'state')
+/** No arguments → fetch origin now (bypassing the hourly gate, under the clone's lock), then the refreshed state. */
+export const CheckAction = actionRef<null, UpdateState>('update', 'check')
 /**
  * User-only: fetch origin, fast-forward the clone's default branch and install when the lockfile changed. Refuses a
  * dirty, diverged or switched clone and while the lander lands into it; never stashes, rebases or resets.

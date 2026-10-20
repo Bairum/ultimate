@@ -10,6 +10,8 @@ When a check finds a new range, the summary model is asked once (`ConversationsA
 
 ## Status line
 
+The item is always there (except on previews). While the clone is current it is a quiet, muted `✓ up to date` (just the ✓ on a phone); its popover says so, names the clone and when it was last checked, and offers **Check now**. Check now (`check`) fetches origin at once, bypassing the hourly gate but under the clone-wide lock, then recounts and summarizes as a background check does; the item spins meanwhile. When it finds commits the popover switches to the behind view, and updating stays a click on **Update now**. Check now also sits in the behind and refused popovers, so a clone can be re-checked after fixing it.
+
 While the clone is behind, the status line shows `↓ 5 new · update` (`↓ 5 new` on a phone). It is amber with a warning icon when an update would be refused. The popover shows:
 
 - the clone's path;
@@ -52,4 +54,4 @@ Each update records a durable event, emitted in its own commit right after the c
 
 ## Faux
 
-A faux server answers a demo: 5 commits behind, touching server and the lockfile. `demo {state: 'behind' | 'refused' | 'updated' | 'current'}` switches it for previews, and Update now moves the demo to `updated`, or stays `refused`.
+A faux server answers a demo: 5 commits behind, touching server and the lockfile. `demo {state: 'behind' | 'refused' | 'updated' | 'current'}` switches it for previews, and Update now moves the demo to `updated`, or stays `refused`. Check now takes 1.5 s and turns `current` into `behind`.

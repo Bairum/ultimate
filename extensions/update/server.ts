@@ -23,7 +23,7 @@ import {
   summaryFor,
   withLock,
 } from './clone.ts'
-import { Applied, DemoAction, Refused, StateAction, UpdateAction } from './refs.ts'
+import { Applied, CheckAction, DemoAction, Refused, StateAction, UpdateAction } from './refs.ts'
 import type { UpdateResult, UpdateState } from './refs.ts'
 
 /** How often the clone is compared with origin locally; origin itself is fetched at most hourly (`FETCH_EVERY`). */
@@ -140,6 +140,15 @@ export function demoState(root: string, state: string, now: number): UpdateState
 /** A preview started by another Ultimate's `instance` tool: it shares the clone and must never touch it. */
 const preview = () => Boolean(process.env.ULTIMATE_INSTANCE_OWNER)
 
+const previewState = (root: string): UpdateState => ({
+  root,
+  behind: 0,
+  commits: [],
+  install: false,
+  restart: false,
+  preview: true,
+})
+
 export default function update(host: ExtensionHost) {
   // Resolved where they are called; declared here so the catalogue lists them.
   host.need(WorkspacesApi)
@@ -166,6 +175,7 @@ export default function update(host: ExtensionHost) {
 
 type Shared = {
   ticking: Promise<void> | undefined
+  checking: Promise<void> | undefined
   updating: Promise<UpdateResult> | undefined
   latest: UpdateState | undefined
   updated: (UpdateResult & { ok: true }) | undefined
@@ -176,6 +186,7 @@ type Shared = {
 const state = (host: ExtensionHost) =>
   host.resource<Shared>('update.state', () => ({
     ticking: undefined,
+    checking: undefined,
     updating: undefined,
     latest: undefined,
     updated: undefined,
@@ -202,9 +213,10 @@ async function ask(host: ExtensionHost, input: string) {
 
 /**
  * Compare the clone with origin and keep the result for `state`. A `check` fetches when due and summarizes a new
- * range (once per range, cached in the clone's git directory); a plain refresh only reads.
+ * range (once per range, cached in the clone's git directory); `force` fetches even when not due; a plain refresh
+ * only reads.
  */
-async function refresh(host: ExtensionHost, check: boolean) {
+async function refresh(host: ExtensionHost, check: boolean, force = false) {
   const shared = state(host)
   const root = host.ultimateRoot
   const git = gitIn(root)
@@ -224,7 +236,7 @@ async function refresh(host: ExtensionHost, check: boolean) {
   // and ask the summary model once between them.
   const checked = check
     ? await withLock(await lockOf(root), async () => {
-        const error = await fetchIfDue(git, root, Date.now())
+        const error = await fetchIfDue(git, root, Date.now(), force)
         await summarize(true)
         return { error }
       })
@@ -352,9 +364,25 @@ export const actions = {
   state: implementAction(StateAction, async (_args, { host }) => {
     const shared = state(host)
     if (host.faux) return demoState(host.ultimateRoot, shared.demo ?? 'behind', Date.now())
-    if (preview())
-      return { root: host.ultimateRoot, behind: 0, commits: [], install: false, restart: false }
+    if (preview()) return previewState(host.ultimateRoot)
     if (!shared.latest) await refresh(host, false)
+    return shared.latest!
+  }),
+  check: implementAction(CheckAction, async (_args, { host }) => {
+    const shared = state(host)
+    if (host.faux) {
+      // The demo's check takes a moment, then finds the 5 commits, so previews show the spinner and the behind view.
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      if ((shared.demo ?? 'behind') === 'current') shared.demo = 'behind'
+      return demoState(host.ultimateRoot, shared.demo ?? 'behind', Date.now())
+    }
+    if (preview()) return previewState(host.ultimateRoot)
+    // A background tick may be mid-check without forcing: let it finish, then fetch now. A second click joins.
+    await shared.ticking
+    shared.checking ??= refresh(host, true, true).finally(() => {
+      shared.checking = undefined
+    })
+    await shared.checking
     return shared.latest!
   }),
   update: implementAction(UpdateAction, async (_args, { host }): Promise<UpdateResult> => {

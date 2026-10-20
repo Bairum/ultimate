@@ -36,10 +36,13 @@ export async function fetchedAt(git: Git, root: string) {
   )
 }
 
-/** Fetch origin when the last fetch is older than `FETCH_EVERY`; the error of a failed fetch, else undefined. */
-export async function fetchIfDue(git: Git, root: string, now: number) {
+/**
+ * Fetch origin when the last fetch is older than `FETCH_EVERY`, or always with `force` (Check now); the error of a
+ * failed fetch, else undefined.
+ */
+export async function fetchIfDue(git: Git, root: string, now: number, force = false) {
   const last = await fetchedAt(git, root)
-  if (last !== undefined && now - last < FETCH_EVERY) return undefined
+  if (!force && last !== undefined && now - last < FETCH_EVERY) return undefined
   return fetchOrigin(git).then(
     () => undefined,
     (error: unknown) => (error instanceof Error ? error.message : String(error)),

@@ -38,6 +38,7 @@
     "extensions/sounds/cues.ts",
     "extensions/sounds/tones.ts",
     "extensions/instance/links.ts",
+    "extensions/update/item.ts",
     "extensions/system/feed.ts",
     "extensions/system/layout.ts",
     "extensions/workspaces/types.ts",

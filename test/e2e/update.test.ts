@@ -68,6 +68,33 @@ it('fetches only when the last fetch is an hour old', async () => {
   expect(state.refused).toBeUndefined()
 })
 
+it('Check now fetches although the last fetch is recent, once among simultaneous checks', async () => {
+  const run = gitIn(clone)
+  await fetchIfDue(run, clone, Date.now())
+  await push({ 'extensions/a/web.tsx': 'x\n' })
+  // Not due by the hour, but forced: origin/main moves.
+  expect(await fetchIfDue(run, clone, Date.now(), true)).toBeUndefined()
+  expect((await cloneState(run, clone)).behind).toBe(1)
+
+  await push({ 'extensions/a/web.tsx': 'y\n' })
+  const lock = join(clone, '.git/ultimate-update.lock')
+  let fetches = 0
+  const counting: typeof run = async (...args) => {
+    if (args[0] === 'fetch') fetches++
+    return run(...args)
+  }
+  const check = () => withLock(lock, () => fetchIfDue(counting, clone, Date.now(), true))
+  // A second check while the first holds the lock gets nothing and fetches nothing.
+  let second: unknown = 'not run'
+  await withLock(lock, async () => {
+    second = await check()
+    return fetchIfDue(counting, clone, Date.now(), true)
+  })
+  expect(second).toBeUndefined()
+  expect(fetches).toBe(1)
+  expect((await cloneState(run, clone)).behind).toBe(2)
+})
+
 it('fast-forwards a clone behind origin and reports the lockfile change', async () => {
   const tip = await push({
     'server/main.ts': 'x\n',
