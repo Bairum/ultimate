@@ -83,7 +83,7 @@ async function madeCommits(path: string, conversation: number) {
     const [kind, sha, branch, toplevel, common, extra, reflog] = line.split('\t')
     if (!sha || !common) continue
     if (kind === 'rewrite') rewrites.push([sha, extra])
-    else if (kind === 'merge' && /: Fast-forward$/.test(reflog ?? '')) continue
+    else if (kind === 'merge' && reflog?.endsWith(': Fast-forward')) continue
     else if ((kind === 'commit' || kind === 'merge') && !made.has(sha)) {
       made.set(sha, { sha, ...(branch ? { branch } : {}), toplevel, common })
       if (kind === 'merge') merges.set(sha, extra ?? '')
