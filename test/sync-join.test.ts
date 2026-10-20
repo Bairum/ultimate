@@ -82,7 +82,7 @@ it('stores both secrets and cloud.url/cloud.machine after the cloud answers 200,
   const { userHome, deps, settings, secrets } = await home()
   await writeJson(path(userHome, '.ultimate/settings.json'), {
     theme: 'dark',
-    cloud: { idleRelease: 5 },
+    cloud: { autoClaim: false },
   })
   expect((await joinState(userHome)).joined).toBeUndefined()
   const result = await join(deps, input())
@@ -103,7 +103,7 @@ it('stores both secrets and cloud.url/cloud.machine after the cloud answers 200,
   // Other settings stay.
   expect(await settings()).toEqual({
     theme: 'dark',
-    cloud: { idleRelease: 5, url, machine: 'rog' },
+    cloud: { autoClaim: false, url, machine: 'rog' },
   })
   expect(await joinState(userHome)).toEqual({
     joined: { url, host: new URL(base).host, machine: 'rog' },
@@ -119,7 +119,7 @@ it('stores both secrets and cloud.url/cloud.machine after the cloud answers 200,
   })
   expect(await settings()).toEqual({
     theme: 'dark',
-    cloud: { idleRelease: 5, url, machine: 'rog' },
+    cloud: { autoClaim: false, url, machine: 'rog' },
   })
 })
 

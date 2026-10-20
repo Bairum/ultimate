@@ -19,7 +19,6 @@ import type { ActionContext } from '../../server/actions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { SubagentsApi } from '../subagents/api.ts'
-import { AutomationsApi } from './api.ts'
 import {
   CreateAction,
   DeleteAction,
@@ -468,18 +467,9 @@ export const actions = {
   }),
 }
 
-export default function automations(host: Host & Pick<ExtensionHost, 'implement' | 'need'>) {
+export default function automations(host: Host & Pick<ExtensionHost, 'need'>) {
   // Core, always on; resolved where it is called, declared here so the catalogue lists it.
   host.need(SubagentsApi)
-  host.implement(AutomationsApi, {
-    async nextDue() {
-      const state = await host.harness().snapshot(Automations, BACKGROUND_CONTEXT)
-      const due = Object.values(state?.automations ?? {}).flatMap((a) =>
-        a.enabled && a.nextAt !== undefined ? [a.nextAt] : [],
-      )
-      return due.length ? Math.min(...due) : undefined
-    },
-  })
   const api = backend(host)
   return defineExtension({
     name: 'automations',

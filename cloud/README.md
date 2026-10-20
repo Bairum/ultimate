@@ -45,9 +45,9 @@ confirms that no cloud exists yet. @sync in the machine home guides a join.
 4. Move a project with **Move here** on a standby's page or in the status line's `on <machine>` popover, or ask @sync.
    The machine fast-forwards its checkout, installs when the lockfile changed, checks its model login and secrets, has
    the writer finish its running tasks and release, downloads the snapshot and takes over; every step shows in the
-   move's card on both machines. An idle writer releases the project by itself after `cloud.idleRelease` minutes
-   (default 10) and when Ultimate stops, so the next machine takes it without waiting for the first; **Resume here**
-   takes it back.
+   move's card on both machines. A writer keeps its project while it runs, idle or not; it releases only for a move
+   and when Ultimate stops cleanly, so the next machine takes it without waiting for the first. **Resume here**
+   takes a released project back.
 
 ## Run locally
 
@@ -99,7 +99,7 @@ Use `/tmp/demo/b`, port 4802, a different `DEMO_HOME` and `ULTIMATE_CLOUD_MACHIN
 
 The first host to connect registers the project and becomes its writer (`cloud-lease.json` appears in its home); the second is a standby. The front page shows one row, `demo-project`, running on `demo-desk` with `demo-laptop` as a standby chip. Stop the writer: the row disappears from the front page, and the standby is told. Restart it with the same state home: it is the writer again. Stop all three terminals after testing.
 
-The two checkouts sit at different paths, so moving between them is refused. `test/e2e/cloud-handoff.test.ts` runs the whole handoff (register, join, move, idle release, a cancelled move) with two faux hosts whose clones share one path through Linux mount namespaces; `test/e2e/cloud-helpers.ts` holds that scaffolding.
+The two checkouts sit at different paths, so moving between them is refused. `test/e2e/cloud-handoff.test.ts` runs the whole handoff (register, join, move, a clean-stop release, a cancelled move) with two faux hosts whose clones share one path through Linux mount namespaces; `test/e2e/cloud-helpers.ts` holds that scaffolding.
 
 ## URLs, presence and sync
 

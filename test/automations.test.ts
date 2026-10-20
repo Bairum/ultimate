@@ -13,7 +13,6 @@ import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import automations, { actions, Automations } from '../extensions/automations/server.ts'
 import type { Automation } from '../extensions/automations/server.ts'
-import type { AutomationsService } from '../extensions/automations/api.ts'
 import type { ActionContext } from '../server/actions.ts'
 import type { SubagentsService } from '../extensions/subagents/api.ts'
 import { createChild } from '../extensions/subagents/children.ts'
@@ -111,7 +110,6 @@ async function fixture() {
     },
     action,
     records,
-    service: () => provided.get('automations') as AutomationsService,
     held: () => !!release,
     release: () => release!(),
     async reopen() {
@@ -272,7 +270,4 @@ it('preserves the next interval fire on rename, even when the same schedule is s
   expect(reordered.nextAt).toBe(a.nextAt)
   const changed = (await f.action('update', { id: a.id, schedule: 'every 2d' })) as Automation
   expect(changed.nextAt).toBeGreaterThan(a.nextAt!)
-  expect(await f.service().nextDue()).toBe(changed.nextAt)
-  await f.action('pause', { id: a.id })
-  expect(await f.service().nextDue()).toBeUndefined()
 })

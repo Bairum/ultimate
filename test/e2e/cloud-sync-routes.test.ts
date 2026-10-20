@@ -49,7 +49,7 @@ describe.skipIf(cloudSkip)(
         project: repo.project,
         cloud: cloud.url,
         token,
-        settings: { idleRelease: 0, autoClaim: false },
+        settings: { autoClaim: false },
         secrets,
       })
       await until(async () => (await project.info().catch(() => undefined))?.lease?.machine === 'a')
@@ -58,7 +58,7 @@ describe.skipIf(cloudSkip)(
         mount: repo.clones.b,
         cloud: cloud.url,
         token,
-        settings: { idleRelease: 0, autoClaim: false },
+        settings: { autoClaim: false },
         secrets,
       })
       await until(

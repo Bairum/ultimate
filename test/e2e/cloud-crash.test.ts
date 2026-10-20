@@ -37,7 +37,7 @@ async function project(name: string) {
       ...(machine === 'laptop' ? { mount: repo.clones.laptop } : {}),
       cloud: cloud.url,
       token,
-      settings: { idleRelease: 0, ...settings },
+      settings,
       secrets: { ULTIMATE_CLOUD_SNAPSHOT_KEY: snapshotKey },
     })
   return { api, start }

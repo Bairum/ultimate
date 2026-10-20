@@ -9,7 +9,6 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { HELLO_LIMITS, PROJECT_KEY, PROJECT_MISMATCH, validTailnet } from '../../cloud/protocol.ts'
 import type { CloudMessage, MachineMessage, Transition, Writer } from '../../cloud/protocol.ts'
 import { secretMetadata } from '../../lib/secrets.ts'
-import { AutomationsApi } from '../automations/api.ts'
 import { HealthApi } from '../health/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
 import { cloudConfig, leaseSettings } from '../../lib/cloud.ts'
@@ -480,7 +479,6 @@ export async function joinOnStandby(home: string, key: string) {
 
 export default async function cloud(host: ExtensionHost, deps: Partial<LeaseDeps> = {}) {
   // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(AutomationsApi)
   host.want(HealthApi)
   host.want(Feedback)
   host.want(TailscaleApi)

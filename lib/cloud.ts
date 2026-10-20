@@ -1,4 +1,4 @@
-/** The user's cloud sync settings: the replica to sync with and when a lease is let go. */
+/** The user's cloud sync settings: the replica to sync with and whether a starting machine claims a free lease. */
 import { hostname } from 'node:os'
 import { readSecret } from './secrets.ts'
 import { readSettings, userSettingsPath } from './settings.ts'
@@ -39,17 +39,10 @@ export async function cloudConfig(
   return { url, token, machine }
 }
 
-/**
- * When the writer lets go of its lease: after `cloud.idleRelease` idle minutes (default 10, 0 never), and whether a
- * starting machine takes a free lease by itself (`cloud.autoClaim`, default true).
- */
+/** Whether a starting machine takes a free lease by itself (`cloud.autoClaim`, default true). */
 export async function leaseSettings(
   host: Pick<ExtensionHost, 'userHome'>,
-): Promise<{ idleRelease: number; autoClaim: boolean }> {
+): Promise<{ autoClaim: boolean }> {
   const config = await userCloudSettings(host)
-  const idle = config.idleRelease
-  return {
-    idleRelease: typeof idle === 'number' && Number.isFinite(idle) && idle >= 0 ? idle : 10,
-    autoClaim: config.autoClaim !== false,
-  }
+  return { autoClaim: config.autoClaim !== false }
 }

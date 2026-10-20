@@ -3,7 +3,7 @@
 //
 // - Serving, a `standby` role closes storage (`host.deactivate`), parking the database as `state.stale-<time>.sqlite`
 //   unless it is the lease's last snapshot.
-// - The writer releases on a clean stop, after `cloud.idleRelease` idle minutes, or when a standby asks: it closes
+// - The writer releases on a clean stop or when a standby asks, never by itself while it runs: it closes
 //   storage, uploads a snapshot, records its hash in `cloud-lease.json`, sends `release` and waits for the free lease.
 // - A standby takes the lease on start (`cloud.autoClaim`, a free lease only), with "Move here", or when the cloud UI
 //   sends `move-to`. It first prepares, reporting each step as a `Transition`: it fast-forwards the checkout, installs
@@ -26,7 +26,6 @@ import type { MoveBy, Transition, TransitionStep } from '../../cloud/protocol.ts
 import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- a stop release holds storage's lock, which a swapped-in core owns
 import { acquireLock } from '../../server/lock.ts'
-import { AutomationsApi } from '../automations/api.ts'
 import { Feedback } from './api.ts'
 import type { BackupReport, FeedbackService } from './api.ts'
 import { readSecret, secretMetadata } from '../../lib/secrets.ts'
@@ -46,8 +45,6 @@ import type { Connect, startSync, SyncOptions, SyncState } from './server.ts'
 import type { databaseHash, downloadSnapshot, uploadSnapshot } from './snapshot.ts'
 
 export interface LeaseOptions extends SyncOptions {
-  /** Idle minutes before the writer releases; 0 never. */
-  idleRelease: number
   /** Claim a free lease when the process starts. */
   autoClaim: boolean
 }
@@ -226,8 +223,6 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   let backingUp: { done: number; total: number } | undefined
   /** Settles when the running backup ended; a release waits for it. */
   let backupRun: Promise<void> | undefined
-  let idleSince: number | undefined
-  let idleTimer: ReturnType<typeof setInterval> | undefined
   let pendingRelease:
     | { epoch: number; id: string; sent: boolean; done: PromiseWithResolvers<void> }
     | undefined
@@ -477,18 +472,9 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       },
     })
     sync = current
-    clearInterval(idleTimer)
-    idleSince = undefined
-    // Checked every minute, or four times within a shorter threshold.
-    if (next === 'serving' && options.idleRelease > 0)
-      idleTimer = setInterval(
-        () => void checkIdle().catch(report),
-        Math.min(60_000, Math.max(1000, options.idleRelease * 15_000)),
-      )
   }
   const disconnect = () => {
     sync?.()
-    clearInterval(idleTimer)
     mode = undefined
     holding?.()
   }
@@ -951,35 +937,6 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     return result.released
   }
 
-  const busyTasks = async () => {
-    const graph = await host.harness().taskGraph(context)
-    try {
-      return foreground(graph)
-    } finally {
-      graph.dispose()
-    }
-  }
-  /** No foreground task runs and no automation is due within the idle threshold. */
-  const idle = async (now: number) => {
-    if ((await busyTasks()) > 0) return false
-    const due = await host.want(AutomationsApi)?.nextDue()
-    return due === undefined || due > now + options.idleRelease * 60_000
-  }
-  // A move's hold occupies the queue; idle checks would only pile up behind it.
-  const checkIdle = (now = Date.now()) =>
-    holding
-      ? Promise.resolve(false)
-      : queue(async () => {
-          if (mode !== 'serving' || sync?.state().role !== 'writer' || !(await idle(now))) {
-            idleSince = undefined
-            return false
-          }
-          idleSince ??= now
-          if (now - idleSince < options.idleRelease * 60_000) return false
-          idleSince = undefined
-          return release({ reason: 'Released · resume here', released: true })
-        })
-
   /** `#12 Review the lease`: the conversations whose foreground runs a move waits for, bounded like worktrees. */
   const runningIn = (graph: Parameters<typeof foregroundTasks>[0]) => {
     const titles = new Map(
@@ -1316,7 +1273,6 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       if (!moving?.transition.cancellable) throw new Error('No move to cancel')
       cancel()
     },
-    checkIdle,
     /** Reconnect with a fresh hello, as after a relink. */
     restart() {
       if (mode) connect(mode)

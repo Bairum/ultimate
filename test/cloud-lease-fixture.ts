@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite'
 import type { R2Bucket } from '@cloudflare/workers-types'
 import { defineExtension, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Harness, JsonObject } from '@earendil-works/pi-durable'
-import { afterAll, afterEach, beforeAll, expect, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, vi } from 'vitest'
 import { SharedReplica } from '../cloud/worker.ts'
 import worker from '../cloud/worker.ts'
 import type { MachineMessage, Transition } from '../cloud/protocol.ts'
@@ -479,7 +479,6 @@ export async function machine(
       token: 'dev',
       machine: name,
       identity: { key: options.key ?? KEY, rootCommit: ROOT_COMMIT },
-      idleRelease: 10,
       autoClaim: options.autoClaim ?? true,
     },
     {
@@ -542,6 +541,16 @@ export async function machine(
       await opened?.close()
       opened = undefined
     },
+    /** Stop cleanly, which releases the lease with a snapshot, and start again in this home without claiming it. */
+    async stopped() {
+      lease.close()
+      await lease.stopRelease()
+      await handle.close()
+      machines.delete(handle)
+      const restarted = await machine(name, project, root, { ...options, home, autoClaim: false })
+      await standbyOn(restarted)
+      return restarted
+    },
   }
   machines.add(handle)
   return handle
@@ -555,10 +564,5 @@ export const standbyOn = (m: Machine) =>
     await m.lease.settled()
     return !!m.role()?.connected && m.role()?.role === 'standby' && !!m.host.standby()
   })
-/** Release an idle writer through the idle timer: idle at `start`, released ten minutes on. */
-export async function idleRelease(m: Machine, start = Date.now()) {
-  expect(await m.lease.checkIdle(start)).toBe(false)
-  expect(await m.lease.checkIdle(start + 10 * MINUTE)).toBe(true)
-}
 export const states = (transition: Transition | undefined) =>
   Object.fromEntries(transition?.steps.map((step) => [step.name, step.state]) ?? [])

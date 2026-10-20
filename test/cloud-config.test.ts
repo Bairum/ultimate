@@ -86,13 +86,13 @@ it('defaults the machine name to the OS hostname', async () => {
   expect((await cloudConfig(host, {}))?.machine).toBe(hostname())
 })
 
-it('reads the lease timing from user settings, with defaults for missing or invalid values', async () => {
+it('reads autoClaim from user settings, true unless it is false, and ignores a retired idleRelease', async () => {
   const { host, settings } = await fixture()
-  expect(await leaseSettings(host)).toEqual({ idleRelease: 10, autoClaim: true })
+  expect(await leaseSettings(host)).toEqual({ autoClaim: true })
   await settings({ idleRelease: 0, autoClaim: false })
-  expect(await leaseSettings(host)).toEqual({ idleRelease: 0, autoClaim: false })
-  await settings({ idleRelease: -1, autoClaim: 'no' })
-  expect(await leaseSettings(host)).toEqual({ idleRelease: 10, autoClaim: true })
+  expect(await leaseSettings(host)).toEqual({ autoClaim: false })
+  await settings({ autoClaim: 'no' })
+  expect(await leaseSettings(host)).toEqual({ autoClaim: true })
 })
 
 it('reports a missing token once at host open and never opens a connection', async () => {
