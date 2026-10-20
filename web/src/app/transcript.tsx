@@ -62,6 +62,7 @@ import { ExtensionBoundary } from './boundary.tsx'
 import { chatRows, runOf, windowGaps, windowKey } from './chat.ts'
 import { useFold } from './fold.tsx'
 import type { ChatPart, WorkRun } from './chat.ts'
+import { readerLeft } from './follow.ts'
 import { column } from './layout.ts'
 import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
 import type { ToolResult } from './model.ts'
@@ -208,26 +209,30 @@ function TranscriptEntries() {
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.style.overflowAnchor = following ? 'none' : ''
   }, [following, scrollRef])
-  // The reader left the bottom when the view moved up and is no longer at the bottom. The library only scrolls down,
-  // anchoring is off while following, and a clamp after content shrinks stays at the bottom, so only the reader does
-  // this. The library notices touch, keyboard and scrollbar scrolls a moment late, or not at all while content resizes.
+  // Stop following the moment the reader moves the view up: the library notices touch, keyboard and scrollbar scrolls a
+  // moment late, or not at all while content resizes. Captured, so it reads the library's own last placement before
+  // the library's listener clears it.
   const seenTop = useRef(0)
-  const readerLeft = useEffectEvent(() => {
+  const left = useEffectEvent(() => {
     const scroll = scrollRef.current
     if (!scroll) return false
-    const up = scroll.scrollTop < seenTop.current - 1
-    return up && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 1
+    return readerLeft({
+      top: scroll.scrollTop,
+      seen: seenTop.current,
+      placed: state.ignoreScrollToTop,
+      distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight,
+    })
   })
   useEffect(() => {
     const scroll = scrollRef.current
     if (!scroll) return undefined
     seenTop.current = scroll.scrollTop
     const onScroll = () => {
-      if (readerLeft()) stopScroll()
+      if (left()) stopScroll()
       seenTop.current = scroll.scrollTop
     }
-    scroll.addEventListener('scroll', onScroll, { passive: true })
-    return () => scroll.removeEventListener('scroll', onScroll)
+    scroll.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    return () => scroll.removeEventListener('scroll', onScroll, { capture: true })
   }, [scrollRef, stopScroll])
   // Retain already displayed rows when a live compaction replaces the active context, or a fresh window moves past them.
   const entries = useMemo(() => {
@@ -408,7 +413,7 @@ function TranscriptEntries() {
       }
       // The anchor holds the rows in place; a reader who left the bottom stops following, even when the page arrives
       // before their scroll's event.
-      if (!state.isAtBottom || readerLeft()) stopScroll()
+      if (!state.isAtBottom || left()) stopScroll()
       // A short transcript needs its existing empty tail to remain scrollable after prepending.
       setTailSpace((space) =>
         Math.max(
