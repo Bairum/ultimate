@@ -385,9 +385,11 @@ function TranscriptEntries() {
             top: candidates[0].getBoundingClientRect().top,
           }
       }
-      // The anchor holds the rows in place; a reader who left the bottom stops following. The lock, not the distance:
-      // while a run streams, the follow animation is still catching up and the distance is briefly larger.
-      if (!state.isAtBottom) stopScroll()
+      // The anchor holds the rows in place; a reader who left the bottom stops following. The library notices a touch,
+      // keyboard or scrollbar scroll a moment late, so a distance also counts, unless its follow animation explains it.
+      const scroll = scrollRef.current
+      const distance = scroll ? scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight : 0
+      if (!state.isAtBottom || (!state.animation && distance > 1)) stopScroll()
       // A short transcript needs its existing empty tail to remain scrollable after prepending.
       setTailSpace((space) =>
         Math.max(
