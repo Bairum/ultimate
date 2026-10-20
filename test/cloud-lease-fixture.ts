@@ -359,6 +359,8 @@ export async function machine(
     login?: { provider: string; ok: boolean }
     /** Who hears the lease's `cloud.feedback`: backups and moves that ended here. */
     feedback?: FeedbackService
+    /** Whether the user paused this Ultimate (`pause`), read on every check. */
+    paused?: () => boolean
   } = {},
 ) {
   const home = options.home ?? (await temp('ultimate-lease-'))
@@ -435,7 +437,11 @@ export async function machine(
     onOpen: (callback) => openers.add(callback),
     onRelease: (callback) => releasers.add(callback),
     want: ((api: { name: string }) =>
-      api.name === 'cloud.feedback' ? options.feedback : undefined) as ExtensionHost['want'],
+      api.name === 'cloud.feedback'
+        ? options.feedback
+        : api.name === 'pause' && options.paused
+          ? { paused: options.paused }
+          : undefined) as ExtensionHost['want'],
     conversations: () => [],
     system: () =>
       ({ process: { url: 'http://127.0.0.1:4800' } }) as unknown as ReturnType<

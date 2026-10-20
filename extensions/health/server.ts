@@ -14,6 +14,7 @@ import { readFileHealth, readHealth, record, reset, sanitize, toHealth } from '.
 import { HealthApi, HealthFeedback } from './api.ts'
 import type { HealthFeedbackService } from './api.ts'
 import { LoginChanged } from '../models/api.ts'
+import { PauseApi } from '../pause/api.ts'
 import type { Flip, HealthEntry } from './store.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { Changed, StateAction } from './refs.ts'
@@ -311,6 +312,7 @@ async function report(host: ExtensionHost) {
 export default function health(host: ExtensionHost) {
   // Resolved where it is called; declared here so the catalogue lists it.
   host.want(HealthFeedback)
+  host.want(PauseApi)
   // A login added, replaced or removed through Ultimate makes the provider's record meaningless: start it over.
   // Each write that flips a provider's state is announced as `health.changed`.
   const flipped = (flips: Flip[]) => announce(host, flips)
@@ -357,6 +359,8 @@ export default function health(host: ExtensionHost) {
   }))
   const deps = hostDeps(host, flipped)
   const tick = () => {
+    // Paused: no ping starts until Play; the next tick after it catches up.
+    if (host.want(PauseApi)?.paused()) return
     shared.ticking ??= (async () => {
       const { pruned, pinged } = await heartbeat(deps)
       if (!shouldReport(shared, pruned.length + pinged.length > 0, Date.now())) return

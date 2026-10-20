@@ -14,6 +14,7 @@ import type { Git } from '../../lib/fast-forward.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
+import { PauseApi } from '../pause/api.ts'
 import {
   cloneState,
   fetchIfDue,
@@ -153,10 +154,13 @@ export default function update(host: ExtensionHost) {
   // Resolved where they are called; declared here so the catalogue lists them.
   host.need(WorkspacesApi)
   host.need(ConversationsApi)
+  host.want(PauseApi)
   const shared = state(host)
   // Faux and previews never fetch: the demo stands in, and a preview must not race the host on the same clone.
   if (host.faux || preview()) return defineExtension({ name: 'update' })
   const tick = () => {
+    // Paused: no fetch starts until Play; the next tick after it catches up.
+    if (host.want(PauseApi)?.paused()) return
     shared.ticking ??= refresh(host, true)
       .catch((error: unknown) => host.notice(`Update check: ${String(error)}`))
       .finally(() => {

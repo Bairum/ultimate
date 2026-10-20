@@ -27,6 +27,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 // oxlint-disable-next-line no-restricted-imports -- a stop release holds storage's lock, which a swapped-in core owns
 import { acquireLock } from '../../server/lock.ts'
 import { Feedback } from './api.ts'
+import { PauseApi } from '../pause/api.ts'
 import type { BackupReport, FeedbackService } from './api.ts'
 import { readSecret, secretMetadata } from '../../lib/secrets.ts'
 import {
@@ -197,6 +198,7 @@ export function classify(error: string) {
   const status = /(?:returned|:)\s*([45]\d\d)\b/.exec(error)
   return status ? `HTTP ${status[1]}` : 'failed'
 }
+const PAUSED = 'Ultimate is paused; press Play first'
 const runs = (count: number) => `${count} running ${count === 1 ? 'task' : 'tasks'}`
 const changes = (paths: string[]) =>
   `${paths.length} ${paths.length === 1 ? 'worktree' : 'worktrees'} with uncommitted changes`
@@ -274,6 +276,8 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     host.notice(message)
   }
   const report = (error: unknown) => fail(`Cloud lease: ${String(error)}`)
+  /** The user paused this Ultimate: no backup or move starts until Play. */
+  const paused = () => host.want(PauseApi)?.paused() === true
   /**
    * Record a lease transition as `cloud.lease`, while storage is open: `acquired` just after opening as the writer,
    * `releasing` just before closing to upload, so the released snapshot holds it. A writer the cloud replaced records
@@ -688,9 +692,11 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
     const start = sync?.state()
     const refused = moving
       ? 'Another move is preparing'
-      : mode !== 'standby'
-        ? 'This machine is not on standby'
-        : blocked(start)
+      : paused()
+        ? PAUSED
+        : mode !== 'standby'
+          ? 'This machine is not on standby'
+          : blocked(start)
     if (refused) {
       fail(`Move here refused: ${refused}`)
       return false
@@ -1135,6 +1141,7 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   const backup = async () => {
     const state = sync?.state()
     if (backingUp) throw new Error('a backup is already running')
+    if (paused()) throw new Error(PAUSED)
     if (mode !== 'serving' || !serving() || state?.role !== 'writer' || state.epoch === undefined)
       throw new Error('This machine does not run the project; back it up on its writer')
     if (moving || holding || releasingFor || pendingRelease || progress)
@@ -1302,7 +1309,11 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
      * Resolves the transition ID at once; `move` resolves at its end.
      */
     moveHere({ force = false, by = 'local' }: { force?: boolean; by?: 'local' | 'sync' } = {}) {
-      const reason = moving ? 'Another move is preparing' : blocked(sync?.state())
+      const reason = moving
+        ? 'Another move is preparing'
+        : paused()
+          ? PAUSED
+          : blocked(sync?.state())
       if (reason) throw new Error(reason)
       const id = randomUUID()
       void move({ id, force, by }).catch(report)

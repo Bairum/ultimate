@@ -197,6 +197,25 @@ it('pause keeps a running profile run alive, skips overlap, and abort cancels a 
   await expect(f.action('update', { id: a.id, agent: 'missing' })).rejects.toThrow('Unknown agent')
 })
 
+it('fires nothing while the host is paused and catches up once after Play', async () => {
+  const f = await fixture()
+  const a = (await f.action('create', {
+    name: 'Report',
+    prompt: 'Scheduled report',
+    schedule: 'every 2s',
+  })) as Automation
+  await until(async () => !!(await f.records())[0].nextAt)
+  // The host's pause holds Pi's scheduler; an automation fire is a scheduler task, so it starts nothing.
+  f.opened.harness.hold()
+  await vi.advanceTimersByTimeAsync(5000)
+  expect((await f.records())[0].runs).toEqual([])
+  f.opened.harness.release()
+  await until(async () => (await f.records())[0].runs.some((r) => r.status === 'done'))
+  await f.action('pause', { id: a.id })
+  // One missed fire, not one per period the pause lasted.
+  expect((await f.records())[0].runs.filter((r) => r.status !== 'skipped')).toHaveLength(1)
+})
+
 it('catches up a missed fire exactly once after reopening', async () => {
   const f = await fixture()
   await f.action('create', {

@@ -11,6 +11,7 @@ import type { CloudMessage, MachineMessage, Transition, Writer } from '../../clo
 import { secretMetadata } from '../../lib/secrets.ts'
 import { HealthApi } from '../health/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
+import { PauseApi } from '../pause/api.ts'
 import { cloudConfig, leaseSettings } from '../../lib/cloud.ts'
 import { projectIdentity } from '../../lib/project-identity.ts'
 import { Feedback } from './api.ts'
@@ -482,6 +483,7 @@ export default async function cloud(host: ExtensionHost, deps: Partial<LeaseDeps
   host.want(HealthApi)
   host.want(Feedback)
   host.want(TailscaleApi)
+  host.want(PauseApi)
   // The process stopping, not a reload of this facet, releases the lease.
   const stopping = host.resource('cloud.process', () => {
     const current: { lease?: Lease } = {}

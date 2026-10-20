@@ -31,7 +31,7 @@ index 136bed43fe2c45f1739109e34af5590d5036a3f7..2b43c79b6d83288f2508ef362e8a2544
              await addTools(tx, conversationId, added);
          const live = await tx.doc(LiveDoc, conversationId);
 diff --git a/dist/harness/harness.js b/dist/harness/harness.js
-index d228c4c4aafde8bb5de06c8c0c132c085a53ba8e..238c5f994d7660c61b2d216f22156f9d6471066a 100644
+index d228c4c4aafde8bb5de06c8c0c132c085a53ba8e..8c3b69598ff78e78bc40a5191e73af5fe7fe35c4 100644
 --- a/dist/harness/harness.js
 +++ b/dist/harness/harness.js
 @@ -2,7 +2,7 @@ import { withAbortSignal, withoutAbortSignal } from "@earendil-works/chord/conte
@@ -59,6 +59,19 @@ index d228c4c4aafde8bb5de06c8c0c132c085a53ba8e..238c5f994d7660c61b2d216f22156f9d
      /** Resolve a conversation's committed `pi.agent` against `snapshot`, or the current one, and the current settings. */
      async resolveAgent(id, snapshot, context) {
          const registry = snapshot ?? this.#options.registry.snapshot();
+@@ -149,6 +158,12 @@ class HarnessImpl extends SessionImpl {
+         this.assertUsable();
+         this.#tasks.resume();
+     }
++    hold() {
++        this.#tasks.hold();
++    }
++    release() {
++        this.#tasks.release();
++    }
+     getTask(id, context) {
+         return this.readOnLine(() => this.storage.task(id, context));
+     }
 diff --git a/dist/harness/inbox.d.ts b/dist/harness/inbox.d.ts
 index ee7a0718b1430ca405ab3fb5a037a92fd781ef29..2d1a95d31564dcb8fb43fc44c7dab39eab49d191 100644
 --- a/dist/harness/inbox.d.ts
@@ -134,6 +147,76 @@ index e8e07656188833bffa17af35cd2dbc4eb65b2a24..de36e7149439d9acf6c8f02ecfca62ad
  }
  /** The kind and data of an input's entry as strict JSON, without other fields an untyped caller might pass. */
  export function pickInputEntry({ kind, data }) {
+diff --git a/dist/harness/scheduler.d.ts b/dist/harness/scheduler.d.ts
+index 9aaf34d4f4f674a5be436cdc25bdb849da04ce73..0320c1c0c15ed704060981391bbf77c906980b24 100644
+--- a/dist/harness/scheduler.d.ts
++++ b/dist/harness/scheduler.d.ts
+@@ -65,6 +65,8 @@ export declare class TaskScheduler {
+     open(context: Context): Promise<void>;
+     /** Enable scheduling. Idempotent; the kick does nothing once closing. */
+     resume(): void;
++    hold(): void;
++    release(): void;
+     /**
+      * Signal every invocation and wait for them; writes nothing. Close calls this after every close listener has run, so
+      * waits, watches, and streams a task holds end with the Session's reason, not as cancelled by its signal.
+diff --git a/dist/harness/scheduler.js b/dist/harness/scheduler.js
+index e40b59720224b1f180b0745066e251cc52b499f3..c5063253e6e2f85c2f784f642a1db93905ae2704 100644
+--- a/dist/harness/scheduler.js
++++ b/dist/harness/scheduler.js
+@@ -108,6 +108,7 @@ export class TaskScheduler {
+     #cascadePending = false;
+     #unsubscribeRegistry = () => { };
+     #enabled = false;
++    #held = false;
+     #closing = false;
+     #dirty = false;
+     #draining = false;
+@@ -160,6 +161,14 @@ export class TaskScheduler {
+         this.#enabled = true;
+         this.#kick();
+     }
++    /** Start no run invocation until `release()`; running invocations and abort handlers go on. Overrides `resume()`. */
++    hold() {
++        this.#held = true;
++    }
++    release() {
++        this.#held = false;
++        this.#kick();
++    }
+     /**
+      * Signal every invocation and wait for them; writes nothing. Close calls this after every close listener has run, so
+      * waits, watches, and streams a task holds end with the Session's reason, not as cancelled by its signal.
+@@ -1046,6 +1055,8 @@ export class TaskScheduler {
+                     }
+                     const runnable = record;
+                     const mode = record.abortRequested ? "abort" : "run";
++                    if (mode === "run" && this.#held)
++                        continue;
+                     // Work below an owner with cancellation intent waits for its cascade mark instead of running a phase; schedule
+                     // the cascade, which may not have run yet.
+                     if (mode === "run" && !record.background && this.#belowCancelled(parentOf(record))) {
+@@ -1165,7 +1176,7 @@ export class TaskScheduler {
+         const tasks = [];
+         for (const record of this.#live.values())
+             tasks.push({ record, state: this.#inspectTask(record, snapshot) });
+-        const scheduling = this.#closing ? "closing" : this.#enabled ? "running" : "paused";
++        const scheduling = this.#closing ? "closing" : this.#enabled && !this.#held ? "running" : "paused";
+         return { scheduling, tasks };
+     }
+     #inspectTask(record, snapshot) {
+@@ -1268,6 +1279,11 @@ export class TaskScheduler {
+             const message = `Task ${current.kind} phase ${previous.checkpoint.phase} returned without durable progress`;
+             return { fault: new Error(message) };
+         }
++        // Held: park at this phase boundary, as a handover does; reservation starts it again after `release()`.
++        if (this.#held) {
++            tx.setTask(withState(current, { status: "pending", checkpoint: current.state.checkpoint }));
++            return false;
++        }
+         // 5. progress: refresh the snapshot; hand over to a replacement definition that can take the task.
+         state.snapshot = this.#registry.snapshot();
+         const next = state.snapshot.task(current.kind);
 diff --git a/dist/harness/submissions.js b/dist/harness/submissions.js
 index ee076b5ea977ae39bca78a22e43827c26ba386a5..fd545203037c828570b3b5350eaabdbc977254c3 100644
 --- a/dist/harness/submissions.js
@@ -166,10 +249,20 @@ index ee076b5ea977ae39bca78a22e43827c26ba386a5..fd545203037c828570b3b5350eaabdbc
      const input = { conversationId, ...requestId, type: "input", status: "placed", entry: entry.id };
      const { id } = await tx.createSubmission(input);
 diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
-index ea3adc9e21bcc4b101da614ce9913e3858777f0d..0aeeb60440bf11979bd7867e22ff0a2bdd2ee59e 100644
+index ea3adc9e21bcc4b101da614ce9913e3858777f0d..8173ef267017340b1dde1533157e4cdf90756bd3 100644
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
-@@ -686,6 +686,8 @@ export interface HookApi extends DocumentReader {
+@@ -644,6 +644,9 @@ export interface Harness extends Session {
+      * `Harness.waitForIdle()`, and `Conversation.waitForIdle()`. Read-only viewers never do.
+      */
+     resume(): void;
++    /** Start no task run until `release()`, whatever `resume()` says; running invocations and abort handlers go on. */
++    hold(): void;
++    release(): void;
+     /** Return the reserved root conversation, creating it with `agent` and `init` in one commit when absent. */
+     root(context: Context, options?: {
+         readonly agent?: AgentChange;
+@@ -686,6 +689,8 @@ export interface HookApi extends DocumentReader {
  export type HookResult<T> = T | undefined | Promise<T | undefined>;
  /** Hooks of the built-in generation task. */
  export interface GenerationHooks {

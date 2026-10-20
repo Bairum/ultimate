@@ -1352,6 +1352,28 @@ it('refuses a second backup while one runs, during a release, and on a standby',
   expect(slow.uploadSnapshot).toHaveBeenCalledTimes(2)
 })
 
+it('starts no backup or move while the host is paused', async () => {
+  snapshotFetch()
+  const project = cloud()
+  const { root } = await checkout()
+  let paused = true
+  const desk = await machine('desk', project, root, { paused: () => paused })
+  await writer(desk)
+  const laptop = await machine('laptop', project, root, { autoClaim: false, paused: () => true })
+  await standbyOn(laptop)
+
+  const refusal = 'Ultimate is paused; press Play first'
+  await expect(desk.lease.backup()).rejects.toThrow(refusal)
+  expect(() => laptop.lease.moveHere()).toThrow(refusal)
+  // A move @sync starts goes through the same preparation, which refuses too.
+  expect(await laptop.lease.move({ by: 'sync' })).toBe(false)
+  expect(laptop.notices).toContain(`Move here refused: ${refusal}`)
+  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk' })
+
+  paused = false
+  expect(await desk.lease.backup()).toMatchObject({ id: expect.any(String) })
+})
+
 it('refuses a backup while a move holds the writer, and keeps the last backup across restarts', async () => {
   snapshotFetch()
   const project = cloud()

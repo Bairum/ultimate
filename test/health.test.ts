@@ -1,7 +1,9 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
+import { machineRoot } from '../lib/machine.ts'
+import { PauseApi } from '../extensions/pause/api.ts'
 import { modelLogin, noLogin } from '../extensions/cloud/login.ts'
 import {
   announce,
@@ -10,6 +12,7 @@ import {
   heartbeat,
   hostDeps,
   REPORT,
+  TICK,
   responseEntry,
   shouldReport,
 } from '../extensions/health/server.ts'
@@ -242,6 +245,37 @@ it('reports after a ping, keeps retrying a failed report, and at least hourly', 
   expect(shouldReport(fresh, false, NOW + REPORT)).toBe(true)
   // A resource made by the previous facet has no `pending` yet: it reads as nothing owed.
   expect(shouldReport({ reported: NOW }, false, NOW + MINUTE)).toBe(false)
+})
+
+it('skips the heartbeat tick while the host is paused and pings again after Play', async () => {
+  const home = await temp('ultimate-health-pause-')
+  const services = apis()
+  let paused = true
+  services.implement(PauseApi, { paused: () => paused })
+  const getAvailable = vi.fn<() => Promise<never[]>>(async () => [])
+  const cleanups: (() => Promise<void>)[] = []
+  vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] })
+  try {
+    healthExtension({
+      ...services,
+      faux: undefined,
+      userHome: home,
+      projectRoot: machineRoot(home),
+      modelRuntime: { getAvailable, getProviderAuthStatus: () => ({ configured: false }) },
+      react: () => {},
+      resource: <T>(_key: string, create: () => T) => create(),
+      onClose: (cleanup: () => Promise<void>) => void cleanups.push(cleanup),
+      notice: () => {},
+    } as unknown as ExtensionHost)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(getAvailable).not.toHaveBeenCalled()
+    paused = false
+    await vi.advanceTimersByTimeAsync(TICK)
+    expect(getAvailable).toHaveBeenCalledTimes(1)
+  } finally {
+    for (const cleanup of cleanups) await cleanup()
+    vi.useRealTimers()
+  }
 })
 
 it('picks the cheapest model by input plus output cost, the first on a tie', () => {
