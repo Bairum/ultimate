@@ -499,4 +499,13 @@ it('validates extracted choices and ignores fields outside the schema', () => {
   expect(() =>
     parseQuestions('{"questions":[{"text":"Which?","kind":"choice","options":[]}]}'),
   ).toThrow('Invalid options')
+  // A repeated label would answer as the first option, so it is left out.
+  expect(
+    parseQuestions(
+      '{"questions":[{"text":"Which?","kind":"choice","options":[{"label":"Keep","key":"a"},{"label":" Keep ","key":"b"},{"label":"Drop","key":"c"}]}]}',
+    )[0].options,
+  ).toEqual([
+    { label: 'Keep', key: 'a' },
+    { label: 'Drop', key: 'c' },
+  ])
 })

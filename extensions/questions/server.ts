@@ -176,12 +176,15 @@ export function parseQuestions(text: string): Question[] {
       text: q.text,
       kind: q.kind,
       ...ref,
-      options: q.options.map((o) => ({
-        label: o.label,
-        ...(o.detail ? { detail: o.detail } : {}),
-        ...(o.recommended ? { recommended: true } : {}),
-        ...(typeof o.key === 'string' && /^[a-z]$/.test(o.key) ? { key: o.key } : {}),
-      })),
+      // An answer names its option by label, so a repeated label (after trimming) is left out.
+      options: q.options
+        .map((o) => ({
+          label: o.label.trim(),
+          ...(o.detail ? { detail: o.detail } : {}),
+          ...(o.recommended ? { recommended: true } : {}),
+          ...(typeof o.key === 'string' && /^[a-z]$/.test(o.key) ? { key: o.key } : {}),
+        }))
+        .filter((o, i, all) => all.findIndex((other) => other.label === o.label) === i),
     }
   })
 }
