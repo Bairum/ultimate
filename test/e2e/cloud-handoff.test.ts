@@ -195,8 +195,10 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
     expect(step(moved.transition, 'handover')?.state).toBe('skipped')
     await until(async () => (await project.info()).lease?.machine === 'a' && (await serving(a)))
     expect((await project.info()).lease).toMatchObject({ machine: 'a', epoch: 3 })
-    // A took B's snapshot and recorded its start, `cloud.lease` acquired and `cloud.move` done on top.
+    // A took B's snapshot and recorded its start, `cloud.lease` acquired and `cloud.move` done on top. The last two
+    // commit on their own after the storage switch, so they can follow A's first response by a moment.
     const released = counts(join(b.home, 'state.sqlite'))
+    await until(() => counts(join(a.home, 'state.sqlite')).entries >= released.entries + 3)
     expect(counts(join(a.home, 'state.sqlite'))).toEqual({
       ...released,
       entries: released.entries + 3,
