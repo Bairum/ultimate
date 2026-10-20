@@ -139,10 +139,13 @@ it('keeps concurrent calls of the same task apart', async () => {
   }
 })
 
-it('records the commits an apply-backend rebase rewrote', async () => {
+it('records the commits an apply-backend rebase rewrote, however old their dates', async () => {
   await git('commit', '--allow-empty', '-m', 'base')
   await git('checkout', '-b', 'side')
-  await run('bash', ['-c', 'echo s > s && git add s && git commit -qm side'], { cwd })
+  await run('bash', ['-c', 'echo s > s && git add s && git commit -qm side'], {
+    cwd,
+    env: { ...process.env, GIT_AUTHOR_DATE: '2001-01-01T00:00:00Z' },
+  })
   const old = await git('rev-parse', 'HEAD')
   await git('checkout', 'main')
   await run('bash', ['-c', 'echo m > m && git add m && git commit -qm main'], { cwd })
@@ -211,6 +214,16 @@ it('records no merge when it fast-forwards onto an earlier merge of its own', as
   await git('checkout', '-b', 'later', 'main~1')
   await bash('git merge -q --ff-only main')
   expect(emitted).toHaveLength(1)
+})
+
+it('records a merge of a branch whose name says Fast-forward', async () => {
+  await git('commit', '--allow-empty', '-m', 'base')
+  await git('checkout', '-b', 'Fast-forward')
+  await git('commit', '--allow-empty', '-m', 'side')
+  await git('checkout', 'main')
+  await git('commit', '--allow-empty', '-m', 'main')
+  await bash('git merge -q --no-ff Fast-forward')
+  expect(emitted).toEqual([expect.objectContaining({ sha: await git('rev-parse', 'HEAD') })])
 })
 
 it('records nothing when bash made no commit', async () => {
