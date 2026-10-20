@@ -1,12 +1,12 @@
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Message } from '@earendil-works/pi-ai'
-import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { EntryId, EntryRecord } from '@earendil-works/pi-durable'
+import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { CompactionResult, EntryRecord, TaskId } from '@earendil-works/pi-durable'
 import { afterAll, beforeAll, expect, it } from 'vitest'
-import { Board } from '../extensions/board/api.ts'
+import { MessageSent } from '../extensions/board/api.ts'
 import { Rewound } from '../extensions/lineage/refs.ts'
 import { Standing, Started } from '../extensions/subagents/api.ts'
 import { context } from '../server/harness.ts'
@@ -35,19 +35,29 @@ const textOf = (content: unknown) =>
         .flatMap((part) => (part.type === 'text' ? [part.text!] : []))
         .join('')
 
-/** A faux server that echoes; summary requests answer SUMMARY (or fail while `failSummary`), `HOLD` waits for release. */
+/**
+ * A faux server that echoes; summary requests answer SUMMARY (or fail while `failSummary`, or wait while `summaryGate`
+ * is set), `HOLD` waits for release.
+ */
 async function fixture() {
   const home = await temp('ultimate-rewind-')
   const server = await fauxServer({ ultimateRoot, home, userHome: home })
   servers.push(server)
   const requests: Message[][] = []
   const summaries: string[] = []
-  const state = { failSummary: false, hold: Promise.withResolvers<void>() }
+  const state = {
+    failSummary: false,
+    hold: Promise.withResolvers<void>(),
+    summaryGate: undefined as Promise<void> | undefined,
+    summaryAsked: false,
+  }
   const route: FauxResponseFactory = async (transcript) => {
     server.host.faux!.appendResponses([route])
     const [system, first] = transcript.messages
     if (system?.role === 'system' && textOf(system.content).startsWith('Summarize the part')) {
       summaries.push(textOf(first.content))
+      state.summaryAsked = true
+      await state.summaryGate
       return state.failSummary
         ? fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'summary down' })
         : fauxAssistantMessage('SUMMARY of the set-aside path')
@@ -182,12 +192,24 @@ it('summarizes the set-aside path when asked, once, and lists files alone when t
 
 it('flags conversations started or messaged after the entry, and keeps a standing agent its id', async () => {
   const f = await fixture()
-  await f.ask('one')
-  const at = await f.answer('one')
   const early = await f.server.harness.createConversation(
     { ownership: { kind: 'ownerless' } },
     context,
   )
+  // A message before the entry built on nothing that is set aside.
+  await f.server.harness.commit(
+    (tx) =>
+      emit(tx, MessageSent, {
+        message: 0,
+        from: f.conversation.id,
+        to: early.id,
+        reply: false,
+        steer: false,
+      }),
+    context,
+  )
+  await f.ask('one')
+  const at = await f.answer('one')
   await f.ask('two')
   const worker = await f.server.harness.createConversation(
     { ownership: { kind: 'ownerless' } },
@@ -202,29 +224,13 @@ it('flags conversations started or messaged after the entry, and keeps a standin
     // The conversation is @ultimate; it started one worker after the entry and messaged another conversation.
     ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = id
     await emit(tx, Started, { id: worker.id, agent: 'worker', kind: 'child', parent: id })
-    const sent = await tx.appendEntry(id, { kind: 'test.sent' })
-    ;(await tx.doc(Board, ROOT_CONVERSATION_ID)).messages = [
-      {
-        id: 1,
-        from: id,
-        to: recipient.id,
-        text: 'hi',
-        at: 1,
-        reply: false,
-        state: 'delivered',
-        entry: sent.id,
-      },
-      {
-        id: 2,
-        from: id,
-        to: early.id,
-        text: 'old',
-        at: 1,
-        reply: false,
-        state: 'delivered',
-        entry: at as EntryId,
-      },
-    ]
+    // Board's durable record of the message, not its capped log; one to itself and one from the user count for nothing.
+    for (const [from, to] of [
+      [id, recipient.id],
+      [id, id],
+      ['user', early.id],
+    ] as const)
+      await emit(tx, MessageSent, { message: 1, from, to, reply: false, steer: false })
   }, context)
   const preview = (await f.call('rewindPreview', { conversation: id, at })).data.result
   expect(preview.dependents).toEqual([
@@ -282,4 +288,84 @@ it('refuses roots, busy conversations and going back past a compaction', async (
   expect(await refused(f.conversation.id, at)).toBe(
     `#${f.conversation.id} was compacted after this point; it can't go back past a compaction.`,
   )
+})
+
+it('refuses when a run finishes between reading the context and writing the note, instead of omitting it unlisted', async () => {
+  const f = await fixture()
+  for (const text of ['one', 'two']) await f.ask(text)
+  const at = await f.answer('one')
+  const gate = Promise.withResolvers<void>()
+  f.state.summaryGate = gate.promise
+  const going = f.call('rewind', { conversation: f.conversation.id, at, summarize: true })
+  await until(() => f.state.summaryAsked)
+  // A turn lands while the facts and the summary are already gathered against the old context.
+  await f.ask('three')
+  gate.resolve()
+  expect((await going).data.error).toBe(`#${f.conversation.id} changed meanwhile; go back again`)
+  expect((await f.said()).at(-1)).toBe('echo three')
+  // Asked again, it reads the new context and sets the new turn aside too.
+  const again = await f.call('rewind', { conversation: f.conversation.id, at })
+  expect(again.data.error).toBeUndefined()
+  expect(await f.said()).toEqual(['one', 'echo one', expect.stringContaining('went back to')])
+})
+
+it('refuses while a compaction runs, at admission and when one starts before the note is written', async () => {
+  const f = await fixture()
+  for (const text of ['one', 'two']) await f.ask(text)
+  const at = await f.answer('one')
+  const compacting = (on: boolean) =>
+    f.server.harness.commit(async (tx) => {
+      const live = await tx.doc(LiveDoc, f.conversation.id)
+      if (on)
+        live.compactions = [
+          { taskId: 1 as TaskId<CompactionResult>, reason: 'manual', blocking: false, attempt: 1 },
+        ]
+      else delete live.compactions
+    }, context)
+  const message = `#${f.conversation.id} is compacting: wait until it finishes, then go back.`
+  await compacting(true)
+  const preview = await f.call('rewindPreview', { conversation: f.conversation.id, at })
+  expect(preview.data.result.refused).toBe(message)
+  expect((await f.call('rewind', { conversation: f.conversation.id, at })).data.error).toBe(message)
+  await compacting(false)
+  const gate = Promise.withResolvers<void>()
+  f.state.summaryGate = gate.promise
+  const going = f.call('rewind', { conversation: f.conversation.id, at, summarize: true })
+  await until(() => f.state.summaryAsked)
+  await compacting(true)
+  gate.resolve()
+  expect((await going).data.error).toBe(message)
+  expect((await f.said()).at(-1)).toBe('echo two')
+})
+
+it('goes back over a suffix of tool results only, as a stopped run leaves it', async () => {
+  const f = await fixture()
+  await f.ask('one')
+  const call = fauxToolCall('bash', { command: 'make' })
+  const assistant = await f.server.harness.commit(async (tx) => {
+    const entry = await tx.appendEntry(f.conversation.id, {
+      kind: 'pi.assistant',
+      model: [fauxAssistantMessage([call], { stopReason: 'toolUse' })],
+    })
+    await tx.appendEntry(f.conversation.id, {
+      kind: 'pi.tool-result',
+      model: [
+        {
+          role: 'toolResult',
+          toolCallId: call.id,
+          toolName: 'bash',
+          content: [{ type: 'text', text: 'built' }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+      ],
+    })
+    return entry.id
+  }, context)
+  const preview = await f.call('rewindPreview', { conversation: f.conversation.id, at: assistant })
+  expect(preview.data.result).toMatchObject({ steps: 1 })
+  expect(preview.data.result.refused).toBeUndefined()
+  const { data } = await f.call('rewind', { conversation: f.conversation.id, at: assistant })
+  expect(data.error).toBeUndefined()
+  expect(await f.said()).not.toContain('built')
 })

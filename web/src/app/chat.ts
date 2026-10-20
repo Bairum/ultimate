@@ -145,7 +145,7 @@ export function setAsideIds(entries: readonly EntryRecord[]): Set<number> {
 /** Rows set aside by a go-back, folded together: each consecutive stretch of them is one group. */
 export interface AsideGroup {
   aside: readonly (ChatPart | WorkRun)[]
-  /** Its rows with user or assistant messages, as the go-back counted them. */
+  /** Its entries with messages other than system prompt changes, as the go-back counted them. */
   steps: number
 }
 const partsOf = (row: ChatPart | WorkRun) => ('work' in row ? row.work : [row])
@@ -162,7 +162,7 @@ export function groupAside(
     if (!group.length) return
     const entries = new Set(group.flatMap(partsOf).map((part) => part.entry))
     const steps = [...entries].filter((entry) =>
-      entry.model?.some((message) => message.role === 'user' || message.role === 'assistant'),
+      entry.model?.some((message) => message.role !== 'system'),
     ).length
     grouped.push({ aside: group, steps })
     group = []

@@ -30,10 +30,12 @@ function Files({ files }: { files: readonly RewindFile[] }) {
           <span className="ml-auto shrink-0 tabular-nums">
             {file.untracked ? (
               <span className="text-muted-foreground">new</span>
+            ) : file.added === undefined ? (
+              <span className="text-muted-foreground">changed</span>
             ) : (
               <>
                 <span className="text-success">+{file.added}</span>{' '}
-                <span className="text-error">−{file.removed}</span>
+                <span className="text-error">−{file.removed ?? 0}</span>
               </>
             )}
           </span>

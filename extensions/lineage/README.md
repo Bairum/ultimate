@@ -76,15 +76,20 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   and the landing.
 - **Go back** (`rewind.ts`, `rewind.tsx`): the message action **Go back to here** on any stored message of a non-root
   conversation (standing agents included) opens a confirm dialog fed by `rewindPreview {conversation, at}`: steps set
-  aside, files changed since in the checkout (`git diff --numstat` against its tip at the entry, plus untracked
-  files), commits since, and the conversations that built on the path (subagents and branches it started, Board
-  messages it delivered after the entry). User-only `rewind {conversation, at, summarize?}` runs task
+  aside; the files the set-aside path touched (files of its commits, `git show --name-only`, and paths its `edit` and
+  `write` calls named) with their `git diff --numstat` against the checkout's tip at the entry, untracked, or
+  "changed" (no HEAD to count against, or no difference), so uncommitted work from before the entry stays out;
+  commits since; and the conversations that built on the path (subagents and branches it started, conversations it
+  messaged per `board.sent` events, read by kind since board needs lineage). User-only `rewind {conversation, at, summarize?}` runs task
   `lineage.rewind` in the conversation: it appends one `lineage.rewound` entry whose `edits` omit every entry after
   `at` that still contributes (and restore entries up to `at` an earlier go-back changed), and whose user-role message
   is the note. The conversation keeps its id, worktree, files and commits; nothing runs until the next input, and the
   prefix up to `at` contributes byte-identically, so a warm provider cache can hit. With `summarize`, the summary model
-  summarizes the set-aside path into the note (memoized; without an answer the note lists the files). It refuses roots,
-  busy conversations (a run or queued input) and points before the newest head marker (a compaction or reset). It
+  summarizes the set-aside path into the note (memoized; without an answer the note lists the files). The task reads
+  the context first and memoizes the facts with that revision (its newest entry); a retry or the final commit refuses
+  with "changed meanwhile" once any entry that the model sees lands after it. It refuses roots, busy conversations (a
+  run or queued input), running compactions (both at admission and in the final commit), and points before the newest
+  head marker (a compaction or reset). A suffix of only tool results can be set aside too. It
   emits `lineage.rewound {conversation, at, entry, dependents}` and writes a display-only
   `lineage.rewound-dependent` marker in each dependent, which keeps running. The transcript folds what a go-back set
   aside (`data.setAside`) into **N steps set aside · show**.

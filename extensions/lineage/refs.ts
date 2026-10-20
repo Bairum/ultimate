@@ -28,8 +28,11 @@ export const CompactAction = actionRef<{ id: number; instructions?: string }, { 
   'compact',
 )
 
-/** A file that changed in a conversation's checkout since an entry: lines added and removed, or new and untracked. */
-export type RewindFile = { path: string; added: number; removed: number; untracked?: true }
+/**
+ * A file the set-aside path touched (a commit or an edit or write after the entry) as it is in the checkout now: lines
+ * added and removed since the entry's tip, new and untracked, or neither when Git shows no difference to count.
+ */
+export type RewindFile = { path: string; added?: number; removed?: number; untracked?: true }
 /** A conversation that built on the path a go-back set aside: a subagent or branch it started, or one it messaged. */
 export type RewindDependent = { id: number; via: 'subagent' | 'branch' | 'message' }
 /** What going back to an entry would set aside and leave in the checkout; `refused` says why it cannot now. */

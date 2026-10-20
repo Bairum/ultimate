@@ -20,11 +20,13 @@ import { implementAction } from '../../lib/actions.ts'
 import type { ActionInput } from '../../lib/actions.ts'
 import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { defineEvent } from '../../shared/events.ts'
 import { Committed } from '../coding-tools/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
 import { Started } from '../subagents/api.ts'
+import { isAbsolute, relative, resolve } from 'node:path'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { Roots } from './api.ts'
 import { RewindAction, RewindPreviewAction, Rewound } from './refs.ts'
@@ -39,6 +41,14 @@ type Facts = {
   commits: { sha: string; subject: string }[]
   dependents: RewindDependent[]
 }
+/** The facts and the context revision they were gathered against: the newest entry the model saw then. */
+type Gathered = { revision: number | null; facts: Facts }
+
+/**
+ * Board's `board.sent`, read by kind: board needs lineage, so lineage importing Board's token would close a cycle.
+ * Only the fields read here; Board's refs.ts owns the full shape.
+ */
+const MessageSent = defineEvent<{ from: number | 'user'; to: number | 'user' }>('board.sent')
 
 /** How many events a go-back reads back from the log for commits and started conversations. */
 const EVENTS = 5000
@@ -56,8 +66,11 @@ export async function refusal(tx: Tx, id: ConversationId, at: number) {
     1,
   )
   if (!found.items.length) return `Entry ${at} is not in #${id}`
-  if ((await tx.doc(LiveDoc, id)).run || (await tx.doc(InboxDoc, id)).items.length)
+  const live = await tx.doc(LiveDoc, id)
+  if (live.run || (await tx.doc(InboxDoc, id)).items.length)
     return `#${id} is busy: stop it or wait until it is idle, then go back.`
+  // A compaction placed after the go-back would summarize the set-aside path back into the context.
+  if (live.compactions?.length) return `#${id} is compacting: wait until it finishes, then go back.`
   const marker = await tx.latestHeadMarker(id)
   if (marker && marker.id > at)
     return `#${id} was compacted after this point; it can't go back past a compaction.`
@@ -69,7 +82,8 @@ const json = (messages: readonly Message[] | undefined) => JSON.stringify(messag
 /**
  * The edits that make `current` contribute what `past` (the context as of entry `at`) did: every entry after `at` that
  * still contributes is omitted, and an entry up to `at` that an earlier go-back changed gets its old messages back.
- * `steps` counts the entries with user or assistant messages set aside.
+ * `steps` counts the entries set aside with messages other than system prompt changes: inputs, answers, tool calls and
+ * results, notes.
  */
 export function rewindPlan(current: View, past: View, at: number) {
   const before = new Map(past.entries.map((entry, index) => [entry.id, past.contributions[index]]))
@@ -80,7 +94,7 @@ export function rewindPlan(current: View, past: View, at: number) {
     if (entry.id > at) {
       if (!now.length) return
       edits.push({ target: entry.id as EntryId, action: 'omit' })
-      if (now.some((message) => message.role === 'user' || message.role === 'assistant')) steps++
+      if (now.some((message) => message.role !== 'system')) steps++
       return
     }
     const then = before.get(entry.id)
@@ -94,33 +108,69 @@ export function rewindPlan(current: View, past: View, at: number) {
   return { edits, steps }
 }
 
-/** The changes in `cwd` since `base` (HEAD without one): tracked files with their line counts, then untracked files. */
-async function changedFiles(cwd: string, base: string | undefined): Promise<RewindFile[]> {
-  const numstat = await git(cwd, 'diff', '--numstat', '--no-renames', base ?? 'HEAD')
-  const untracked = await git(cwd, 'ls-files', '--others', '--exclude-standard')
-  return [
-    ...numstat
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => {
-        // Binary files count `-` lines.
-        const [added, removed, path] = line.split('\t')
-        return { path, added: Number(added) || 0, removed: Number(removed) || 0 }
-      }),
-    ...untracked
-      .split('\n')
-      .filter(Boolean)
-      .map((path) => ({ path, added: 0, removed: 0, untracked: true as const })),
-  ]
+const rows = (text: string) => text.split('\n').filter(Boolean)
+
+/** The paths the edit and write calls among `messages` touched, relative to `top` (outside it: as given). */
+export function editedPaths(messages: readonly Message[], cwd: string, top: string) {
+  const paths = new Set<string>()
+  for (const message of messages)
+    if (message.role === 'assistant')
+      for (const block of message.content)
+        if (
+          block.type === 'toolCall' &&
+          (block.name === 'edit' || block.name === 'write') &&
+          typeof block.arguments.path === 'string'
+        ) {
+          const path = resolve(cwd, block.arguments.path)
+          const inside = relative(top, path)
+          paths.add(inside && !inside.startsWith('..') && !isAbsolute(inside) ? inside : path)
+        }
+  return paths
+}
+
+/**
+ * `paths` as they are in the checkout `top` now: lines added and removed since `base` (HEAD without one; none in a
+ * repository without a commit), new and untracked, or neither when Git shows no difference to count.
+ */
+async function fileStates(top: string, paths: ReadonlySet<string>, base: string | undefined) {
+  if (!paths.size) return []
+  const listed = [...paths]
+  const head = await git(top, 'rev-parse', '--verify', '--quiet', 'HEAD').catch(
+    // A repository before its first commit has no HEAD to count lines against.
+    () => undefined,
+  )
+  const counts = new Map<string, { added: number; removed: number }>()
+  if (head)
+    for (const line of rows(
+      await git(top, 'diff', '--numstat', '--no-renames', base ?? 'HEAD', '--', ...listed),
+    )) {
+      // Binary files count `-` lines.
+      const [added, removed, path] = line.split('\t')
+      counts.set(path, { added: Number(added) || 0, removed: Number(removed) || 0 })
+    }
+  const untracked = new Set(
+    rows(await git(top, 'ls-files', '--others', '--exclude-standard', '--', ...listed)),
+  )
+  return listed.map((path): RewindFile => {
+    if (untracked.has(path)) return { path, untracked: true }
+    return { path, ...counts.get(path) }
+  })
 }
 
 /**
  * What happened in `id`'s checkout and tree after entry `at`. Entry and event ids share one sequence, so an event after
- * the entry has a larger id: its commits since (the checkout's tip at `at` is its newest commit before, else the parent
- * of its first after, else its worktree's base), the files changed since that tip, and the conversations it started or
- * messaged since.
+ * the entry has a larger id. Its commits since; the files the set-aside path touched (the commits' files, and what its
+ * edit and write calls named in `setAside`), counted against the checkout's tip at `at` (its newest commit before, else
+ * the parent of its first after, else its worktree's base), so changes from before the entry stay out; and the
+ * conversations it started or messaged since.
  */
-async function facts(host: ExtensionHost, id: ConversationId, at: number, ctx: Context) {
+async function facts(
+  host: ExtensionHost,
+  id: ConversationId,
+  at: number,
+  setAside: readonly Message[],
+  ctx: Context,
+) {
   const own = (data: { conversation?: number; parent?: number }) =>
     data.conversation === id || data.parent === id
   const cwd = (await host.harness().snapshot(AgentDoc, id, ctx))?.cwd ?? host.projectRoot
@@ -146,10 +196,17 @@ async function facts(host: ExtensionHost, id: ConversationId, at: number, ctx: C
     before?.data.sha ??
     after[0]?.data.parents[0] ??
     (await host.need(WorkspacesApi).get(id, ctx))?.base
-  const files = await changedFiles(cwd, base).catch(
-    // Outside a repository, or with a tip Git no longer has, there is no list to show.
-    () => [],
-  )
+  const paths = top ? editedPaths(setAside, cwd, top) : new Set<string>()
+  if (top)
+    for (const { data } of after)
+      for (const path of rows(
+        await git(top, 'show', '--name-only', '--format=', data.sha).catch(
+          // A commit an amend or rebase dropped may be gone; its files show through the other commits and edits.
+          () => '',
+        ),
+      ))
+        paths.add(path)
+  const files = top ? await fileStates(top, paths, base) : []
   const dependents = new Map<number, RewindDependent>()
   for (const event of await host.eventLog.recent({
     events: [Started],
@@ -162,22 +219,19 @@ async function facts(host: ExtensionHost, id: ConversationId, at: number, ctx: C
         id: event.data.id,
         via: event.data.kind === 'branch' ? 'branch' : 'subagent',
       })
-  const board = host.doc('board')
-  const log = board && (await host.harness().snapshot(board, ROOT_CONVERSATION_ID, ctx))
-  for (const message of (log?.messages ?? []) as {
-    from: number | 'user'
-    to: number | 'user'
-    entry?: number
-  }[])
+  for (const { data } of await host.eventLog.recent({
+    events: [MessageSent],
+    since: at,
+    order: 'ascending',
+    limit: EVENTS,
+  }))
     if (
-      message.from === id &&
-      typeof message.to === 'number' &&
-      message.to !== id &&
-      message.entry !== undefined &&
-      message.entry > at &&
-      !dependents.has(message.to)
+      data.from === id &&
+      typeof data.to === 'number' &&
+      data.to !== id &&
+      !dependents.has(data.to)
     )
-      dependents.set(message.to, { id: message.to, via: 'message' })
+      dependents.set(data.to, { id: data.to, via: 'message' })
   return {
     files,
     commits: after.map((event) => ({ sha: event.data.sha, subject: event.data.subject })),
@@ -197,7 +251,7 @@ export function noteText(id: number, at: number, found: Facts, summary?: string)
       'Since then these files changed in your worktree:',
       ...found.files.map(
         (file) =>
-          `- ${file.path} ${file.untracked ? '(new, untracked)' : `(+${file.added} −${file.removed})`}`,
+          `- ${file.path} ${file.untracked ? '(new, untracked)' : file.added === undefined ? '(changed)' : `(+${file.added} −${file.removed})`}`,
       ),
     )
   else lines.push('Your worktree has no changes since then.')
@@ -215,12 +269,38 @@ export function noteText(id: number, at: number, found: Facts, summary?: string)
   return lines.join('\n')
 }
 
-/** The views a go-back compares: the context now and as of entry `at`. */
+/**
+ * The views a go-back compares: the context now and as of entry `at`, the plan between them, the messages it sets
+ * aside, and the revision: the newest entry of the context now.
+ */
 async function views(host: ExtensionHost, id: ConversationId, at: number, ctx: Context) {
   const conversation = (await host.harness().conversation(id, ctx))!
   const current = await conversation.context(ctx)
   const past = await conversation.context(ctx, { at: at as EntryId })
-  return { current, past, plan: rewindPlan(current, past, at) }
+  const setAside = current.entries.flatMap((entry, index) =>
+    entry.id > at
+      ? current.contributions[index].filter((message) => message.role !== 'system')
+      : [],
+  )
+  const revision = (current.entries.at(-1)?.id as number | undefined) ?? null
+  return { current, past, plan: rewindPlan(current, past, at), setAside, revision }
+}
+
+/**
+ * Why the context moved past `revision`: an entry after it that changes what the model sees (a turn, a note, an
+ * edit). Display-only entries (a summary line, a marker) do not count. Read inside `tx` before its first table write.
+ */
+async function moved(tx: Tx, id: ConversationId, revision: number | null) {
+  const since = await tx.scanEntries(
+    {
+      conversationId: id,
+      ...(revision === null ? {} : { minEntryId: (revision + 1) as EntryId }),
+    },
+    100,
+  )
+  return since.next || since.items.some((entry) => entry.model || entry.edits || entry.head)
+    ? `#${id} changed meanwhile; go back again`
+    : undefined
 }
 
 const nothing = 'Nothing after this point is in the context to set aside.'
@@ -244,11 +324,18 @@ export function rewindTask(host: ExtensionHost) {
         const id = runtime.conversationId
         const { at, summarize } = task.input
         try {
-          const found =
-            (await runtime.memo<Facts>('facts', ctx)) ??
-            (await runtime.memo('facts', await facts(host, id, at, ctx), ctx))
-          const { current, plan } = await views(host, id, at, ctx)
-          if (!plan.steps) throw new Error(nothing)
+          // The context is read first and the facts gathered against it; both keep its revision, so a retry, and the
+          // final commit, refuse once the conversation moved past it instead of omitting work the note never listed.
+          const { plan, setAside, revision } = await views(host, id, at, ctx)
+          let gathered = await runtime.memo<Gathered>('facts', ctx)
+          if (!gathered) {
+            const found = await facts(host, id, at, setAside, ctx)
+            gathered = await runtime.memo('facts', { revision, facts: found }, ctx)
+          }
+          if (gathered.revision !== revision)
+            throw new Error(`#${id} changed meanwhile; go back again`)
+          const found = gathered.facts
+          if (!plan.edits.length) throw new Error(nothing)
           let response: ResponseReceipt | undefined
           if (summarize) {
             const kept = await runtime.memo<SummaryModel | false>('summary-model', ctx)
@@ -260,11 +347,6 @@ export function rewindTask(host: ExtensionHost) {
                     ctx,
                   )
                 : kept
-            const setAside = current.entries.flatMap((entry, index) =>
-              entry.id > at
-                ? current.contributions[index].filter((message) => message.role !== 'system')
-                : [],
-            )
             if (model)
               response = await conversations
                 .askSummaryModel(
@@ -289,21 +371,9 @@ export function rewindTask(host: ExtensionHost) {
               ? response.text.trim()
               : undefined
           const text = noteText(id, at, found, summary)
-          const tail = current.entries.at(-1)?.id
           await runtime.commit(async (tx) => {
-            const refused = await refusal(tx, id, at)
+            const refused = (await refusal(tx, id, at)) ?? (await moved(tx, id, revision))
             if (refused) throw new Error(refused)
-            // An entry that changed the context since the views were read would escape the edits: ask again instead.
-            // Display-only entries (a summary, a marker) change nothing the model sees.
-            const since = await tx.scanEntries(
-              {
-                conversationId: id,
-                ...(tail === undefined ? {} : { minEntryId: (tail + 1) as EntryId }),
-              },
-              100,
-            )
-            if (since.next || since.items.some((entry) => entry.model || entry.edits || entry.head))
-              throw new Error(`#${id} changed meanwhile; go back again`)
             const entry = await tx.appendEntry(id, {
               kind: 'lineage.rewound',
               data: {
@@ -397,9 +467,9 @@ export const rewindActions = {
     const empty = { steps: 0, files: [], commits: [], dependents: [], summaryModel }
     const refused = await host.harness().commit((tx) => refusal(tx, id, at), context)
     if (refused) return { ...empty, refused }
-    const { plan } = await views(host, id, at, context)
-    if (!plan.steps) return { ...empty, refused: nothing }
-    return { ...(await facts(host, id, at, context)), steps: plan.steps, summaryModel }
+    const { plan, setAside } = await views(host, id, at, context)
+    if (!plan.edits.length) return { ...empty, refused: nothing }
+    return { ...(await facts(host, id, at, setAside, context)), steps: plan.steps, summaryModel }
   }),
   /** Go back to `at` in place; resolves once the note is written, or rejects with why it could not. */
   rewind: implementAction(RewindAction, async (args, { host }) => {
