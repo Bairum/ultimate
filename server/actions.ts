@@ -1,10 +1,13 @@
 import { execFile } from 'node:child_process'
 import type { JsonValue } from '@earendil-works/chord'
+import type { Device } from '../shared/events.ts'
 import type { ExtensionHost } from './extensions.ts'
 
 export interface ActionContext {
   host: ExtensionHost
   conversationId?: number
+  /** The browser that asked, for a call from the UI; agents' calls have none. */
+  device?: Device
   signal: AbortSignal
   exec(
     command: string,

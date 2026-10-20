@@ -35,7 +35,11 @@ const subscribe = (listener: () => void) => {
   }
 }
 
-/** The list, read on mount, after a save or delete here, and when the enabled extensions or their declarations change. */
+/**
+ * The list, read on mount, after a save or delete here, and when an extension is enabled, disabled or changes its
+ * declared secrets. A hot reload of server code alone (`loadedAt`) is left out: it changes nothing the list shows,
+ * and re-reading on it sent a burst of reads from every tab on each save.
+ */
 function useSecrets() {
   const system = useSystem()
   // Failures show inline in the panel, not as notices: the status line reads the list on every page.
@@ -44,7 +48,6 @@ function useSecrets() {
     system?.extensions.map((extension) => [
       extension.name,
       extension.enabled,
-      extension.server?.loadedAt,
       extension.server?.secrets,
     ]),
   )

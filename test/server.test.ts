@@ -20,6 +20,8 @@ import { Metadata } from '../server/metadata.ts'
 import type { ConversationSummary, ServerEvents } from '../shared/protocol.ts'
 import { Logins } from '../extensions/models/server.ts'
 import { fixture, orderedSource, servers } from './server-fixture.ts'
+import { eventHost } from './helpers.ts'
+import { UserInputEvent } from '../shared/events.ts'
 
 describe('server', () => {
   it('admits registered identities for API, SSE, actions, assets and HMR, then revokes on disposal and unload', async () => {
@@ -405,6 +407,45 @@ export default host => { host.resource('cleanup.process',()=>{
     expect((await post(server, `/api/conversations/1/inbox/${completed.id}/cancel`)).status).toBe(
       409,
     )
+  })
+  it('records each typed input as one user.input event with its device and never its text', async () => {
+    const { server } = await fixture()
+    const submit = (text: string, whenBusy?: string) =>
+      fetch(server.url + '/api/conversations/1/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: server.url,
+          'User-Agent':
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1',
+        },
+        body: JSON.stringify({ text, whenBusy }),
+      }).then((response) => response.json() as Promise<{ submissionId: number }>)
+    const first = await submit('a secret plan')
+    const queued = await submit('later', 'followUp')
+    const events = await eventHost(() => server.harness, 'test').eventLog.recent({
+      events: [UserInputEvent],
+      order: 'ascending',
+    })
+    const placed = (await server.harness.submission(first.submissionId as never, context))!
+    expect(events.map((event) => event.data)).toEqual([
+      {
+        conversation: 1,
+        kind: 'prompt',
+        entry: (await placed.status(context)).entry,
+        length: 13,
+        device: 'phone safari',
+      },
+      {
+        conversation: 1,
+        kind: 'follow-up',
+        submission: queued.submissionId,
+        length: 5,
+        device: 'phone safari',
+      },
+    ])
+    expect(JSON.stringify(events)).not.toContain('secret')
+    await server.root.abort(context)
   })
   it('orders live-added sections and tools deterministically across reopen', async () => {
     const { server, options } = await fixture(false, {

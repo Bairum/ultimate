@@ -6,6 +6,7 @@ import type { Context } from '@earendil-works/chord'
 import { defineDoc } from '@earendil-works/pi-durable'
 import type { EntryId } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
+import type { Device } from '../../shared/events.ts'
 import { BoardDoc } from './refs.ts'
 import type { Triage } from './refs.ts'
 
@@ -40,10 +41,13 @@ export const Board = defineDoc<{ messages: BoardMessage[]; next: number }>({
 })
 
 export type BoardService = {
-  /** Reply `text` from the user to open Board message `messageId`; returns the reply's message id. */
-  answer(messageId: number, text: string, ctx: Context): Promise<number>
+  /**
+   * Reply `text` from the user to open Board message `messageId`, from browser `device`; returns the reply's message
+   * id. Records a `user.input` event.
+   */
+  answer(messageId: number, text: string, ctx: Context, device?: Device): Promise<number>
   /** Close open Board message `messageId` unanswered; its sender gets a one-way note. Returns the note's message id. */
-  dismiss(messageId: number, ctx: Context): Promise<number>
+  dismiss(messageId: number, ctx: Context, device?: Device): Promise<number>
   /** Send a one-way message from conversation `from` to `to` (`#id`, `@name` or `user`), once per `requestId`. */
   send(
     from: number,

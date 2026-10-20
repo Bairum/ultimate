@@ -46,7 +46,11 @@ posted: ids, `reply`, `steer`, never the text), `workspaces.check` (each lander 
 releasing), `cloud.backup` and `cloud.move` (started, done or failed), `coding-tools.committed` (a commit made
 through bash: full sha, repo, worktree, branch). The last six follow state outside the caller's commit (Pi's
 compaction, the machine's health file, the lease's storage switch, an upload, a git repository), so each commits on
-its own right after it. Something the user must see
+its own right after it. For debugging what the user did: `user.input` (a typed prompt, steer or follow-up, an
+answer or dismissal, a review: its conversation, entry or Board message and length, never the text) and
+`ui.navigated` (the surface or Agent's conversation changed, reported by the browser after a second and deduped),
+each with the browser's `device` label and, through Tailscale Serve, the `login`. A typed input and a review commit
+right after Pi admits them, which has no hook for queued inputs; answers commit with their Board reply. Something the user must see
 exactly once and that feeds the result the owner reports, like the lander's deploy handoff, stays a call, idempotent by
 request id; when it calls up the layering, it goes through an extension point (below).
 `host.harness().subscribeCommits` remains for watching Pi's own records (entries, tasks, submissions, conversation

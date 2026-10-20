@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { fetchOrigin, otherTransport } from '../extensions/cloud/fetch.ts'
+import { fetchOrigin, otherTransport } from '../lib/fast-forward.ts'
 
 it('swaps a GitHub remote to the other transport and leaves others alone', () => {
   expect(otherTransport('git@github.com:o/r.git')).toBe('https://github.com/o/r.git')
