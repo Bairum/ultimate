@@ -15,7 +15,7 @@ import {
   LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { ContextEdit, ConversationId, EntryId, Tx } from '@earendil-works/pi-durable'
+import type { ContextEdit, ConversationId, Cursor, EntryId, Tx } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import type { ActionInput } from '../../lib/actions.ts'
 import { git } from '../../lib/git.ts'
@@ -26,7 +26,11 @@ import { ConversationsApi } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
 import { Started } from '../subagents/api.ts'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute, relative } from 'node:path'
+import { getOrThrow } from '@earendil-works/pi-durable/env'
+import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
+import type { JsonValue } from '@earendil-works/chord'
+import type { EventData, EventRecord, EventToken } from '../../shared/events.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { Roots } from './api.ts'
 import { RewindAction, RewindPreviewAction, Rewound } from './refs.ts'
@@ -50,7 +54,7 @@ type Gathered = { revision: number | null; facts: Facts }
  */
 const MessageSent = defineEvent<{ from: number | 'user'; to: number | 'user' }>('board.sent')
 
-/** How many events a go-back reads back from the log for commits and started conversations. */
+/** How many events a go-back reads from the log per page. */
 const EVENTS = 5000
 
 const SUMMARY_SYSTEM =
@@ -110,9 +114,26 @@ export function rewindPlan(current: View, past: View, at: number) {
 
 const rows = (text: string) => text.split('\n').filter(Boolean)
 
-/** The paths the edit and write calls among `messages` touched, relative to `top` (outside it: as given). */
-export function editedPaths(messages: readonly Message[], cwd: string, top: string) {
-  const paths = new Set<string>()
+// Pi upstream: @earendil-works/pi-durable@1.3.0 src/tools/path-utils.ts — copied unexported normalizeToolPath (unicode spaces, leading @), which edit and write apply before env.absolutePath. Drop when Pi exports resolveToolPath's normalization.
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g
+function normalizeToolPath(path: string) {
+  const normalized = path.replace(UNICODE_SPACES, ' ')
+  return normalized.startsWith('@') ? normalized.slice(1) : normalized
+}
+
+/**
+ * The paths the edit and write calls among `messages` touched, resolved as those tools resolve them in `cwd` (`~`, a
+ * leading `@`, `file://`): relative to `top` inside the checkout, absolute in `outside` otherwise.
+ */
+export async function editedPaths(
+  messages: readonly Message[],
+  cwd: string,
+  top: string,
+  ctx: Context,
+) {
+  const env = new NodeExecutionEnv({ cwd })
+  const inside = new Set<string>()
+  const outside = new Set<string>()
   for (const message of messages)
     if (message.role === 'assistant')
       for (const block of message.content)
@@ -121,16 +142,19 @@ export function editedPaths(messages: readonly Message[], cwd: string, top: stri
           (block.name === 'edit' || block.name === 'write') &&
           typeof block.arguments.path === 'string'
         ) {
-          const path = resolve(cwd, block.arguments.path)
-          const inside = relative(top, path)
-          paths.add(inside && !inside.startsWith('..') && !isAbsolute(inside) ? inside : path)
+          const path = getOrThrow(
+            await env.absolutePath(normalizeToolPath(block.arguments.path), ctx),
+          )
+          const local = relative(top, path)
+          if (local && !local.startsWith('..') && !isAbsolute(local)) inside.add(local)
+          else outside.add(path)
         }
-  return paths
+  return { inside, outside }
 }
 
 /**
- * `paths` as they are in the checkout `top` now: lines added and removed since `base` (HEAD without one; none in a
- * repository without a commit), new and untracked, or neither when Git shows no difference to count.
+ * `paths` (relative to the checkout `top`) as they are now: lines added and removed since `base` (HEAD without one;
+ * none in a repository without a commit), new and untracked, or neither when Git shows no difference to count.
  */
 async function fileStates(top: string, paths: ReadonlySet<string>, base: string | undefined) {
   if (!paths.size) return []
@@ -160,17 +184,26 @@ async function fileStates(top: string, paths: ReadonlySet<string>, base: string 
 /**
  * What happened in `id`'s checkout and tree after entry `at`. Entry and event ids share one sequence, so an event after
  * the entry has a larger id. Its commits since; the files the set-aside path touched (the commits' files, and what its
- * edit and write calls named in `setAside`), counted against the checkout's tip at `at` (its newest commit before, else
+ * edit and write calls named in every stored entry after `at`), counted against the checkout's tip at `at` (its newest commit before, else
  * the parent of its first after, else its worktree's base), so changes from before the entry stay out; and the
  * conversations it started or messaged since.
  */
-async function facts(
-  host: ExtensionHost,
-  id: ConversationId,
-  at: number,
-  setAside: readonly Message[],
-  ctx: Context,
-) {
+async function facts(host: ExtensionHost, id: ConversationId, at: number, ctx: Context) {
+  /** Every event of `token` after entry `at`, oldest first: the log pages by id, so no window cuts it short. */
+  const since = async <D extends JsonValue>(token: EventToken<D>) => {
+    const found: EventRecord<D>[] = []
+    for (let after = at; ;) {
+      const page = await host.eventLog.recent({
+        events: [token],
+        since: after,
+        order: 'ascending',
+        limit: EVENTS,
+      })
+      found.push(...page)
+      if (page.length < EVENTS) return found
+      after = page.at(-1)!.id
+    }
+  }
   const own = (data: { conversation?: number; parent?: number }) =>
     data.conversation === id || data.parent === id
   const cwd = (await host.harness().snapshot(AgentDoc, id, ctx))?.cwd ?? host.projectRoot
@@ -181,50 +214,68 @@ async function facts(
   // Only commits made in this checkout: a command may commit in another repository.
   const here = (data: { conversation: number; repo: string; worktree?: string }) =>
     own(data) && (data.worktree ?? data.repo) === top
-  const after = (
-    await host.eventLog.recent({
-      events: [Committed],
-      since: at,
-      order: 'ascending',
-      limit: EVENTS,
-    })
-  ).filter((event) => here(event.data))
-  const before = (
-    await host.eventLog.recent({ events: [Committed], before: at + 1, limit: EVENTS })
-  ).find((event) => here(event.data))
+  const after = (await since(Committed)).filter((event) => here(event.data))
+  let before: EventRecord<EventData<typeof Committed>> | undefined
+  for (let until = at + 1; !before;) {
+    const page = await host.eventLog.recent({ events: [Committed], before: until, limit: EVENTS })
+    before = page.find((event) => here(event.data))
+    if (page.length < EVENTS) break
+    until = page.at(-1)!.id
+  }
   const base =
     before?.data.sha ??
     after[0]?.data.parents[0] ??
     (await host.need(WorkspacesApi).get(id, ctx))?.base
-  const paths = top ? editedPaths(setAside, cwd, top) : new Set<string>()
+  // Every stored entry after the point, also ones an earlier go-back set aside: their writes are still on disk.
+  const conversation = (await host.harness().conversation(id, ctx))!
+  const written: Message[] = []
+  let cursor: Cursor | undefined
+  do {
+    const page = await conversation.entries(
+      { minEntryId: (at + 1) as EntryId, order: 'ascending' },
+      256,
+      cursor,
+      ctx,
+    )
+    for (const entry of page.items) written.push(...(entry.model ?? []))
+    cursor = page.next
+  } while (cursor)
+  const edited = top
+    ? await editedPaths(written, cwd, top, ctx)
+    : { inside: new Set<string>(), outside: new Set<string>() }
+  const paths = edited.inside
   if (top)
     for (const { data } of after)
       for (const path of rows(
-        await git(top, 'show', '--name-only', '--format=', data.sha).catch(
+        // A merge lists its changes against its first parent; a root commit against nothing.
+        await git(
+          top,
+          'diff-tree',
+          '-r',
+          '--no-commit-id',
+          '--name-only',
+          '--root',
+          '--diff-merges=first-parent',
+          data.sha,
+        ).catch(
           // A commit an amend or rebase dropped may be gone; its files show through the other commits and edits.
           () => '',
         ),
       ))
         paths.add(path)
-  const files = top ? await fileStates(top, paths, base) : []
+  const files = [
+    ...(top ? await fileStates(top, paths, base) : []),
+    // Git cannot count a file outside the checkout: it is listed as changed.
+    ...[...edited.outside].map((path): RewindFile => ({ path, outside: true })),
+  ]
   const dependents = new Map<number, RewindDependent>()
-  for (const event of await host.eventLog.recent({
-    events: [Started],
-    since: at,
-    order: 'ascending',
-    limit: EVENTS,
-  }))
+  for (const event of await since(Started))
     if (own(event.data) && event.data.kind !== 'standing' && event.data.id !== id)
       dependents.set(event.data.id, {
         id: event.data.id,
         via: event.data.kind === 'branch' ? 'branch' : 'subagent',
       })
-  for (const { data } of await host.eventLog.recent({
-    events: [MessageSent],
-    since: at,
-    order: 'ascending',
-    limit: EVENTS,
-  }))
+  for (const { data } of await since(MessageSent))
     if (
       data.from === id &&
       typeof data.to === 'number' &&
@@ -251,7 +302,7 @@ export function noteText(id: number, at: number, found: Facts, summary?: string)
       'Since then these files changed in your worktree:',
       ...found.files.map(
         (file) =>
-          `- ${file.path} ${file.untracked ? '(new, untracked)' : file.added === undefined ? '(changed)' : `(+${file.added} −${file.removed})`}`,
+          `- ${file.path} ${file.outside ? '(changed, outside the checkout)' : file.untracked ? '(new, untracked)' : file.added === undefined ? '(changed)' : `(+${file.added} −${file.removed})`}`,
       ),
     )
   else lines.push('Your worktree has no changes since then.')
@@ -329,7 +380,7 @@ export function rewindTask(host: ExtensionHost) {
           const { plan, setAside, revision } = await views(host, id, at, ctx)
           let gathered = await runtime.memo<Gathered>('facts', ctx)
           if (!gathered) {
-            const found = await facts(host, id, at, setAside, ctx)
+            const found = await facts(host, id, at, ctx)
             gathered = await runtime.memo('facts', { revision, facts: found }, ctx)
           }
           if (gathered.revision !== revision)
@@ -467,9 +518,9 @@ export const rewindActions = {
     const empty = { steps: 0, files: [], commits: [], dependents: [], summaryModel }
     const refused = await host.harness().commit((tx) => refusal(tx, id, at), context)
     if (refused) return { ...empty, refused }
-    const { plan, setAside } = await views(host, id, at, context)
+    const { plan } = await views(host, id, at, context)
     if (!plan.edits.length) return { ...empty, refused: nothing }
-    return { ...(await facts(host, id, at, setAside, context)), steps: plan.steps, summaryModel }
+    return { ...(await facts(host, id, at, context)), steps: plan.steps, summaryModel }
   }),
   /** Go back to `at` in place; resolves once the note is written, or rejects with why it could not. */
   rewind: implementAction(RewindAction, async (args, { host }) => {

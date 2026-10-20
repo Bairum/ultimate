@@ -76,9 +76,11 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   and the landing.
 - **Go back** (`rewind.ts`, `rewind.tsx`): the message action **Go back to here** on any stored message of a non-root
   conversation (standing agents included) opens a confirm dialog fed by `rewindPreview {conversation, at}`: steps set
-  aside; the files the set-aside path touched (files of its commits, `git show --name-only`, and paths its `edit` and
-  `write` calls named) with their `git diff --numstat` against the checkout's tip at the entry, untracked, or
-  "changed" (no HEAD to count against, or no difference), so uncommitted work from before the entry stays out;
+  aside; the files the set-aside path touched (files of its commits, a merge's against its first parent, and paths
+  the `edit` and `write` calls in every stored entry after the point named, resolved as those tools resolve them) with
+  their `git diff --numstat` against the checkout's tip at the entry, untracked, "changed" (no HEAD to count against,
+  or no difference), or "changed, outside the checkout" (never passed to Git), so uncommitted work from before the
+  entry stays out;
   commits since; and the conversations that built on the path (subagents and branches it started, conversations it
   messaged per `board.sent` events, read by kind since board needs lineage). User-only `rewind {conversation, at, summarize?}` runs task
   `lineage.rewind` in the conversation: it appends one `lineage.rewound` entry whose `edits` omit every entry after

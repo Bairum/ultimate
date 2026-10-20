@@ -28,7 +28,9 @@ function Files({ files }: { files: readonly RewindFile[] }) {
             {file.path}
           </span>
           <span className="ml-auto shrink-0 tabular-nums">
-            {file.untracked ? (
+            {file.outside ? (
+              <span className="text-muted-foreground">outside the checkout</span>
+            ) : file.untracked ? (
               <span className="text-muted-foreground">new</span>
             ) : file.added === undefined ? (
               <span className="text-muted-foreground">changed</span>

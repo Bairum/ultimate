@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { configure } from '@earendil-works/pi-durable'
@@ -129,5 +129,62 @@ it('lists the files the path wrote in a repository without a commit', async () =
   expect(data.error).toBeUndefined()
   expect((await f.conversation.context(context)).messages.at(-1)!.content).toContain(
     '- notes.md (new, untracked)',
+  )
+})
+
+it('lists an edit outside the checkout as changed, without asking git about it', async () => {
+  const f = await fixture(true)
+  await f.ask('one')
+  const at = await f.tail()
+  const outside = join(f.repo, '..', 'outside.txt')
+  await f.ask(`EDIT ${outside}`)
+  await f.ask('EDIT inside.md')
+  const preview = (await f.call('rewindPreview', { conversation: f.conversation.id, at })).data
+  expect(preview.error).toBeUndefined()
+  expect(preview.result.files).toEqual([
+    { path: 'inside.md', untracked: true },
+    { path: resolve(outside), outside: true },
+  ])
+  const { data } = await f.call('rewind', { conversation: f.conversation.id, at })
+  expect(data.error).toBeUndefined()
+  expect((await f.conversation.context(context)).messages.at(-1)!.content).toContain(
+    `- ${resolve(outside)} (changed, outside the checkout)`,
+  )
+})
+
+it("lists a merge commit's changes against its first parent", async () => {
+  const f = await fixture(true)
+  await f.ask('one')
+  const at = await f.tail()
+  git(f.repo, 'checkout', '-q', '-b', 'side')
+  await f.commit('side.ts', 'side\n', 'side')
+  git(f.repo, 'checkout', '-q', 'main')
+  git(f.repo, 'merge', '-q', '--no-ff', 'side', '-m', 'merge side')
+  const merge = git(f.repo, 'rev-parse', 'HEAD')
+  await f.recorded(merge, 'merge side')
+  // A turn after the point, so there is something to set aside.
+  await f.ask('merged')
+  const preview = (await f.call('rewindPreview', { conversation: f.conversation.id, at })).data
+    .result
+  expect(preview.refused).toBeUndefined()
+  expect(preview.commits).toEqual([{ sha: merge, subject: 'merge side' }])
+  expect(preview.files).toEqual([{ path: 'side.ts', added: 1, removed: 0 }])
+})
+
+it('still lists a file written after a later point when going back again past it', async () => {
+  const f = await fixture(true)
+  await f.ask('one')
+  const a = await f.tail()
+  await f.ask('two')
+  const b = await f.tail()
+  await f.ask('EDIT later.md')
+  expect((await f.call('rewind', { conversation: f.conversation.id, at: b })).data.error).toBe(
+    undefined,
+  )
+  // The write is set aside now, but still on disk: going back further lists it again.
+  const { data } = await f.call('rewind', { conversation: f.conversation.id, at: a })
+  expect(data.error).toBeUndefined()
+  expect((await f.conversation.context(context)).messages.at(-1)!.content).toContain(
+    '- later.md (new, untracked)',
   )
 })

@@ -190,6 +190,38 @@ it('summarizes the set-aside path when asked, once, and lists files alone when t
   expect(textOf(last.model?.[0]?.content)).not.toContain('Summary of the set-aside path')
 })
 
+it('finds a dependent behind more than one page of other events', async () => {
+  const f = await fixture()
+  await f.ask('one')
+  const at = await f.answer('one')
+  await f.ask('two')
+  const recipient = await f.server.harness.createConversation(
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  await f.server.harness.commit(async (tx) => {
+    // Other conversations' messages fill more than a page (5000 events) before this conversation's own.
+    for (let message = 0; message < 5001; message++)
+      await emit(tx, MessageSent, {
+        message,
+        from: 'user',
+        to: recipient.id,
+        reply: false,
+        steer: false,
+      })
+    await emit(tx, MessageSent, {
+      message: 5001,
+      from: f.conversation.id,
+      to: recipient.id,
+      reply: false,
+      steer: false,
+    })
+  }, context)
+  const preview = (await f.call('rewindPreview', { conversation: f.conversation.id, at })).data
+    .result
+  expect(preview.dependents).toEqual([{ id: recipient.id, via: 'message' }])
+})
+
 it('flags conversations started or messaged after the entry, and keeps a standing agent its id', async () => {
   const f = await fixture()
   const early = await f.server.harness.createConversation(
