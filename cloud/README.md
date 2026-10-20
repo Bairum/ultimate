@@ -45,8 +45,7 @@ confirms that no cloud exists yet. @sync in the machine home guides a join.
 4. Move a project with **Move here** on a standby's page or in the status line's `on <machine>` popover, or ask @sync.
    The machine fast-forwards its checkout, installs when the lockfile changed, checks its model login and secrets, has
    the writer finish its running tasks and release, downloads the snapshot and takes over; every step shows in the
-   move's card on both machines. A writer keeps its project while it runs, idle or not; it releases only for a move
-   and when Ultimate stops cleanly, so the next machine takes it without waiting for the first. **Resume here**
+   move's card on both machines. A writer releases its project only for a move and when Ultimate stops cleanly, so the next machine takes it without waiting for the first. **Resume here**
    takes a released project back.
 
 ## Run locally

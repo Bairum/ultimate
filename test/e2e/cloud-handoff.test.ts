@@ -186,7 +186,7 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
   }, 180_000)
 
   it('releases on a clean stop, and a standby takes the free lease without a handover', async () => {
-    // B serves however long it idles; a clean stop releases it, and B starts again on standby.
+    // A clean stop releases B's lease, and B starts again on standby.
     const exited = once(b.child, 'exit')
     b.child.kill('SIGTERM')
     await exited
