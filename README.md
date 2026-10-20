@@ -156,7 +156,6 @@ ULTIMATE_FAUX=1 pnpm start        # a scripted demo model, no tokens
 pnpm check                        # format, lint, types
 pnpm test                         # fast in-process tests with the faux model
 pnpm test:e2e                     # tests that spawn real supervisors and instances
-pnpm eval                         # real-model agent evals, ending with their cost
 ```
 
 ## License

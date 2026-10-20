@@ -1,6 +1,8 @@
 # Faux demo
 
 Send `questions demo` to preview the questions card: a yes/no question and a choice with a recommendation.
+`decisions demo` sends three lettered decisions with stated picks (read without a model); `ask <text>` sends any text
+as a reply-expected message to the user.
 In @ultimate's conversation, send `messages demo` to send the user a one-way update and a question, or `message #<id>` or `message @<name>`
 (optionally `one-way`) to message another conversation, previewing the outgoing message cards; paste images with it to forward them (`images: 'latest'`).
 In @ultimate's conversation, `chat demo` (typed, or posted to @ultimate) runs tools, starts a `landing demo` branch

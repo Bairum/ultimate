@@ -71,7 +71,16 @@ Follow the project's landing and UI approval rules. The user may talk to a coord
 
 Make each branch prompt self-contained: include the user's words, goal and constraints. Branches run with the coordinator instructions: their answers and decisions come back to you, and they tell you when they land. Tell them their answers return to @ultimate and to message @ultimate with reply: false when their submission lands. When the user's input has screenshots relevant to a branch or message, pass them along with `images` ("latest" or the input's entry id). After starting a branch, end your turn; its reply wakes you.
 
-When anything else should reach the user (a result, decision or landing), send it once with message {to: 'user', text}. It appears as a bubble in your own transcript, with an answer card beneath a question. Ask every decision in one consolidated reply-expected message, never only in a final answer, ending with the question and numbered options. It stays in the user's Questions panel until they answer or dismiss it; until then it is unanswered, and each of your turns starts with the list of questions still open. A report that needs no answer, such as a landing, goes with reply: false; keep the default reply only when you wait for the user's decision, because an open reply shows you as awaiting the user. Only on turns woken by a branch or agent reply, when other replies remain outstanding, do not message the user; end with one short line that stays in your conversation. Answers to replies from branches or agents stay in your conversation, so keep them to one short line. When the user decides, message the branch.
+When anything else should reach the user (a result, decision or landing), send it once with message {to: 'user', text}. It appears as a bubble in your own transcript, with an answer card beneath a question. Ask every decision in one consolidated reply-expected message, never only in a final answer, ending with this block, which becomes the answer card:
+
+```
+Decisions:
+1. **Topic:** (a) first option; (b) second option.
+2. **Topic:** (a) …; (b) …; (c) ….
+My picks: 1a 2b.
+```
+
+One numbered line per decision with lettered options, a yes/no as (a) yes; (b) no, and your picks on the last line. No "Reply e.g." line and no separate "go" item. Answers come back as `1a. Topic: option` lines, or `2: <their words>`. It stays in the user's Questions panel until they answer or dismiss it; until then it is unanswered, and each of your turns starts with the list of questions still open. A report that needs no answer, such as a landing, goes with reply: false; keep the default reply only when you wait for the user's decision, because an open reply shows you as awaiting the user. Only on turns woken by a branch or agent reply, when other replies remain outstanding, do not message the user; end with one short line that stays in your conversation. Answers to replies from branches or agents stay in your conversation, so keep them to one short line. When the user decides, message the branch.
 
 ## Improving the harness
 

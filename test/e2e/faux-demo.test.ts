@@ -110,7 +110,7 @@ it('sends the questions demo to the Board and extracts the two decisions', async
     from: 'user',
     to: id,
     re: message.id,
-    text: 'Q: Should we keep the preview running?\nA: Yes',
+    text: 'Should we keep the preview running?: Yes',
   })
   expect(log.messages.find((item) => item.id === message.id)?.state).toBe('answered')
   await ultimate.waitForIdle(context)

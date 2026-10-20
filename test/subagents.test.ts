@@ -1,9 +1,10 @@
 // First: helpers mocks the faux provider's token pacing, which must apply before the server modules load.
 import { eventHost, idleNeed, until, temp, removeTemp } from './helpers.ts'
 import { awaitWithContext } from '@earendil-works/chord/context'
-import { projectSettings } from '../server/project-setup.ts'
+import { decisionRoot, projectSettings } from '../server/project-setup.ts'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   fauxAssistantMessage,
   fauxText,
@@ -1764,7 +1765,7 @@ describe('subagents', () => {
     expect(JSON.stringify(view.value.entries)).toContain('Child: follow-up')
     view.dispose()
   })
-  it('extends an earlier definition with an addTools overlay and refuses other fields', async () => {
+  it('extends an earlier definition with an addTools overlay and refuses a tools list', async () => {
     const repo = await directory(),
       home = await directory(),
       cwd = await directory()
@@ -1790,8 +1791,9 @@ describe('subagents', () => {
       '---\nname: open\naddTools: [laravel]\n---\n',
     )
     for (const [name, text] of [
-      ['pinned', '---\nname: scout\naddTools: [x]\nmodel: anthropic/claude-opus-4-8\n---\n'],
-      ['empty', '---\nname: scout\naddTools: []\n---\n'],
+      ['listed', '---\nname: scout\naddTools: [x]\ntools: [read]\n---\n'],
+      ['unknown', '---\nname: scout\naddTools: []\ncolour: red\n---\n'],
+      ['badfail', '---\nname: scout\naddTools: []\nonFailure: shrug\n---\n'],
       ['orphan', '---\nname: nobody\naddTools: [x]\n---\n'],
     ])
       await writeFile(join(cwd, `.ultimate/agents/${name}.md`), text)
@@ -1808,10 +1810,80 @@ describe('subagents', () => {
     // A definition that inherits every tool stays without a list.
     expect(found.definitions.find((agent) => agent.name === 'open')?.tools).toBeUndefined()
     expect(Object.fromEntries(found.errors.map((file) => [file.name, file.error]))).toEqual({
-      empty: expect.stringContaining('addTools must be a nonempty list'),
+      listed: expect.stringContaining('adds tools with addTools, not tools'),
+      unknown: expect.stringContaining('Unknown field: colour'),
+      badfail: expect.stringContaining('onFailure must be diagnose or fix'),
       orphan: expect.stringContaining('needs an earlier definition named nobody'),
-      pinned: expect.stringContaining('not model'),
     })
+    expect(found.replaced).toEqual([])
+  })
+  it('lets an overlay override settings such as model, thinking and onFailure', async () => {
+    const repo = await directory(),
+      home = await directory(),
+      cwd = await directory()
+    await mkdir(join(repo, 'agents'))
+    await mkdir(join(cwd, '.ultimate/agents'), { recursive: true })
+    const modelRuntime = await ModelRuntime.create()
+    await writeFile(
+      join(repo, 'agents/scout.md'),
+      definition().replace('tools: [read, bash]\n', 'tools: [read, bash]\nonFailure: diagnose\n'),
+    )
+    // An empty addTools marks a settings-only overlay.
+    await writeFile(
+      join(cwd, '.ultimate/agents/scout.md'),
+      '---\nname: scout\nmodel: anthropic/claude-opus-4-8\nthinking: high\nonFailure: fix\ndescription: Our scout\naddTools: []\n---\n',
+    )
+    new ProjectTrustStore(join(home, '.ultimate')).set(cwd, true)
+    const found = await discoverAgents(repo, cwd, home, modelRuntime)
+    expect(found.definitions.find((agent) => agent.name === 'scout')).toMatchObject({
+      source: 'builtin',
+      description: 'Our scout',
+      model: { provider: 'anthropic', modelId: 'claude-opus-4-8' },
+      thinking: 'high',
+      onFailure: 'fix',
+      tools: ['read', 'bash'],
+      instructions: 'Original instructions',
+    })
+    expect(found.errors).toEqual([])
+    expect(found.replaced).toEqual([])
+  })
+  it("merges this repository's lander overlay into the tools, model and instructions of its old full copy", async () => {
+    const root = fileURLToPath(new URL('..', import.meta.url)),
+      home = await directory()
+    new ProjectTrustStore(join(home, '.ultimate')).set(decisionRoot(root), true)
+    const found = await discoverAgents(root, root, home, await ModelRuntime.create())
+    const lander = found.definitions.find((agent) => agent.name === 'lander')!
+    expect(lander).toMatchObject({
+      source: 'builtin',
+      model: { provider: 'openai-codex', modelId: 'gpt-6.1-sol' },
+      thinking: 'high',
+      onFailure: 'fix',
+      overlays: [join(root, '.ultimate/agents/lander.md')],
+    })
+    expect(lander.tools?.toSorted()).toEqual(
+      [
+        'workspace',
+        'automation',
+        'screenshot',
+        'browser',
+        'codemode',
+        'read',
+        'write',
+        'edit',
+        'bash',
+        'instance',
+        'web_search',
+        'web_fetch',
+        'restart',
+      ].toSorted(),
+    )
+    for (const line of [
+      'pnpm test:e2e',
+      'read AGENTS.md first',
+      'A flaky test is fixed at its cause or deleted, never skipped or given a longer timeout.',
+      'fix: resolve the conflict',
+    ])
+      expect(lander.instructions).toContain(line)
     expect(found.replaced).toEqual([])
   })
   it('discovers model and thinking settings and reports unknown models', async () => {

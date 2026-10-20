@@ -155,6 +155,15 @@ it('names each file that replaces a built-in definition whole, but not an overla
     join(host.userHome, '.ultimate/agents/ultimate.md'),
     '---\nname: ultimate\naddTools: [laravel]\n---\nAdded.\n',
   )
+  // A settings-only overlay (an empty addTools) is no replacement either.
+  await writeFile(
+    join(host.userHome, '.ultimate/agents/reviewer.md'),
+    '---\nname: reviewer\nthinking: high\naddTools: []\n---\n',
+  )
+  await writeFile(
+    join(host.ultimateRoot, 'agents/reviewer.md'),
+    builtin.replace('NAME', 'reviewer'),
+  )
   const issues = (await check(host)).filter((issue) => issue.area === 'Agent definitions')
   expect(issues).toEqual([
     expect.objectContaining({

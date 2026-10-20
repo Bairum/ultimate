@@ -36,7 +36,7 @@ export default defineConfig({
       },
       {
         files: ['**/*'],
-        excludeFiles: ['test/**', 'evals/**'],
+        excludeFiles: ['test/**'],
         rules: {
           'ultimate/replay-safe-reason': 'error',
           'ultimate/no-silent-catch': 'error',

@@ -101,13 +101,13 @@ it('reads plain commands and commands with their own timeout from settings', asy
     (
       await settings([
         'pnpm check',
-        [{ command: 'pnpm test', timeout: 120 }, 'pnpm eval'],
+        [{ command: 'pnpm test', timeout: 120 }, 'pnpm test:e2e'],
         { command: 'pnpm build', timeout: 60 },
       ])
     ).checks,
   ).toEqual([
     { command: 'pnpm check' },
-    [{ command: 'pnpm test', timeout: 120 }, { command: 'pnpm eval' }],
+    [{ command: 'pnpm test', timeout: 120 }, { command: 'pnpm test:e2e' }],
     { command: 'pnpm build', timeout: 60 },
   ])
   for (const invalid of [
