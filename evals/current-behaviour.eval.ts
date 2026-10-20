@@ -5,6 +5,17 @@ import { assistant, start, toolResult, user } from './fixture.ts'
 import { routingInstructions } from './routing-instructions.ts'
 import { Plan } from '../extensions/plan/server.ts'
 import { parseDefinition } from '../lib/agents.ts'
+import { decisionQuestions } from '../extensions/questions/server.ts'
+import { extract, shape } from './question-extract.ts'
+import { decisionCases } from './questions.cases.ts'
+
+// Real @ultimate asks without a decisions block: the summary model extracts them, so single misses are tendencies.
+test.for(decisionCases.filter((c) => !decisionQuestions(c.text).length))(
+  'summary model extracts real ask $id',
+  async ({ text, n, opts, rec }) => {
+    expect(shape(await extract(text), { rec })).toEqual({ n, opts, rec })
+  },
+)
 
 async function standing(ultimate: Awaited<ReturnType<typeof start>>, name = 'ultimate') {
   const { result: id } = await ultimate.action('subagents', 'standing', { name })
