@@ -43,9 +43,10 @@ the system stream: `ultimate.started` (storage opened: generation, build), `suba
 automation run, new standing agent or branch configured: agent, model, thinking, parent), `board.sent` (a message
 posted: ids, `reply`, `steer`, never the text), `workspaces.check` (each lander check run: command, result, ms),
 `conversations.compacted`, `health.changed` (a provider's state flipped), `cloud.lease` (lease acquired or
-releasing), `cloud.backup` and `cloud.move` (started, done or failed). The last five follow state outside the
-caller's commit (Pi's compaction, the machine's health file, the lease's storage switch, an upload), so each commits
-on its own right after it. Something the user must see
+releasing), `cloud.backup` and `cloud.move` (started, done or failed), `coding-tools.committed` (a commit made
+through bash: full sha, repo, worktree, branch). The last six follow state outside the caller's commit (Pi's
+compaction, the machine's health file, the lease's storage switch, an upload, a git repository), so each commits on
+its own right after it. Something the user must see
 exactly once and that feeds the result the owner reports, like the lander's deploy handoff, stays a call, idempotent by
 request id; when it calls up the layering, it goes through an extension point (below).
 `host.harness().subscribeCommits` remains for watching Pi's own records (entries, tasks, submissions, conversation

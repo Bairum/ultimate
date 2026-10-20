@@ -3,7 +3,7 @@ import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { expect, it, vi } from 'vitest'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type { ConversationId, TaskId } from '@earendil-works/pi-durable'
 import { type BashExecution } from '@earendil-works/pi-durable/tools'
 import { prepareBash } from '../../extensions/coding-tools/server.ts'
 import { removeTemp, temp } from '../helpers.ts'
@@ -27,7 +27,10 @@ it.each([0, 1])(
       const hooks = join(cwd, '.git', 'hooks')
       const before = await readdir(hooks)
       const execution: BashExecution = { command: '', cwd, env: {}, inheritEnv: true }
-      prepareBash(execution, { conversationId: 34820 as ConversationId })
+      prepareBash(execution, {
+        conversationId: 34820 as ConversationId,
+        taskId: 'task-trailer-1' as unknown as TaskId,
+      })
       const bash = (command: string) =>
         run('bash', ['-c', command], { cwd, env: { ...process.env, ...execution.env } })
       expect((await bash('git config --list')).stdout.includes('ultimate.test=preserved')).toBe(
@@ -39,7 +42,10 @@ it.each([0, 1])(
       )
       expect((await git('log', '-1', '--format=%B')).stdout).toContain('Other-Trailer: kept')
 
-      prepareBash(execution, { conversationId: 42 as ConversationId })
+      prepareBash(execution, {
+        conversationId: 42 as ConversationId,
+        taskId: 'task-trailer-2' as unknown as TaskId,
+      })
       await run('bash', ['-c', 'git commit --amend --allow-empty --no-edit'], {
         cwd,
         env: { ...process.env, ...execution.env },
