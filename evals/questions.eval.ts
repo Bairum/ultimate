@@ -4,7 +4,12 @@ import { describe, expect, inject, test } from 'vitest'
 import { askSummaryModel } from '../extensions/conversations/summary.ts'
 import { DEFAULT_SUMMARY_MODEL } from '../extensions/conversations/summary-model.ts'
 import { parseSummaryModel } from '../extensions/conversations/summary-model-ref.ts'
-import { parseQuestions, QUESTIONS_SYSTEM } from '../extensions/questions/server.ts'
+import {
+  decisionQuestions,
+  parseQuestions,
+  QUESTIONS_SYSTEM,
+} from '../extensions/questions/server.ts'
+import { decisionCases } from './questions.cases.ts'
 import type { TurnUsage } from './reporter.ts'
 import { ultimateQuestionCorpus } from './ultimate-question-corpus.ts'
 
@@ -138,6 +143,26 @@ test('Q5 real @ultimate preview decision', async () => {
 
 test.for(ultimateQuestionCorpus.slice(1))('Q6 real @ultimate report: $name', async (sample) => {
   expect(await extract(sample.text)).toEqual([])
+})
+
+// The extension's path: a decisions block without a model, anything else through the summary model.
+test.for(decisionCases)('Q7 real @ultimate ask $id', async ({ n, opts, rec, text }) => {
+  const strict = decisionQuestions(text)
+  const questions = strict.length ? strict : await extract(text)
+  expect(questions).toHaveLength(n)
+  expect(questions.map((q) => (q.kind === 'confirm' ? 2 : q.options!.length))).toEqual(opts)
+  // A stated pick must be found; where the message states none, a model's guess is tolerated.
+  expect(
+    questions.map((q, i) => (rec[i] === null ? null : q.options?.findIndex((o) => o.recommended))),
+  ).toEqual(rec)
+})
+
+test('Q8 stated picks mark options recommended; they never decide the question', async () => {
+  const questions = await extract(
+    'Decisions (my picks: 1a 2a):\n- Branch starts in the context: one-line intent (a), or drop them (b).\n- Boxer: assess adding tools (a), or leave it (b).',
+  )
+  expect(questions).toHaveLength(2)
+  expect(questions.every((q) => q.options?.[0]?.recommended)).toBe(true)
 })
 
 test('Q4 a wrap-up that answers the user and offers more asks nothing', async () => {

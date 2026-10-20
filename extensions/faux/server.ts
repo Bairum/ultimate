@@ -209,10 +209,20 @@ export default async function fauxExtension(host: ExtensionHost) {
         'The preview is ready. Two decisions before continuing:\n\nShould we keep the preview running?\n1. Yes\n2. No\n\nWhich layout should we use?\n1. Compact — fits the existing cards (recommended)\n2. Spacious — more room between options'
       if (last?.role === 'user' && last.content === 'questions demo')
         return tool('message', { to: 'user', text: decisions })
+      if (last?.role === 'user' && last.content === 'decisions demo')
+        return tool('message', {
+          to: 'user',
+          text: "The preview is ready.\n\nDecisions:\n1. **Branch starts in the context:** (a) one-line intent plus breadcrumb; (b) drop them, rely on abstracts; (c) leave as is.\n2. **Boxer's copied `agents/ultimate.md`:** (a) assess a way to add tools without forking it; (b) leave it.\n3. **Land it:** (a) yes; (b) no, change something first.\n\nMy picks: 1a 2a 3a.",
+        })
+      // A reply-expected message to the user with the given text, to preview its answer card.
+      const ask =
+        last?.role === 'user' ? /^ask ([\s\S]+)$/.exec(messageText(last.content).trim()) : null
+      if (ask) return tool('message', { to: 'user', text: ask[1] })
       if (
         last?.role === 'user' &&
         typeof last.content === 'string' &&
-        (last.content.startsWith('Q: ') || last.content.includes('\nQ: '))
+        // An answer card's reply: `1a. Topic: option`, `2: text` or `Question?: answer` paragraphs.
+        /^(\d+[a-z]?[.:] |[^\n]+\?: )/.test(last.content)
       )
         return fauxAssistantMessage([fauxText('Understood. I’ll continue with your reply.')])
       if (transcript.messages[asked]?.content === 'phases demo') {

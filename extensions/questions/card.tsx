@@ -8,15 +8,7 @@ import type { Message } from './open.tsx'
 import { AnswerAction, DismissAction, QuestionsDoc } from './refs.ts'
 import type { Answer } from './refs.ts'
 import type { Question } from './types.ts'
-
-function options(question: Question) {
-  return [
-    ...(question.kind === 'confirm'
-      ? [{ label: 'Yes' }, { label: 'No' }]
-      : (question.options ?? [])),
-    { label: 'Something else…', custom: true },
-  ]
-}
+import { answered as ready, choiceForKey, choices, picks, position } from './state.tsx'
 
 /** Whether `card` is the one on the shown conversation's page that takes the desktop 1–9 and Enter keys. */
 function useKeys(card: string) {
@@ -81,16 +73,24 @@ function Card({
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string>()
   const phone = useViewport() === 'phone'
-  const answered = questions.flatMap((q, i) =>
-    answers[i]?.trim() ? [{ question: q.text, answer: answers[i].trim() }] : [],
-  )
+  const answered = ready(questions, answers)
+  const recommended = picks(questions)
+  const hasPicks = Object.keys(recommended).length > 0
   const select = (index: number, option: number) => {
-    const value = options(questions[index])[option]
+    const value = choices(questions[index])[option]
     if (!value) return
-    const other = 'custom' in value
+    const other = !!value.custom
     setCustom((old) => ({ ...old, [index]: other }))
     setAnswers((old) => ({ ...old, [index]: other ? '' : value.label }))
     setCurrent(index)
+  }
+  // Every pick at once; questions without one keep what was chosen.
+  const accept = () => {
+    setCustom((old) => ({
+      ...old,
+      ...Object.fromEntries(Object.keys(recommended).map((i) => [i, false])),
+    }))
+    setAnswers((old) => ({ ...old, ...recommended }))
   }
   const run = async (action: () => Promise<unknown>) => {
     if (sending) return
@@ -120,9 +120,16 @@ function Card({
           target?.closest('[data-questions-card], [data-open-questions], button, a'))
       )
         return
-      if (/^[1-9]$/.test(event.key)) {
+      const choice = /^[1-9a-z]$/.test(event.key)
+        ? choiceForKey(questions[current], event.key)
+        : undefined
+      if (choice !== undefined) {
         event.preventDefault()
-        select(current, Number(event.key) - 1)
+        select(current, choice)
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        const step = event.key === 'ArrowDown' ? 1 : -1
+        setCurrent(Math.min(questions.length - 1, Math.max(0, current + step)))
       } else if (event.key === 'Enter') {
         event.preventDefault()
         if (current < questions.length - 1) setCurrent(current + 1)
@@ -180,6 +187,7 @@ function Card({
           {questions.length} {questions.length === 1 ? 'question' : 'questions'}
         </span>
         <span>· Answer what you can</span>
+        {hasPicks && <span>· picks marked</span>}
       </div>
       <div className="space-y-3 px-3 pt-2 pb-3">
         {questions.map(
@@ -189,19 +197,25 @@ function Card({
                 key={index}
                 disabled={sending}
                 onFocus={() => setCurrent(index)}
-                className="min-w-0 space-y-2"
+                data-current={keys && !phone && index === current ? '' : undefined}
+                className={cn(
+                  'min-w-0 space-y-2',
+                  keys && !phone && questions.length > 1 && '-ml-2 border-l-2 pl-1.5',
+                  keys &&
+                    !phone &&
+                    questions.length > 1 &&
+                    (index === current ? 'border-brand/60' : 'border-transparent'),
+                )}
               >
                 <legend className="mb-2 text-[13px] leading-relaxed text-foreground">
-                  {!phone && (
-                    <span className="mr-2 font-mono text-[11px] text-muted-foreground">
-                      {index + 1}.
-                    </span>
-                  )}
+                  <span className="mr-2 font-mono text-[11px] text-muted-foreground">
+                    {position(question, index)}.
+                  </span>
                   {question.text}
                 </legend>
                 <div className="flex flex-wrap gap-1.5">
-                  {options(question).map((option, number) => {
-                    const other = 'custom' in option
+                  {choices(question).map((option, number) => {
+                    const other = !!option.custom
                     const chosen = other
                       ? custom[index]
                       : !custom[index] && answers[index] === option.label
@@ -218,17 +232,19 @@ function Card({
                             : 'border-border bg-background/40 text-muted-foreground hover:bg-muted hover:text-foreground',
                         )}
                       >
-                        <span className="font-mono text-[10px] opacity-60">{number + 1}</span>
+                        <span className="font-mono text-[10px] opacity-60">
+                          {option.key ?? (other ? '…' : number + 1)}
+                        </span>
                         <span>
                           <span>{option.label}</span>
-                          {'detail' in option && option.detail && (
+                          {option.detail && (
                             <span className="mt-0.5 block text-[11px] text-muted-foreground">
                               {option.detail}
                             </span>
                           )}
                         </span>
-                        {'recommended' in option && option.recommended && (
-                          <span className="ml-1 font-mono text-[9px] text-brand">recommended</span>
+                        {option.recommended && (
+                          <span className="ml-1 font-mono text-[9px] text-brand">pick</span>
                         )}
                         {chosen && <CheckIcon className="ml-auto size-3 shrink-0 text-brand" />}
                       </button>
@@ -272,7 +288,8 @@ function Card({
           ) : (
             keys && (
               <span className="font-mono text-[10px] text-muted-foreground">
-                1–9 choose · Enter next / send
+                {questions.some((q) => q.options?.some((o) => o.key)) ? 'a–z' : '1–9'} choose
+                {questions.length > 1 && ' · ↑↓ question'} · Enter next / send
               </span>
             )
           )}
@@ -286,6 +303,17 @@ function Card({
           >
             Dismiss
           </Button>
+          {hasPicks && (
+            <Button
+              variant="outline"
+              size={phone ? 'xs' : 'sm'}
+              disabled={sending}
+              onClick={accept}
+              title="Choose every option marked pick"
+            >
+              Accept picks
+            </Button>
+          )}
           <Button size="sm" disabled={!answered.length || sending} onClick={() => void send()}>
             {sending ? 'Sending…' : 'Send answers'}
           </Button>

@@ -124,7 +124,7 @@ so nested codemode calls stay distinct.
 Ultimate answers the user's typed input directly in its conversation. To relay a branch result, decision or landing
 to the user, Ultimate sends one consolidated `message {to: 'user', text}` when the needed replies have arrived.
 It appears there as a bubble with an answer card for questions. Decisions use a reply-expected message, ending with
-numbered options; reports that need no answer use `reply: false`.
+a `Decisions:` block (see [Questions](../questions/README.md)); reports that need no answer use `reply: false`.
 
 ## Document and typed inputs
 

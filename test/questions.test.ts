@@ -283,11 +283,48 @@ it('posts exactly one Board reply atomically, wakes the sender, and rejects unkn
   await f.settled()
   expect((await f.log())!.messages).toMatchObject([
     { id, state: 'answered' },
-    { from: 'user', to: 1, re: id, text: 'Q: Keep it running?\nA: Yes' },
+    { from: 'user', to: 1, re: id, text: 'Keep it running?: Yes' },
     { from: 1, to: 'user', reply: false },
   ])
-  expect(f.observed.some((text) => text.includes('Q: Keep it running?\nA: Yes'))).toBe(true)
+  expect(f.observed.some((text) => text.includes('Keep it running?: Yes'))).toBe(true)
   await expect(f.answer(id)).rejects.toThrow('These questions are no longer open')
+})
+
+it('reads a decisions block without the model and answers in its numbering', async () => {
+  const f = await fixture()
+  const text =
+    'Decisions:\n1. **Scope:** (a) all of it; (b) the format only.\n2. **Test:** (a) add it; (b) skip it.\nMy picks: 1a 2b.'
+  const id = await f.send({ text })
+  await f.settled()
+  expect(f.extract).not.toHaveBeenCalled()
+  expect((await f.state())!.asked[String(id)]).toEqual([
+    {
+      text: 'Scope',
+      kind: 'choice',
+      ref: '1',
+      options: [
+        { key: 'a', label: 'all of it', recommended: true },
+        { key: 'b', label: 'the format only' },
+      ],
+    },
+    {
+      text: 'Test',
+      kind: 'choice',
+      ref: '2',
+      options: [
+        { key: 'a', label: 'add it' },
+        { key: 'b', label: 'skip it', recommended: true },
+      ],
+    },
+  ])
+  await f.answer(id, [
+    { question: 'Scope', answer: 'all of it' },
+    { question: 'Test', answer: 'only the keyboard one' },
+  ])
+  await f.settled()
+  expect((await f.log())!.messages.find((m) => m.re === id)?.text).toBe(
+    '1a. Scope: all of it\n\n2: only the keyboard one',
+  )
 })
 
 it('keeps a card answerable across typed input and discards an extraction its message outlived', async () => {

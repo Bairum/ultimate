@@ -1,0 +1,76 @@
+// Answers a three-question card in a real browser with only the keyboard: letter keys choose, ↑/↓ move between
+// questions, Enter sends; the reply reaches @ultimate in the message's own numbering.
+import { join, resolve } from 'node:path'
+import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { ConversationId } from '@earendil-works/pi-durable'
+import { chromium } from 'playwright-core'
+import { afterEach, expect, it } from 'vitest'
+import { browserBinary } from '../../extensions/browser/server.ts'
+import { Board } from '../../extensions/board/api.ts'
+import { context } from '../../server/harness.ts'
+import { fauxServer, post, removeTemp, temp, until } from '../helpers.ts'
+
+const cleanup: (() => Promise<void>)[] = []
+afterEach(async () => {
+  for (const close of cleanup.splice(0).toReversed()) await close()
+})
+
+it('answers a decisions card with letters, arrows and Enter', async () => {
+  const home = await temp('ultimate-questions-keys-')
+  cleanup.push(() => removeTemp(home))
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot: resolve('.'),
+    userHome: home,
+    home: join(home, 'state'),
+    faux: true,
+    port: 0,
+  })
+  cleanup.push(() => server.close())
+  const { data } = await post(server, '/api/extensions/subagents/actions/standing', {
+    args: { name: 'ultimate' },
+  })
+  const ultimate = data.result as ConversationId
+  const conversation = (await server.harness.conversation(ultimate, context))!
+  await (
+    await conversation.submit({ type: 'input', content: 'decisions demo' }, context)
+  ).wait(context)
+  const board = () => server.harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
+  const ask = async () => (await board())?.messages.findLast((m) => m.to === 'user' && m.reply)
+  await until(async () => !!(await ask()))
+  const asked = (await ask())!
+
+  const browser = await chromium.launch({ executablePath: await browserBinary(), headless: true })
+  cleanup.push(() => browser.close())
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+  await page.goto(`${server.url}/?conversation=${ultimate}`)
+  const card = page.locator(`[data-questions-card="message:${asked.id}"]`)
+  await card.locator('fieldset').nth(2).waitFor()
+  // The composer takes focus on desktop and keeps its keys; the card takes them once the user leaves it.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  // Question 1: b; down to 2: a; down to 3: b; back up twice and change 1 to c.
+  await page.keyboard.press('b')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('a')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('b')
+  await page.keyboard.press('ArrowUp')
+  await page.keyboard.press('ArrowUp')
+  await page.keyboard.press('c')
+  expect(await card.locator('[aria-pressed=true]').allTextContents()).toEqual([
+    expect.stringContaining('leave as is'),
+    expect.stringContaining('assess a way to add tools'),
+    expect.stringContaining('no, change something first'),
+  ])
+  // Enter moves on to the last question, then sends.
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Enter')
+  const answer = async () =>
+    (await board())?.messages.find((m) => m.re === asked.id && m.from === 'user')
+  await until(async () => !!(await answer()))
+  expect((await answer())!.text).toBe(
+    "1c. Branch starts in the context: leave as is\n\n2a. Boxer's copied agents/ultimate.md: assess a way to add tools without forking it\n\n3b. Land it: no, change something first",
+  )
+  await card.waitFor({ state: 'detached' })
+})

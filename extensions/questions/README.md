@@ -6,10 +6,22 @@ message to the user. @ultimate's `message { to: 'user', text, reply: true }` (th
 the extraction task in one transaction, once per message. One-way messages, user posts and messages to conversations
 never do. Final answers never ask: @ultimate's instructions put every decision in such a message.
 
-The configured summary model extracts only decisions and options present in the text, using `QUESTIONS_SYSTEM`;
-only decisions available now count, not pending work or a future branch proposal. Rhetorical closers, offers, empty
-results and model failures produce no extracted questions. Extraction memoizes its model and response and accounts
-usage on the root.
+A message ending with a decisions block is read without a model (`lib/decisions.ts`):
+
+```
+Decisions:
+1. **Topic:** (a) first option; (b) second option.
+2. **Topic:** (a) …; (b) ….
+My picks: 1a 2b.
+```
+
+Only the last run of numbered items with lettered options counts, so numbered findings earlier in the message are
+ignored; each becomes a choice with its number as `ref`, its letters as option `key`s, and the picks as `recommended`.
+Any other message goes to the configured summary model, which extracts only decisions and options present in the text,
+using `QUESTIONS_SYSTEM`; only decisions available now count, not pending work or a future branch proposal. Stated picks
+mark options recommended and never count as decided. Rhetorical closers, offers, empty results and model failures
+produce no extracted questions. Extraction memoizes its model and response and accounts usage on the root. The
+open-questions note names a message by its decision topics when it has a decisions block.
 
 A question stays open until the user answers it (its card, or a Reply to that message) or dismisses it. Typed input,
 answers to other messages and agent messages leave it open. While it is open, board starts each of the asker's runs
@@ -27,11 +39,12 @@ memoized response or creating duplicate cards.
 ## Card
 
 Under the outgoing `message` card in @ultimate's transcript, through board's `MessageAnswers` point, and in the
-Questions panel. Confirmations offer Yes/No; choices show the extracted options and their recommended marker. Both
-offer “Something else…” with an inline field. Send answers is enabled after at least one answer; omitted questions stay
+Questions panel. Confirmations offer Yes/No; choices show the extracted options, their letter and a `pick` marker on
+recommended ones. Both offer “Something else…” with an inline field. **Accept picks** chooses every pick at once. Send answers is enabled after at least one answer; omitted questions stay
 out. Dismiss closes the message without an answer. A message without extracted questions gets a one-line answer field
 (sent as a Reply to that message) and Dismiss. On phones, one question shows at a time with Back/Next. On desktop, 1–9
-and Enter act on the shown conversation's newest open card; they leave alone input/textarea editing and keys pressed
+or an option's letter chooses, ↑/↓ moves between questions and Enter goes to the next or sends, on the shown
+conversation's newest open card; they leave alone input/textarea editing and keys pressed
 in another card, on another control or in the panel, whose cards take no global keys.
 
 ## Questions panel
@@ -47,8 +60,9 @@ does too.
 Both are user-only.
 
 - `answer { messageId, answers: [{ question, answer }] }` validates the extracted questions, refusing unknown or
-  duplicate answers, and posts a normal user Board reply to the sender with `re: messageId` and `Q: …\nA: …` blocks,
-  returning `{ id }`. `answer { messageId, text }` posts `text` instead, for a message with or without extracted
+  duplicate answers, and posts a normal user Board reply to the sender with `re: messageId`, one paragraph per answer in the
+  message's own numbering: `1a. Topic: option` for an option, `2: text` for typed text (`Topic: answer` when the
+  message numbered nothing), returning `{ id }`. `answer { messageId, text }` posts `text` instead, for a message with or without extracted
   questions. Board admission atomically verifies that the original remains open, so concurrent answers produce
   exactly one reply; normal Board delivery wakes the sender.
 - `dismiss { messageId }` marks the message `dismissed` and posts a one-way user note to the sender with `re`, in one

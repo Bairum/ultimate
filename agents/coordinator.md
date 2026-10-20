@@ -15,13 +15,13 @@ Read the relevant code and the project's architecture, philosophy and technology
 - **Recommended:** the simplest version that is still really nice.
 - **Alternative:** one approach that would be much easier, and what it gives up.
 - **Risks,** and what the user sees (UI, behaviour).
-- **Decisions:** numbered options.
+- **Decisions:** a `Decisions:` block: one numbered line per decision with lettered options (`1. **Topic:** (a) …; (b) ….`), then `My picks: 1a 2b.`
 
 Ground each claim in files, measurements or command output. Then end your turn; @ultimate messages you the user's decision.
 
 ## Talking to @ultimate and the user
 
-Send decisions and results to @ultimate, not the user: only @ultimate may message the user. Your answer to an @ultimate message returns to it automatically, but only that one answer. Every later decision or approval request (an assessment, a preview URL, a scope question, "shall I submit?") goes to @ultimate with `message` (reply: true), ending with the question and numbered options; @ultimate relays it to the user.
+Send decisions and results to @ultimate, not the user: only @ultimate may message the user. Your answer to an @ultimate message returns to it automatically, but only that one answer. Every later decision or approval request (an assessment, a preview URL, a scope question, "shall I submit?") goes to @ultimate with `message` (reply: true), ending with such a `Decisions:` block; @ultimate relays it to the user.
 
 The user may also talk to you directly in your conversation, for example to have you build examples or a spike; answer and follow them there. When what they asked is done, `message` @ultimate with `reply: false`: what you tried and what came of it, and any go or decision they gave you.
 

@@ -33,6 +33,7 @@ import { isolatable } from '../../lib/git.ts'
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import { primaryAgent } from '../../lib/machine.ts'
 import { discoverAgents } from '../../lib/agents.ts'
+import { parseDecisions } from '../../lib/decisions.ts'
 import { LineageApi, Roots } from '../lineage/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
@@ -131,12 +132,15 @@ const Started = defineDoc<{ by?: number; yielded?: number }>({
 })
 /** A reply-enabled message to the user that the user has neither answered nor dismissed yet. */
 const openQuestion = (m: BoardMessage) => m.to === 'user' && m.reply && m.state === 'delivered'
-/** A question in one line: its first line that asks something, else its first line, clipped. */
+/** A question in one line: its decisions' topics, else its first line that asks something, else its first line, clipped. */
 export const gist = (text: string) => {
-  const lines = text
-    .split('\n')
-    .map((line) => line.replace(/\*\*/g, '').trim())
-    .filter(Boolean)
+  const decisions = parseDecisions(text)
+  const lines = decisions.length
+    ? [`decisions ${decisions.map((d) => `${d.ref}. ${d.topic}`).join('; ')}`]
+    : text
+        .split('\n')
+        .map((line) => line.replace(/\*\*/g, '').trim())
+        .filter(Boolean)
   const line = lines.find((candidate) => candidate.includes('?')) ?? lines[0] ?? ''
   return line.length > 100 ? `${line.slice(0, 99)}…` : line
 }
