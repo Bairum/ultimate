@@ -560,9 +560,11 @@ it('wakes the project’s @sync once when a provider turns failing, not on its r
     { provider: 'anthropic', at: 2, error: 'invalid_grant' },
   ])
   expect(await delivery(home, 'sync-health:anthropic:2')).toBe('input')
-  // Working again, then failing again, is a new turn; one never seen before turns failing at its first failure.
+  // Working again, then failing again, is a new turn; a transient failure counts only at the third in a row.
   await recordHealth(home.userHome, 'anthropic', { lastOk: 5 }, point)
   await recordHealth(home.userHome, 'anthropic', { lastFail: 6, error: '401 sk-live-abc' }, point)
+  await recordHealth(home.userHome, 'openai', { lastFail: 7, error: 'ETIMEDOUT' }, point)
+  await recordHealth(home.userHome, 'openai', { lastFail: 7, error: 'ETIMEDOUT' }, point)
   await recordHealth(home.userHome, 'openai', { lastFail: 7 }, point)
   expect((await syncEntries(home)).map((entry) => entry.data)).toEqual([
     { provider: 'anthropic', at: 2, error: 'invalid_grant' },
@@ -572,7 +574,7 @@ it('wakes the project’s @sync once when a provider turns failing, not on its r
   // On standby the project's storage is closed: nothing is delivered.
   home.setStandby({ reason: 'Runs on haza-pc' })
   await recordHealth(home.userHome, 'openai', { lastOk: 8 }, point)
-  await recordHealth(home.userHome, 'openai', { lastFail: 9 }, point)
+  await recordHealth(home.userHome, 'openai', { lastFail: 9, error: 'invalid_grant' }, point)
   expect(await syncEntries(home)).toHaveLength(3)
 })
 

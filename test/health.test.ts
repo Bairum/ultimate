@@ -18,6 +18,7 @@ import healthExtension, { changedLogins, watchLogins } from '../extensions/healt
 import { actions as models } from '../extensions/models/server.ts'
 import type { ActionContext } from '../server/actions.ts'
 import {
+  failureKind,
   healthPath,
   merge,
   readHealth,
@@ -42,12 +43,68 @@ const NOW = 1_000 * HOUR
 const message = (stopReason: AssistantMessage['stopReason'], errorMessage?: string) =>
   ({ provider: 'anthropic', stopReason, errorMessage }) as AssistantMessage
 
-it('computes a provider state from its latest success and failure', () => {
+it('computes a provider state from its latest success, auth failure and transient streak', () => {
   expect(state({})).toBe('unknown')
   expect(state({ lastOk: 5 })).toBe('ok')
-  expect(state({ lastOk: 5, lastFail: 6 })).toBe('failing')
-  expect(state({ lastFail: 6 })).toBe('failing')
-  expect(state({ lastOk: 7, lastFail: 6 })).toBe('ok')
+  expect(state({ lastOk: 5, lastFail: 6 })).toBe('ok')
+  expect(state({ lastOk: 5, lastFail: 6, lastAuth: 6 })).toBe('failing')
+  expect(state({ lastFail: 6, lastAuth: 6 })).toBe('failing')
+  expect(state({ lastOk: 7, lastFail: 6, lastAuth: 6 })).toBe('ok')
+  expect(state({ lastOk: 5, lastFail: 8, streak: 3, since: 6 })).toBe('failing')
+  expect(state({ lastOk: 5, lastFail: 8, streak: 2, since: 6 })).toBe('ok')
+})
+
+it('classifies failures as auth, capacity or transient', () => {
+  expect(failureKind('400 {"error":"invalid_grant"}')).toBe('auth')
+  expect(failureKind('Request failed with status 403')).toBe('auth')
+  expect(failureKind('529 overloaded_error: Overloaded')).toBe('capacity')
+  expect(failureKind('429 rate_limit_error')).toBe('capacity')
+  expect(failureKind('fetch failed: ETIMEDOUT')).toBe('transient')
+  expect(failureKind('request failed')).toBe('transient')
+})
+
+it('counts a provider failing only after an auth error or a transient streak', async () => {
+  const home = await temp()
+  const states = async () => (await readHealth(home)).map((entry) => entry.state)
+  const fail = (at: number, error: string) => record(home, 'p', { lastFail: at, error })
+  await record(home, 'p', { lastOk: NOW })
+  // One transient failure after a success stays ok, and so does a second.
+  expect(await fail(NOW + 1, 'request failed')).toMatchObject({ from: 'ok', to: 'ok' })
+  expect(await fail(NOW + 2, 'ETIMEDOUT')).toMatchObject({ to: 'ok' })
+  // The third in a row flips it, with its error.
+  expect(await fail(NOW + 3, 'request failed')).toEqual({
+    provider: 'p',
+    from: 'ok',
+    to: 'failing',
+    error: 'request failed',
+  })
+  // A success resets the count: two more failures stay ok.
+  expect(await record(home, 'p', { lastOk: NOW + 4 })).toMatchObject({ to: 'ok' })
+  await fail(NOW + 5, 'request failed')
+  await fail(NOW + 6, 'request failed')
+  expect(await states()).toEqual(['ok'])
+  // A failure five minutes after the streak began, with no success between, flips it too.
+  await record(home, 'p', { lastOk: NOW + 7 })
+  await fail(NOW + 8, 'ETIMEDOUT')
+  expect(await fail(NOW + 8 + 5 * MINUTE, 'ETIMEDOUT')).toMatchObject({ to: 'failing' })
+  // Capacity errors never flip, however many, but stay the last error.
+  await record(home, 'p', { lastOk: NOW + HOUR })
+  for (let i = 1; i <= 5; i++) await fail(NOW + HOUR + i * MINUTE, '529 overloaded_error')
+  expect(await readHealth(home)).toEqual([
+    {
+      provider: 'p',
+      state: 'ok',
+      lastOk: NOW + HOUR,
+      lastFail: NOW + HOUR + 5 * MINUTE,
+      error: '529 overloaded_error',
+    },
+  ])
+  // An auth error flips at once, and a later success clears it.
+  expect(await fail(NOW + 2 * HOUR, '401 invalid_grant')).toMatchObject({ to: 'failing' })
+  expect(await record(home, 'p', { lastOk: NOW + 3 * HOUR })).toMatchObject({
+    from: 'failing',
+    to: 'ok',
+  })
 })
 
 it('merges each timestamp by its maximum and keeps the newest failure’s error', () => {
@@ -296,17 +353,17 @@ it('a move confirms a recorded failure with a ping, so a stale one never blocks 
     } as unknown as ExtensionHost['modelRuntime'],
   })
   // A failure long ago, no heartbeat since: the move's ping finds the provider working and clears it.
-  await record(home, 'anthropic', { lastFail: NOW, error: 'overloaded' })
-  expect(await modelLogin(host)).toMatchObject({ ok: false, error: 'overloaded' })
+  await record(home, 'anthropic', { lastFail: NOW, error: 'invalid_grant' })
+  expect(await modelLogin(host)).toMatchObject({ ok: false, error: 'invalid_grant' })
   expect(await modelLogin(host, { confirm: true })).toEqual({ provider: 'anthropic', ok: true })
   expect(pinged).toEqual(['haiku'])
   expect(await modelLogin(host)).toEqual({ provider: 'anthropic', ok: true })
   // A real revocation: the confirming ping fails too and its error blocks the move.
   answers = 'error'
-  await record(home, 'anthropic', { lastFail: Date.now() + HOUR, error: 'overloaded' })
+  await record(home, 'anthropic', { lastFail: Date.now() + HOUR, error: '401' })
   expect(await modelLogin(host, { confirm: true })).toMatchObject({
     ok: false,
-    error: expect.stringMatching(/invalid_grant|overloaded/),
+    error: expect.stringMatching(/invalid_grant|401/),
   })
   expect(pinged).toEqual(['haiku', 'haiku'])
 })

@@ -6,11 +6,17 @@ import type { ProviderHealth } from '../../cloud/protocol.ts'
 /** One provider's record in `health.json`; times are epoch milliseconds. */
 export interface HealthEntry {
   lastOk?: number
+  /** The newest failure of any kind. */
   lastFail?: number
   /** The newest failure's sanitised message. */
   error?: string
   lastChecked?: number
   lastUsed?: number
+  /** The newest auth failure: it alone turns the provider failing. */
+  lastAuth?: number
+  /** Transient failures in a row since the last success, and when the first of them happened. */
+  streak?: number
+  since?: number
 }
 
 export type HealthFile = { providers: Record<string, HealthEntry> }
@@ -18,7 +24,12 @@ export type HealthFile = { providers: Record<string, HealthEntry> }
 /** The machine's health file, shared by every Ultimate home of the user. */
 export const healthPath = (userHome: string) => join(userHome, '.ultimate/health.json')
 
-const STAMPS = ['lastOk', 'lastFail', 'lastChecked', 'lastUsed'] as const
+const STAMPS = ['lastOk', 'lastFail', 'lastChecked', 'lastUsed', 'lastAuth'] as const
+
+/** Transient failures in a row that turn a provider failing. */
+export const STREAK = 3
+/** A transient failure this long after the first of its streak, with no success between, turns it failing too. */
+export const STREAK_WINDOW = 5 * 60_000
 
 /**
  * The only words an error summary may contain: provider and OAuth error codes, network errors and a few plain words.
@@ -79,12 +90,88 @@ export function sanitize(error: string) {
   return parts.length ? parts.join(' ') : 'request failed'
 }
 
+const AUTH = new Set([
+  '401',
+  '403',
+  'invalid_grant',
+  'invalid_token',
+  'invalid_client',
+  'invalid_api_key',
+  'unauthorized_client',
+  'access_denied',
+  'authentication_error',
+  'permission_error',
+  'unauthorized',
+  'forbidden',
+  'expired',
+  'revoked',
+])
+const CAPACITY = new Set([
+  '429',
+  '529',
+  'overloaded_error',
+  'overloaded',
+  'rate_limit_error',
+  'rate_limit_exceeded',
+  'usage_limit_reached',
+  'insufficient_quota',
+  'quota',
+])
+
+/**
+ * What a failure says about the provider, from its `sanitize` summary: `auth` (the login is broken), `capacity` (the
+ * provider is busy or rate-limited; never the login) or `transient` (timeouts, network errors, anything else).
+ */
+export function failureKind(error: string): 'auth' | 'capacity' | 'transient' {
+  const parts = sanitize(error).split(' ')
+  if (parts.some((part) => AUTH.has(part))) return 'auth'
+  if (parts.some((part) => CAPACITY.has(part))) return 'capacity'
+  return 'transient'
+}
+
+/**
+ * `failing` after an auth failure newer than the last success, or a transient streak of `STREAK` failures or one
+ * spanning `STREAK_WINDOW`; capacity failures never count. Otherwise `ok` once it has a success, else `unknown`.
+ */
 export function state(entry: HealthEntry): ProviderHealth['state'] {
-  if (entry.lastFail !== undefined && entry.lastFail > (entry.lastOk ?? 0)) return 'failing'
+  const ok = entry.lastOk ?? -Infinity
+  if (entry.lastAuth !== undefined && entry.lastAuth > ok) return 'failing'
+  const { streak = 0, since, lastFail } = entry
+  if (
+    streak > 0 &&
+    since !== undefined &&
+    since > ok &&
+    (streak >= STREAK || (lastFail ?? since) - since >= STREAK_WINDOW)
+  )
+    return 'failing'
   return entry.lastOk !== undefined ? 'ok' : 'unknown'
 }
 
-/** Each timestamp by its maximum; the error belongs to the newest `lastFail`. */
+/**
+ * `before` with `update` applied: timestamps by `merge`, then the failure counted by its kind. An auth failure stamps
+ * `lastAuth`; a transient one continues the streak when no success came since its start, else starts one; a success
+ * newer than the streak's start ends it.
+ */
+export function apply(before: HealthEntry, update: HealthEntry): HealthEntry {
+  const after = merge(before, update)
+  const ok = after.lastOk ?? -Infinity
+  const streaking = !!before.streak && before.since !== undefined && before.since > ok
+  if (streaking) {
+    after.streak = before.streak
+    after.since = before.since
+  }
+  const failed = update.lastFail
+  if (failed === undefined || failed <= ok) return after
+  const kind = failureKind(update.error ?? '')
+  if (kind === 'auth') after.lastAuth = Math.max(failed, after.lastAuth ?? -Infinity)
+  if (kind === 'transient') {
+    after.streak = streaking ? before.streak! + 1 : 1
+    after.since = streaking ? before.since! : failed
+  }
+  return after
+}
+
+/** Each timestamp by its maximum; the error belongs to the newest `lastFail`. The streak is `apply`'s business. */
 export function merge(a: HealthEntry, b: HealthEntry): HealthEntry {
   const merged: HealthEntry = {}
   for (const key of STAMPS) {
@@ -128,6 +215,12 @@ export async function readFileHealth(userHome: string): Promise<HealthFile> {
         if (at !== undefined) entry[key] = at
       }
       if (typeof fields.error === 'string') entry.error = sanitize(fields.error)
+      const streak = stamp(fields.streak)
+      const since = stamp(fields.since)
+      if (streak !== undefined && streak > 0 && since !== undefined) {
+        entry.streak = streak
+        entry.since = since
+      }
       providers[provider] = entry
     }
   return { providers }
@@ -136,7 +229,11 @@ export async function readFileHealth(userHome: string): Promise<HealthFile> {
 export const toHealth = (file: HealthFile): ProviderHealth[] =>
   Object.entries(file.providers)
     .toSorted(([a], [b]) => a.localeCompare(b))
-    .map(([provider, entry]) => ({ provider, state: state(entry), ...entry }))
+    .map(([provider, entry]) => {
+      // The counting fields decide the state; they are not part of what a provider's health shows.
+      const { lastAuth: _auth, streak: _streak, since: _since, ...shown } = entry
+      return { provider, state: state(entry), ...shown }
+    })
 
 export async function readHealth(userHome: string): Promise<ProviderHealth[]> {
   return toHealth(await readFileHealth(userHome))
@@ -158,7 +255,7 @@ export async function record(
   let flip: Flip = { provider, from: 'unknown', to: 'unknown' }
   await write(userHome, (file) => {
     const before = file.providers[provider] ?? {}
-    const after = merge(before, clean)
+    const after = apply(before, clean)
     file.providers[provider] = after
     const to = state(after)
     flip = {

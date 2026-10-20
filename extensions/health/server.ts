@@ -47,6 +47,7 @@ export function due(entries: Record<string, HealthEntry>, now: number, providers
   const every = interval(entries, now)
   return providers.filter((provider) => {
     const entry = entries[provider] ?? {}
+    // Any failure since the last success, failing or not yet: a ping soon settles the streak either way.
     const failing = entry.lastFail !== undefined && entry.lastFail > (entry.lastOk ?? 0)
     if (failing && now - (entry.lastChecked ?? 0) >= CONFIRM) return true
     return now - Math.max(entry.lastOk ?? 0, entry.lastChecked ?? 0) >= every

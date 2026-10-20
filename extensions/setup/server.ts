@@ -133,7 +133,7 @@ async function providersArea(host: CheckHost): Promise<SetupIssue | undefined> {
       summary: failing
         .map((provider) => `${provider.provider} ✗ ${provider.error ?? 'failed'}`)
         .join(' · '),
-      impact: 'Its latest call on this machine failed.',
+      impact: 'Its login was refused, or its calls kept failing on this machine.',
       fix: { label: 'Log in again', command: 'auth.login' },
     }
   return {
