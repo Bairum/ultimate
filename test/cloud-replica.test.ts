@@ -361,7 +361,7 @@ describe('project replica sockets', () => {
     expect(writer.sent().at(-1)).toEqual(free)
     expect(laptop.sent().at(-1)).toEqual(free)
     expect(instance.sockets()).toEqual([])
-    expect(updates.at(-1)?.writer).toEqual({ machine: null, online: false })
+    expect(updates.at(-1)?.writer).toEqual({ machine: null, online: false, last: 'test' })
     // The released socket is a standby now: its lease messages are ignored.
     writer.receive({ type: 'release', epoch: 1, snapshot: { id: 'snap-2' } })
     expect(instance.store.lease()?.snapshot).toEqual({ id: 'snap-1', epoch: 1 })
@@ -1078,7 +1078,12 @@ describe('project replica sockets', () => {
     standby.receive({ type: 'release', epoch: 1, snapshot: { id: 'snap-0' } })
     expect(instance.store.lease()?.machine).toBe('test')
     writer.receive({ type: 'release', epoch: 1, snapshot: { id: 'snap-1' } })
-    expect(instance.store.lease()).toMatchObject({ machine: null, snapshot: { id: 'snap-1' } })
+    // The free lease names who released it, for the fleet page.
+    expect(instance.store.lease()).toMatchObject({
+      machine: null,
+      last: 'test',
+      snapshot: { id: 'snap-1' },
+    })
 
     // A standby's checkout survives hibernation: after a release its claim names its own root, not another's.
     instance = new SharedReplica(
@@ -1132,7 +1137,7 @@ describe('project replica sockets', () => {
 })
 
 describe('cloud directory', () => {
-  it('lists one directory row per project with stable repository slugs, and forgets a free project nobody connects to', () => {
+  it('lists one directory row per project with stable repository slugs, and keeps a released one with its last writer', () => {
     const directory = new DirectoryStore(database())
     const listed = (key = 'github.com/hazat/ultimate') =>
       directory.list().find((project) => project.key === key)
@@ -1162,13 +1167,11 @@ describe('cloud directory', () => {
     }
     directory.update(offline)
     expect(listed()).toMatchObject({ writer: { online: false } })
-    // A free lease with a machine connected stays too; with nobody connected it is gone.
-    directory.update({ ...value, writer: { machine: null, online: false } })
-    expect(listed()).toMatchObject({ writer: { machine: null } })
-    directory.update({ ...offline, writer: { machine: null, online: false } })
-    expect(listed()).toBeUndefined()
-    expect(directory.list()).toHaveLength(2)
-    // The slug stays reserved for the returning project.
+    // A released project stays listed with the machine that released it, also with nobody connected.
+    const released = { ...offline, writer: { machine: null, online: false, last: 'haza-pc' } }
+    directory.update(released)
+    expect(listed()).toEqual({ ...released, slug: 'ultimate' })
+    expect(directory.list()).toHaveLength(3)
     directory.update(value)
     expect(listed()?.slug).toBe('ultimate')
   })

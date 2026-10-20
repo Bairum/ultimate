@@ -13,7 +13,13 @@ interface Project {
   key: string
   name: string
   slug: string
-  writer: { machine: string | null; online: boolean; lastSeen?: number; tailnet?: string }
+  writer: {
+    machine: string | null
+    online: boolean
+    lastSeen?: number
+    tailnet?: string
+    last?: string
+  }
   machines: {
     machine: string
     role: 'writer' | 'standby'
@@ -262,6 +268,45 @@ function Row({ project }: { project: Project }) {
   )
 }
 
+/**
+ * A project nobody runs, quieter than a running one: `boxer · free · last on sentry-mac`. Its name links to that
+ * machine on the tailnet while it is connected, where the standby page offers Resume here.
+ */
+function Released({ project }: { project: Project }) {
+  const last = project.machines.find((machine) => machine.machine === project.writer.last)
+  const reachable = last?.connected && last.tailnet ? last.tailnet : undefined
+  return (
+    <li className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5 px-3 py-2 font-mono text-[11px] text-muted-foreground/70 pointer-coarse:py-2.5">
+      {reachable ? (
+        <a
+          aria-label={`Open ${project.name} on ${last!.machine} over the tailnet to resume it`}
+          className="truncate font-sans text-[13px] text-foreground/75 underline decoration-border underline-offset-2 hover:text-foreground hover:decoration-foreground/60"
+          data-tailnet
+          href={reachable}
+          title={`Resume ${project.name} on ${last!.machine}: ${reachable}`}
+        >
+          {project.name}
+        </a>
+      ) : (
+        <span className="truncate font-sans text-[13px] text-foreground/60" title={project.key}>
+          {project.name}
+        </span>
+      )}
+      <span className="text-muted-foreground/40">·</span>
+      <span>free</span>
+      {last && (
+        <>
+          <span className="text-muted-foreground/40">·</span>
+          <span className="truncate">
+            last on {last.machine}
+            {!last.connected && ', offline'}
+          </span>
+        </>
+      )}
+    </li>
+  )
+}
+
 function Message({ children }: { children: ReactNode }) {
   return (
     <div className="rounded-lg border border-dashed border-border/80 px-4 py-8 text-center text-[13px] leading-relaxed text-muted-foreground">
@@ -273,12 +318,11 @@ function Message({ children }: { children: ReactNode }) {
 function Front() {
   const { directory, health, failing } = useDirectory()
   const now = Date.now()
-  const rows =
-    directory.state === 'loaded'
-      ? directory.rows.filter((row) => row.writer.machine !== null && row.writer.online)
-      : []
+  const all = directory.state === 'loaded' ? directory.rows : []
+  const rows = all.filter((row) => row.writer.machine !== null && row.writer.online)
+  const released = all.filter((row) => row.writer.machine === null)
   const connected = new Set(
-    rows.flatMap((row) =>
+    all.flatMap((row) =>
       row.machines.filter((machine) => machine.connected).map((machine) => machine.machine),
     ),
   )
@@ -317,8 +361,8 @@ function Front() {
         <header>
           <h1 className="text-[15px] font-medium text-foreground">Projects</h1>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            Every project running on one of your machines right now. Open one on the tailnet to
-            continue where it left off.
+            Every project on your machines. Open a running one on the tailnet to continue where it
+            left off, or a released one on its last machine to resume it there.
           </p>
         </header>
         {directory.state === 'loading' && (
@@ -337,7 +381,7 @@ function Front() {
             </div>
           </Message>
         )}
-        {directory.state === 'loaded' && !rows.length && (
+        {directory.state === 'loaded' && !rows.length && !released.length && (
           <Message>
             No project is running: start Ultimate on a machine with cloud sync (see New machine in{' '}
             <code className="rounded-sm bg-muted px-1 font-mono text-[12px] text-foreground/85">
@@ -352,6 +396,18 @@ function Front() {
               <Row key={row.slug} project={row} />
             ))}
           </ul>
+        )}
+        {released.length > 0 && (
+          <section className="-mt-4 flex flex-col gap-2">
+            <h2 className="text-[10.5px] font-normal tracking-wider text-muted-foreground uppercase">
+              Released
+            </h2>
+            <ul className="divide-y divide-border/40 overflow-hidden rounded-lg border border-dashed border-border/60">
+              {released.map((row) => (
+                <Released key={row.slug} project={row} />
+              ))}
+            </ul>
+          </section>
         )}
         {running.length > 0 && <Machines health={running} now={now} />}
       </main>

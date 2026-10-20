@@ -8,10 +8,16 @@ export interface Project {
   /** The lowercased repository name, unique across projects and kept while the project is gone. */
   slug: string
   /**
-   * `machine` is null while the lease is free; `lastSeen` is when the writer last connected or left; `tailnet` is where
-   * the writing checkout answers on the tailnet.
+   * `machine` is null while the lease is free, and `last` then names the machine that released it; `lastSeen` is when
+   * the writer last connected or left; `tailnet` is where the writing checkout answers on the tailnet.
    */
-  writer: { machine: string | null; online: boolean; lastSeen?: number; tailnet?: string }
+  writer: {
+    machine: string | null
+    online: boolean
+    lastSeen?: number
+    tailnet?: string
+    last?: string
+  }
   machines: {
     machine: string
     role: 'writer' | 'standby'
@@ -133,7 +139,7 @@ export class DirectoryStore {
       ),
     ].map((row) => JSON.parse(row.value) as Project)
   }
-  /** A project stays listed while a machine holds its lease or is connected; a free one nobody connects to is gone. */
+  /** A project stays listed, free or not, until a relink points its key at another replica. */
   update(value: Presence) {
     this.sql.transaction(() => {
       // A relinked key's own replica may still report as its last sockets close.
@@ -149,10 +155,9 @@ export class DirectoryStore {
           slug = `${base}-${suffix++}`
         this.sql.exec('INSERT INTO projects (key, slug) VALUES (?, ?)', value.key, slug)
       }
-      const connected = value.machines.some((machine) => machine.connected)
       this.sql.exec(
         'UPDATE projects SET value=? WHERE key=?',
-        !connected && value.writer.machine === null ? null : JSON.stringify({ ...value, slug }),
+        JSON.stringify({ ...value, slug }),
         value.key,
       )
     })
