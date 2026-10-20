@@ -221,6 +221,24 @@ describe('durable UI state', () => {
     expect(state.get('panel')).toBe('fresh')
   })
 
+  it('keeps an acknowledged write shown across a restart until the new snapshot arrives', async () => {
+    const { state, commit, ack, start } = setup()
+    start({ 'shell.surface': 'agent' })
+    state.set('shell.surface', 'system')
+    await wait()
+    commit(0)
+    ack(0)
+    await wait()
+    // The old process goes away before the stream showed the write; nothing rolls the surface back meanwhile.
+    state.restarted()
+    await wait(5000)
+    expect(state.get('shell.surface')).toBe('system')
+    // The new process's first snapshot is the truth, whatever its revision.
+    state.receive({ 'shell.surface': 'system', [UI_REVISION]: 1 })
+    state.receive({ 'shell.surface': 'review', [UI_REVISION]: 2 })
+    expect(state.get('shell.surface')).toBe('review')
+  })
+
   it('ignores an old server’s late reply and sends unsent edits to the new one', async () => {
     const { state, requests, commit, ack, start } = setup()
     start({ panel: 'start' })
@@ -230,7 +248,7 @@ describe('durable UI state', () => {
     state.set('view', 'unsent')
     // The old process goes away while its answer is still on the way.
     state.restarted()
-    expect(state.get('panel')).toBe('start')
+    expect(state.get('panel')).toBe('old')
     expect(state.get('view')).toBe('unsent')
     await wait()
     expect(requests[1].change.set).toEqual({ view: 'unsent' })

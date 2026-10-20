@@ -42,6 +42,8 @@ export function createUiState(
   let inFlight = false
   /** Counts server processes seen; a reply from an earlier one is about storage the stream no longer shows. */
   let epoch = 0
+  /** After a restart, until the new process's first snapshot: nothing is released, since its revisions start over. */
+  let restarting = false
   let timer: ReturnType<typeof setTimeout> | undefined
 
   function update() {
@@ -55,6 +57,7 @@ export function createUiState(
   }
   /** Drop the overlay of writes the stream has shown: it is the truth for them now. */
   function release() {
+    if (restarting) return
     for (const [key, entry] of local)
       if (entry.rev !== undefined && entry.rev <= shown) local.delete(key)
   }
@@ -133,21 +136,22 @@ export function createUiState(
       if (rev < shown) return
       remote = next
       shown = rev
+      restarting = false
       release()
       update()
     },
     /**
      * The server is another process now, whose storage may have started over (`pnpm reset`): take its next snapshot
-     * whatever its revision. Every batch already sent went to the old storage, so the next snapshot is the truth for
-     * it, and its late reply is ignored; edits not yet sent go to the new server.
+     * whatever its revision. Every batch already sent went to the old storage: it stays shown until that snapshot
+     * arrives, which is the truth for it, and its late reply is ignored. Edits not yet sent go to the new server.
      */
     restarted() {
       epoch++
       shown = 0
       inFlight = false
-      for (const [key, entry] of local) if (entry.batch !== undefined) local.delete(key)
-      if (local.size) schedule(0)
-      update()
+      restarting = true
+      for (const entry of local.values()) if (entry.batch !== undefined) entry.rev = 0
+      if ([...local.values()].some((entry) => entry.batch === undefined)) schedule(0)
     },
     /** Send what is pending now, such as before the page goes away. */
     flush: () => {
