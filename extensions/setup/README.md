@@ -1,5 +1,3 @@
-# Setup
-
 What isn't set up on this machine, and what that costs: one status-line item, `⚠ N setup issues`, shown only while
 something warns. Its popover lists every area with what is set up, what is missing, what the user loses and a fix
 button (a ⌘K command, or the Secrets panel at the missing secret).

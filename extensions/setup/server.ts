@@ -223,21 +223,28 @@ async function landerArea(host: CheckHost): Promise<SetupIssue | undefined> {
 /** Every area, warnings first, then information, then what is set up; a failing area is skipped, not fatal. */
 export async function check(host: CheckHost): Promise<SetupIssue[]> {
   const areas = await Promise.all(
-    [
-      summaryArea(host),
-      agentsArea(host),
-      providersArea(host),
-      secretsArea(host),
-      extensionsArea(host),
-      cloudArea(host),
-      tailscaleArea(host),
-      landerArea(host),
-    ].map((area) =>
-      Promise.resolve(area).catch((error: unknown): SetupIssue => ({
-        area: 'Setup check',
-        status: 'info',
-        summary: `one check failed: ${error instanceof Error ? error.message : String(error)}`,
-      })),
+    (
+      [
+        summaryArea,
+        agentsArea,
+        providersArea,
+        secretsArea,
+        extensionsArea,
+        cloudArea,
+        tailscaleArea,
+        landerArea,
+      ] as ((
+        host: CheckHost,
+      ) => SetupIssue | SetupIssue[] | undefined | Promise<SetupIssue | SetupIssue[] | undefined>)[]
+    ).map((area) =>
+      // Started inside the promise, so an area that throws synchronously is caught like one that rejects.
+      Promise.resolve(host)
+        .then(area)
+        .catch((error: unknown): SetupIssue => ({
+          area: 'Setup check',
+          status: 'info',
+          summary: `one check failed: ${error instanceof Error ? error.message : String(error)}`,
+        })),
     ),
   )
   const rank = { warn: 0, info: 1, ok: 2 }

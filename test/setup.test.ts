@@ -132,6 +132,18 @@ it('warns about a fallback, agent models without a login and a missing secret, w
   expect(issues.findIndex((issue) => issue.status !== 'warn')).toBe(3)
 })
 
+it('keeps the other areas when one throws synchronously', async () => {
+  const host = await checkHost({ logins: ['openrouter'] })
+  const issues = await check({
+    ...host,
+    extensions: () => {
+      throw new Error('boom')
+    },
+  })
+  expect(issues.find((issue) => issue.area === 'Summary model')?.status).toBe('warn')
+  expect(issues.some((issue) => issue.summary === 'one check failed: boom')).toBe(true)
+})
+
 it('has no agent warning once the pinned provider has a login', async () => {
   const issues = await check(await checkHost({ logins: ['openrouter', 'openai-codex'] }))
   expect(issues.find((issue) => issue.area === 'Agent models')?.status).toBe('ok')

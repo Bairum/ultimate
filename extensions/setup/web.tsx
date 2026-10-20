@@ -9,9 +9,12 @@ import {
   useAction,
   useCommands,
   useEvent,
+  useEvents,
   useSystem,
   useUltimate,
 } from '@/sdk'
+import { Changed as HealthChanged } from '../health/ui.tsx'
+import { LoginChanged } from '../models/ui.tsx'
 import { CheckAction } from './refs.ts'
 import type { SetupIssue } from './refs.ts'
 
@@ -64,7 +67,7 @@ function Row({ issue }: { issue: SetupIssue }) {
 
 /**
  * "⚠ N setup issues" while something on this machine isn't set up; nothing otherwise. Read on mount, every minute,
- * after a secret changes here and when an extension is enabled, disabled or fails to load.
+ * after a secret, login or provider health changes and when an extension is enabled, disabled or fails to load.
  */
 function Setup() {
   const system = useSystem()
@@ -87,6 +90,9 @@ function Setup() {
     return () => clearInterval(timer)
   }, [refetch])
   useEvent('secrets:changed', () => void refetch())
+  // A login or provider health change re-checks at once; the minute poll covers the file-backed areas.
+  const latest = useEvents({ events: [LoginChanged, HealthChanged], limit: 1 })?.[0]?.id
+  useEffect(() => void refetch(), [latest, refetch])
   const warnings = data?.filter((issue) => issue.status === 'warn') ?? []
   if (!warnings.length) return null
   return (
