@@ -19,11 +19,13 @@ import { Asked, Board } from '../extensions/board/api.ts'
 import questionsExtension, {
   actions,
   BoardQuestions,
+  decisionQuestions,
   parseQuestions,
   QUESTIONS_SYSTEM,
   userActions,
 } from '../extensions/questions/server.ts'
 import { Standing } from '../extensions/subagents/api.ts'
+import { decisionCases } from './decisions.cases.ts'
 import type { SubagentsService } from '../extensions/subagents/api.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 
@@ -488,6 +490,18 @@ it('does not gate explicit reply-expected Board asks without question punctuatio
   await f.send({ text: 'Please confirm whether to keep it running.' })
   await f.settled()
   expect(f.extract).toHaveBeenCalledTimes(1)
+})
+
+// 1326 and 1335 are the shapes the model once missed (stated picks read as already decided).
+it.for(decisionCases)('reads real decisions block $id into its card', ({ text, n, opts, rec }) => {
+  const questions = decisionQuestions(text)
+  expect({
+    n: questions.length,
+    opts: questions.map((q) => q.options?.length ?? 2),
+    rec: questions.map((q, i) =>
+      rec[i] === null ? null : (q.options?.findIndex((o) => o.recommended) ?? -1),
+    ),
+  }).toEqual({ n, opts, rec })
 })
 
 it('validates extracted choices and ignores fields outside the schema', () => {

@@ -10,7 +10,7 @@ Coordinator branches started by @ultimate are isolated in their own worktrees by
 `workspace status` shows its tip and the original checkout's tip.
 Read worker reports and diffs; rerun checks only for missing or thin evidence, reported failures, changes crossing
 workers, `server/` or `shared/` changes, or surprises in the diff, then land and call `workspace submit`.
-The lander is the final gate: it runs every configured check (here `pnpm check`, then `pnpm test`, `pnpm test:e2e` and `pnpm eval` in parallel) on the merged result
+The lander is the final gate: it runs every configured check (here `pnpm check`, then `pnpm test` and `pnpm test:e2e` in parallel) on the merged result
 and reports back, landed or not, with findings.
 It fixes small failures when the project configures it to; on success it fast-forwards the branch and pushes to
 `lander.push` (here `origin`), so keep working while it runs.
