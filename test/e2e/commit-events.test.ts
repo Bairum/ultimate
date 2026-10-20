@@ -147,7 +147,7 @@ it('records the commits an apply-backend rebase rewrote', async () => {
   await git('checkout', 'main')
   await run('bash', ['-c', 'echo m > m && git add m && git commit -qm main'], { cwd })
   await git('checkout', 'side')
-  await bash('git rebase -q --apply main')
+  await bash('git rebase -q --apply --committer-date-is-author-date main')
   expect(emitted).toEqual([
     expect.objectContaining({
       sha: await git('rev-parse', 'HEAD'),
@@ -178,8 +178,6 @@ it('records each commit of a rebase once, in the call that made it, without a br
       subject: 'one',
     },
   ])
-  // Commit times have one-second resolution: let `one` fall before the next call starts.
-  await new Promise((resolve) => setTimeout(resolve, 1100))
   await bash('echo both > f && git add f && GIT_EDITOR=true git rebase --continue')
   expect(emitted.slice(1)).toEqual([
     {
@@ -211,8 +209,6 @@ it('records no merge when it fast-forwards onto an earlier merge of its own', as
   await bash('git merge -q --no-ff side -m merged')
   expect(emitted).toHaveLength(1)
   await git('checkout', '-b', 'later', 'main~1')
-  // Commit times have one-second resolution: let the earlier merge fall before this call starts.
-  await new Promise((resolve) => setTimeout(resolve, 1100))
   await bash('git merge -q --ff-only main')
   expect(emitted).toHaveLength(1)
 })

@@ -30,13 +30,17 @@ const bashTripwireMessage = (seconds: number) =>
  * drops the arguments Git appends.
  */
 const where = `"$(git symbolic-ref -q --short HEAD)" "$(git rev-parse --show-toplevel)" "$(git rev-parse --path-format=absolute --git-common-dir)"`
+const logCommit = `printf 'commit\\t%s\\t%s\\t%s\\t%s\\n' "$(git rev-parse HEAD)" ${where} 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`
 const hooks = (conversation: number) => ({
   'prepare-commit-msg': `git interpret-trailers --in-place --if-exists replace --trailer "Ultimate-Conversation: ${conversation}" "$1" #`,
-  'post-commit': `printf 'commit\\t%s\\t%s\\t%s\\t%s\\n' "$(git rev-parse HEAD)" ${where} 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
-  // Merges run no post-commit. Fast-forwards and squashes run post-merge too, so it also logs the HEAD before the merge.
-  'post-merge': `printf 'merge\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$(git rev-parse HEAD)" ${where} "$(git rev-parse -q --verify ORIG_HEAD)" 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
-  // Git's stdin holds `old new` pairs; an apply-backend rebase runs no post-commit, so each pair is a commit too.
-  'post-rewrite': `while read -r old new rest; do printf 'rewrite\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$new" ${where} "$old"; done 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
+  'post-commit': logCommit,
+  // `git am` and the apply backend of rebase make commits without post-commit.
+  'post-applypatch': logCommit,
+  // Merges run no post-commit. Fast-forwards and squashes run post-merge too, so it also logs the HEAD before the
+  // merge and the reflog's subject (`… Fast-forward` for one).
+  'post-merge': `printf 'merge\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$(git rev-parse HEAD)" ${where} "$(git rev-parse -q --verify ORIG_HEAD)" "$(git reflog -1 --format=%gs)" 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
+  // Git's stdin holds `old new` pairs of amended or rebased commits.
+  'post-rewrite': `while read -r old new rest; do printf 'rewrite\\t%s\\t\\t\\t%s\\t%s\\n' "$new" "$(git rev-parse --path-format=absolute --git-common-dir)" "$old"; done 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
 })
 
 /** Install the hooks for bash call `api` in `execution`; they log its commits to `log` when given. */
@@ -61,39 +65,33 @@ type Made = {
   branch?: string
   toplevel: string
   common: string
-  /** Logged by post-merge: the HEAD before it, to tell a real merge from a fast-forward or squash. */
-  merged?: string
-  /** Logged only by post-rewrite, as an apply-backend rebase makes: it may name a commit an earlier call made. */
-  inferred?: true
   rewrittenFrom?: string
 }
 
 /**
- * The commits a bash call that started at `started` (ms) made, from its hook log at `path`, which this removes. A
- * commit line confirms a commit; a merge or rewrite line alone only proposes one, and a rewrite line otherwise adds
- * `rewrittenFrom` to the commit's own record.
+ * The commits a bash call made, from its hook log at `path`, which this removes. Only a commit line, or a post-merge
+ * line for a real merge commit (first parent the HEAD before it, not a fast-forward), records a commit; a rewrite line
+ * only adds `rewrittenFrom` to one, since a resumed rebase also lists commits an earlier call made.
  */
-async function madeCommits(path: string, conversation: number, started: number) {
+async function madeCommits(path: string, conversation: number) {
   const log = await readFile(path, 'utf8').catch(() => '')
   await rm(path, { force: true })
   const made = new Map<string, Made>()
+  const merges = new Map<string, string>()
+  const rewrites: string[][] = []
   for (const line of log.split('\n')) {
-    const [kind, sha, branch, toplevel, common, extra] = line.split('\t')
-    if (!sha || !common || !['commit', 'merge', 'rewrite'].includes(kind)) continue
-    const known = made.get(sha)
-    if (known && kind === 'rewrite') {
-      if (extra) known.rewrittenFrom = extra
-      continue
+    const [kind, sha, branch, toplevel, common, extra, reflog] = line.split('\t')
+    if (!sha || !common) continue
+    if (kind === 'rewrite') rewrites.push([sha, extra])
+    else if (kind === 'merge' && /Fast-forward/.test(reflog ?? '')) continue
+    else if ((kind === 'commit' || kind === 'merge') && !made.has(sha)) {
+      made.set(sha, { sha, ...(branch ? { branch } : {}), toplevel, common })
+      if (kind === 'merge') merges.set(sha, extra ?? '')
     }
-    if (known && kind === 'merge') continue
-    made.set(sha, {
-      sha,
-      ...(branch ? { branch } : {}),
-      toplevel,
-      common,
-      ...(kind === 'merge' ? { merged: extra ?? '' } : {}),
-      ...(kind === 'rewrite' ? { inferred: true, ...(extra ? { rewrittenFrom: extra } : {}) } : {}),
-    })
+  }
+  for (const [sha, old] of rewrites) {
+    const commit = made.get(sha)
+    if (commit && old) commit.rewrittenFrom = old
   }
   const byRepo = Map.groupBy(made.values(), (commit) => commit.common)
   const events = []
@@ -103,37 +101,22 @@ async function madeCommits(path: string, conversation: number, started: number) 
       common,
       'log',
       '--no-walk=unsorted',
-      '--format=%H%x00%P%x00%s%x00%(trailers:key=Ultimate-Conversation,valueonly,separator=%x2C)%x00%ct%x1e',
+      '--format=%H%x00%P%x00%s%x1e',
       ...commits.map((commit) => commit.sha),
     ).catch(() => '')
     const details = new Map(
       shown
         .split('\x1e')
         .map((record) => record.trim().split('\0'))
-        .map(([sha, parents, subject, trailer, time]) => [
-          sha,
-          { parents, subject, trailer, time: Number(time) },
-        ]),
+        .map(([sha, parents, subject]) => [sha, { parents, subject }]),
     )
     for (const commit of commits) {
       const found = details.get(commit.sha)
       if (!found) continue
       const parents = found.parents ? found.parents.split(' ') : []
-      const during = found.time >= Math.floor(started / 1000)
-      // A rebase resumed in this call lists commits an earlier call already recorded.
-      if (commit.inferred && !during) continue
-      // A merge commit on the HEAD it started from, with this conversation's trailer, made during this call: not a
-      // fast-forward or squash, nor a fast-forward onto an older merge.
-      if (
-        commit.merged !== undefined &&
-        !(
-          parents.length > 1 &&
-          parents[0] === commit.merged &&
-          found.trailer.trim() === String(conversation) &&
-          during
-        )
-      )
-        continue
+      // A squash leaves HEAD where it was, which is no merge commit on the HEAD before it.
+      const before = merges.get(commit.sha)
+      if (before !== undefined && !(parents.length > 1 && parents[0] === before)) continue
       const repo = basename(common) === '.git' ? dirname(common) : common
       events.push({
         conversation,
@@ -158,7 +141,6 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
     async execute(args, api, context) {
       // One log per invocation: task ids repeat across projects and a retried call reruns its task.
       const log = join(tmpdir(), `ultimate-commits-${randomUUID()}.log`)
-      const started = Date.now()
       const call = createBashTool({
         prepare: (execution) => prepareBash(execution, api, log),
       })
@@ -166,7 +148,7 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
         return await call.execute(args, api, context)
       } finally {
         // A failed or stopped command may still have committed, so record what it made either way.
-        const commits = await madeCommits(log, api.conversationId, started)
+        const commits = await madeCommits(log, api.conversationId)
         if (commits.length)
           await api
             .commit(async (tx) => {
