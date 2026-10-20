@@ -364,7 +364,7 @@ export default host => { host.resource('cleanup.process',()=>{
       expect(server.url).toBe(`http://127.0.0.1:${server.port}`)
       expect((await fetch(server.url)).status).toBe(200)
       expect((await post(server, '/api/ui', { set: { 'test.isolated': true } })).status).toBe(200)
-      expect(await server.host.uiState(context)).toEqual({ 'test.isolated': true })
+      expect(await server.host.uiState(context)).toEqual({ 'test.isolated': true, 'ui.rev': 1 })
       await (
         await server.root.submit({ type: 'input', content: 'self URL' }, context)
       ).wait(context)
@@ -494,22 +494,26 @@ export default host => { host.resource('cleanup.process',()=>{
     const second = await attach(server, `?conversation=${created.data.id as number}`)
     expect(
       await post(server, '/api/ui', { set: { 'shell.panel': 'tasks', 'app.count': 2 } }),
-    ).toEqual({ status: 200, data: { ok: true } })
+    ).toEqual({ status: 200, data: { ok: true, rev: 1 } })
+    // The revision is the server's: a client cannot set or delete it.
+    expect((await post(server, '/api/ui', { set: { 'ui.rev': 9 } })).status).toBe(400)
+    expect((await post(server, '/api/ui', { delete: ['ui.rev'] })).status).toBe(400)
     await until(() => second.events.some((event) => event.name === 'uiOps'))
     let value = (second.events.find((event) => event.name === 'ui')!.data as ServerEvents['ui'])
       .value
     for (const event of second.events.filter((item) => item.name === 'uiOps'))
       value = applyImmutable(value, (event.data as ServerEvents['uiOps']).ops)
-    expect(value).toEqual({ 'shell.panel': 'tasks', 'app.count': 2 })
+    expect(value).toEqual({ 'shell.panel': 'tasks', 'app.count': 2, 'ui.rev': 1 })
     const count = second.events.filter((event) => event.name === 'uiOps').length
     await post(server, '/api/ui', { delete: ['app.count'] })
     await until(() => second.events.filter((event) => event.name === 'uiOps').length > count)
     const deletion = second.events.filter((event) => event.name === 'uiOps').at(-1)!
     expect(applyImmutable(value, (deletion.data as ServerEvents['uiOps']).ops)).toEqual({
       'shell.panel': 'tasks',
+      'ui.rev': 2,
     })
     await until(() => first.events.filter((event) => event.name === 'uiOps').length === 2)
-    expect(await server.host.uiState(context)).toEqual({ 'shell.panel': 'tasks' })
+    expect(await server.host.uiState(context)).toEqual({ 'shell.panel': 'tasks', 'ui.rev': 2 })
     const entry = await server.root.commit(
       async (tx) => tx.appendEntry(server.root.id, { kind: 'test.marker' }),
       context,
@@ -518,8 +522,9 @@ export default host => { host.resource('cleanup.process',()=>{
     const fork = await server.root.fork(entry.id, { ownership: { kind: 'ownerless' } }, context)
     expect(await server.harness.snapshot(UiState, fork.id, context)).toEqual({
       'shell.panel': 'tasks',
+      'ui.rev': 2,
     })
-    expect(await server.host.uiState(context)).toEqual({ 'shell.panel': 'settings' })
+    expect(await server.host.uiState(context)).toEqual({ 'shell.panel': 'settings', 'ui.rev': 3 })
     await post(server, '/api/ui', { set: { 'shell.panel': 'tasks' } })
     await first.close()
     await second.close()
@@ -530,7 +535,7 @@ export default host => { host.resource('cleanup.process',()=>{
     servers.push(reopened)
     const stream = await attach(reopened)
     expect(stream.events.find((event) => event.name === 'ui')!.data).toEqual({
-      value: { 'shell.panel': 'tasks' },
+      value: { 'shell.panel': 'tasks', 'ui.rev': 4 },
     })
     await stream.close()
   })
@@ -543,12 +548,14 @@ export default host => { host.resource('cleanup.process',()=>{
     expect((await post(server, '/api/ui', { set: [] })).status).toBe(400)
     await post(server, '/api/ui', { set: { large: 'x'.repeat(200000) } })
     expect((await post(server, '/api/ui', { set: { extra: 'é'.repeat(40000) } })).status).toBe(413)
-    expect(await server.host.uiState(context)).toEqual({ large: 'x'.repeat(200000) })
+    expect(await server.host.uiState(context)).toEqual({ large: 'x'.repeat(200000), 'ui.rev': 1 })
     await post(server, '/api/ui', {
       set: JSON.parse('{"__proto__":{"safe":true}}'),
       delete: ['large'],
     })
-    expect(await server.host.uiState(context)).toEqual(JSON.parse('{"__proto__":{"safe":true}}'))
+    expect(await server.host.uiState(context)).toEqual(
+      JSON.parse('{"__proto__":{"safe":true},"ui.rev":2}'),
+    )
   })
 
   it('prepares the core and listener without opening SQLite until go', async () => {

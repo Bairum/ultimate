@@ -8,7 +8,7 @@ import type {
   SubmissionId,
 } from '@earendil-works/pi-durable'
 import type { ServerEvents, ConversationSummary, ConfigureRequest } from '../shared/protocol.ts'
-import { imageMimeTypes, maxImageBytes, maxImages } from '../shared/protocol.ts'
+import { UI_REVISION, imageMimeTypes, maxImageBytes, maxImages } from '../shared/protocol.ts'
 import { listModels } from './models.ts'
 import type { Extensions } from './extensions.ts'
 import { context } from './harness.ts'
@@ -481,7 +481,9 @@ export async function createApi(
             throw new HttpError(400, 'Invalid UI update')
           if (!Object.keys(set).every(validUiKey) || !remove.every(validUiKey))
             throw new HttpError(400, 'Invalid UI key')
-          await root.commit(async (tx) => {
+          if (UI_REVISION in set || remove.includes(UI_REVISION))
+            throw new HttpError(400, 'The UI revision is the server’s')
+          const rev = await root.commit(async (tx) => {
             const value = await tx.doc(UiState, root.id)
             const next = { ...value, ...(set as Record<string, JsonValue>) }
             for (const key of remove) delete next[key]
@@ -489,8 +491,13 @@ export async function createApi(
               throw new HttpError(413, 'UI state too large')
             for (const [key, item] of Object.entries(set)) value[key] = item as JsonValue
             for (const key of remove) delete value[key]
+            // Counted in the write's own commit, so a client knows which stream snapshot first carries it.
+            const previous = value[UI_REVISION]
+            const counted = (typeof previous === 'number' ? previous : 0) + 1
+            value[UI_REVISION] = counted
+            return counted
           }, context)
-          json(200, { ok: true })
+          json(200, { ok: true, rev })
           return true
         }
         if (url.pathname === '/api/restart') {

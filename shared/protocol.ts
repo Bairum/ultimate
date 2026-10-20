@@ -178,6 +178,13 @@ export interface UiUpdateRequest {
   set?: Record<string, JsonValue>
   delete?: string[]
 }
+/** The document key counting UI commits; each `POST /api/ui` increments it in its own commit. */
+export const UI_REVISION = 'ui.rev'
+/** The revision the update committed as: the stream shows it once its `ui.rev` reaches this. */
+export interface UiUpdateResponse {
+  ok: true
+  rev: number
+}
 export interface ServerEvents {
   system: SystemInfo
   conversations: ConversationSummary[]
