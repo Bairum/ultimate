@@ -23,7 +23,7 @@ export interface AgentDefinition {
   resident?: boolean | 'machine' | 'everywhere'
   /** What the lander does when a submission fails: explain it, or fix it and land. Only the lander reads it. */
   onFailure?: 'diagnose' | 'fix'
-  /** Overlay files whose `addTools` and body discovery merged into this definition, in order. */
+  /** Overlay files whose settings, `addTools` and body discovery merged into this definition, in order. */
   overlays?: string[]
 }
 export function definitionAgent(
@@ -93,6 +93,43 @@ const fields = new Set([
   'onFailure',
 ])
 
+/** The settings a definition or overlay may set: every field but `name`, `tools` and `addTools`. */
+function parseSettings(frontmatter: Record<string, unknown>): Partial<
+  Pick<AgentDefinition, 'description' | 'thinking' | 'isolate' | 'resident' | 'onFailure'>
+> & {
+  model?: string
+} {
+  const { description, model, thinking, isolate, resident, onFailure } = frontmatter
+  if (description !== undefined && (typeof description !== 'string' || !description.trim()))
+    throw new Error('description is required')
+  if (thinking !== undefined && (typeof thinking !== 'string' || !Object.hasOwn(levels, thinking)))
+    throw new Error(`thinking must be one of ${Object.keys(levels).join(', ')}`)
+  if (model !== undefined && (typeof model !== 'string' || !model.trim()))
+    throw new Error('model must be a nonempty string')
+  if (isolate !== undefined && isolate !== 'none' && isolate !== 'worktree')
+    throw new Error('isolate must be none or worktree')
+  if (onFailure !== undefined && onFailure !== 'diagnose' && onFailure !== 'fix')
+    throw new Error('onFailure must be diagnose or fix')
+  if (
+    resident !== undefined &&
+    typeof resident !== 'boolean' &&
+    resident !== 'machine' &&
+    resident !== 'everywhere'
+  )
+    throw new Error('resident must be a boolean, machine or everywhere')
+  return {
+    ...(description !== undefined ? { description: description.trim() } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(thinking ? { thinking: thinking as ModelThinkingLevel } : {}),
+    ...(isolate ? { isolate: isolate } : {}),
+    ...(resident !== undefined ? { resident: resident } : {}),
+    ...(onFailure ? { onFailure: onFailure } : {}),
+  }
+}
+
+const isTools = (tools: unknown): tools is string[] =>
+  Array.isArray(tools) && tools.every((tool) => typeof tool === 'string')
+
 /** A definition file: Pi's YAML frontmatter with Ultimate's fields, and the instructions as its body. */
 export function parseDefinition(
   text: string,
@@ -106,66 +143,65 @@ export function parseDefinition(
     !Object.keys(frontmatter).length
   )
     throw new Error('Expected frontmatter fields between --- lines')
-  const { name, description, model, thinking, tools, isolate, resident, onFailure } = frontmatter
+  const { name, tools } = frontmatter
   const unknown = Object.keys(frontmatter).find((key) => !fields.has(key))
   if (unknown) throw new Error(`Unknown field: ${unknown}`)
   if (typeof name !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(name))
     throw new Error('name must be a nonempty identifier')
-  if (typeof description !== 'string' || !description.trim())
-    throw new Error('description is required')
-  if (thinking !== undefined && (typeof thinking !== 'string' || !Object.hasOwn(levels, thinking)))
-    throw new Error(`thinking must be one of ${Object.keys(levels).join(', ')}`)
-  if (model !== undefined && (typeof model !== 'string' || !model.trim()))
-    throw new Error('model must be a nonempty string')
-  if (
-    tools !== undefined &&
-    (!Array.isArray(tools) || !tools.every((tool) => typeof tool === 'string'))
-  )
-    throw new Error('tools must be a list of tool names')
-  if (isolate !== undefined && isolate !== 'none' && isolate !== 'worktree')
-    throw new Error('isolate must be none or worktree')
-  if (onFailure !== undefined && onFailure !== 'diagnose' && onFailure !== 'fix')
-    throw new Error('onFailure must be diagnose or fix')
-  if (
-    resident !== undefined &&
-    typeof resident !== 'boolean' &&
-    resident !== 'machine' &&
-    resident !== 'everywhere'
-  )
-    throw new Error('resident must be a boolean, machine or everywhere')
+  const { description, ...settings } = parseSettings(frontmatter)
+  if (!description) throw new Error('description is required')
+  if (tools !== undefined && !isTools(tools)) throw new Error('tools must be a list of tool names')
   if (!body) throw new Error('Instructions are required')
   return {
     name,
-    description: description.trim(),
+    description,
     path,
     instructions: body,
-    ...(model !== undefined ? { model } : {}),
-    ...(thinking ? { thinking: thinking as ModelThinkingLevel } : {}),
+    ...settings,
     ...(tools ? { tools } : {}),
-    ...(isolate ? { isolate } : {}),
-    ...(resident !== undefined ? { resident } : {}),
-    ...(onFailure ? { onFailure } : {}),
+  }
+}
+
+/** A model reference resolved as Pi's CLI resolves it; a `provider/id:level` model also sets the thinking level. */
+function resolveModel(
+  cliModel: string | undefined,
+  cliThinking: ModelThinkingLevel | undefined,
+  modelRuntime: ModelRuntime,
+) {
+  const resolved = resolveCliModel({ cliModel, cliThinking, modelRuntime })
+  if (resolved.error || resolved.warning)
+    throw new Error(`model: ${resolved.error || resolved.warning}`)
+  const thinking = cliThinking ?? resolved.thinkingLevel
+  return {
+    ...(resolved.model
+      ? { model: { provider: resolved.model.provider, modelId: resolved.model.id } }
+      : {}),
+    ...(thinking ? { thinking } : {}),
   }
 }
 
 /**
- * An overlay: `name` and `addTools` only, and an optional body. It adds tools to the definition of the same name an
- * earlier folder holds and appends its body to that definition's instructions, so the earlier file stays the source.
+ * An overlay, marked by `addTools` (empty when it only changes settings): it extends the definition of the same name
+ * an earlier folder holds. Its settings (every field but `tools`) replace that definition's, its `addTools` join its
+ * tool list, and its body is appended to its instructions, so the earlier file stays the source of the instructions.
  */
-export function parseOverlay(text: string, path: string) {
+export function parseOverlay(text: string, path: string, modelRuntime: ModelRuntime) {
   const { frontmatter, body } = parseFrontmatter(text)
   const { name, addTools } = frontmatter
-  const extra = Object.keys(frontmatter).find((key) => key !== 'name' && key !== 'addTools')
-  if (extra) throw new Error(`An overlay sets only name and addTools, not ${extra}`)
+  if ('tools' in frontmatter) throw new Error('An overlay adds tools with addTools, not tools')
+  const unknown = Object.keys(frontmatter).find((key) => key !== 'addTools' && !fields.has(key))
+  if (unknown) throw new Error(`Unknown field: ${unknown}`)
   if (typeof name !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(name))
     throw new Error('name must be a nonempty identifier')
-  if (
-    !Array.isArray(addTools) ||
-    !addTools.length ||
-    !addTools.every((tool) => typeof tool === 'string')
-  )
-    throw new Error('addTools must be a nonempty list of tool names')
-  return { name, path, addTools: addTools, instructions: body.trim() }
+  if (!isTools(addTools)) throw new Error('addTools must be a list of tool names')
+  const { model, thinking, ...settings } = parseSettings(frontmatter)
+  return {
+    name,
+    path,
+    addTools,
+    settings: { ...settings, ...resolveModel(model, thinking, modelRuntime) },
+    instructions: body.trim(),
+  }
 }
 
 const isOverlay = (text: string) => {
@@ -179,18 +215,8 @@ export function readDefinition(
   path: string,
   modelRuntime: ModelRuntime,
 ): AgentDefinition {
-  const { model: cliModel, ...definition } = parseDefinition(text, path)
-  const resolved = resolveCliModel({ cliModel, cliThinking: definition.thinking, modelRuntime })
-  if (resolved.error || resolved.warning)
-    throw new Error(`model: ${resolved.error || resolved.warning}`)
-  const thinking = definition.thinking ?? resolved.thinkingLevel
-  return {
-    ...definition,
-    ...(resolved.model
-      ? { model: { provider: resolved.model.provider, modelId: resolved.model.id } }
-      : {}),
-    ...(thinking ? { thinking } : {}),
-  }
+  const { model, thinking, ...definition } = parseDefinition(text, path)
+  return { ...definition, ...resolveModel(model, thinking, modelRuntime) }
 }
 
 /** The `agents/` folders discovery reads, in order; the project's only once its setup is chosen as local. */
@@ -206,7 +232,7 @@ export function agentRoots(ultimateRoot: string, projectRoot: string, userHome: 
 
 /**
  * Definitions from `agents/` in Ultimate's clone, `~/.ultimate/`, and the project's `.ultimate/`; a later file wins
- * by name, unless it is an overlay (`addTools`), which extends the earlier one.
+ * by name, unless it is an overlay (marked by `addTools`), which extends the earlier one.
  */
 export async function discoverAgents(
   ultimateRoot: string,
@@ -232,12 +258,13 @@ export async function discoverAgents(
       try {
         const text = await readFile(path, 'utf8')
         if (isOverlay(text)) {
-          const overlay = parseOverlay(text, path)
+          const overlay = parseOverlay(text, path, modelRuntime)
           const base = definitions.get(overlay.name)
           if (!base) throw new Error(`addTools needs an earlier definition named ${overlay.name}`)
           const heading = source === 'user' ? 'User additions' : 'Project additions'
           definitions.set(overlay.name, {
             ...base,
+            ...overlay.settings,
             // A base that inherits every tool already has them; only a list grows.
             ...(base.tools ? { tools: [...new Set([...base.tools, ...overlay.addTools])] } : {}),
             instructions: overlay.instructions
