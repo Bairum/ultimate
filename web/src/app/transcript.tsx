@@ -208,6 +208,27 @@ function TranscriptEntries() {
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.style.overflowAnchor = following ? 'none' : ''
   }, [following, scrollRef])
+  // The reader left the bottom when the view moved up and is no longer at the bottom. The library only scrolls down,
+  // anchoring is off while following, and a clamp after content shrinks stays at the bottom, so only the reader does
+  // this. The library notices touch, keyboard and scrollbar scrolls a moment late, or not at all while content resizes.
+  const seenTop = useRef(0)
+  const readerLeft = useEffectEvent(() => {
+    const scroll = scrollRef.current
+    if (!scroll) return false
+    const up = scroll.scrollTop < seenTop.current - 1
+    return up && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 1
+  })
+  useEffect(() => {
+    const scroll = scrollRef.current
+    if (!scroll) return undefined
+    seenTop.current = scroll.scrollTop
+    const onScroll = () => {
+      if (readerLeft()) stopScroll()
+      seenTop.current = scroll.scrollTop
+    }
+    scroll.addEventListener('scroll', onScroll, { passive: true })
+    return () => scroll.removeEventListener('scroll', onScroll)
+  }, [scrollRef, stopScroll])
   // Retain already displayed rows when a live compaction replaces the active context, or a fresh window moves past them.
   const entries = useMemo(() => {
     const rows = new Map(history.map((entry) => [entry.id, entry]))
@@ -385,11 +406,9 @@ function TranscriptEntries() {
             top: candidates[0].getBoundingClientRect().top,
           }
       }
-      // The anchor holds the rows in place; a reader who left the bottom stops following. The library notices a touch,
-      // keyboard or scrollbar scroll a moment late, so a distance also counts, unless its follow animation explains it.
-      const scroll = scrollRef.current
-      const distance = scroll ? scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight : 0
-      if (!state.isAtBottom || (!state.animation && distance > 1)) stopScroll()
+      // The anchor holds the rows in place; a reader who left the bottom stops following, even when the page arrives
+      // before their scroll's event.
+      if (!state.isAtBottom || readerLeft()) stopScroll()
       // A short transcript needs its existing empty tail to remain scrollable after prepending.
       setTailSpace((space) =>
         Math.max(
