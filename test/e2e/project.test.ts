@@ -7,8 +7,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { projectHome } from '../../server/project.ts'
-import type { SystemInfo } from '../../shared/protocol.ts'
-import { temp, sourceCopy, cleanEnv, until, post as requestPost } from '../helpers.ts'
+import { attach, temp, sourceCopy, cleanEnv, until, post as requestPost } from '../helpers.ts'
 
 const children: ChildProcess[] = []
 afterEach(async () => {
@@ -102,16 +101,15 @@ it('starts two project supervisors concurrently on distinct free ports and stora
     })
     expect(owner.port).toBeGreaterThan(0)
     expect(existsSync(join(run.home, 'state.sqlite'))).toBe(true)
-    const controller = new AbortController()
-    const response = await fetch(urls[index] + '/api/events', { signal: controller.signal })
-    const reader = response.body!.getReader()
-    let wire = ''
-    while (!wire.includes('event: system\n'))
-      wire += new TextDecoder().decode((await reader.read()).value)
-    const system = JSON.parse(/event: system\ndata: (.+)/.exec(wire)![1]) as SystemInfo
-    controller.abort()
-    expect(system.project.root).toBe(projects[index])
-    expect(system.persistence.path).toBe(join(run.home, 'state.sqlite'))
+    const stream = await attach(urls[index])
+    try {
+      await until(() => !!stream.system())
+      const system = stream.system()
+      expect(system.project.root).toBe(projects[index])
+      expect(system.persistence.path).toBe(join(run.home, 'state.sqlite'))
+    } finally {
+      await stream.close()
+    }
   }
   expect(await post(urls[0], '/api/extensions/hello/actions/hello', 'hi')).toEqual({
     status: 200,
