@@ -56,7 +56,12 @@ async function topLevelId(host: ExtensionHost, args: ActionInput<{ id: number }>
  * Roots and standing agents (@ultimate, the lander, other residents) are fixed parts of the project: refuse `verb`
  * on them. Reads documents by kind, so it holds without lineage or subagents too.
  */
-async function refuseFixed(host: ExtensionHost, tx: Tx, id: ConversationId, verb: string) {
+async function refuseFixed(
+  host: Pick<ExtensionHost, 'doc' | 'metadata'>,
+  tx: Tx,
+  id: ConversationId,
+  verb: string,
+) {
   const roots = host.doc('lineage.roots')
   const listed = roots && ((await tx.doc(roots, ROOT_CONVERSATION_ID)) as { roots?: number[] })
   if (listed?.roots?.includes(id)) throw new Error(`#${id} is a root; roots cannot be ${verb}`)
@@ -82,25 +87,9 @@ export const order = 100
 
 /** Called by the sidebar; each acts on a top-level conversation by id. */
 export const actions = {
-  conclude: implementAction(ConcludeAction, async (args, { host }) => {
-    const ids = conversationIds(args)
-    await host.harness().commit(async (tx) => {
-      for (const id of ids) {
-        const found = await tx.conversation(id)
-        if (!found) throw new Error(`Unknown conversation ${id}`)
-        if (found.owner)
-          throw new Error(`Conversation ${id} is owned, not a top-level conversation`)
-        await refuseFixed(host, tx, id, 'concluded')
-      }
-      const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
-      const previous = ui['ext.conversations.concluded']
-      ui['ext.conversations.concluded'] = [
-        ...new Set([...(Array.isArray(previous) ? previous : []), ...ids]),
-      ]
-    }, context)
-    const kept = (await host.want(Release)?.release(ids, context)) ?? []
-    return { concluded: ids, kept }
-  }),
+  conclude: implementAction(ConcludeAction, async (args, { host }) =>
+    conclude(host, conversationIds(args)),
+  ),
   resume: implementAction(ResumeAction, async (args, { host }) => {
     const ids = conversationIds(args)
     const resumed = await resume(host, ids)
@@ -146,6 +135,31 @@ export const actions = {
     })
     return effectiveSummaryModel(host)
   }),
+}
+
+/** Conclude top-level conversations `ids` in one transaction, then free what they hold; returns the work kept. */
+async function conclude(host: ExtensionHost, ids: ConversationId[], caller: Context = context) {
+  await host.harness().commit((tx) => concludeIn(host, tx, ids), caller)
+  const kept = (await host.want(Release)?.release(ids, caller)) ?? []
+  return { concluded: ids, kept }
+}
+/** Add top-level conversations `ids` to the concluded list inside `tx`; throws for unknown, owned or fixed ones. */
+export async function concludeIn(
+  host: Pick<ExtensionHost, 'doc' | 'metadata'>,
+  tx: Tx,
+  ids: ConversationId[],
+) {
+  for (const id of ids) {
+    const found = await tx.conversation(id)
+    if (!found) throw new Error(`Unknown conversation ${id}`)
+    if (found.owner) throw new Error(`Conversation ${id} is owned, not a top-level conversation`)
+    await refuseFixed(host, tx, id, 'concluded')
+  }
+  const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
+  const previous = ui['ext.conversations.concluded']
+  ui['ext.conversations.concluded'] = [
+    ...new Set([...(Array.isArray(previous) ? previous : []), ...ids]),
+  ]
 }
 
 function conversationIds(args: ActionInput<{ ids: number[] }>): ConversationId[] {
@@ -211,6 +225,7 @@ export default (host: ExtensionHost) => {
   host.want(Release)
   host.implement(ConversationsApi, {
     subject: (id, caller) => subject(host, id, caller),
+    concludeIn: (tx, ids) => concludeIn(host, tx, ids),
     summaryModel: () => summaryModel(host),
     summaryModelStatus: () => summaryModelStatus(host),
     requestSummary: (tx, id, request, model) => requestSummary(tx, host, id, request, model),
