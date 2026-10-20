@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { admit, loopbackAuthority, loopbackOrigin } from '../server/request-security.ts'
+import { admit, deviceOf, loopbackAuthority, loopbackOrigin } from '../server/request-security.ts'
 
 it.each(['127.0.0.1', 'localhost', '[::1]', 'ultimate.localhost', 'preview.ultimate.localhost'])(
   'admits direct loopback host and origin %s on the listening port',
@@ -42,4 +42,23 @@ it('does not admit forwarded localhost subdomains', async () => {
       new Set(),
     ),
   ).toBe(false)
+})
+
+it('labels a request by its browser, with the Tailscale login only behind Serve', () => {
+  const iphone =
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1'
+  const linux = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/141.0 Safari/537.36'
+  expect(deviceOf({ 'user-agent': iphone })).toEqual({ device: 'phone safari' })
+  expect(
+    deviceOf({
+      'user-agent': linux,
+      'tailscale-user-login': 'me@example.com',
+      'x-forwarded-for': '100.64.0.2',
+    }),
+  ).toEqual({ device: 'desktop chrome', login: 'me@example.com' })
+  // A login header that no proxy set is a local client's claim, not Tailscale's.
+  expect(deviceOf({ 'user-agent': linux, 'tailscale-user-login': 'me@example.com' })).toEqual({
+    device: 'desktop chrome',
+  })
+  expect(deviceOf({})).toEqual({ device: 'desktop other' })
 })

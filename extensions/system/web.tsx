@@ -22,6 +22,7 @@ import { windows } from './layout.ts'
 import type { WindowName } from './layout.ts'
 import { LanesAction } from './refs.ts'
 import type { Lane, LaneLink } from './refs.ts'
+import { NavigationReporter } from './navigation.tsx'
 import { Stream } from './stream.tsx'
 import type { StreamView } from './stream.tsx'
 
@@ -231,4 +232,5 @@ export default defineWebExtension({
   commands: [
     { id: 'system.open', title: 'Open System', run: (context) => context.showSurface('system') },
   ],
+  slots: { overlay: [NavigationReporter] },
 })

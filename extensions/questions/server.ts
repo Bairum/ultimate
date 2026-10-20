@@ -164,7 +164,7 @@ export function parseQuestions(text: string): Question[] {
 export const userActions = ['answer', 'dismiss']
 export const actions = {
   /** Answer an open Board message, from its extracted questions or as free text: a user Board reply to its sender. */
-  answer: implementAction(AnswerAction, async (args, { host, signal }) => {
+  answer: implementAction(AnswerAction, async (args, { host, signal, device }) => {
     const data = args as {
       messageId: number
       answers?: { question: string; answer: string }[]
@@ -193,15 +193,18 @@ export const actions = {
           data.messageId,
           text ?? answerText(data.answers!),
           withAbortSignal(signal, context),
+          device,
         ),
     }
   }),
   /** Close an open Board message to the user unanswered; its sender gets a one-way note. */
-  dismiss: implementAction(DismissAction, async (args, { host, signal }) => {
+  dismiss: implementAction(DismissAction, async (args, { host, signal, device }) => {
     const data = args as { messageId: number }
     if (!data || !Number.isSafeInteger(data.messageId)) throw new Error('Invalid message')
     return {
-      id: await host.need(BoardApi).dismiss(data.messageId, withAbortSignal(signal, context)),
+      id: await host
+        .need(BoardApi)
+        .dismiss(data.messageId, withAbortSignal(signal, context), device),
     }
   }),
 }

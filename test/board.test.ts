@@ -23,6 +23,7 @@ import { Metadata } from '../server/metadata.ts'
 import { emit, EventFeed } from '../server/events.ts'
 import board, { actions } from '../extensions/board/server.ts'
 import { Board, MessageSent } from '../extensions/board/api.ts'
+import { UserInputEvent } from '../shared/events.ts'
 import type { BoardService } from '../extensions/board/api.ts'
 import { BranchReceipts, Tally, rootOf, startBranch } from '../extensions/lineage/server.ts'
 import type { BranchInput } from '../extensions/lineage/server.ts'
@@ -587,10 +588,33 @@ it('answers questions to the user through answer cards or input in the sender co
   // Two open questions: answering one leaves the other open, and typing anywhere answers neither.
   const first = await ask('Which command?')
   const second = await ask('Approve the preview?')
-  await f.service().answer(first.id, 'Q: Which command?\nA: Both', context)
+  await f.service().answer(first.id, 'Q: Which command?\nA: Both', context, {
+    device: 'phone safari',
+  })
   await f.opened.harness.waitForIdle(context)
   expect(await state(first.id)).toBe('answered')
   expect(await state(second.id)).toBe('delivered')
+  // Each answer is the user's input to the asker, recorded once with its reply's message and never its text.
+  const inputs = await eventHost(() => f.opened.harness, 'test').eventLog.recent({
+    events: [UserInputEvent],
+  })
+  const answer = (await f.log())!.messages.find((m) => m.from === 'user' && m.re === first.id)!
+  expect(inputs.map((event) => event.data)).toEqual([
+    {
+      conversation: f.recipient.id,
+      kind: 'answer',
+      message: answer.id,
+      length: 'Q: Which command?\nA: Both'.length,
+      device: 'phone safari',
+    },
+    {
+      conversation: f.recipient.id,
+      kind: 'answer',
+      message: expect.any(Number),
+      length: 'Option 1'.length,
+    },
+  ])
+  expect(JSON.stringify(inputs)).not.toContain('Which command')
   await (await f.recipient.submit({ type: 'input', content: 'Yes' }, context)).wait(context)
   await (await f.opened.root.submit({ type: 'input', content: 'Elsewhere' }, context)).wait(context)
   await f.opened.close()

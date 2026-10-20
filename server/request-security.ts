@@ -1,4 +1,5 @@
 import type { IncomingHttpHeaders, IncomingMessage } from 'node:http'
+import type { Device } from '../shared/events.ts'
 
 export interface AccessRule {
   origin: string
@@ -61,6 +62,29 @@ export async function admit(
     }
   }
   return false
+}
+
+/**
+ * The short label of the browser behind a request, `phone safari` or `desktop chrome`, and the Tailscale login when
+ * Tailscale Serve proxied it. Nothing else of the request.
+ */
+export function deviceOf(headers: IncomingHttpHeaders): Device {
+  const agent = headers['user-agent'] ?? ''
+  const kind = /Mobi|iPhone|Android/.test(agent) ? 'phone' : 'desktop'
+  const browser = /Edg\//.test(agent)
+    ? 'edge'
+    : /Firefox|FxiOS/.test(agent)
+      ? 'firefox'
+      : /Chrome|CriOS/.test(agent)
+        ? 'chrome'
+        : /Safari/.test(agent)
+          ? 'safari'
+          : 'other'
+  const login = headers['tailscale-user-login']
+  return {
+    device: `${kind} ${browser}`,
+    ...(proxied(headers) && typeof login === 'string' && login ? { login } : {}),
+  }
 }
 
 export function proxied(headers: IncomingHttpHeaders) {

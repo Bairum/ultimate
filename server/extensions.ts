@@ -30,6 +30,7 @@ import type { EventHost } from './events.ts'
 import { extensionApis } from './extension-apis.ts'
 import type { TraceReader } from './trace.ts'
 import type { Api, Catalogue } from '../shared/extension-api.ts'
+import type { Device } from '../shared/events.ts'
 
 export type ExtensionHost = Pick<
   PreparedHost,
@@ -282,6 +283,7 @@ export async function loadExtensions(
     signal: AbortSignal,
     conversationId?: number,
     caller = 'ui',
+    device?: Device,
   ) {
     const table = actions.get(name)
     const fn = table && Object.hasOwn(table, action) ? table[action] : undefined
@@ -297,6 +299,7 @@ export async function loadExtensions(
       fn(args, {
         host: facetHosts.get(name)!,
         conversationId,
+        ...(device ? { device } : {}),
         signal,
         exec: async (command, commandArgs, options) => {
           const agent =

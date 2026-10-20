@@ -53,6 +53,33 @@ export const NoticeEvent = defineEvent<{ extension: string; message: string; lev
 /** This process opened storage and serves: its supervisor generation and the build it runs. */
 export const StartedEvent = defineEvent<{ generation: number; build: string }>('ultimate.started')
 
+/**
+ * The browser a user request came from, `desktop chrome` or `phone safari`, and its Tailscale login when it came
+ * through Tailscale Serve. Nothing else of the request is kept.
+ */
+export type Device = { device: string; login?: string }
+
+/**
+ * The user gave conversation `conversation` an input: typed (`prompt`, or `steer`/`follow-up` while it ran), an answer
+ * or dismissal of its question (`message`, the Board reply), or a review. `entry` is its transcript entry once placed;
+ * a queued one names its `submission`, whose record gets the entry. Never the text: `length` counts its characters.
+ */
+export const UserInputEvent = defineEvent<
+  {
+    conversation: number
+    kind: 'prompt' | 'steer' | 'follow-up' | 'answer' | 'dismiss' | 'review'
+    entry?: number
+    submission?: number
+    message?: number
+    length: number
+  } & Partial<Device>
+>('user.input')
+
+/** The user switched the surface on screen (`agent`, `system`, …) or the conversation open on it. */
+export const NavigatedEvent = defineEvent<
+  { surface: string; conversation?: number } & Partial<Device>
+>('ui.navigated')
+
 /** Root document with the newest events, which `useEvents()` streams to the browser. */
 export const EVENT_FEED = 'ultimate.event-feed'
 export const EVENT_FEED_SIZE = 100

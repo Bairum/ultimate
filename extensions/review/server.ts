@@ -3,6 +3,7 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineEntry, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
+import { UserInputEvent } from '../../shared/events.ts'
 import { git, isolatable } from '../../lib/git.ts'
 import { primaryAgent } from '../../lib/machine.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -169,7 +170,7 @@ export const actions = {
     if (typeof spec !== 'string') throw new Error('Expected { spec }')
     return { conversation: await recipient(host, spec) }
   }),
-  send: implementAction(SendAction, async (args, { host }) => {
+  send: implementAction(SendAction, async (args, { host, device }) => {
     const id =
       args && typeof args === 'object' && !Array.isArray(args) ? args.conversation : undefined
     if (typeof id !== 'number' || !Number.isSafeInteger(id) || !known(host, id))
@@ -177,14 +178,30 @@ export const actions = {
     const review = checkReview(args)
     const conversation = await host.harness().conversation(id as ConversationId, context)
     if (!conversation) throw new Error(`No conversation #${id}`)
-    await conversation.submit(
+    const content = reviewText(review)
+    const submission = await conversation.submit(
       {
         type: 'input',
-        content: reviewText(review),
+        content,
         entry: { kind: ReviewCommentsEntry.kind, data: review },
         // A review is the user's input: it steers a busy recipient as a message typed into it would.
         whenBusy: 'steer',
       },
+      context,
+    )
+    // In a commit of its own right after the input's, which Pi admits with no hook: a crash in between loses it.
+    const admitted = await submission.status(context)
+    await host.harness().commit(
+      (tx) =>
+        host.emit(tx, UserInputEvent, {
+          conversation: id,
+          kind: 'review',
+          ...(admitted.entry === undefined
+            ? { submission: submission.id }
+            : { entry: admitted.entry }),
+          length: content.length,
+          ...device,
+        }),
       context,
     )
     return { conversation: id }

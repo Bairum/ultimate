@@ -618,4 +618,27 @@ export const actions = {
     'Invalid before cursor',
   )
   expect(systemRows()).toMatchObject([{ name: 'system/stream', ok: false }])
+
+  // Navigation: a change of surface or conversation is one event with the browser's device; a repeat is none.
+  const device = { device: 'desktop firefox', login: 'me@example.com' }
+  const navigate = (args: JsonValue) =>
+    server.extensions.invoke('system', 'navigated', args, signal, 1, 'ui', device)
+  expect(await navigate({ surface: 'agent', conversation: 7 })).toEqual({ recorded: true })
+  expect(await navigate({ surface: 'agent', conversation: 7 })).toEqual({ recorded: false })
+  expect(await navigate({ surface: 'system' })).toEqual({ recorded: true })
+  expect(await navigate({ surface: 'system' })).toEqual({ recorded: false })
+  // Two tabs reporting the same new view at once record it once.
+  const racing = await Promise.all([
+    navigate({ surface: 'review' }),
+    navigate({ surface: 'review' }),
+  ])
+  expect(racing.filter((result) => (result as { recorded: boolean }).recorded)).toHaveLength(1)
+  const navigated = (await invoke('system', 'stream', { kinds: ['ui.navigated'] })) as {
+    rows: SystemRow[]
+  }
+  expect(navigated.rows.map((row) => JSON.parse(row.summary))).toEqual([
+    { surface: 'review', ...device },
+    { surface: 'system', ...device },
+    { surface: 'agent', conversation: 7, ...device },
+  ])
 })

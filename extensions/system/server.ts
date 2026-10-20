@@ -1,11 +1,12 @@
 import type { JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
-import { defineEvent } from '../../shared/events.ts'
+import { defineEvent, NavigatedEvent } from '../../shared/events.ts'
 import type { EventRecord } from '../../shared/events.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { CallRow, CallTree } from '../../server/trace.ts'
-import { LanesAction, PollsAction, StreamAction, TreeAction } from './refs.ts'
+import { LanesAction, NavigatedAction, PollsAction, StreamAction, TreeAction } from './refs.ts'
 import type { Lane, LaneLink, LaneSpawn, SystemCall, SystemFilter, SystemRow } from './refs.ts'
 
 const SUMMARY = 200
@@ -520,7 +521,42 @@ const record = (args: unknown): Record<string, unknown> =>
  */
 export const pollActions = ['stream', 'lanes', 'tree', 'polls']
 
+/** The view the last `ui.navigated` recorded, `<surface>:<conversation>`, so repeats are dropped. */
+const LastView = defineDoc<{ key?: string }>({
+  kind: 'system.last-view',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
+
+/** Only the browser reports where the user is; an agent calling it would make up navigation. */
+export const userActions = ['navigated']
+
 export const actions = {
+  /** Record a `ui.navigated` event, unless it repeats the last one: other tabs and reloads report the same view. */
+  navigated: implementAction(NavigatedAction, async (args, { host, device }) => {
+    const { surface, conversation } = record(args)
+    if (typeof surface !== 'string' || !surface || surface.length > 64)
+      throw new Error('Expected { surface }')
+    if (conversation !== undefined && !Number.isSafeInteger(conversation))
+      throw new Error('Expected conversation to be an integer')
+    const data = {
+      surface,
+      ...(conversation === undefined ? {} : { conversation: conversation as number }),
+      ...device,
+    }
+    const key = `${surface}:${data.conversation ?? ''}`
+    // Compared and recorded in one commit, so two tabs reporting the same view record it once.
+    return host.harness().commit(async (tx) => {
+      const last = await tx.doc(LastView, ROOT_CONVERSATION_ID)
+      if (last.key === key) return { recorded: false }
+      last.key = key
+      await host.emit(tx, NavigatedEvent, data)
+      return { recorded: true }
+    }, BACKGROUND_CONTEXT)
+  }),
   stream: implementAction(StreamAction, (args, { host }) => stream(host, record(args))),
   lanes: implementAction(LanesAction, (args, { host }) => lanes(host, record(args))),
   polls: implementAction(PollsAction, (_args, { host }) => ({ polls: host.trace.polls() })),

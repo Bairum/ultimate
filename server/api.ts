@@ -19,8 +19,9 @@ import { UiState } from './ui-state.ts'
 import type { JsonValue } from '@earendil-works/chord'
 import { clampThinkingLevel, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
 import { Metadata } from './metadata.ts'
-import { EVENT_LOG_LABEL } from './events.ts'
-import { admit } from './request-security.ts'
+import { EVENT_LOG_LABEL, emit } from './events.ts'
+import { UserInputEvent } from '../shared/events.ts'
+import { admit, deviceOf } from './request-security.ts'
 import type { Access } from './request-security.ts'
 import { conversationIndex } from './project.ts'
 import { windowOps, windowView } from './view-window.ts'
@@ -120,7 +121,15 @@ async function runAction(
   try {
     // Missing args mean none, so `curl -d '{}'` and agents can call argument-free actions.
     const args = (Object.hasOwn(data, 'args') ? data.args : {}) as JsonValue
-    const result = await extensions.invoke(name, key, args, controller.signal, id)
+    const result = await extensions.invoke(
+      name,
+      key,
+      args,
+      controller.signal,
+      id,
+      'ui',
+      deviceOf(request.headers),
+    )
     reply(response, 200, { result })
   } catch (error) {
     // An aborted action is the client leaving (a newer call, an unmount), not a fault.
@@ -549,6 +558,7 @@ export async function createApi(
               )
                 throw new HttpError(400, 'Invalid whenBusy')
               if (typeof data.text !== 'string') throw new HttpError(400, 'Expected text')
+              const length = data.text.length
               const images = data.images === undefined ? [] : data.images
               if (!Array.isArray(images)) throw new HttpError(400, 'Expected images array')
               if (images.length > maxImages) throw new HttpError(413, `At most ${maxImages} images`)
@@ -580,6 +590,27 @@ export async function createApi(
                 : data.text
               const submission = await conversation.submit(
                 { type: 'input', content, whenBusy: data.whenBusy },
+                context,
+              )
+              // Pi admits the input in a commit with no hook for steers and follow-ups, so the event commits right
+              // after it: a crash in between loses the event, never the input.
+              const admitted = await submission.status(context)
+              await harness.commit(
+                (tx) =>
+                  emit(tx, UserInputEvent, {
+                    conversation: conversation.id,
+                    kind:
+                      admitted.status !== 'queued'
+                        ? 'prompt'
+                        : data.whenBusy === 'steer'
+                          ? 'steer'
+                          : 'follow-up',
+                    ...(admitted.entry === undefined
+                      ? { submission: submission.id }
+                      : { entry: admitted.entry }),
+                    length,
+                    ...deviceOf(request.headers),
+                  }),
                 context,
               )
               json(202, { submissionId: submission.id })

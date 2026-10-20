@@ -114,6 +114,15 @@ export const PollsAction = actionRef<
 export type SystemCall = SystemRow & { parent?: string; children: SystemCall[] }
 
 /**
+ * `{ surface, conversation? }` → `{ recorded }`: the browser reports what the user looks at, and a `ui.navigated`
+ * event is recorded unless it repeats the last one (`recorded: false`).
+ */
+export const NavigatedAction = actionRef<
+  { surface: string; conversation?: number },
+  { recorded: boolean }
+>('system', 'navigated')
+
+/**
  * `{ trace }` → `{ calls, events }`: the call tree of trace `trace` (roots in start order, at most 5000 calls) and
  * the events emitted in it, oldest first.
  */

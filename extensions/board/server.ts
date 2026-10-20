@@ -43,6 +43,8 @@ import type { Triage } from './refs.ts'
 import { declared, needsDecision, parseVerdict, TRIAGE_SYSTEM, triageInput } from './triage.ts'
 import type { Verdict } from './triage.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
+import { UserInputEvent } from '../../shared/events.ts'
+import type { Device } from '../../shared/events.ts'
 export const docs = [Board]
 
 /**
@@ -748,6 +750,7 @@ async function send(
   requestId?: string,
   answerId?: number,
   note?: boolean,
+  device?: Device,
 ) {
   if (requestId !== undefined && from !== 'user') {
     const sent = await host.harness().snapshot(Requests, from as ConversationId, ctx)
@@ -828,6 +831,15 @@ async function send(
       ...(images ? { images } : {}),
     })
     await host.emit(tx, MessageSent, { message: message.id, from, to, reply: message.reply, steer })
+    // The user's answer or dismissal is their input to the asker; the message's `entry` names it once delivered.
+    if (from === 'user' && answerId !== undefined && typeof to === 'number')
+      await host.emit(tx, UserInputEvent, {
+        conversation: to,
+        kind: input.dismiss ? 'dismiss' : 'answer',
+        message: message.id,
+        length: input.dismiss ? 0 : input.text.length,
+        ...device,
+      })
     if (to === 'user' && message.reply && from !== 'user')
       await host.emit(tx, Asked, { message: message.id, from })
     if (to !== 'user')
@@ -880,7 +892,7 @@ export default function board(host: ExtensionHost) {
   host.need(SubagentsApi)
   host.need(WorkspacesApi)
   host.implement(BoardApi, {
-    answer: async (messageId, text, ctx) => {
+    answer: async (messageId, text, ctx, device) => {
       const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx)
       const message = log?.messages.find((m) => m.id === messageId)
       if (!message || !openQuestion(message)) throw new Error('These questions are no longer open')
@@ -893,9 +905,11 @@ export default function board(host: ExtensionHost) {
         undefined,
         undefined,
         messageId,
+        undefined,
+        device,
       )
     },
-    dismiss: async (messageId, ctx) => {
+    dismiss: async (messageId, ctx, device) => {
       const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx)
       const message = log?.messages.find((m) => m.id === messageId)
       if (!message || !openQuestion(message)) throw new Error('These questions are no longer open')
@@ -916,6 +930,7 @@ export default function board(host: ExtensionHost) {
         undefined,
         messageId,
         true,
+        device,
       )
     },
     send: (from, input, requestId, ctx) =>
