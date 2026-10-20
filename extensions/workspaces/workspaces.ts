@@ -412,6 +412,20 @@ export function workspaces(host: Host) {
       ? workspace
       : undefined
   }
+  /** The commits and uncommitted changes of each ready worktree among `ids`, without their subagents'. */
+  async function progress(ids: number[], context: Context): Promise<KeptWork[]> {
+    const result = await Promise.all(
+      ids.map(async (id) => {
+        const workspace = await get(id as ConversationId, context)
+        if (workspace?.state !== 'ready') return undefined
+        return changes(id as ConversationId, workspace).catch(
+          // A checkout gone from disk or mid-removal has nothing to show.
+          () => undefined,
+        )
+      }),
+    )
+    return result.filter((item) => item !== undefined)
+  }
   async function pending(ids: number[], context: Context): Promise<KeptWork[]> {
     const result: KeptWork[] = []
     for (const id of (await candidates(ids, context)).ids) {
@@ -820,6 +834,7 @@ export function workspaces(host: Host) {
     land,
     submit,
     pending,
+    progress,
     release,
     async create(tx: Tx, id: ConversationId, cwd: string) {
       if (

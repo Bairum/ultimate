@@ -32,7 +32,8 @@ A project is a forest of conversation trees, like commit histories.
   (older updates collapse when needed), then new target commits, overlaps first.
 - **State divergence.** Reports and `workspace submit` say how the result differs from the task as given: new
   agreements, a different approach or changed scope. Say "None" when it matches.
-- **Conclude** a conversation when its work is done; it stays readable and can be resumed.
+- **Conclude** a conversation when its work is done; it stays readable and can be resumed. A branch whose submission
+  lands is concluded for you once its report run is idle, unless it still waits on a reply or a subagent runs.
 - **UI polish lands when the user says so.** For small look-and-feel work (an animation, a loading state, spacing,
   a card), keep a faux preview of the branch's checkout running (`instance start` with `faux: true`), give the user
   its URL, and iterate there: commit each round in the branch, but do not `workspace submit` until the user has

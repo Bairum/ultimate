@@ -6,12 +6,23 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { api, cn, events, formatTokens, Provided, useAction, useDocOf, useUltimate } from '@/sdk'
+import {
+  api,
+  cn,
+  events,
+  formatTokens,
+  Provided,
+  useAction,
+  useDocOf,
+  useEvents,
+  useUltimate,
+} from '@/sdk'
+import { Committed } from '../coding-tools/ui.tsx'
 import { BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { CompactAction, RecentAction, TallyDoc } from '../lineage/ui.tsx'
 import type { RootEvent } from '../lineage/types.ts'
-import { CommitCount, useWorkspaceIndex } from '../workspaces/ui.tsx'
+import { CommitCount, ProgressAction, Review, useWorkspaceIndex } from '../workspaces/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import {
   AgentMark,
@@ -22,6 +33,8 @@ import {
 } from '../conversations/ui.tsx'
 import { ago } from './lander.tsx'
 import { useSidebarState } from './state.tsx'
+import { workOf } from './work.ts'
+import type { Work } from './work.ts'
 
 type Landing = Extract<RootEvent, { type: 'landed' }>
 type Actions = Pick<ReturnType<typeof useUltimate>, 'switchConversation' | 'showSurface'>
@@ -104,6 +117,30 @@ type FlightProps = {
   parked?: boolean
   shown: boolean
   now: number
+  work?: Work
+}
+
+/** Uncommitted edits as "+ 4 edits", opening a review of them while something reviews. */
+function Edits({ count, spec }: { count: number; spec: string }) {
+  const label = `+ ${count} edit${count === 1 ? '' : 's'}`
+  return (
+    <Provided input={spec} point={Review}>
+      {(open) =>
+        open ? (
+          <button
+            className="shrink-0 cursor-pointer hover:text-foreground hover:underline"
+            onClick={open}
+            title="Review uncommitted changes"
+            type="button"
+          >
+            {label}
+          </button>
+        ) : (
+          <span className="shrink-0">{label}</span>
+        )
+      }
+    </Provided>
+  )
 }
 
 /** One open branch: its feature and title, where it stands, and its age; click opens it. */
@@ -121,6 +158,7 @@ function PhasedFlightRow({
   parked,
   shown,
   now,
+  work,
   phase,
 }: FlightProps & { phase?: { word: string; waiting: boolean } }) {
   const actions = useUltimate()
@@ -129,7 +167,7 @@ function PhasedFlightRow({
   const latest = Math.max(conversation.inputAt ?? 0, conversation.answerAt ?? 0)
   const title = conversation.title ?? `#${conversation.id}`
   return (
-    <li>
+    <li className="relative">
       <button
         aria-current={shown ? 'true' : undefined}
         className={cn(
@@ -175,6 +213,16 @@ function PhasedFlightRow({
           )}
         </span>
       </button>
+      {work && (
+        // Its own line under the row's button, so its links never nest in it.
+        <span
+          className="flex min-w-0 items-center gap-2 pr-2 pb-0.5 pl-[54px] font-mono text-[10px] leading-4 text-muted-foreground/80"
+          data-flight-work={conversation.id}
+        >
+          {work.commits && <CommitCount count={work.commits.count} range={work.commits.spec} />}
+          {work.edits && <Edits count={work.edits.count} spec={work.edits.spec} />}
+        </span>
+      )}
     </li>
   )
 }
@@ -216,6 +264,40 @@ function LandingLine({ event, root, now }: { event: Landing; root: number; now: 
         </span>
       )}
     </li>
+  )
+}
+
+/**
+ * Each open branch's work so far, read once for all of them. It is read again only when something can have changed it:
+ * an agent commits (`coding-tools.committed`), a worktree changes in the index, or a branch's run starts or ends
+ * (edits happen in runs). Never on a timer.
+ */
+function useFlightWork(branches: ConversationSummary[]) {
+  const ids = branches.filter((branch) => branch.workspace?.state === 'ready').map((b) => b.id)
+  const progress = useAction(
+    ProgressAction,
+    { ids },
+    { enabled: ids.length > 0, onError: () => {} },
+  )
+  const { refetch } = progress
+  // A worktree becoming ready or going changes `ids`, which refetches by itself.
+  const commit = useEvents({ events: [Committed], limit: 1 })?.[0]?.id
+  const runs = branches.map((branch) => `${branch.id}:${branch.busy ? 1 : 0}`).join(',')
+  const first = useRef(true)
+  useEffect(() => {
+    if (first.current) {
+      first.current = false
+      return
+    }
+    if (ids.length > 0) void refetch()
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- a changed id set refetches in useAction itself
+  }, [commit, runs, refetch])
+  const byId = new Map((progress.data ?? []).map((item) => [item.id, item]))
+  return new Map(
+    branches.map((branch) => [
+      branch.id,
+      workOf(branch.id, branch.workspace?.branch, byId.get(branch.id)),
+    ]),
   )
 }
 
@@ -283,6 +365,7 @@ export function RootRow({
           (event.at ?? 0) >= (flight.conversation.inputAt ?? 0),
       ),
   )
+  const work = useFlightWork(open.map((flight) => flight.conversation))
   return (
     <div
       className={cn(
@@ -331,6 +414,7 @@ export function RootRow({
                 now={now}
                 parked={flight.parked}
                 shown={flight.conversation.id === shownId}
+                work={work.get(flight.conversation.id)}
                 working={flight.working}
               />
             ))}

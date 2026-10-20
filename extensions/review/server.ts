@@ -110,12 +110,20 @@ async function ranges(host: ExtensionHost): Promise<ReviewRange[]> {
   return list
 }
 
+/** The conversation of an `uncommitted:<id>` spec, else undefined. */
+const worktreeOf = (spec: string) => {
+  const id = /^uncommitted:([1-9]\d*)$/.exec(spec.trim())?.[1]
+  return id === undefined ? undefined : Number(id)
+}
+
 const known = (host: ExtensionHost, id: number) =>
   host.conversations().some((conversation) => conversation.id === id)
 
 /** Who a review of `spec` goes to unless the user picks another: see `RecipientAction`. */
 async function recipient(host: ExtensionHost, spec: string): Promise<number> {
   const owner = async () => {
+    const worktree = worktreeOf(spec)
+    if (worktree !== undefined) return worktree
     if (spec.startsWith('branch:')) {
       const branch = spec.slice('branch:'.length)
       const items = Object.entries((await index(host, context))?.items ?? {})
@@ -159,10 +167,16 @@ export const actions = {
   diff: implementAction(DiffAction, async (args, { host, signal }) => {
     const input = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
     if (typeof input.spec !== 'string') throw new Error('Expected { spec }')
-    return reviewDiff(await where(host, input.conversation), input.spec, {
-      target: (branch) => target(host, branch),
-      signal,
-    })
+    // `uncommitted:<id>` names a worktree's uncommitted changes: the same diff, run in that checkout.
+    const worktree = worktreeOf(input.spec)
+    const diff = await reviewDiff(
+      await where(host, worktree ?? input.conversation),
+      worktree === undefined ? input.spec : 'uncommitted',
+      { target: (branch) => target(host, branch), signal },
+    )
+    return worktree === undefined
+      ? diff
+      : { ...diff, spec: input.spec, title: `Uncommitted changes in #${worktree}` }
   }),
   ranges: implementAction(RangesAction, (_args, { host }) => ranges(host)),
   recipient: implementAction(RecipientAction, async (args, { host }) => {

@@ -14,6 +14,11 @@ export type ConversationsService = {
   subject: (id: ConversationId, caller: Context) => Promise<ConversationSubject>
   /** The conversations the user concluded; use it to leave their resources (worktrees) alone or free them. */
   concluded: (caller: Context) => Promise<Set<ConversationId>>
+  /**
+   * Conclude top-level conversations `ids` inside `tx`, as the Conclude action does before it frees their resources
+   * through `Release`; throws for unknown and owned conversations, roots and standing agents.
+   */
+  concludeIn(tx: Tx, ids: ConversationId[]): Promise<void>
   /** The summary model to ask now, from settings; undefined while none is valid and available. */
   summaryModel(): Promise<SummaryModel | undefined>
   /** The summary model with why: the configured one, a fallback for a default without a login, or why none runs. */
