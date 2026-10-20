@@ -49,7 +49,6 @@ function Sender({ origin, label }: { origin: AgentOrigin; label?: string }) {
 }
 
 export function AgentInput({ entry }: { entry: EntryRecord }) {
-  const [expanded, setExpanded] = useState(false)
   const origin = entry.data as AgentOrigin
   const id = useConversation((conversation) => conversation.id)
   const { switchConversation } = useUltimate()
@@ -105,19 +104,9 @@ export function AgentInput({ entry }: { entry: EntryRecord }) {
             {sender ? 'source' : 'source unavailable'}
           </button>
         </header>
-        <div
-          className={`min-w-0 overflow-auto px-3 py-3 font-sans text-[13px] leading-relaxed ${expanded ? '' : 'max-h-96'}`}
-        >
+        <div className="min-w-0 px-3 py-3 font-sans text-[13px] leading-relaxed">
           <MessageResponse>{body}</MessageResponse>
         </div>
-        {body.length > 1800 && (
-          <button
-            className="w-full cursor-pointer border-t border-border/60 px-3 py-2 text-left font-mono text-[11px] text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-            onClick={() => setExpanded(!expanded)}
-          >
-            {expanded ? 'Compact view' : 'Expand full message'}
-          </button>
-        )}
       </section>
     </Fold>
   )
