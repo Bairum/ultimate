@@ -22,7 +22,10 @@ import type { ActionContext } from '../server/actions.ts'
 import { Metadata } from '../server/metadata.ts'
 import { emit, EventFeed } from '../server/events.ts'
 import board, { actions } from '../extensions/board/server.ts'
-import pauseExtension, { actions as pauseActions } from '../extensions/pause/server.ts'
+import pauseExtension, {
+  actions as pauseActions,
+  docs as pauseDocs,
+} from '../extensions/pause/server.ts'
 import { Board, MessageSent } from '../extensions/board/api.ts'
 import { UserInputEvent } from '../shared/events.ts'
 import type { BoardService } from '../extensions/board/api.ts'
@@ -71,7 +74,11 @@ async function fixture(
   },
   /** Triage's verdict for messages to @ultimate; without one there is no summary model, so nothing is gated. */
   triage?: (text: string) => string | Promise<string>,
+  /** Holds triage's model selection until it settles. */
+  selecting?: Promise<void>,
 ) {
+  /** Services other extensions implement here, by API name, such as pause's `board.gate`. */
+  const provided = new Map<string, unknown>()
   const home = await temp('ultimate-board-')
   homes.push(home)
   await mkdir(join(home, 'agents'), { recursive: true })
@@ -87,35 +94,39 @@ async function fixture(
   const openers: (() => Promise<void>)[] = []
   const closers: (() => Promise<void>)[] = []
   const provider = ({ name }: { name: string }) =>
-    name === 'subagents'
-      ? {
-          residents: async () => [{ name: 'scout', description: 'Search' }],
-          // Like the real service: only resident names resolve.
-          standing: async (agent: string) => {
-            if (agent !== 'scout') throw new Error(`Unknown standing agent @${agent}`)
-            return recipient.id
-          },
-        }
-      : name === 'conversations'
+    provided.has(name)
+      ? provided.get(name)
+      : name === 'subagents'
         ? {
-            summaryModel: async () =>
-              triage ? { provider: 'test', id: 'triage', thinking: 'off' } : undefined,
-            askSummaryModel: async (_models: unknown, _system: string, input: string) => ({
-              provider: 'test',
-              model: 'triage',
-              text: await triage!(JSON.parse(input).untrustedMessage as string),
-              stopReason: 'stop',
-            }),
-            accountResponse: async () => undefined,
+            residents: async () => [{ name: 'scout', description: 'Search' }],
+            // Like the real service: only resident names resolve.
+            standing: async (agent: string) => {
+              if (agent !== 'scout') throw new Error(`Unknown standing agent @${agent}`)
+              return recipient.id
+            },
           }
-        : name === 'workspaces'
-          ? { doc: Workspaces, git: async () => '' }
-          : name === 'lineage'
-            ? {
-                rootOf: (id: number, ctx: Context) => rootOf(host, id, ctx),
-                branch: (input: BranchInput, ctx: Context) => startBranch(host, input, ctx),
-              }
-            : undefined
+        : name === 'conversations'
+          ? {
+              summaryModel: async () => {
+                await selecting
+                return triage ? { provider: 'test', id: 'triage', thinking: 'off' } : undefined
+              },
+              askSummaryModel: async (_models: unknown, _system: string, input: string) => ({
+                provider: 'test',
+                model: 'triage',
+                text: await triage!(JSON.parse(input).untrustedMessage as string),
+                stopReason: 'stop',
+              }),
+              accountResponse: async () => undefined,
+            }
+          : name === 'workspaces'
+            ? { doc: Workspaces, git: async () => '' }
+            : name === 'lineage'
+              ? {
+                  rootOf: (id: number, ctx: Context) => rootOf(host, id, ctx),
+                  branch: (input: BranchInput, ctx: Context) => startBranch(host, input, ctx),
+                }
+              : undefined
   const host = {
     ...prepared,
     metadata: Metadata,
@@ -275,6 +286,7 @@ async function fixture(
   }
   return {
     host,
+    provided,
     get opened() {
       return opened
     },
@@ -1302,7 +1314,8 @@ function pauser(f: Awaited<ReturnType<typeof fixture>>) {
       return resources.get(key) as T
     },
     onOpen: () => {},
-    implement: () => {},
+    // Pause fills Board's `board.gate` point; the fixture's `want` hands it to Board.
+    implement: (api: { name: string }, value: unknown) => void f.provided.set(api.name, value),
     conversations: () => [],
   } as unknown as ExtensionHost
   pauseExtension(host)
@@ -1333,34 +1346,69 @@ it('reaches Paused · safe while a delivery waits for its held recipient to answ
     ),
   )
 })
-it('stays Pausing… while a delivery asks the summary model to triage its message', async () => {
-  const asked = gate()
-  const answer = gate()
-  let asking = false
-  const f = await fixture(undefined, undefined, async () => {
-    asking = true
-    asked.release()
-    await answer.promise
-    return JSON.stringify({ verdict: 'fyi', reason: 'progress only' })
-  })
-  const pause = pauser(f)
+/** Pause's own document on conversation 1, which the footer watches. */
+const PauseState = pauseDocs[0]
+/** #recipient messages @ultimate one-way, which Board triages with the summary model. */
+async function messageUltimate(f: Awaited<ReturnType<typeof fixture>>, text: string) {
   const recipient = await f.opened.harness.conversation(f.recipient.id, context)
   await (
     await recipient!.submit(
       {
         type: 'input',
-        content: `SEND ${JSON.stringify({ to: '#1', text: 'Working on it.', reply: false })}`,
+        content: `SEND ${JSON.stringify({ to: '#1', text, reply: false })}`,
       },
       context,
     )
   ).wait(context)
+}
+it('starts no triage model call while paused: one gated before it runs waits for Play', async () => {
+  const selecting = gate()
+  let asked = 0
+  const f = await fixture(
+    undefined,
+    undefined,
+    () => {
+      asked++
+      return JSON.stringify({ verdict: 'fyi', reason: 'progress only' })
+    },
+    selecting.promise,
+  )
+  const pause = pauser(f)
+  await messageUltimate(f, 'Working on it.')
+  // The delivery picks its triage model: nothing has asked a model yet.
+  const paused = await pause('pause')
+  expect(paused.running).toEqual([])
+  selecting.release()
+  // It reaches the gate and waits there: safe, and the model is never asked while paused.
+  await until(async () => (await f.log())!.messages.at(-1)?.triage?.verdict === 'assessing')
+  expect((await pause('state')).running).toEqual([])
+  expect(asked).toBe(0)
+  await pause('play')
+  await until(async () => (await f.log())!.messages.at(-1)?.triage?.verdict === 'fyi')
+  expect(asked).toBe(1)
+})
+it('stays Pausing… while a triage model call runs, and refreshes when it ends', async () => {
+  const asked = gate()
+  const answer = gate()
+  const f = await fixture(undefined, undefined, async () => {
+    asked.release()
+    await answer.promise
+    return JSON.stringify({ verdict: 'fyi', reason: 'progress only' })
+  })
+  const pause = pauser(f)
+  await messageUltimate(f, 'Working on it.')
   await asked.promise
-  expect(asking).toBe(true)
-  expect((await f.log())!.messages.at(-1)?.triage?.verdict).toBe('assessing')
   const pausing = await pause('pause')
-  expect(pausing.running.map((task) => task.what)).toEqual(['board.delivery'])
+  expect(pausing.running.map((task) => task.what)).toEqual(['triage'])
+  const before = (await f.opened.harness.snapshot(PauseState, ROOT_CONVERSATION_ID, context))?.work
   answer.release()
-  await until(async () => (await pause('state')).running.length === 0)
+  // Ending the call bumps pause's own document, which the footer watches; by then nothing runs.
+  await until(
+    async () =>
+      (await f.opened.harness.snapshot(PauseState, ROOT_CONVERSATION_ID, context))?.work ===
+      (before ?? 0) + 1,
+  )
+  expect((await pause('state')).running).toEqual([])
   expect((await f.log())!.messages.at(-1)?.triage?.verdict).toBe('fyi')
   await pause('play')
 })

@@ -3,7 +3,7 @@ import { defineDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-dur
 import type { ConversationId, Cursor, SubmissionId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { Board } from '../board/api.ts'
+import { Gate } from '../board/api.ts'
 import { PauseApi } from './api.ts'
 import { lasted } from './lasted.ts'
 import { PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
@@ -41,28 +41,83 @@ function serial<T>(host: Pick<ExtensionHost, 'resource'>, work: () => Promise<T>
 
 /**
  * Background phases that only wait on other work (a run, a submission, a timer), which a pause holds: they never end
- * while paused and execute nothing meanwhile, so they never keep the pause from being safe. A `board.delivery` in
- * `deliver` waits for its receipt too, except while it asks the summary model to triage its message: the Board stores
- * that message's verdict as `assessing` until the answer is recorded.
+ * while paused and execute nothing meanwhile, so they never keep the pause from being safe. A `board.delivery` and a
+ * `board.reply` triage through the gate (`gated`), which counts that model call on its own.
  */
 const PASSIVE: Record<string, string[]> = {
   'ultimate.subagent-reporter': ['deliver', 'retry'],
   'ultimate.automation-scheduler': ['sleep'],
   'ultimate.automation-run': ['deliver'],
-  'board.delivery': ['deliver'],
+  'board.delivery': ['deliver', 'reply'],
   'board.route': ['observe'],
   'conversations.summary': ['observe'],
   'lineage.notify': ['wait'],
 }
-export const passive = (
-  record: { kind: string; state: unknown; input?: unknown },
-  board?: { messages: readonly { id: number; triage?: { verdict: string } }[] },
-) => {
+export const passive = (record: { kind: string; state: unknown }) => {
   const phase = (record.state as { checkpoint?: { phase?: string } }).checkpoint?.phase
-  if (!phase || !(PASSIVE[record.kind] ?? []).includes(phase)) return false
-  if (record.kind !== 'board.delivery') return true
-  const id = (record.input as { message?: { id?: number } } | undefined)?.message?.id
-  return board?.messages.find((m) => m.id === id)?.triage?.verdict !== 'assessing'
+  return !!phase && (PASSIVE[record.kind] ?? []).includes(phase)
+}
+
+type Call = { task: number; conversationId: number; what: string; startedAt: number }
+/** In-task work through the gate: the calls in flight, and the ones waiting for Play. Shared across reloads. */
+const gate = (host: Pick<ExtensionHost, 'resource'>) =>
+  host.resource('pause.gate', () => ({
+    next: 1,
+    calls: new Map<number, Call>(),
+    waiters: new Set<() => void>(),
+  }))
+
+/** Bump the pause doc while paused, so the footer refreshes when in-flight work ends; none starts while paused. */
+async function bump(host: Host) {
+  if (!flag(host).paused) return
+  await host
+    .harness()
+    .commit(async (tx) => {
+      const doc = await tx.doc(State, ROOT_CONVERSATION_ID)
+      doc.work = (doc.work ?? 0) + 1
+    }, context)
+    .catch((error: unknown) => {
+      // Only the footer's refresh is lost; the work itself and the pause stand.
+      console.error('pause: refreshing the state failed:', error)
+    })
+}
+
+/** Until Play, or until `signal` aborts. */
+function played(host: Host, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const { waiters } = gate(host)
+    const stop = () => {
+      waiters.delete(done)
+      reject(signal.reason)
+    }
+    const done = () => {
+      waiters.delete(done)
+      signal.removeEventListener('abort', stop)
+      resolve()
+    }
+    if (signal.aborted) return stop()
+    waiters.add(done)
+    signal.addEventListener('abort', stop, { once: true })
+  })
+}
+
+/** The gate: work starts only while playing, and counts as running while it runs. */
+export async function gated<T>(
+  host: Host,
+  call: Omit<Call, 'startedAt'>,
+  fn: () => Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  while (flag(host).paused) await played(host, signal)
+  const inFlight = gate(host)
+  const id = inFlight.next++
+  inFlight.calls.set(id, { ...call, startedAt: Date.now() })
+  try {
+    return await fn()
+  } finally {
+    inFlight.calls.delete(id)
+    await bump(host)
+  }
 }
 
 /**
@@ -87,13 +142,13 @@ async function running(host: Host): Promise<RunningTask[]> {
     }
     return tools.get(conversationId)!.get(task)
   }
-  // Read only when a delivery runs: its triage state decides whether it executes.
-  const board = tasks.some(({ record }) => record.kind === 'board.delivery')
-    ? await harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
-    : undefined
   const result: RunningTask[] = []
+  for (const call of gate(host).calls.values()) {
+    const title = titles.get(call.conversationId)
+    result.push({ ...call, ...(title ? { title } : {}) })
+  }
   for (const { record, state: inspected } of tasks) {
-    if (inspected.kind !== 'running' || (record.background && passive(record, board))) continue
+    if (inspected.kind !== 'running' || (record.background && passive(record))) continue
     const what =
       record.kind === 'pi.generation'
         ? 'model response'
@@ -213,14 +268,20 @@ async function play(host: Host) {
     current.paused = false
     delete current.since
     delete current.runs
+    delete current.work
   }, context)
   flag(host).paused = false
   harness.release()
+  // Gated work waiting for Play starts now.
+  for (const resume of gate(host).waiters) resume()
   return state(host)
 }
 
 export default function pauseExtension(host: Host) {
   host.implement(PauseApi, { paused: () => flag(host).paused })
+  host.implement(Gate, {
+    work: (call, fn, signal) => gated(host, call, fn, signal),
+  })
   // The server resumes scheduling only after every opener settled, so a paused host reopens with nothing started.
   host.onOpen(() =>
     serial(host, async () => {

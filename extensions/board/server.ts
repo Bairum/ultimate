@@ -38,7 +38,7 @@ import { LineageApi, Roots } from '../lineage/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
-import { Asked, Board, BoardApi, MessageSent, Triaged } from './api.ts'
+import { Asked, Board, BoardApi, Gate, MessageSent, Triaged } from './api.ts'
 import type { BoardMessage } from './api.ts'
 import type { Triage } from './refs.ts'
 import { declared, needsDecision, parseVerdict, TRIAGE_SYSTEM, triageInput } from './triage.ts'
@@ -190,21 +190,30 @@ type Recipient = NonNullable<
  */
 async function assess(
   host: ExtensionHost,
-  runtime: Pick<TaskRuntime<unknown, unknown, unknown, object>, 'memo' | 'models' | 'signal'>,
+  runtime: Pick<
+    TaskRuntime<unknown, unknown, unknown, object>,
+    'memo' | 'models' | 'signal' | 'taskId' | 'conversationId'
+  >,
   model: SummaryModel,
   input: { kind: 'message' | 'reply'; from: string; text: string },
   ctx: Context,
 ): Promise<{ verdict: Verdict; response?: ResponseReceipt }> {
   const conversations = host.need(ConversationsApi)
   let response = await runtime.memo<ResponseReceipt>('triage-response', ctx)
-  try {
-    response = await conversations.askSummaryModel(
+  const ask = () =>
+    conversations.askSummaryModel(
       runtime.models,
       TRIAGE_SYSTEM,
       triageInput(input.kind, input.from, input.text),
+      // The timeout starts with the call, not while the gate holds it.
       AbortSignal.any([runtime.signal, AbortSignal.timeout(30_000)]),
       { model, response, save: (received) => runtime.memo('triage-response', received, ctx) },
     )
+  // The gate (pause, when enabled) holds the call while paused and counts it as running while it runs.
+  const gate = host.want(Gate)
+  const call = { task: runtime.taskId, conversationId: runtime.conversationId, what: 'triage' }
+  try {
+    response = gate ? await gate.work(call, ask, runtime.signal) : await ask()
     if (response.stopReason !== 'stop') throw new Error(`Triage stopped: ${response.stopReason}`)
     return { verdict: parseVerdict(response.text), response }
   } catch (error) {
@@ -252,7 +261,7 @@ async function recordTriage(host: ExtensionHost, tx: Tx, id: number, triage: Tri
 }
 type TriageRuntime = Pick<
   TaskRuntime<unknown, unknown, unknown, object>,
-  'memo' | 'models' | 'signal' | 'commit'
+  'memo' | 'models' | 'signal' | 'commit' | 'taskId' | 'conversationId'
 >
 /**
  * After a triaged message was written as context (no run), assess it and record the verdict: `act` wakes the agent with
@@ -895,6 +904,8 @@ export default function board(host: ExtensionHost) {
   host.need(LineageApi)
   host.need(SubagentsApi)
   host.need(WorkspacesApi)
+  // Board's own extension point, resolved where triage calls the model.
+  host.want(Gate)
   host.implement(BoardApi, {
     answer: async (messageId, text, ctx, device) => {
       const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx)

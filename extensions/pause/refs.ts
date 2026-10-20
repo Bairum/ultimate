@@ -9,6 +9,8 @@ export type PauseDocState = {
   paused: boolean
   since?: number
   runs?: Record<string, { task: number; input?: number }>
+  /** Bumped when gated in-task work (a triage model call) ends while paused, so the footer refreshes. */
+  work?: number
 }
 
 /** A task still running while paused: it finishes on its own, nothing new starts after it. */

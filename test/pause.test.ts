@@ -341,22 +341,12 @@ it('leaves no note when the run handed over during the drain and its successor w
   expect(entries.filter((entry) => entry.kind === 'pause.note')).toEqual([])
 })
 
-/** A task record as `running()` reads it: its kind, checkpoint phase and, for a delivery, the message it delivers. */
-const at = (kind: string, phase: string, message?: number) => ({
-  kind,
-  state: { checkpoint: { phase } },
-  ...(message === undefined ? {} : { input: { message: { id: message } } }),
-})
-const boardWith = (verdict?: 'assessing' | 'act' | 'fyi') => ({
-  messages: [{ id: 7, ...(verdict ? { triage: { verdict } } : {}) }],
-})
+/** A task record as `running()` reads it: it decides by task kind and checkpoint phase only. */
+const at = (kind: string, phase: string) => ({ kind, state: { checkpoint: { phase } } })
 
-it('counts a board delivery as running only while the summary model triages its message', () => {
-  expect(passive(at('board.delivery', 'deliver', 7), boardWith('assessing'))).toBe(false)
-  // Waiting on its receipt: no triage, or a verdict already recorded.
-  expect(passive(at('board.delivery', 'deliver', 7), boardWith())).toBe(true)
-  expect(passive(at('board.delivery', 'deliver', 7), boardWith('fyi'))).toBe(true)
-  expect(passive(at('board.delivery', 'deliver', 8), boardWith('assessing'))).toBe(true)
+it('treats board deliveries as passive: their triage model call counts through the gate', () => {
+  expect(passive(at('board.delivery', 'deliver'))).toBe(true)
+  expect(passive(at('board.delivery', 'reply'))).toBe(true)
   expect(passive(at('ultimate.subagent-reporter', 'deliver'))).toBe(true)
   expect(passive(at('board.route', 'observe'))).toBe(true)
   expect(passive(at('conversations.summary', 'generate'))).toBe(false)
