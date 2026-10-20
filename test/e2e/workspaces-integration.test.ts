@@ -17,6 +17,7 @@ import {
   defineExtension,
   defineTask,
   defineTool,
+  LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
@@ -1236,6 +1237,87 @@ it.concurrent("hands this repository's cloud/ landings to its deploy agent, the 
   )
   expect(recipient?.title).toBe('@sync')
   expect(report).toContain('deploy → @sync')
+})
+const concludedIds = async (f: Awaited<ReturnType<typeof fixture>>) =>
+  ((await f.opened.harness.snapshot(UiState, ROOT_CONVERSATION_ID, context))?.[
+    'ext.conversations.concluded'
+  ] ?? []) as number[]
+/** A lander fixture with lineage and the real conclude, whose submitter's report run waits for `release`. */
+async function concluding() {
+  const f = await lander({}, undefined, true)
+  // As the server: documents by kind, here the board, which lineage reads open questions from.
+  f.host.doc = (kind: string) => (kind === 'board' ? Board : undefined)
+  f.prepared.registry.install(lineage(f.host))
+  const concluded = vi.fn<ConversationsService['conclude']>(async (ids) => {
+    await f.opened.harness.commit(async (tx) => {
+      const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
+      ui['ext.conversations.concluded'] = [
+        ...((ui['ext.conversations.concluded'] as number[]) ?? []),
+        ...ids,
+      ]
+    }, context)
+    return { concluded: ids, kept: [] }
+  })
+  f.host.implement(
+    ConversationsApi,
+    conversations({
+      concluded: async () => new Set<ConversationId>(),
+      subject: async () => ({}),
+      conclude: concluded,
+    }),
+  )
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path, 'concluded.txt')
+  const report = Promise.withResolvers<void>()
+  f.prepared.faux!.setResponses([
+    async () => {
+      await report.promise
+      return fauxAssistantMessage('Told @ultimate it landed.')
+    },
+  ])
+  return { f, id, concluded, release: () => report.resolve() }
+}
+it.concurrent('concludes a landed branch once its report run and subagents are idle', async () => {
+  const { f, id, concluded, release } = await concluding()
+  await f.service.submit(id, 'None', context)
+  // The report's run is still going: the branch stays open.
+  await until(async () => !!(await f.opened.harness.snapshot(LiveDoc, id, context))?.run)
+  await reacted(f)
+  expect(concluded).not.toHaveBeenCalled()
+  release()
+  await until(async () => (await concludedIds(f)).includes(id))
+  expect(concluded).toHaveBeenCalledTimes(1)
+  expect(concluded.mock.calls[0][0]).toEqual([id])
+})
+it.concurrent('leaves a landed branch open while it waits on a reply it asked for', async () => {
+  const { f, id, concluded, release } = await concluding()
+  await f.opened.harness.commit(async (tx) => {
+    const doc = await tx.doc(Board, ROOT_CONVERSATION_ID)
+    doc.messages.push({
+      id: doc.next++,
+      from: id,
+      to: 'user',
+      text: 'Which?',
+      at: 1,
+      reply: true,
+      state: 'delivered',
+    })
+  }, context)
+  await f.service.submit(id, 'None', context)
+  release()
+  await submitted(f, id)
+  await reacted(f)
+  // The conclude task finishes without concluding.
+  await until(async () => {
+    const tasks = await f.opened.harness.commit(
+      (tx) => tx.scanTasks({ conversationId: id, kind: 'lineage.conclude-landed' }, 5),
+      context,
+    )
+    return tasks.items.length === 1 && tasks.items[0].state.status === 'terminal'
+  })
+  expect(concluded).not.toHaveBeenCalled()
+  expect(await concludedIds(f)).not.toContain(id)
 })
 it.concurrent('reports a landing with a deploy warning when the handoff itself fails', async () => {
   const f = await lander({ deploy: { agent: 'deploy-test', paths: ['cloud/'] } }, undefined, true)

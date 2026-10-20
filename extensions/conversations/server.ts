@@ -82,25 +82,9 @@ export const order = 100
 
 /** Called by the sidebar; each acts on a top-level conversation by id. */
 export const actions = {
-  conclude: implementAction(ConcludeAction, async (args, { host }) => {
-    const ids = conversationIds(args)
-    await host.harness().commit(async (tx) => {
-      for (const id of ids) {
-        const found = await tx.conversation(id)
-        if (!found) throw new Error(`Unknown conversation ${id}`)
-        if (found.owner)
-          throw new Error(`Conversation ${id} is owned, not a top-level conversation`)
-        await refuseFixed(host, tx, id, 'concluded')
-      }
-      const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
-      const previous = ui['ext.conversations.concluded']
-      ui['ext.conversations.concluded'] = [
-        ...new Set([...(Array.isArray(previous) ? previous : []), ...ids]),
-      ]
-    }, context)
-    const kept = (await host.want(Release)?.release(ids, context)) ?? []
-    return { concluded: ids, kept }
-  }),
+  conclude: implementAction(ConcludeAction, async (args, { host }) =>
+    conclude(host, conversationIds(args)),
+  ),
   resume: implementAction(ResumeAction, async (args, { host }) => {
     const ids = conversationIds(args)
     const resumed = await resume(host, ids)
@@ -146,6 +130,25 @@ export const actions = {
     })
     return effectiveSummaryModel(host)
   }),
+}
+
+/** Conclude top-level conversations `ids` in one transaction, then free what they hold; returns the work kept. */
+async function conclude(host: ExtensionHost, ids: ConversationId[], caller: Context = context) {
+  await host.harness().commit(async (tx) => {
+    for (const id of ids) {
+      const found = await tx.conversation(id)
+      if (!found) throw new Error(`Unknown conversation ${id}`)
+      if (found.owner) throw new Error(`Conversation ${id} is owned, not a top-level conversation`)
+      await refuseFixed(host, tx, id, 'concluded')
+    }
+    const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
+    const previous = ui['ext.conversations.concluded']
+    ui['ext.conversations.concluded'] = [
+      ...new Set([...(Array.isArray(previous) ? previous : []), ...ids]),
+    ]
+  }, caller)
+  const kept = (await host.want(Release)?.release(ids, caller)) ?? []
+  return { concluded: ids, kept }
 }
 
 function conversationIds(args: ActionInput<{ ids: number[] }>): ConversationId[] {
@@ -211,6 +214,7 @@ export default (host: ExtensionHost) => {
   host.want(Release)
   host.implement(ConversationsApi, {
     subject: (id, caller) => subject(host, id, caller),
+    conclude: (ids, caller) => conclude(host, ids, caller),
     summaryModel: () => summaryModel(host),
     summaryModelStatus: () => summaryModelStatus(host),
     requestSummary: (tx, id, request, model) => requestSummary(tx, host, id, request, model),

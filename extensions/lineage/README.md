@@ -64,7 +64,11 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   `'root'` needs `source.from` and errors if it has no root. Successful landings leave a note in the submitter's root
   (unless it is that root or has none): the reactor `lineage/landing-notes` handles each `workspaces.landed` event
   once, placing the note in a tally inside its own transaction, or, for a root that is no tally yet, creating a
-  `lineage.landing-note` task in it that delivers the note as a write (request id `lander-root:<submission>`). The
+  `lineage.landing-note` task in it that delivers the note as a write (request id `lander-root:<submission>`). A second
+  reactor, `lineage/conclude-landed`, starts a background `lineage.conclude-landed` task in a top-level submitter: it
+  waits for the lander's report (`lander:<submission>`) to settle and the submitter and its subagents to go idle, then
+  concludes it through `ConversationsApi.conclude`, unless it is running again, has a reply-enabled Board message still
+  open, or a subagent still runs. Any later input resumes it. The
   note has `source: 'lander'`, `sha`, `base`, `target`, `commits`, `paths`, `divergence` and
   `at`. Text includes the submitter's `#N/at` breadcrumb and `Diverged: …`, including "None"; the landing card shows
   divergence too (up to 10 commits and 8 changed paths). A landing is the commit of a liquid abstract: in a tally, a
