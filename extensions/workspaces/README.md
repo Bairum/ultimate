@@ -35,6 +35,8 @@ the root row link commit ranges with it.
 `workspace land` fast-forwards the saved source branch to the clean, verified workspace tip.
 Unrelated dirty files in the source checkout do not block; `git merge --ff-only` refuses only real overlap.
 If the target changed or diverged, update the workspace onto it and verify again; landing never rebases or pushes.
+`progress {ids}` (at most 100) reports `{id, uncommitted, unlanded}` for every ready worktree among `ids`, without
+their subagents, for the sidebar's in-flight rows.
 `pending {ids}` reports `{id, uncommitted, unlanded}` for checkouts with work at risk, including transitively
 owned subagents. The `workspaces` service exposes `pending(ids, ctx)` and `release(ids, ctx)`; release removes
 only clean, fully landed checkouts, deletes merged branches, and returns checkouts kept for pending work or

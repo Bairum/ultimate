@@ -32,6 +32,11 @@ on hover, since it described the root's history before it held a context) and th
   after its latest input (a landed branch that gets new work is open again). Each shows its title, its feature tag,
   a state (`submitted` or `landing` while the lander has it, the working phase while it works, amber `awaiting @ultimate`
   while a reply-enabled message it sent @ultimate is open, red `failed`, else `idle`) and its age; clicking opens it.
+  A branch with a worktree also shows its work so far on a quiet line below (workspaces' `progress`): `N commits` not
+  yet on its target, opening `branch:<name>` in Review, and `+ N edits` (uncommitted changed paths), opening
+  `uncommitted:<id>`. A fresh worktree, or a branch without one, shows nothing. All rows are read in one call, again
+  only when an agent commits (`coding-tools.committed`), a worktree's state changes or a branch's run starts or ends;
+  never on a timer.
 - **Landed**: the last three landings from lineage's `recent {id, types: ['landed']}`, as the shipped feature's tag
   (its title when it has none, the full title on hover) and a commit count opening the range in Review, with the
   DiffsHub compare as a small ↗ (`CommitCount` from workspaces; without review the count links DiffsHub, and no link

@@ -2,7 +2,8 @@ The Review surface: the project's local Git diffs, its files on the left and the
 
 What it shows is a **spec**:
 
-- `uncommitted`: the work tree against `HEAD`, untracked files included (ignored ones not).
+- `uncommitted`: the work tree against `HEAD`, untracked files included (ignored ones not). `uncommitted:<id>` is the
+  same in conversation `id`'s worktree (the project checkout once it has none); its default recipient is `id`.
 - `<sha>` (or any ref naming a commit): that commit against its first parent; a root commit against the empty tree.
 - `<a>...<b>`: what `b` changed since it forked from `a`, as a landing's `<base>...<sha>`.
 - `branch:<name>`: the branch against the target branch it lands on (its worktree's target, else the project checkout's branch).

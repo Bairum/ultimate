@@ -67,6 +67,11 @@ describe('review diffs', () => {
     expect(branch.files.map((file) => file.path)).toEqual(['feature.txt'])
   })
 
+  it('refuses an uncommitted:<id> spec outside the review action', async () => {
+    // Only the action resolves `uncommitted:<id>` to that worktree's `uncommitted`; the diff itself knows no ids.
+    await expect(diff('uncommitted:12')).rejects.toThrow('Not a commit: uncommitted:12')
+  })
+
   it('shows uncommitted changes with untracked files, without ignored ones', async () => {
     await writeFile(join(repo, '.gitignore'), 'ignored.txt\n')
     await writeFile(join(repo, 'ignored.txt'), 'secret\n')

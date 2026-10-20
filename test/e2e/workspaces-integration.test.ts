@@ -2328,6 +2328,10 @@ it.concurrent('pending and release preserve dirty and unlanded work, removing on
   expect(
     await actions.pending({ ids: [clean, dirty, ahead] }, { host: f.host } as ActionContext),
   ).toEqual(expected)
+  // An in-flight row's work: every ready worktree, the landed one with nothing left, an unknown id left out.
+  expect(
+    await actions.progress({ ids: [clean, dirty, ahead, 999] }, { host: f.host } as ActionContext),
+  ).toEqual([{ id: clean, uncommitted: 0, unlanded: 0 }, ...expected])
   expect(await f.service.release([clean, dirty, ahead], context)).toEqual(expected)
   await expect(access(cleanWorkspace.path)).rejects.toThrow('ENOENT')
   expect(await git(f.projectRoot, 'worktree', 'list', '--porcelain')).not.toContain(
