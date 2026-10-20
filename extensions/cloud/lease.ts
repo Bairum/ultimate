@@ -38,7 +38,7 @@ import {
   writeLeaseFile,
 } from '../../lib/database-files.ts'
 import type { LeaseFile } from '../../lib/database-files.ts'
-import { fetchOrigin } from './fetch.ts'
+import { fastForward as fastForwardCheckout } from '../../lib/fast-forward.ts'
 import { modelLogin, noLogin } from './login.ts'
 import { BackupEvent, LeaseChanged, MoveEvent } from './refs.ts'
 import type { ModelLogin } from './types.ts'
@@ -55,7 +55,12 @@ export interface LeaseOptions extends SyncOptions {
 export type Exec = (
   command: string,
   args: string[],
-  options: { cwd: string; signal: AbortSignal; timeout?: number; env?: NodeJS.ProcessEnv },
+  options: {
+    cwd: string
+    signal: AbortSignal
+    timeout?: number
+    env?: NodeJS.ProcessEnv
+  },
 ) => Promise<{ stdout: string; stderr: string }>
 export interface LeaseDeps {
   sync: typeof startSync
@@ -154,13 +159,18 @@ async function writeJson(path: string, value: unknown) {
 }
 /** The last lines of a failed command's output. */
 function tail(error: unknown) {
-  const { stdout = '', stderr = '' } = error as { stdout?: string; stderr?: string }
+  const { stdout = '', stderr = '' } = error as {
+    stdout?: string
+    stderr?: string
+  }
   const output = `${stdout}${stderr}`.trim()
   return output ? output.split('\n').slice(-20).join('\n') : String(error)
 }
 // Conversation runs and lander runs are foreground tasks; schedulers and reporters wait in the background.
 const foregroundTasks = (graph: {
-  value: { tasks: Record<string, { background: boolean; conversationId: number }> }
+  value: {
+    tasks: Record<string, { background: boolean; conversationId: number }>
+  }
 }) => Object.values(graph.value.tasks).filter((task) => !task.background)
 const foreground = (graph: Parameters<typeof foregroundTasks>[0]) => foregroundTasks(graph).length
 /** Transition text bounded well under the replica's limit, keeping the end, where errors say what failed. */
@@ -229,11 +239,20 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
   let idleSince: number | undefined
   let idleTimer: ReturnType<typeof setInterval> | undefined
   let pendingRelease:
-    | { epoch: number; id: string; sent: boolean; done: PromiseWithResolvers<void> }
+    | {
+        epoch: number
+        id: string
+        sent: boolean
+        done: PromiseWithResolvers<void>
+      }
     | undefined
   /** A claim sent and its answer; after a reconnect the new connection's first role is that answer. */
   let pendingClaim:
-    | { epoch: number; done: PromiseWithResolvers<boolean>; reconnected: boolean }
+    | {
+        epoch: number
+        done: PromiseWithResolvers<boolean>
+        reconnected: boolean
+      }
     | undefined
   /** The move this machine prepares, and how to stop it before its claim. */
   let moving: { transition: Transition; abort: AbortController } | undefined
@@ -632,29 +651,15 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         return (await execute('git', args, { cwd: host.projectRoot, signal, env })).stdout.trim()
       } catch (error) {
         if (signal.aborted) throw signal.reason
-        throw new Error(`git ${args[0]} failed: ${tail(error)}`, { cause: error })
+        throw new Error(`git ${args[0]} failed: ${tail(error)}`, {
+          cause: error,
+        })
       }
     }
-    if (await git('status', '--porcelain', '--untracked-files=no'))
-      throw new Error('The checkout has uncommitted changes')
-    await fetchOrigin(git)
-    const remote = await git('symbolic-ref', '--short', 'refs/remotes/origin/HEAD').catch(() => {
-      throw new Error('origin has no default branch; run git remote set-head origin --auto')
-    })
-    const branch = remote.replace(/^origin\//, '')
-    const current = await git('symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => '')
-    if (current !== branch)
-      throw new Error(`The checkout is on ${current || 'a detached HEAD'}, not ${branch}`)
-    const [ahead, behind] = (await git('rev-list', '--left-right', '--count', `HEAD...${remote}`))
-      .split(/\s+/)
-      .map(Number)
-    if (ahead && behind) throw new Error(`${branch} has diverged from ${remote}`)
-    const before = await git('rev-parse', 'HEAD')
     // The install is owed before the lockfile changes, so a crash between the two still installs on the next try.
-    if (behind && (await git('diff', '--name-only', 'HEAD', remote, '--', 'pnpm-lock.yaml')))
-      await writeFile(owed, '')
-    if (behind) await git('merge', '--ff-only', '--quiet', remote)
-    const after = await git('rev-parse', 'HEAD')
+    const { branch, behind, before, after } = await fastForwardCheckout(git, () =>
+      writeFile(owed, ''),
+    )
     if (before === after) {
       step.detail = `${branch} already up to date`
       return
@@ -751,7 +756,9 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
           })
         } catch (error) {
           if (signal.aborted) throw signal.reason
-          throw new Error(`pnpm install failed:\n${tail(error)}`, { cause: error })
+          throw new Error(`pnpm install failed:\n${tail(error)}`, {
+            cause: error,
+          })
         }
         await rm(owed)
         end('done', 'pnpm install --frozen-lockfile')
@@ -777,7 +784,11 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         freed = Promise.withResolvers<SyncState>()
         const aborted = () => freed?.reject(signal.reason)
         signal.addEventListener('abort', aborted, { once: true })
-        sync!.send({ type: 'request-release', id, ...(force ? { force: true } : {}) })
+        sync!.send({
+          type: 'request-release',
+          id,
+          ...(force ? { force: true } : {}),
+        })
         try {
           state = await freed.promise
         } finally {
@@ -1028,7 +1039,13 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
         )
         return false
       }
-      await record(MoveEvent, { phase: 'started', project, id, from: options.machine, to: by })
+      await record(MoveEvent, {
+        phase: 'started',
+        project,
+        id,
+        from: options.machine,
+        to: by,
+      })
       // An unforced move cannot release on worktrees it could not check: the error holds it like dirty ones.
       const scan = (): Promise<{ dirty: string[]; unchecked?: string }> =>
         dirtyWorktrees().then(
@@ -1082,7 +1099,12 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
             return false
           }
           if (cancelled || ended(sync.state())) return stopped()
-          let waiting: { tasks: number; runs?: string[]; dirty?: string[]; held?: boolean }
+          let waiting: {
+            tasks: number
+            runs?: string[]
+            dirty?: string[]
+            held?: boolean
+          }
           let unchecked: string | undefined
           if (!force && foreground(graph) > 0)
             waiting = { tasks: foreground(graph), runs: runningIn(graph) }
@@ -1103,7 +1125,12 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
               if (await noBackup()) break
               continue
             }
-            waiting = { tasks: 0, dirty, held: true, ...(unchecked ? { unchecked } : {}) }
+            waiting = {
+              tasks: 0,
+              dirty,
+              held: true,
+              ...(unchecked ? { unchecked } : {}),
+            }
           }
           const key = JSON.stringify(waiting)
           if (key !== reported) {
@@ -1131,7 +1158,10 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       releasingFor = id
       try {
         // The standby page's cloud facet explains the move, and that "Move here" pulls it back.
-        const released = await release({ reason: `Moved to ${by}`, explained: true })
+        const released = await release({
+          reason: `Moved to ${by}`,
+          explained: true,
+        })
         // Storage open again: the release failed before it was sent, and this machine serves on.
         if (!released) await failed('handover', 'Releasing the lease failed')
         return released
@@ -1194,7 +1224,12 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       sync?.send({ type: 'backup', at: done.at })
       lastError = undefined
       const ms = done.at - started
-      await record(BackupEvent, { phase: 'done', project, bytes: done.bytes, ms })
+      await record(BackupEvent, {
+        phase: 'done',
+        project,
+        bytes: done.bytes,
+        ms,
+      })
       await tell({ ok: true, ...done, ms })
       return done
     } catch (error) {
@@ -1232,14 +1267,20 @@ export function startLease(host: ExtensionHost, options: LeaseOptions, deps: Lea
       return
     }
     const signal = AbortSignal.timeout(STOP_BUDGET)
-    const info = { reason: 'Released when Ultimate stopped', released: true, cloud: true }
+    const info = {
+      reason: 'Released when Ultimate stopped',
+      released: true,
+      cloud: true,
+    }
     if (serving()) {
       await announce(state.epoch, 'releasing')
       await host.deactivate(info, async () => {})
     }
     let lock: Awaited<ReturnType<typeof acquireLock>>
     try {
-      lock = await acquireLock(join(host.home, 'storage.lock'), { pid: process.pid })
+      lock = await acquireLock(join(host.home, 'storage.lock'), {
+        pid: process.pid,
+      })
     } catch {
       // A core swap: the next process owns storage and the lease.
       return
