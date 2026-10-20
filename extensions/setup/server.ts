@@ -6,7 +6,10 @@ import {
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import type { ConversationId, JsonObject, Tx } from '@earendil-works/pi-durable'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { discoverAgents } from '../../lib/agents.ts'
+import { isolatable } from '../../lib/git.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { readSecret, secretMetadata } from '../../lib/secrets.ts'
@@ -220,6 +223,37 @@ async function landerArea(host: CheckHost): Promise<SetupIssue | undefined> {
   }
 }
 
+/** Files that say a fresh checkout needs installing before it runs: a worktree has none of their ignored output. */
+const MANIFESTS = [
+  'package.json',
+  'composer.json',
+  'Gemfile',
+  'pyproject.toml',
+  'requirements.txt',
+  'go.mod',
+  'Cargo.toml',
+  'mix.exs',
+]
+
+async function worktreeArea(host: CheckHost): Promise<SetupIssue | undefined> {
+  if (!host.extensions().some((extension) => extension.name === 'workspaces' && extension.enabled))
+    return undefined
+  const commands = ((await host.projectSettings()).isolates as { worktree?: { setup?: unknown } })
+    ?.worktree?.setup
+  if (Array.isArray(commands) && commands.length)
+    return { area: 'Worktree setup', status: 'ok', summary: `${commands.length} commands` }
+  if ('reason' in (await isolatable(host.projectRoot))) return undefined
+  const manifests = MANIFESTS.filter((name) => existsSync(join(host.projectRoot, name)))
+  if (!manifests.length) return undefined
+  return {
+    area: 'Worktree setup',
+    status: 'warn',
+    summary: `none, though the project has ${manifests.join(', ')}`,
+    impact:
+      'New worktrees start without dependencies, .env or a database. Ask @ultimate to set it up (the integrate-ultimate skill).',
+  }
+}
+
 /** Every area, warnings first, then information, then what is set up; a failing area is skipped, not fatal. */
 export async function check(host: CheckHost): Promise<SetupIssue[]> {
   const areas = await Promise.all(
@@ -233,6 +267,7 @@ export async function check(host: CheckHost): Promise<SetupIssue[]> {
         cloudArea,
         tailscaleArea,
         landerArea,
+        worktreeArea,
       ] as ((
         host: CheckHost,
       ) => SetupIssue | SetupIssue[] | undefined | Promise<SetupIssue | SetupIssue[] | undefined>)[]

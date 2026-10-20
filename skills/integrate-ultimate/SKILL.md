@@ -75,11 +75,56 @@ Worker reports and submissions state divergence from the task as given (agreemen
   `extensions/subagents/README.md`.
 - **Lander:** checks and push are per project, in `<project>/.ultimate/settings.json` (read once the project is
   chosen): `"lander": { "checks": [...], "push": "origin" }` lists the project's own check commands in order (an array
-  runs as a concurrent group) and the remote to push to; push only with the owner's consent. Add
-  `isolates.worktree.setup` (for example the dependency install) when checks need it. To let the lander's model resolve
+  runs as a concurrent group) and the remote to push to; push only with the owner's consent. The lander's checkout
+  runs the worktree setup below first. To let the lander's model resolve
   conflicts and failing checks instead of only diagnosing them, add a `lander` definition with `onFailure: fix` and the
   tools it needs (`.ultimate/agents/lander.md`), per project or in `~/.ultimate/agents/`. Details:
   `extensions/workspaces/README.md`.
+
+## Worktree setup
+
+Every coordinator, worktree subagent and the lander works in a fresh `git worktree`, which has none of the
+project's ignored files: no dependencies, `.env`, database, generated files or dev-server port of its own. Always check
+this, even unasked (setup health warns while it is missing), and propose it.
+
+- **Read:** the package managers and lockfiles, `.env.example` and how `.env` is made, the database config (driver,
+  file path), generated files the build or tests need, and the dev-server scripts and their ports.
+- **Write** `isolates.worktree.setup` in `.ultimate/settings.json`: a list of shell commands, run in order in the new
+  worktree with `ULTIMATE_SOURCE` set to the source checkout, before the conversation's first tool call. A list that
+  grows past a few lines goes into `.ultimate/worktree-setup.sh`, referenced as `["sh .ultimate/worktree-setup.sh"]`.
+  Every command must be safe to repeat, and each has 120 seconds.
+- **Recipes** (no Ultimate support needed):
+  - Dependencies: the lockfile installs (`pnpm install --frozen-lockfile --prefer-offline`, `npm ci`,
+    `composer install --no-interaction`).
+  - `.env`: `[ -f .env ] || cp "$ULTIMATE_SOURCE/.env" .env`, so keys work as in the source checkout.
+  - SQLite: a copy-on-write clone of the source's file, instant and free until written:
+    `cp -c` (macOS) or `cp --reflink=auto` (Linux), only when the worktree has none yet.
+  - A dev port of its own: the worktree folder is named after its conversation id, so
+    `PORT=$((20000 + $(basename "$PWD") % 1000 * 10))` gives a stable block of 10, written into `.env` (APP_URL,
+    the server and Vite ports). Check the dev script actually reads it.
+  - The lander: its checkout lives under `*/lander/*`; skip the database and dev-server steps there
+    (`case "$PWD" in */lander/*) exit 0;; esac`) and keep what the checks need.
+- **Ask** before Postgres, MySQL or anything needing credentials: whether worktrees share the developer's database
+  or get their own (`createdb -T <db> <db>_wt_<id>`, or a dump), and where credentials come from. Never copy
+  production data into a worktree without the owner saying so.
+- **Prove it:** `git worktree add --detach <tmp> HEAD`, run the commands there with `ULTIMATE_SOURCE` set, run the
+  project's checks or start the dev server, then remove the scratch worktree. Commit the settings and script.
+
+```sh
+#!/bin/sh -e
+# .ultimate/worktree-setup.sh for a Laravel + npm app with SQLite
+composer install --no-interaction --prefer-dist
+npm ci --prefer-offline --no-audit --no-fund
+[ -f .env ] || cp "$ULTIMATE_SOURCE/.env" .env
+php artisan wayfinder:generate --with-form
+case "$PWD" in */lander/*) exit 0;; esac
+[ -f database/database.sqlite ] || cp -c "$ULTIMATE_SOURCE/database/database.sqlite" database/ 2>/dev/null \
+  || cp --reflink=auto "$ULTIMATE_SOURCE/database/database.sqlite" database/
+PORT=$((20000 + $(basename "$PWD") % 1000 * 10))
+grep -v -e '^APP_URL=' -e '^SERVER_PORT=' -e '^VITE_PORT=' .env > .env.tmp || true
+printf 'APP_URL=http://127.0.0.1:%s\nSERVER_PORT=%s\nVITE_PORT=%s\n' "$PORT" "$PORT" $((PORT + 1)) >> .env.tmp
+mv .env.tmp .env
+```
 
 Paths above are relative to the Ultimate clone (`../..` from this skill). Definitions are reread on every start and
 settings apply live; nothing needs a restart.

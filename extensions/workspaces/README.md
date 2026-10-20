@@ -14,6 +14,9 @@ Each conversation has one record in the root `ultimate.workspaces` document.
 Its path is `<home>/worktrees/<conversationId>`; its branch includes the home hash and conversation ID.
 Preparation runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout.
 Setup commands must be safe to repeat after interruption.
+What a project's setup should do (dependencies, `.env`, a copy-on-write SQLite clone, a dev port per worktree, skipping
+the database in the lander's checkout, and when to ask about Postgres) is the "Worktree setup" step of the
+`integrate-ultimate` skill; setup health warns while an isolatable project with a package manifest has none.
 The first model request waits for preparation. Before every tool call, the workspace must be ready with a
 present, registered checkout. Otherwise the tool is blocked with the reason; the model can still reply and
 explain why it cannot use the checkout.

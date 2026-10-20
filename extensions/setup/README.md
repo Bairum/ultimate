@@ -13,6 +13,7 @@ button (a ⌘K command, or the Secrets panel at the missing secret).
 | Cloud sync        | `cloud.url` is set but `ULTIMATE_CLOUD_TOKEN` or the snapshot key is missing | the Secrets panel |
 | Tailscale         | never; `info` while not published                                            |                   |
 | Lander checks     | never; `info` while `lander.checks` is empty                                 |                   |
+| Worktree setup    | the project is isolatable, has a package manifest, and no worktree setup     |                   |
 
 A definition pinned to a provider without a login still loads (Pi resolves its model among every known model) and
 fails at its first model call, so its row says that.

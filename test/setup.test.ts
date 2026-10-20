@@ -1,10 +1,11 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { ConversationId, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, JsonObject, Tx } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import { fallbackModel, summaryModelStatus } from '../extensions/conversations/summary-model.ts'
 import { check, noteFor } from '../extensions/setup/server.ts'
 import type { SetupIssue } from '../extensions/setup/refs.ts'
+import { git } from '../lib/git.ts'
 import { removeTemps, temp } from './helpers.ts'
 
 afterEach(removeTemps)
@@ -147,6 +148,39 @@ it('keeps the other areas when one throws synchronously', async () => {
 it('has no agent warning once the pinned provider has a login', async () => {
   const issues = await check(await checkHost({ logins: ['openrouter', 'openai-codex'] }))
   expect(issues.find((issue) => issue.area === 'Agent models')?.status).toBe('ok')
+})
+
+it('warns about a missing worktree setup until one is configured', async () => {
+  const host = await checkHost({ logins: ['openrouter', 'openai-codex'] })
+  await mkdir(host.projectRoot)
+  await writeFile(join(host.projectRoot, 'composer.json'), '{}')
+  await git(host.projectRoot, 'init', '-q', '-b', 'main')
+  await git(
+    host.projectRoot,
+    '-c',
+    'user.name=T',
+    '-c',
+    'user.email=t@example.com',
+    'commit',
+    '-q',
+    '--allow-empty',
+    '-m',
+    'first',
+  )
+  const workspaces = [...host.extensions(), { name: 'workspaces', enabled: true }] as ReturnType<
+    typeof host.extensions
+  >
+  const row = async (settings: JsonObject) =>
+    (
+      await check({ ...host, extensions: () => workspaces, projectSettings: async () => settings })
+    ).find((issue) => issue.area === 'Worktree setup')
+  expect(await row({})).toMatchObject({
+    status: 'warn',
+    summary: 'none, though the project has composer.json',
+  })
+  expect(await row({ isolates: { worktree: { setup: ['composer install'] } } })).toMatchObject({
+    status: 'ok',
+  })
 })
 
 it('notes the primary agent only when its warnings change, and once when they clear', async () => {

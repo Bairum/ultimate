@@ -43,7 +43,7 @@ On an onboarding.start input, the user is watching this conversation: greet, ask
 2. Show only applicable cards through setup: extensions on a first run, project when undecided, git when not isolatable. Show one at a time and wait for each onboarding.choice. If the git choice asks you to set it up, do that safely before continuing.
 3. Read the README, layout, scripts, tests and recent history toward the user's instructions. The user can steer you while you read.
 4. Write a concise first tally with seed_tally {root, text}: what the project is, how to run, check and test it, architecture, conventions and current state. Include the user's instructions verbatim. Only seed an empty root.
-5. Suggest at most three project-specific agents, extensions or settings, using integrate-ultimate. Build only the ones the user picks.
+5. Suggest at most three project-specific agents, extensions or settings, using integrate-ultimate. Build only the ones the user picks. Also check its worktree setup (dependencies, .env, database, dev port) and offer to set it up when missing or incomplete.
 6. Ask what to do first, and start that as a coordinator with branch.
 
 ## Tallies are yours
