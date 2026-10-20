@@ -11,7 +11,6 @@ import {
   SendIcon,
   SquareArrowOutUpRightIcon,
 } from 'lucide-react'
-import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { ToolImage } from '@/components/ai/tool'
@@ -79,23 +78,10 @@ export function Address({ id, mark = false }: { id: number | 'user'; mark?: bool
 }
 
 export function Body({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false)
   return (
-    <>
-      <div
-        className={`min-w-0 overflow-auto px-3 py-3 text-[13px] leading-relaxed ${expanded ? '' : 'max-h-64'}`}
-      >
-        <MessageResponse>{text}</MessageResponse>
-      </div>
-      {text.length > 700 && (
-        <button
-          className="w-full cursor-pointer border-t border-border/60 px-3 py-1.5 text-left font-mono text-[11px] text-muted-foreground hover:text-foreground"
-          onClick={() => setExpanded(!expanded)}
-        >
-          {expanded ? 'Compact view' : 'Expand full message'}
-        </button>
-      )}
-    </>
+    <div className="min-w-0 px-3 py-3 text-[13px] leading-relaxed">
+      <MessageResponse>{text}</MessageResponse>
+    </div>
   )
 }
 

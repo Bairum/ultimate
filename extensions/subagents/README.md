@@ -33,7 +33,7 @@ A deferred tool explicitly named in a definition's `tools` is loaded into that c
 
 ## Attributed transcript messages
 
-Ordinary human input uses the core renderer. Typed agent instructions and asynchronous reports use compact Markdown cards with a bot marker, sender conversation ID, and a Source button. Long messages have a scrollable compact view and an explicit expansion control. Successful foreground answers still use the existing `SubagentCall` / `MessageResponse` renderer; their Open button now targets the answer when available.
+Ordinary human input uses the core renderer. Typed agent instructions and asynchronous reports use compact Markdown cards with a bot marker, sender conversation ID, and a Source button. Message bodies always show in full, with no inner scroll. Successful foreground answers still use the existing `SubagentCall` / `MessageResponse` renderer; their Open button now targets the answer when available.
 
 Instructions and reports are stored as `subagents.instruction` and `subagents.report` input entries. Their data carries the sender, source entry, agent name, display body and report failure flag; the model still receives the original user message. Cards read that data directly, including through history forks and reopen. Old plain user messages remain plain messages. If a source entry is no longer in its active transcript, Source still opens the conversation without scrolling to a different entry.
 
