@@ -53,6 +53,9 @@ function labelSplit(text: string) {
   return split && (split[1].split('`').length - 1) % 2 === 0 ? split : undefined
 }
 
+const distinct = (list: Decision['options']) =>
+  new Set(list.map((o) => o.label)).size === list.length
+
 /** The picks a message states: "my picks: 1a 2b", "(my picks are 1a, 2a, go)", "\"1b 2a\" are my picks". */
 export function statedPicks(text: string) {
   const picks = new Map<string, string>()
@@ -82,8 +85,6 @@ export function parseDecisions(text: string): Decision[] {
     // whole; an option whose whole text repeats an earlier one offers nothing new and is left out.
     const build = (split: boolean) =>
       options.map(([key, raw]) => option(key, raw, picks.get(ref) === key, split))
-    const distinct = (list: Decision['options']) =>
-      new Set(list.map((o) => o.label)).size === list.length
     const shortened = build(true)
     const kept = (distinct(shortened) ? shortened : build(false)).filter(
       (o, i, list) => list.findIndex((other) => other.label === o.label) === i,
