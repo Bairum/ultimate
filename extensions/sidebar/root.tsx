@@ -273,9 +273,8 @@ function useFlightWork(branches: ConversationSummary[]) {
     { enabled: ids.length > 0, onError: () => {} },
   )
   const { refetch } = progress
+  // A worktree becoming ready or going changes `ids`, which refetches by itself.
   const commit = useEvents({ events: [Committed], limit: 1 })?.[0]?.id
-  const items = useWorkspaceIndex().items
-  const worktrees = ids.map((id) => `${id}:${items[String(id)]?.state}`).join(',')
   const runs = branches.map((branch) => `${branch.id}:${branch.busy ? 1 : 0}`).join(',')
   const first = useRef(true)
   useEffect(() => {
@@ -283,8 +282,9 @@ function useFlightWork(branches: ConversationSummary[]) {
       first.current = false
       return
     }
-    if (worktrees) void refetch()
-  }, [commit, worktrees, runs, refetch])
+    if (ids.length > 0) void refetch()
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- a changed id set refetches in useAction itself
+  }, [commit, runs, refetch])
   const byId = new Map((progress.data ?? []).map((item) => [item.id, item]))
   return new Map(
     branches.map((branch) => [
