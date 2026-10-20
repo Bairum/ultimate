@@ -15,18 +15,21 @@ export const messageReference = (conversation: number, id: number) =>
 /**
  * Hover actions on a stored message, always shown on touch screens: extensions' details (`messageDetails`), its time,
  * and copies of its text or of a reference another conversation can follow, around extensions' `messageActions`.
- * `entry` is the message they act on, such as the one going back returns to.
+ * `entry` is the message they act on, such as the one going back returns to. They show while the nearest
+ * `group/message` is hovered, or `group/bubble` with `bubble`, for a card nested inside another message.
  */
 export function MessageActions({
   entry,
   text,
   timestamp,
   className,
+  bubble = false,
 }: {
   entry: EntryRecord
   text: string
   timestamp: number
   className?: string
+  bubble?: boolean
 }) {
   const extensions = useExtensions()
   const details = messageItems(extensions, 'messageDetails')
@@ -36,7 +39,8 @@ export function MessageActions({
   return (
     <div
       className={cn(
-        'flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted-foreground/60 opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100',
+        'flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted-foreground/60 opacity-0 transition-opacity focus-within:opacity-100 pointer-coarse:opacity-100',
+        bubble ? 'group-hover/bubble:opacity-100' : 'group-hover/message:opacity-100',
         className,
       )}
       data-message-actions={id}

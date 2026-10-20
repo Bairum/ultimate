@@ -147,7 +147,7 @@ export function ChatBubble({
       data-board-outgoing={message?.id}
       data-chat-bubble
       className={cn(
-        'group/message w-full min-w-0 rounded-md border border-l-2 border-border',
+        'group/bubble w-full min-w-0 rounded-md border border-l-2 border-border',
         accent.left,
         accent.fill,
       )}
@@ -177,10 +177,11 @@ export function ChatBubble({
           )}
           {entry && (
             <MessageActions
+              bubble
               className="ml-auto"
               entry={entry}
               text={text}
-              timestamp={stored && 'timestamp' in stored ? stored.timestamp : (at ?? Date.now())}
+              timestamp={at ?? (stored && 'timestamp' in stored ? stored.timestamp : 0)}
             />
           )}
         </footer>
@@ -461,7 +462,7 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
       <section
         data-board-input={origin.id}
         className={cn(
-          'min-w-0 rounded-md border border-l-2 border-border',
+          'group/bubble min-w-0 rounded-md border border-l-2 border-border',
           accent.left,
           accent.fill,
         )}
@@ -503,8 +504,9 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
         <Body text={origin.text} />
         <InputImages entry={entry} />
         {origin.from === 'user' && (
-          <footer className="group/message border-t border-border/60 px-3 py-1.5">
+          <footer className="border-t border-border/60 px-3 py-1.5">
             <MessageActions
+              bubble
               className="justify-end"
               entry={entry}
               text={origin.text}
