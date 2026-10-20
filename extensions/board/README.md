@@ -101,8 +101,8 @@ current definitions, including numeric-address messages and automatic replies.
 
 The deferred `branch { prompt, root?, isolated?: true }` tool is offered only to definitions that name it.
 It chooses the explicit root, otherwise the caller's tree root, otherwise the only root. Ambiguous or missing roots
-produce an error listing the available ids. It forks the root's tally tip through lineage, attributes the tally prompt
-to the caller, and sends the first input as a board message with replies enabled. It returns the branch id and message id.
+produce an error listing the available ids. It forks the root's tally tip through lineage, attributes the tally's branch
+line to the caller, and sends the first input as a board message with replies enabled. It returns the branch id and message id.
 The branch's answer therefore wakes its caller as a normal `board.reply`.
 The tool records the caller in the branch's `board.started` document, so later answers reach it too. A later run, woken
 by a subagent, a notify, a lander report or steering, ends with a final answer nobody receives. After each such run, a

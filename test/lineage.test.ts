@@ -246,10 +246,7 @@ it.concurrent('branches from a tally: the root gets the prompt node, the branch 
     intent: 'Add notes between conversations',
   })
   expect(said(tally.messages)).toEqual([
-    [
-      'user',
-      `#${first} was started from the tally (#1/${reset.id}) with the prompt:\nAdd notes between conversations`,
-    ],
+    ['user', `#${first} started from #1/${reset.id}: Add notes between conversations`],
   ])
   // The first branch reads its prompt once, as its own input, with no brief.
   const view = await (await server.harness.conversation(first, context))!.context(context)
@@ -277,10 +274,7 @@ it.concurrent('branches from a tally: the root gets the prompt node, the branch 
       textOf(messages.findLast((message) => message.role === 'user')?.content) === 'Look at this',
   )!
   expect(said(request)).toEqual([
-    [
-      'user',
-      `#${first} was started from the tally (#1/${reset.id}) with the prompt:\nAdd notes between conversations`,
-    ],
+    ['user', `#${first} started from #1/${reset.id}: Add notes between conversations`],
     ['user', 'Look at this'],
   ])
   expect(request.at(-1)!.content).toEqual([{ type: 'text', text: 'Look at this' }, image])
@@ -292,9 +286,9 @@ it.concurrent('branches from a tally: the root gets the prompt node, the branch 
     { branch: later, at: node.id, intent: 'Look at this', images: 1 },
   ])
   expect(textOf(nodes[1].model?.[0]?.content)).toBe(
-    `#${later} was started from the tally (#1/${node.id}) with the prompt:\nLook at this\n(1 image, in #${later})`,
+    `#${later} started from #1/${node.id}: Look at this`,
   )
-  // Images are counted in the tally, never copied into it.
+  // Images are counted on the node for display, never copied into the tally or its model text.
   expect(JSON.stringify(nodes[1])).not.toContain(image.data)
   await until(
     async () =>
@@ -396,6 +390,26 @@ it.concurrent('a late branched reaction leaves the title a branch chose since', 
   expect((await server.harness.snapshot(Metadata, id, context))?.title).toBe('Renamed sidebar')
 })
 
+it.concurrent('keeps a long prompt out of the tally: one intent line, the prompt in the branch', async () => {
+  const { server, requests } = await fixture()
+  const prompt =
+    `Rework the sidebar\n\n${'Every detail of the plan goes here. '.repeat(200)}`.trim()
+  const id = await branchFrom(server, { from: 1, prompt })
+  await settled(server, id)
+  const node = (await server.root.context(context)).entries.findLast(
+    (entry) => entry.kind === 'lineage.branched',
+  )!
+  const { at, intent } = node.data as { at: number; intent: string }
+  expect(intent).toBe(`${prompt.replace(/\s+/g, ' ').slice(0, 79)}…`)
+  expect(textOf(node.model?.[0]?.content)).toBe(`#${id} started from #1/${at}: ${intent}`)
+  // The whole prompt is the branch's own first input, and its branch doc keeps it.
+  const asked = requests.map((messages) =>
+    textOf(messages.findLast((message) => message.role === 'user')?.content),
+  )
+  expect(asked).toContain(prompt)
+  expect((await server.harness.snapshot(Branch, id, context))?.branch?.intent).toBe(prompt)
+})
+
 it.concurrent('writes the prompt node of a branch of a branch into the tree root and marks its source', async () => {
   const { server, requests } = await fixture()
   const first = await branchFrom(server, { from: 1, prompt: 'First line' })
@@ -410,7 +424,7 @@ it.concurrent('writes the prompt node of a branch of a branch into the tree root
   const node = root.entries.at(-1)!
   expect(node.data).toEqual({ branch: nested, at: answer.id, intent: 'Go deeper', from: first })
   expect(textOf(node.model?.[0]?.content)).toBe(
-    `#${nested} was started from #${first}/${answer.id} with the prompt:\nGo deeper`,
+    `#${nested} started from #${first}/${answer.id}: Go deeper`,
   )
   // The source keeps a display-only marker; its model never sees it.
   const source = await (await server.harness.conversation(first, context))!.context(context)

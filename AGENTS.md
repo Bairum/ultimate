@@ -8,7 +8,7 @@ tells you which change reloads how, so the conversation you are in keeps running
 
 A project is a forest of conversation trees, like commit histories.
 
-- **Roots** run no turns. Their read-only tallies supply each branch's starting context: prompts, latest conversation
+- **Roots** run no turns. Their read-only tallies supply each branch's starting context: branch intents, latest conversation
   abstracts and landings with divergence and `#conversation/entry` breadcrumbs. The UI calls a tally **context**;
   code, tools and model text call it "tally". The footer shows estimated tokens and **Talk to @ultimate**; the sidebar
   shows each root heading its tree with its last three events (landings, notes, branches, compactions).

@@ -38,7 +38,7 @@ function userText(entry: EntryRecord) {
     : message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n')
 }
 
-/** A branch started from this conversation: in its tree's root a card with the prompt, elsewhere a quiet divider. */
+/** A branch started from this conversation: in its tree's root a card with its intent, elsewhere a quiet divider. */
 function Branched({ entry }: { entry: EntryRecord }) {
   const { switchConversation } = useUltimate()
   const { branch, intent } = entry.data as { branch: number; intent: string }
@@ -60,7 +60,7 @@ function Branched({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/** The tally's prompt node: which branch started, from where, with what prompt (three lines until opened). */
+/** The tally's branch node: which branch started, from where, with what intent (older nodes carry the whole prompt). */
 function Started({ entry }: { entry: EntryRecord }) {
   const { switchConversation } = useUltimate()
   const { branch, at, intent, images, from } = entry.data as {

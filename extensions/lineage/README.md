@@ -1,4 +1,4 @@
-A project is a forest of conversation trees. Each root keeps a non-agent tally of one line of work: prompts, each conversation's latest abstract, notes and landings. Branches do the work with that shared context.
+A project is a forest of conversation trees. Each root keeps a non-agent tally of one line of work: one intent line per branch, each conversation's latest abstract, notes and landings. Branches do the work with that shared context.
 
 The UI calls a root's tally its **context** ("what every new branch starts from"); "tally" stays the internal name of the
 document, tools and model-facing text, where agents and stored entries already use it.
@@ -8,8 +8,12 @@ document, tools and model-facing text, where agents and stored entries already u
   ownerless conversation in the project root, optionally isolated in its own worktree. There is no brief or reset:
   it inherits the source context, then the durable `lineage.prompt` task submits the prompt and images as its first
   input. Doc `lineage.branch` holds `{ from, at, intent }`; `inputAt` is when the branch was asked for, not inherited
-  activity. The fork happens before the tree root receives a model-visible `lineage.branched` prompt node
-  `{ branch, at, intent, images?, from? }`, so the branch does not inherit its own prompt twice. `from` is present
+  activity. The fork happens before the tree root receives a model-visible `lineage.branched` node
+  `{ branch, at, intent, images?, from? }`, so the branch does not inherit its own node. The node's model text is one
+  line, `#<branch> started by <caller> from #<source>/<at>: <intent>`, where `intent` is the prompt's first 80
+  characters on one line (also the branch's title until its summary names it); the prompt and its images stay in the
+  branch's own first input, so later branches never inherit them. Nodes written before this carried the whole prompt;
+  they are not rewritten and shrink at the next `compact_tally`. `from` is present
   when the source is not the root; that source also gets a display-only marker. The forking commit emits the durable
   event `lineage.branched` `{ id, from, at, intent }` (`Branched` in `api.ts`); lineage's own `named` reactor (for it
   and `lineage.rooted`) has conversations mark the intent title as generated (`generatedTitle`). Lineage provides
@@ -116,7 +120,7 @@ is undefined. The conversations summarizer uses this to publish an abstract afte
 An optional `receipt: { taskId, callId }` records the branch id atomically with the fork in the originating task's
 `lineage.branch-receipts` document. Repeating that task and call returns the same branch; Pi retires the receipt when
 the task completes. The method returns `{ id }`. With `deliver: false`, no `lineage.prompt` task is created: the caller
-must deliver its first input (the board uses a reply-enabled message). `by: conversationId` attributes the tally's prompt node to that caller,
+must deliver its first input (the board uses a reply-enabled message). `by: conversationId` attributes the tally's branch node to that caller,
 including its standing-agent name when available.
 
 The user talks to @ultimate in its own conversation, opened by the top-bar @ultimate button or first sidebar row; it picks a root by reading tallies and starts coordinator branches.
