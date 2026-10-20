@@ -322,3 +322,36 @@ it.concurrent('keeps Ultimate answers to board replies out of the log, including
   const reopened = await f.open()
   expect(await log(reopened)).toEqual(before)
 })
+
+it.concurrent('re-applies an updated @ultimate definition on a typed input and notes changed instructions once', async () => {
+  const f = await fixture()
+  const ultimate = await f.subagents.standing('ultimate', context)
+  const notes = async () =>
+    (await entries(f.server, ultimate)).filter((entry) => entry.kind === 'prompt.build')
+  const instructions = async () =>
+    (await (await f.server.harness.conversation(ultimate, context))!.agent(context)).instructions
+  // The first run records what it saw silently.
+  await ask(f.server, ultimate, 'first')
+  expect(await notes()).toEqual([])
+  const path = join(f.root, 'agents/ultimate.md')
+  await writeFile(path, (await readFile(path, 'utf8')) + '\nNew rule: delegate extensions.\n')
+  await writeFile(join(f.root, 'docs/subagents.md'), 'Changed docs.\n')
+  // A typed input, not a Board delivery, picks up the new definition.
+  await ask(f.server, ultimate, 'second')
+  expect(await instructions()).toContain('New rule: delegate extensions.')
+  const [note] = await notes()
+  expect(note.data).toEqual({ instructions: ['agents/ultimate.md'], docs: ['docs/subagents.md'] })
+  expect(note.model?.[0]?.content).toContain('Instructions changed: agents/ultimate.md')
+  // The note comes once per change.
+  await ask(f.server, ultimate, 'third')
+  expect(await notes()).toHaveLength(1)
+  // Other conversations never get it.
+  await writeFile(path, (await readFile(path, 'utf8')) + '\nAnother rule.\n')
+  await ask(f.server, ROOT_CONVERSATION_ID, 'root')
+  expect(
+    (await entries(f.server, ROOT_CONVERSATION_ID)).some(
+      (entry) =>
+        entry.kind === 'prompt.build' && JSON.stringify(entry.data).includes('instructions'),
+    ),
+  ).toBe(false)
+})

@@ -1,18 +1,30 @@
-import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { readdir, readFile } from 'node:fs/promises'
+import { join, relative } from 'node:path'
 import { formatSkillsForPrompt, loadProjectContextFiles } from '@earendil-works/pi-coding-agent'
 import {
+  AgentDoc,
+  configure,
   defineDoc,
   defineExtension,
   GenerationTask,
   hook,
+  ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
+import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { discoverAgents } from '../../lib/agents.ts'
+import { primaryAgent } from '../../lib/machine.ts'
+import type { BuildNote } from './refs.ts'
 
 export const order = -100
 
-/** The build a conversation's last run started on; a fork starts from its parent's. */
-const SeenBuild = defineDoc<{ id?: string }>({
+/**
+ * The build a conversation's last run started on; a fork starts from its parent's. For the primary agent also the
+ * hashes of the instruction files it last saw (`files`, path → sha256 prefix).
+ */
+const SeenBuild = defineDoc<{ id?: string; files?: Record<string, string> }>({
   kind: 'prompt.build',
   version: 1,
   scope: 'conversation',
@@ -33,6 +45,97 @@ export function buildNote(build: ReturnType<ExtensionHost['build']>, seen: strin
   )
 }
 
+const digest = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16)
+
+/** Ultimate's own docs the primary agent reads on demand: `AGENTS.md`, `docs/*.md` and `agents/*.md` in the clone. */
+async function cloneDocs(ultimateRoot: string) {
+  const listed = async (folder: string) =>
+    (await readdir(join(ultimateRoot, folder)).catch(() => [] as string[]))
+      .filter((name) => name.endsWith('.md'))
+      .map((name) => `${folder}/${name}`)
+  const paths = ['AGENTS.md', ...(await listed('docs')), ...(await listed('agents'))]
+  const files: Record<string, string> = {}
+  for (const path of paths) {
+    // A doc removed between the listing and the read is simply not there.
+    const text = await readFile(join(ultimateRoot, path), 'utf8').catch(() => undefined)
+    if (text !== undefined) files[path] = digest(text)
+  }
+  return files
+}
+
+/** `path` as the agent knows it: relative to the clone or the project, else with the home as `~`. */
+function shown(host: ExtensionHost, path: string) {
+  for (const root of [host.ultimateRoot, host.projectRoot]) {
+    const inside = relative(root, path)
+    if (!inside.startsWith('..')) return inside
+  }
+  return path.startsWith(host.userHome) ? `~${path.slice(host.userHome.length)}` : path
+}
+
+/**
+ * For the primary agent (@ultimate, @sync in the machine home): re-apply its definition's instructions when they
+ * differ from the conversation's, and name the instruction files that changed since its last run. Other agents keep
+ * the instructions they started with.
+ */
+async function instructionChanges(
+  host: ExtensionHost,
+  tx: Tx,
+  conversationId: ConversationId,
+  seen: { files?: Record<string, string> },
+) {
+  const standing = host.doc('ultimate.standing-agents')
+  const name = primaryAgent(host.projectRoot, host.userHome)
+  const index = standing
+    ? ((await tx.doc(standing, ROOT_CONVERSATION_ID)) as Record<string, number>)
+    : {}
+  if (index[name] !== conversationId) return { instructions: [], docs: [] }
+  const { definitions } = await discoverAgents(
+    host.ultimateRoot,
+    host.projectRoot,
+    host.userHome,
+    host.modelRuntime,
+  )
+  const definition = definitions.find((candidate) => candidate.name === name)
+  const instructions: string[] = []
+  // Board deliveries refresh a standing agent; a typed input did not, so an updated definition waited for a message.
+  if (
+    definition &&
+    (await tx.doc(AgentDoc, conversationId)).instructions !== definition.instructions
+  ) {
+    await configure(tx, conversationId, { instructions: definition.instructions })
+    instructions.push(shown(host, definition.path))
+  }
+  const files: Record<string, string> = await cloneDocs(host.ultimateRoot)
+  for (const file of loadProjectContextFiles({
+    cwd: host.projectRoot,
+    agentDir: join(host.userHome, '.ultimate'),
+  }))
+    files[shown(host, file.path)] = digest(file.content)
+  // The definition is compared as applied text above; listing its file as well would name it twice.
+  if (definition) delete files[shown(host, definition.path)]
+  const previous = seen.files
+  seen.files = files
+  // The first run records what it saw; afterwards every added or changed file counts.
+  const changed = previous
+    ? Object.keys(files)
+        .filter((path) => previous[path] !== files[path])
+        .toSorted()
+    : []
+  return { instructions, docs: changed }
+}
+
+/** The note's text: what changed, so the agent knows its instructions or Ultimate's docs moved. */
+export function instructionNote(changes: { instructions: string[]; docs: string[] }) {
+  return [
+    changes.instructions.length > 0 &&
+      `Instructions changed: ${changes.instructions.join(', ')}. Your system prompt now carries the new text; drop habits from the old one.`,
+    changes.docs.length > 0 &&
+      `Docs changed: ${changes.docs.join(', ')}. Re-read them before relying on what you read earlier.`,
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
 export default function prompt(host: ExtensionHost) {
   return defineExtension({
     name: 'prompt',
@@ -44,22 +147,25 @@ export default function prompt(host: ExtensionHost) {
         beforeInput: async (_input, { tx, conversationId }) => {
           const build = host.build()
           const seen = await tx.doc(SeenBuild, conversationId)
-          if (seen.id === build.id) return undefined
+          const changes = await instructionChanges(host, tx, conversationId, seen)
           const previous = seen.id
           seen.id = build.id
-          if (previous === undefined) return undefined
+          const built = previous !== undefined && previous !== build.id
+          const text = [built && buildNote(build, previous), instructionNote(changes)]
+            .filter(Boolean)
+            .join('\n')
+          if (!text) return undefined
+          const data: BuildNote = {
+            ...(built && { from: previous, to: build.id }),
+            ...(changes.instructions.length > 0 && { instructions: changes.instructions }),
+            ...(changes.docs.length > 0 && { docs: changes.docs }),
+          }
           return {
             entries: [
               {
                 kind: 'prompt.build',
-                data: { from: previous, to: build.id },
-                model: [
-                  {
-                    role: 'user' as const,
-                    content: buildNote(build, previous),
-                    timestamp: Date.now(),
-                  },
-                ],
+                data: { ...data },
+                model: [{ role: 'user' as const, content: text, timestamp: Date.now() }],
               },
             ],
           }
@@ -100,7 +206,7 @@ export default function prompt(host: ExtensionHost) {
             : []),
           '- When a "Build changed" note arrives with your input, you were hot-swapped: your tools, prompt, or UI may be different now. Find out what changed (the changed list, `git log`/`git diff`' +
             (has('codemode') ? ', `ultimate.extensions()`' : '') +
-            ') and test new behaviour before relying on it.',
+            ') and test new behaviour before relying on it. An "Instructions changed" or "Docs changed" line means those files changed: your system prompt already carries changed instructions; re-read changed docs before relying on them.',
           ...(has('screenshot')
             ? [
                 '- You can see your own UI: take a screenshot and look at it after UI changes instead of assuming they render correctly.',
