@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -23,26 +24,26 @@ function defaultBashTimeout() {
 const bashTripwireMessage = (seconds: number) =>
   `Tripwire: bash ran past the ${seconds} s default limit and was stopped. Pass timeout for longer commands.`
 
-/** The file the commit hooks of bash call `api` append to, one line per commit or rewrite. */
-const commitLog = (api: Pick<ToolExecutionApi, 'taskId'>) =>
-  join(tmpdir(), `ultimate-commits-${encodeURIComponent(api.taskId)}.log`)
-
 /**
- * Process-local Git hooks for one bash call. Each appends a line to `$ULTIMATE_COMMIT_LOG` and swallows every failure, so
- * it can never fail a commit; the trailing `#` drops the arguments Git appends.
+ * Process-local Git hooks for one bash call. Each appends tab-separated lines (kind, sha, branch, worktree, git common
+ * dir, extra) to `$ULTIMATE_COMMIT_LOG` and swallows every failure, so it can never fail a commit; the trailing `#`
+ * drops the arguments Git appends.
  */
-const where = `"$(git rev-parse --show-toplevel)" "$(git rev-parse --path-format=absolute --git-common-dir)"`
+const where = `"$(git symbolic-ref -q --short HEAD)" "$(git rev-parse --show-toplevel)" "$(git rev-parse --path-format=absolute --git-common-dir)"`
 const hooks = (conversation: number) => ({
   'prepare-commit-msg': `git interpret-trailers --in-place --if-exists replace --trailer "Ultimate-Conversation: ${conversation}" "$1" #`,
-  'post-commit': `printf 'commit\\t%s\\t%s\\t%s\\t%s\\n' "$(git rev-parse HEAD)" "$(git symbolic-ref -q --short HEAD)" ${where} 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
+  'post-commit': `printf 'commit\\t%s\\t%s\\t%s\\t%s\\n' "$(git rev-parse HEAD)" ${where} 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
   // Merges run no post-commit. Fast-forwards and squashes run post-merge too, so it also logs the HEAD before the merge.
-  'post-merge': `printf 'merge\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$(git rev-parse HEAD)" "$(git symbolic-ref -q --short HEAD)" ${where} "$(git rev-parse -q --verify ORIG_HEAD)" 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
-  'post-rewrite': `awk '{ print "rewrite\\t" $1 "\\t" $2 }' 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
+  'post-merge': `printf 'merge\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$(git rev-parse HEAD)" ${where} "$(git rev-parse -q --verify ORIG_HEAD)" 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
+  // Git's stdin holds `old new` pairs; an apply-backend rebase runs no post-commit, so each pair is a commit too.
+  'post-rewrite': `while read -r old new rest; do printf 'rewrite\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$new" ${where} "$old"; done 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
 })
 
+/** Install the hooks for bash call `api` in `execution`; they log its commits to `log` when given. */
 export function prepareBash(
   execution: BashExecution,
-  api: Pick<ToolExecutionApi, 'conversationId' | 'taskId'>,
+  api: Pick<ToolExecutionApi, 'conversationId'>,
+  log?: string,
 ) {
   let count = Number(process.env.GIT_CONFIG_COUNT ?? 0)
   for (const [event, command] of Object.entries(hooks(api.conversationId))) {
@@ -52,30 +53,41 @@ export function prepareBash(
     execution.env[`GIT_CONFIG_VALUE_${count++}`] = command
   }
   execution.env.GIT_CONFIG_COUNT = String(count)
-  execution.env.ULTIMATE_COMMIT_LOG = commitLog(api)
+  if (log) execution.env.ULTIMATE_COMMIT_LOG = log
 }
 
-type Made = { sha: string; branch?: string; toplevel: string; common: string; merged?: string }
+type Made = {
+  sha: string
+  branch?: string
+  toplevel: string
+  common: string
+  /** Logged by post-merge: the HEAD before it, to tell a real merge from a fast-forward or squash. */
+  merged?: string
+  rewrittenFrom?: string
+}
 
-/** The commits bash call `api` made, from its hook log, which this removes: newest line per commit wins. */
-async function madeCommits(api: Pick<ToolExecutionApi, 'conversationId' | 'taskId'>) {
-  const path = commitLog(api)
+/**
+ * The commits a bash call that started at `started` (ms) made, from its hook log at `path`, which this removes. A
+ * commit or rewrite line confirms a commit; a post-merge line only proposes one.
+ */
+async function madeCommits(path: string, conversation: number, started: number) {
   const log = await readFile(path, 'utf8').catch(() => '')
-  if (!log) return []
   await rm(path, { force: true })
   const made = new Map<string, Made>()
-  const rewritten = new Map<string, string>()
   for (const line of log.split('\n')) {
-    const [kind, sha, branch, toplevel, common, before] = line.split('\t')
-    if (kind === 'rewrite') rewritten.set(branch, sha)
-    else if ((kind === 'commit' || kind === 'merge') && sha && common)
-      made.set(sha, {
-        sha,
-        ...(branch ? { branch } : {}),
-        toplevel,
-        common,
-        ...(kind === 'merge' ? { merged: before ?? '' } : {}),
-      })
+    const [kind, sha, branch, toplevel, common, extra] = line.split('\t')
+    if (!sha || !common || !['commit', 'merge', 'rewrite'].includes(kind)) continue
+    const known = made.get(sha)
+    if (kind === 'merge' && known) continue
+    made.set(sha, {
+      sha,
+      ...(branch ? { branch } : {}),
+      toplevel,
+      common,
+      ...(kind === 'merge' ? { merged: extra ?? '' } : {}),
+      ...(kind === 'rewrite' && extra ? { rewrittenFrom: extra } : {}),
+      ...(kind !== 'rewrite' && known?.rewrittenFrom ? { rewrittenFrom: known.rewrittenFrom } : {}),
+    })
   }
   const byRepo = Map.groupBy(made.values(), (commit) => commit.common)
   const events = []
@@ -85,40 +97,44 @@ async function madeCommits(api: Pick<ToolExecutionApi, 'conversationId' | 'taskI
       common,
       'log',
       '--no-walk=unsorted',
-      '--format=%H%x00%P%x00%s%x00%(trailers:key=Ultimate-Conversation,valueonly,separator=%x2C)%x1e',
+      '--format=%H%x00%P%x00%s%x00%(trailers:key=Ultimate-Conversation,valueonly,separator=%x2C)%x00%ct%x1e',
       ...commits.map((commit) => commit.sha),
     ).catch(() => '')
     const details = new Map(
       shown
         .split('\x1e')
         .map((record) => record.trim().split('\0'))
-        .map(([sha, parents, subject, trailer]) => [sha, { parents, subject, trailer }]),
+        .map(([sha, parents, subject, trailer, time]) => [
+          sha,
+          { parents, subject, trailer, time: Number(time) },
+        ]),
     )
     for (const commit of commits) {
       const found = details.get(commit.sha)
       if (!found) continue
       const parents = found.parents ? found.parents.split(' ') : []
-      // A merge commit on top of the HEAD it started from, carrying this conversation's trailer; not a fast-forward.
+      // A merge commit on the HEAD it started from, with this conversation's trailer, made during this call: not a
+      // fast-forward or squash, nor a fast-forward onto an older merge.
       if (
         commit.merged !== undefined &&
         !(
           parents.length > 1 &&
           parents[0] === commit.merged &&
-          found.trailer.trim() === String(api.conversationId)
+          found.trailer.trim() === String(conversation) &&
+          found.time >= Math.floor(started / 1000)
         )
       )
         continue
       const repo = basename(common) === '.git' ? dirname(common) : common
-      const from = rewritten.get(commit.sha)
       events.push({
-        conversation: api.conversationId as number,
+        conversation,
         sha: commit.sha,
         parents,
         repo,
         ...(commit.toplevel && commit.toplevel !== repo ? { worktree: commit.toplevel } : {}),
         ...(commit.branch ? { branch: commit.branch } : {}),
         subject: found.subject,
-        ...(from ? { rewrittenFrom: from } : {}),
+        ...(commit.rewrittenFrom ? { rewrittenFrom: commit.rewrittenFrom } : {}),
       })
     }
   }
@@ -126,16 +142,22 @@ async function madeCommits(api: Pick<ToolExecutionApi, 'conversationId' | 'taskI
 }
 
 export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
-  const shell = createBashTool({ prepare: prepareBash })
+  const shell = createBashTool()
   // In the tool itself, not a wrap, so the events carry the call's trace and conversation.
   const bashTool: typeof shell = {
     ...shell,
     async execute(args, api, context) {
+      // One log per invocation: task ids repeat across projects and a retried call reruns its task.
+      const log = join(tmpdir(), `ultimate-commits-${randomUUID()}.log`)
+      const started = Date.now()
+      const call = createBashTool({
+        prepare: (execution) => prepareBash(execution, api, log),
+      })
       try {
-        return await shell.execute(args, api, context)
+        return await call.execute(args, api, context)
       } finally {
         // A failed or stopped command may still have committed, so record what it made either way.
-        const commits = await madeCommits(api)
+        const commits = await madeCommits(log, api.conversationId, started)
         if (commits.length)
           await api
             .commit(async (tx) => {

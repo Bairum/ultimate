@@ -17,8 +17,7 @@ it('uses a 600-second default tripwire and leaves explicit timeouts unchanged', 
   }).wraps!.find((wrap) => 'tool' in wrap && wrap.tool === 'bash')!
   if (!('tool' in wrapper)) throw new Error('Missing bash wrapper')
   const bash = wrapper.wrap({ ...createBashTool(), execute }) as ReturnType<typeof createBashTool>
-  // No hook log for this task, so the wrapper records nothing.
-  const api = { taskId: 'task-tripwire' } as unknown as ToolExecutionApi
+  const api = {} as ToolExecutionApi
   await expect(bash.execute({ command: 'sleep' }, api, context)).rejects.toThrow(
     'Tripwire: bash ran past the 600 s default limit',
   )

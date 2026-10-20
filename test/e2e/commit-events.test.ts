@@ -17,7 +17,6 @@ type Event = typeof Committed extends EventToken<infer D> ? D : never
 
 let cwd: string
 let emitted: Event[]
-let calls = 0
 const git = async (...args: string[]) => (await run('git', args, { cwd })).stdout.trim()
 
 beforeEach(async () => {
@@ -47,7 +46,7 @@ async function bash(command: string, dir = cwd) {
   let output = ''
   const api = {
     conversationId: 7 as ConversationId,
-    taskId: `task-commit-events-${++calls}`,
+    taskId: 'task-commit-events',
     callId: 'call',
     env: new NodeExecutionEnv({ cwd: dir }),
     output: (chunk: string | Uint8Array) => (output += chunk.toString()),
@@ -120,6 +119,66 @@ it('records its own merge commits but not fast-forwards', async () => {
     expect.objectContaining({ sha: await git('rev-parse', 'HEAD'), subject: 'merged' }),
   ])
   expect(emitted[0].parents).toHaveLength(2)
+})
+
+it('keeps concurrent calls of the same task apart', async () => {
+  const other = await realpath(await temp('ultimate-commit-events-other-'))
+  try {
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: other })
+    const commit = 'git -c user.name=t -c user.email=t@t commit -q --allow-empty -m'
+    await Promise.all([bash(`${commit} here`), bash(`${commit} there`, other)])
+    expect(emitted).toHaveLength(2)
+    expect(emitted).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ repo: cwd, subject: 'here' }),
+        expect.objectContaining({ repo: other, subject: 'there' }),
+      ]),
+    )
+  } finally {
+    await removeTemp(other)
+  }
+})
+
+it('records the commits an apply-backend rebase rewrote', async () => {
+  await git('commit', '--allow-empty', '-m', 'base')
+  await git('checkout', '-b', 'side')
+  await run('bash', ['-c', 'echo s > s && git add s && git commit -qm side'], { cwd })
+  const old = await git('rev-parse', 'HEAD')
+  await git('checkout', 'main')
+  await run('bash', ['-c', 'echo m > m && git add m && git commit -qm main'], { cwd })
+  await git('checkout', 'side')
+  await bash('git rebase -q --apply main')
+  expect(emitted).toEqual([
+    expect.objectContaining({
+      sha: await git('rev-parse', 'HEAD'),
+      subject: 'side',
+      rewrittenFrom: old,
+    }),
+  ])
+})
+
+it('keeps a commit when a squash merge in the same call leaves HEAD on it', async () => {
+  await git('commit', '--allow-empty', '-m', 'base')
+  await git('checkout', '-b', 'side')
+  await run('bash', ['-c', 'echo s > s && git add s && git commit -qm side'], { cwd })
+  await git('checkout', 'main')
+  await bash('git commit -q --allow-empty -m mine && git merge -q --squash side')
+  expect(emitted).toEqual([expect.objectContaining({ subject: 'mine' })])
+})
+
+it('records no merge when it fast-forwards onto an earlier merge of its own', async () => {
+  await git('commit', '--allow-empty', '-m', 'base')
+  await git('checkout', '-b', 'side')
+  await git('commit', '--allow-empty', '-m', 'side')
+  await git('checkout', 'main')
+  await git('commit', '--allow-empty', '-m', 'main')
+  await bash('git merge -q --no-ff side -m merged')
+  expect(emitted).toHaveLength(1)
+  await git('checkout', '-b', 'later', 'main~1')
+  // Commit times have one-second resolution: let the earlier merge fall before this call starts.
+  await new Promise((resolve) => setTimeout(resolve, 1100))
+  await bash('git merge -q --ff-only main')
+  expect(emitted).toHaveLength(1)
 })
 
 it('records nothing when bash made no commit', async () => {
