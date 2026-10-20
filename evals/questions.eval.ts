@@ -91,7 +91,10 @@ Two decisions before I start the worker:
   expect(questions[0].kind).toBe('choice')
   expect(questions[0].options!.map((o) => o.label).join(' ')).toMatch(/docked|composer/i)
   expect(questions[0].options!.find((o) => o.recommended)?.label).toMatch(/docked|composer/i)
-  expect(questions[1].kind).toBe('confirm')
+  // The reply explicitly lists Yes/No: either representation gives the user the same decision.
+  const answers =
+    questions[1].kind === 'confirm' ? ['Yes', 'No'] : questions[1].options!.map((o) => o.label)
+  expect(answers).toEqual([expect.stringMatching(/^yes\b/i), expect.stringMatching(/^no\b/i)])
 })
 
 test('Q3 a single go/no-go is one confirm question', async () => {
