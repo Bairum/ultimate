@@ -221,6 +221,27 @@ describe('durable UI state', () => {
     expect(state.get('panel')).toBe('fresh')
   })
 
+  it('ignores an old server’s late reply and sends unsent edits to the new one', async () => {
+    const { state, requests, commit, ack, start } = setup()
+    start({ panel: 'start' })
+    state.set('panel', 'old')
+    await wait()
+    commit(0)
+    state.set('view', 'unsent')
+    // The old process goes away while its answer is still on the way.
+    state.restarted()
+    expect(state.get('panel')).toBe('start')
+    expect(state.get('view')).toBe('unsent')
+    await wait()
+    expect(requests[1].change.set).toEqual({ view: 'unsent' })
+    ack(0)
+    await wait()
+    state.receive({ panel: 'fresh', [UI_REVISION]: 1 })
+    state.receive({ panel: 'other device', [UI_REVISION]: 2 })
+    expect(state.get('panel')).toBe('other device')
+    expect(state.get('view')).toBe('unsent')
+  })
+
   it('skips no-op writes, drops refused writes, and keeps a newer write when an older batch fails', async () => {
     const refused = setup()
     refused.start({ panel: 'start' })

@@ -40,6 +40,8 @@ export function createUiState(
   let sent = 0
   let shown = 0
   let inFlight = false
+  /** Counts server processes seen; a reply from an earlier one is about storage the stream no longer shows. */
+  let epoch = 0
   let timer: ReturnType<typeof setTimeout> | undefined
 
   function update() {
@@ -84,18 +86,21 @@ export function createUiState(
     }
     sent = batch
     inFlight = true
+    const sentIn = epoch
     const settled = () => {
       inFlight = false
       if ([...local.values()].some((entry) => entry.batch === undefined)) schedule(0)
     }
     write(change).then(
       ({ rev }) => {
+        if (sentIn !== epoch) return
         for (const entry of local.values()) if (entry.batch === batch) entry.rev = rev
         settled()
         release()
         update()
       },
       (error: unknown) => {
+        if (sentIn !== epoch) return
         for (const [key, entry] of local) if (entry.batch === batch) local.delete(key)
         settled()
         update()
@@ -133,11 +138,16 @@ export function createUiState(
     },
     /**
      * The server is another process now, whose storage may have started over (`pnpm reset`): take its next snapshot
-     * whatever its revision. Writes it answered are in the old storage; the next snapshot is the truth for them.
+     * whatever its revision. Every batch already sent went to the old storage, so the next snapshot is the truth for
+     * it, and its late reply is ignored; edits not yet sent go to the new server.
      */
     restarted() {
+      epoch++
       shown = 0
-      for (const [key, entry] of local) if (entry.rev !== undefined) local.delete(key)
+      inFlight = false
+      for (const [key, entry] of local) if (entry.batch !== undefined) local.delete(key)
+      if (local.size) schedule(0)
+      update()
     },
     /** Send what is pending now, such as before the page goes away. */
     flush: () => {
