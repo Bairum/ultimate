@@ -115,6 +115,69 @@ export function windowGaps(
   return gaps
 }
 
+/**
+ * The entries a go-back set aside, as the model's context leaves them out. An entry whose `data.setAside` is an entry id
+ * went back to it: the newest go-back after an entry decides. The entry is set aside when it came after that go-back's
+ * point; otherwise the context returned to how it was at the point, where the go-backs before the point decide.
+ */
+export function setAsideIds(entries: readonly EntryRecord[]): Set<number> {
+  const backs = entries.flatMap((entry) => {
+    const at = (entry.data as { setAside?: unknown } | undefined)?.setAside
+    return typeof at === 'number' ? [{ id: entry.id, at }] : []
+  })
+  const aside = new Set<number>()
+  if (!backs.length) return aside
+  for (const entry of entries) {
+    let limit = Number.POSITIVE_INFINITY
+    for (;;) {
+      const back = backs.findLast((candidate) => candidate.id > entry.id && candidate.id <= limit)
+      if (!back) break
+      if (entry.id > back.at) {
+        aside.add(entry.id)
+        break
+      }
+      limit = back.at
+    }
+  }
+  return aside
+}
+
+/** Rows set aside by a go-back, folded together: each consecutive stretch of them is one group. */
+export interface AsideGroup {
+  aside: readonly (ChatPart | WorkRun)[]
+  /** Its rows with user or assistant messages, as the go-back counted them. */
+  steps: number
+}
+const partsOf = (row: ChatPart | WorkRun) => ('work' in row ? row.work : [row])
+
+/** `rows` with each stretch of rows whose entries are all in `aside` folded into one group. */
+export function groupAside(
+  rows: readonly (ChatPart | WorkRun)[],
+  aside: ReadonlySet<number>,
+): (ChatPart | WorkRun | AsideGroup)[] {
+  if (!aside.size) return [...rows]
+  const grouped: (ChatPart | WorkRun | AsideGroup)[] = []
+  let group: (ChatPart | WorkRun)[] = []
+  const flush = () => {
+    if (!group.length) return
+    const entries = new Set(group.flatMap(partsOf).map((part) => part.entry))
+    const steps = [...entries].filter((entry) =>
+      entry.model?.some((message) => message.role === 'user' || message.role === 'assistant'),
+    ).length
+    grouped.push({ aside: group, steps })
+    group = []
+  }
+  for (const row of rows) {
+    if (partsOf(row).every((part) => aside.has(part.entry.id))) group.push(row)
+    else {
+      flush()
+      grouped.push(row)
+    }
+  }
+  flush()
+  return grouped
+}
+
 /** The folded run where `entry` first shows, if it starts in one: revealing the entry opens it. */
 export function runOf(rows: readonly (ChatPart | WorkRun)[], entry: number) {
   const first = rows.find((row) =>

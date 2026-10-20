@@ -1,6 +1,13 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
-import { chatRows, runOf, windowGaps, windowKey } from '../../web/src/app/chat.ts'
+import {
+  chatRows,
+  groupAside,
+  runOf,
+  setAsideIds,
+  windowGaps,
+  windowKey,
+} from '../../web/src/app/chat.ts'
 import type { ChatPart, WorkRun } from '../../web/src/app/chat.ts'
 
 let nextId = 1
@@ -168,5 +175,44 @@ describe('windowGaps', () => {
   it('leaves a contiguous window without a head marker alone', () => {
     expect(windowGaps([at(900), at(901)], 900, [at(899)])).toEqual([])
     expect(windowGaps([at(900), at(901)], 900, [])).toEqual([])
+  })
+})
+
+describe('set-aside rows', () => {
+  const back = (point: number) => entry('lineage.rewound', undefined, { setAside: point })
+  it('sets aside what came after each go-back, and what a later go-back before it reaches', () => {
+    nextId = 1
+    // 1 2 3 | back to 1 (4) | 5 6 | back to 4 (7), the first note itself | 8
+    const entries = [
+      user('a'),
+      user('b'),
+      user('c'),
+      back(1),
+      user('d'),
+      user('e'),
+      back(4),
+      user('f'),
+    ]
+    // Going back to the first note keeps what it set aside (2, 3) aside, and sets aside 5 and 6.
+    expect([...setAsideIds(entries)].toSorted((a, b) => a - b)).toEqual([2, 3, 5, 6])
+    // Back before the first go-back: its note leaves too.
+    const again = [...entries, back(1)]
+    expect([...setAsideIds(again)].toSorted((a, b) => a - b)).toEqual([2, 3, 4, 5, 6, 7, 8])
+    expect(setAsideIds([user('x')]).size).toBe(0)
+  })
+  it('folds each stretch of set-aside rows into one group with its steps', () => {
+    nextId = 1
+    const entries = [user('a'), user('b'), system(), user('c'), back(1), user('d')]
+    const grouped = groupAside(
+      entries.map((value) => ({ entry: value })),
+      setAsideIds(entries),
+    )
+    expect(
+      grouped.map((row) =>
+        'aside' in row
+          ? `aside ${row.aside.length} ×${row.steps}`
+          : String((row as ChatPart).entry.id),
+      ),
+    ).toEqual(['1', 'aside 3 ×2', '5', '6'])
   })
 })

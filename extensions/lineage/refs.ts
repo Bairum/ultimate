@@ -28,6 +28,43 @@ export const CompactAction = actionRef<{ id: number; instructions?: string }, { 
   'compact',
 )
 
+/** A file that changed in a conversation's checkout since an entry: lines added and removed, or new and untracked. */
+export type RewindFile = { path: string; added: number; removed: number; untracked?: true }
+/** A conversation that built on the path a go-back set aside: a subagent or branch it started, or one it messaged. */
+export type RewindDependent = { id: number; via: 'subagent' | 'branch' | 'message' }
+/** What going back to an entry would set aside and leave in the checkout; `refused` says why it cannot now. */
+export type RewindPreview = {
+  refused?: string
+  /** Entries after the point that leave the model's context. */
+  steps: number
+  files: RewindFile[]
+  commits: { sha: string; subject: string }[]
+  dependents: RewindDependent[]
+  /** Whether a summary model can summarize the set-aside path. */
+  summaryModel: boolean
+}
+/** `{ conversation, at }` → what going back to entry `at` of `conversation` sets aside, or why it cannot. */
+export const RewindPreviewAction = actionRef<{ conversation: number; at: number }, RewindPreview>(
+  'lineage',
+  'rewindPreview',
+)
+/**
+ * `{ conversation, at, summarize? }` → `{ entry }`: go back to entry `at` in place. Everything after it leaves the model's
+ * context (still shown, folded), and one note entry says what changed in the checkout since, with a summary of the
+ * set-aside path when `summarize`. Starts no turn. User-only.
+ */
+export const RewindAction = actionRef<
+  { conversation: number; at: number; summarize?: boolean },
+  { entry: number }
+>('lineage', 'rewind')
+/** `conversation` went back to entry `at`; `entry` is its note, `dependents` the conversations that built on the path. */
+export const Rewound = defineEvent<{
+  conversation: number
+  at: number
+  entry: number
+  dependents: number[]
+}>('lineage.rewound')
+
 /**
  * A branch started: conversation `id` forked from `from` at entry `at`, its prompt `intent`. Emitted in the forking
  * commit, before the branch's first run; react to it to set up a new branch's own state.

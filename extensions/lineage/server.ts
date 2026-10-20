@@ -41,6 +41,7 @@ import { ConversationsApi, Trees } from '../conversations/api.ts'
 import { Started } from '../subagents/api.ts'
 import { CompactAction, RecentAction, TallyDoc } from './refs.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
+import { rewindActions, rewindTask } from './rewind.ts'
 import type { Tree } from './catchup.ts'
 import type { RootEvent } from './types.ts'
 import { compareUrl } from '../../lib/compare.ts'
@@ -78,6 +79,8 @@ export const Tally = defineDoc<TallyState>({
 })
 
 export const docs = [Roots, Branch, Tally, Seen]
+/** Going back sets a conversation's path aside: only the user decides that. */
+export const userActions = ['rewind']
 
 const ASK_TOKENS = 8192
 
@@ -1016,6 +1019,7 @@ function rootInput(args: JsonValue) {
 }
 
 export const actions = {
+  ...rewindActions,
   /** The roots, and with `{ id }` that conversation's tree root and its branch state when it is a branch. */
   async info(args: JsonValue, { host }: ActionContext) {
     const roots = await rootsOf(host, context)
@@ -1168,7 +1172,7 @@ export default function lineageExtension(host: ExtensionHost) {
   watchTally(host, context)
   return defineExtension({
     name: 'lineage',
-    tasks: [Notify, Prompt, LandingNote],
+    tasks: [Notify, Prompt, LandingNote, rewindTask(host)],
     sections: [section('lineage', (input, ctx) => lineageSection(host, input.conversationId, ctx))],
     hooks: [
       hook(GenerationTask, {

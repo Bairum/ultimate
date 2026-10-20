@@ -83,6 +83,13 @@ export default async function fauxExtension(host: ExtensionHost) {
             fauxText(JSON.stringify({ line, effect: writes.length > 0 })),
           ])
         }
+        // Going back with a summary: a fixed summary of the set-aside path.
+        if (system.content.startsWith('Summarize the part of a coding conversation'))
+          return fauxAssistantMessage([
+            fauxText(
+              '- Tried the scripted phases demo: edited the scratch file and committed it.\n- Added a retry button on the landing card; spacing is still unpolished.',
+            ),
+          ])
         if (system.content.startsWith("List the decisions a coding agent's final reply"))
           return fauxAssistantMessage([
             fauxText(

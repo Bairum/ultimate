@@ -59,9 +59,9 @@ import {
 import { entryRenderers, messageItems, toolLine } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary } from './boundary.tsx'
-import { chatRows, runOf, windowGaps, windowKey } from './chat.ts'
+import { chatRows, groupAside, runOf, setAsideIds, windowGaps, windowKey } from './chat.ts'
 import { useFold } from './fold.tsx'
-import type { ChatPart, WorkRun } from './chat.ts'
+import type { AsideGroup, ChatPart, WorkRun } from './chat.ts'
 import { readerLeft } from './follow.ts'
 import { column } from './layout.ts'
 import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
@@ -497,6 +497,10 @@ function TranscriptEntries() {
   const rows: (ChatPart | WorkRun)[] = chat
     ? chatRows(visible, keeps)
     : visible.map((entry) => ({ entry }))
+  // What a go-back set aside folds into one quiet row; the rows themselves render as usual inside it.
+  const aside = useMemo(() => setAsideIds(entries), [entries])
+  const grouped = groupAside(rows, aside)
+  const [shownAside, setShownAside] = useState<ReadonlySet<number>>(new Set())
   // Folded runs the reader or a reveal opened, by the keys of all their parts: a run that gains earlier entries from a
   // page, or later ones live, stays open.
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set())
@@ -533,7 +537,15 @@ function TranscriptEntries() {
       // Inside the window's range: a fill still reading it brings it.
       if (filling) return
     }
-    // Open its folded run first; the next commit scrolls.
+    // Open its set-aside group and folded run first; the next commit scrolls.
+    const group = grouped.find(
+      (row): row is AsideGroup => 'aside' in row && !!runOf(row.aside, reveal),
+    )
+    const first = group && asideKey(group)
+    if (first !== undefined && !shownAside.has(first)) {
+      setShownAside((keys) => new Set(keys).add(first))
+      return
+    }
     const run = chat && runOf(rows, reveal)
     if (run && !isOpen(run)) {
       open(run, true)
@@ -546,7 +558,45 @@ function TranscriptEntries() {
     }
     setReveal(undefined)
   })
-  useLayoutEffect(() => revealStep(), [reveal, loading, pending, error, history, opened, filling])
+  useLayoutEffect(
+    () => revealStep(),
+    [reveal, loading, pending, error, history, opened, filling, shownAside],
+  )
+  const render = (row: ChatPart | WorkRun, last: boolean) =>
+    'work' in row ? (
+      <div
+        className="empty:hidden"
+        data-conversation-id={id}
+        data-entry-id={row.work[0].entry.id}
+        data-run-last={row.work.at(-1)!.entry.id}
+        key={partKey(row.work[0])}
+      >
+        <WorkRow
+          busy={busy}
+          onOpenChange={(value) => open(row, value)}
+          open={isOpen(row)}
+          results={results}
+          run={row}
+          slots={slots}
+          working={busy && last}
+        />
+      </div>
+    ) : (
+      <div
+        className="empty:hidden"
+        data-conversation-id={id}
+        data-entry-id={row.entry.id}
+        key={partKey(row)}
+      >
+        <EntryView
+          blocks={row.blocks}
+          busy={busy}
+          entry={row.entry}
+          results={results}
+          slots={slots}
+        />
+      </div>
+    )
   return (
     <TranscriptContext value={entries}>
       {!loading && entries.length > 0 && cursor !== undefined && (
@@ -574,42 +624,36 @@ function TranscriptEntries() {
         </div>
       )}
       {!loading && visible.length === 0 && !partial && <EmptyState />}
-      {rows.map((row, index) =>
-        'work' in row ? (
-          <div
-            className="empty:hidden"
-            data-conversation-id={id}
-            data-entry-id={row.work[0].entry.id}
-            data-run-last={row.work.at(-1)!.entry.id}
-            key={partKey(row.work[0])}
+      {grouped.map((item, index) => {
+        const last = index === grouped.length - 1
+        if (!('aside' in item)) return render(item, last)
+        const key = asideKey(item)
+        const shown = shownAside.has(key)
+        return (
+          <Collapsible
+            className="group/aside"
+            data-set-aside={item.steps}
+            key={`aside:${key}`}
+            onOpenChange={(value) =>
+              setShownAside((keys) => {
+                const next = new Set(keys)
+                if (value) next.add(key)
+                else next.delete(key)
+                return next
+              })
+            }
+            open={shown}
           >
-            <WorkRow
-              busy={busy}
-              onOpenChange={(value) => open(row, value)}
-              open={isOpen(row)}
-              results={results}
-              run={row}
-              slots={slots}
-              working={busy && index === rows.length - 1}
-            />
-          </div>
-        ) : (
-          <div
-            className="empty:hidden"
-            data-conversation-id={id}
-            data-entry-id={row.entry.id}
-            key={partKey(row)}
-          >
-            <EntryView
-              blocks={row.blocks}
-              busy={busy}
-              entry={row.entry}
-              results={results}
-              slots={slots}
-            />
-          </div>
-        ),
-      )}
+            <CollapsibleTrigger className="flex cursor-pointer items-center gap-1.5 font-mono text-[11px] text-muted-foreground/70 hover:text-muted-foreground">
+              {item.steps} step{item.steps === 1 ? '' : 's'} set aside · {shown ? 'hide' : 'show'}
+              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/aside:rotate-90" />
+            </CollapsibleTrigger>
+            <CollapsibleContent className="mt-3 flex flex-col gap-3 border-l border-dashed border-border/70 pl-3 opacity-70">
+              {item.aside.map((inner) => render(inner, false))}
+            </CollapsibleContent>
+          </Collapsible>
+        )
+      })}
       {partial && (
         <AssistantView busy message={partial} results={results} slots={slots} streaming />
       )}
@@ -619,6 +663,12 @@ function TranscriptEntries() {
       )}
     </TranscriptContext>
   )
+}
+
+/** A set-aside group is known by its first entry, so it stays open while later rows join it. */
+const asideKey = (group: AsideGroup) => {
+  const first = group.aside[0]
+  return ('work' in first ? first.work[0] : first).entry.id
 }
 
 const partKey = (part: ChatPart) =>
