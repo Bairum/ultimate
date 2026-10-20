@@ -126,43 +126,46 @@ async function madeCommits(api: Pick<ToolExecutionApi, 'conversationId' | 'taskI
 }
 
 export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
+  const shell = createBashTool({ prepare: prepareBash })
+  // In the tool itself, not a wrap, so the events carry the call's trace and conversation.
+  const bashTool: typeof shell = {
+    ...shell,
+    async execute(args, api, context) {
+      try {
+        return await shell.execute(args, api, context)
+      } finally {
+        // A failed or stopped command may still have committed, so record what it made either way.
+        const commits = await madeCommits(api)
+        if (commits.length)
+          await api
+            .commit(async (tx) => {
+              for (const commit of commits) await host.emit(tx, Committed, commit)
+            }, context)
+            .catch((error: unknown) =>
+              // Recording is history only; the command's own result must stand.
+              console.error('coding-tools: recording commits failed:', error),
+            )
+      }
+    },
+  }
   return defineExtension({
     name: 'coding-tools',
-    tools: [
-      createReadTool(),
-      createWriteTool(),
-      createEditTool(),
-      createBashTool({ prepare: prepareBash }),
-    ],
+    tools: [createReadTool(), createWriteTool(), createEditTool(), bashTool],
     wraps: [
       wrapTool(createBashTool(), (bash) => ({
         ...bash,
         async execute(args, api, context) {
+          if (args.timeout !== undefined) return bash.execute(args, api, context)
+          const timeout = defaultBashTimeout()
           try {
-            if (args.timeout !== undefined) return await bash.execute(args, api, context)
-            const timeout = defaultBashTimeout()
-            try {
-              return await bash.execute({ ...args, timeout }, api, context)
-            } catch (error) {
-              if (
-                error instanceof Error &&
-                /^Command timed out after [\d.e+-]+ seconds$/.test(error.message)
-              )
-                throw new Error(bashTripwireMessage(timeout), { cause: error })
-              throw error
-            }
-          } finally {
-            // A failed or stopped command may still have committed, so record what it made either way.
-            const commits = await madeCommits(api)
-            if (commits.length)
-              await api
-                .commit(async (tx) => {
-                  for (const commit of commits) await host.emit(tx, Committed, commit)
-                }, context)
-                .catch((error: unknown) =>
-                  // Recording is history only; the command's own result must stand.
-                  console.error('coding-tools: recording commits failed:', error),
-                )
+            return await bash.execute({ ...args, timeout }, api, context)
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              /^Command timed out after [\d.e+-]+ seconds$/.test(error.message)
+            )
+              throw new Error(bashTripwireMessage(timeout), { cause: error })
+            throw error
           }
         },
       })),

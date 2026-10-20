@@ -32,7 +32,7 @@ afterEach(async () => {
   await removeTemp(cwd)
 })
 
-/** The real bash tool, wrapped as the extension installs it, run as one call of conversation 7 in `dir`. */
+/** The extension's bash tool, run as one call of conversation 7 in `dir`. */
 async function bash(command: string, dir = cwd) {
   const extension = codingTools({
     emit: async (_tx, event, data) => {
@@ -41,10 +41,9 @@ async function bash(command: string, dir = cwd) {
       return undefined as never
     },
   })
-  const base = extension.tools!.find((tool) => tool.name === 'bash')!
-  const wrapper = extension.wraps!.find((wrap) => 'tool' in wrap && wrap.tool === 'bash')!
-  if (!('tool' in wrapper)) throw new Error('Missing bash wrapper')
-  const tool = wrapper.wrap(base) as ReturnType<typeof createBashTool>
+  const tool = extension.tools!.find((candidate) => candidate.name === 'bash') as ReturnType<
+    typeof createBashTool
+  >
   let output = ''
   const api = {
     conversationId: 7 as ConversationId,
