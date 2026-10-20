@@ -73,9 +73,11 @@ Worker reports and submissions state divergence from the task as given (agreemen
   user is logged in to and named after what it checks (`reviewer-correctness.md`, `reviewer-simplicity.md`,
   `reviewer-architecture.md`). Details: "Review team" in
   `extensions/subagents/README.md`.
-- **Project tools for a built-in agent** (@ultimate, @sync, the lander): never copy its definition. Add a file of
-  the same name with only `name` and `addTools: [tool]`, plus an optional body that is appended to the built-in
-  instructions as project additions; a copy stops following the built-in and the setup check warns about it.
+- **Project tools or settings for a built-in agent** (@ultimate, @sync, the lander): never copy its definition. Add
+  an overlay, a file of the same name marked by `addTools: [tool]` (`[]` when it only changes settings). It may
+  override any setting (`model`, `thinking`, `onFailure`, `description`, …) but never `tools`, and its optional body
+  is appended to the built-in instructions as project additions; a copy stops following the built-in and the setup
+  check warns about it.
 - **Lander:** checks and push are per project, in `<project>/.ultimate/settings.json` (read once the project is
   chosen): `"lander": { "checks": [...], "push": "origin" }` lists the project's own check commands in order (an array
   runs as a concurrent group) and the remote to push to; push only with the owner's consent. The lander's checkout
