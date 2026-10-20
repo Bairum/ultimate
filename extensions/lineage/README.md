@@ -124,6 +124,7 @@ must deliver its first input (the board uses a reply-enabled message). `by: conv
 including its standing-agent name when available.
 
 The user talks to @ultimate in its own conversation, opened by the top-bar @ultimate button or first sidebar row; it picks a root by reading tallies and starts coordinator branches.
+A branch is the conversation; the coordinator is the agent that runs it, so the header and System lanes label it `branch · coordinator`.
 There is no manual creation page or message-hover branch action. Coordinator branches keep their composers for steering.
 
 An empty root shows what the `EmptyRoot` point (`ui.tsx`) provides: onboarding's **Start here** card
