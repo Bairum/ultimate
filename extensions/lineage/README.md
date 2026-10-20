@@ -67,8 +67,10 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   `lineage.landing-note` task in it that delivers the note as a write (request id `lander-root:<submission>`). A second
   reactor, `lineage/conclude-landed`, starts a background `lineage.conclude-landed` task in a top-level submitter: it
   waits for the lander's report (`lander:<submission>`) to settle and the submitter and its subagents to go idle, then
-  concludes it through `ConversationsApi.conclude`, unless it is running again, has a reply-enabled Board message still
-  open, or a subagent still runs. Any later input resumes it. The
+  concludes it through `ConversationsApi.concludeIn`, unless it is running or has queued input, has a reply-enabled Board
+  message still open, or a subagent still runs. That check, the conclusion and the task's next phase commit in one
+  transaction, so a replay never concludes twice; freeing the worktree follows as its own phase. A lander that goes idle
+  without sending the report (aborted) ends the task. Any later input resumes the branch. The
   note has `source: 'lander'`, `sha`, `base`, `target`, `commits`, `paths`, `divergence` and
   `at`. Text includes the submitter's `#N/at` breadcrumb and `Diverged: …`, including "None"; the landing card shows
   divergence too (up to 10 commits and 8 changed paths). A landing is the commit of a liquid abstract: in a tally, a

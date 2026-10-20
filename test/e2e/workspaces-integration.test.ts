@@ -41,7 +41,7 @@ import { createLander, landerCheckout, landerPath } from '../../extensions/works
 import { CheckRan, Handoff, SubmissionLanded } from '../../extensions/workspaces/api.ts'
 import lineage, { leaveNote, startBranch } from '../../extensions/lineage/server.ts'
 import { LineageApi, Roots } from '../../extensions/lineage/api.ts'
-import { subject } from '../../extensions/conversations/server.ts'
+import { concludeIn, subject } from '../../extensions/conversations/server.ts'
 import { ConversationsApi } from '../../extensions/conversations/api.ts'
 import type { ConversationsService } from '../../extensions/conversations/api.ts'
 import { Summaries } from '../../extensions/conversations/summary.ts'
@@ -1238,34 +1238,39 @@ it.concurrent("hands this repository's cloud/ landings to its deploy agent, the 
   expect(recipient?.title).toBe('@sync')
   expect(report).toContain('deploy → @sync')
 })
+/** The landed-branch conclude task of conversation `id`; one per landing. */
+const concludeTask = async (f: Awaited<ReturnType<typeof fixture>>, id: ConversationId) => {
+  const page = await f.opened.harness.commit(
+    (tx) => tx.scanTasks({ conversationId: id, kind: 'lineage.conclude-landed' }, 5),
+    context,
+  )
+  expect(page.items.length).toBeLessThanOrEqual(1)
+  return page.items[0]
+}
 const concludedIds = async (f: Awaited<ReturnType<typeof fixture>>) =>
   ((await f.opened.harness.snapshot(UiState, ROOT_CONVERSATION_ID, context))?.[
     'ext.conversations.concluded'
   ] ?? []) as number[]
-/** A lander fixture with lineage and the real conclude, whose submitter's report run waits for `release`. */
+/**
+ * A lander fixture with lineage, the real conclude and workspaces' release, whose submitter's report run waits for
+ * `release`; `report` holds the faux answer.
+ */
 async function concluding() {
   const f = await lander({}, undefined, true)
   // As the server: documents by kind, here the board, which lineage reads open questions from.
   f.host.doc = (kind: string) => (kind === 'board' ? Board : undefined)
-  f.prepared.registry.install(lineage(f.host))
-  const concluded = vi.fn<ConversationsService['conclude']>(async (ids) => {
-    await f.opened.harness.commit(async (tx) => {
-      const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
-      ui['ext.conversations.concluded'] = [
-        ...((ui['ext.conversations.concluded'] as number[]) ?? []),
-        ...ids,
-      ]
-    }, context)
-    return { concluded: ids, kept: [] }
-  })
+  const concluded = vi.fn<ConversationsService['concludeIn']>((tx, ids) =>
+    concludeIn(f.host, tx, ids),
+  )
   f.host.implement(
     ConversationsApi,
     conversations({
       concluded: async () => new Set<ConversationId>(),
       subject: async () => ({}),
-      conclude: concluded,
+      concludeIn: concluded,
     }),
   )
+  f.prepared.registry.install(lineage(f.host))
   const id = await f.create()
   await f.service.ready(id, context)
   await commit((await f.service.get(id, context))!.path, 'concluded.txt')
@@ -1288,7 +1293,33 @@ it.concurrent('concludes a landed branch once its report run and subagents are i
   release()
   await until(async () => (await concludedIds(f)).includes(id))
   expect(concluded).toHaveBeenCalledTimes(1)
-  expect(concluded.mock.calls[0][0]).toEqual([id])
+  expect(concluded.mock.calls[0][1]).toEqual([id])
+  // The release phase freed its worktree: concluded and landed, nothing is kept.
+  await until(async () => (await f.service.get(id, context))?.state === 'removed')
+  await until(async () => (await concludeTask(f, id))?.state.status === 'terminal')
+})
+it.concurrent('answers input from the report run before concluding', async () => {
+  const { f, id, concluded, release } = await concluding()
+  // What the conclusion's own transaction sees of the user's input.
+  const seen: (string | undefined)[] = []
+  concluded.mockImplementation(async (tx, ids) => {
+    seen.push((await tx.submissionByRequest(id, 'user-late'))?.status)
+    await concludeIn(f.host, tx, ids)
+  })
+  await f.service.submit(id, 'None', context)
+  await until(async () => !!(await f.opened.harness.snapshot(LiveDoc, id, context))?.run)
+  // The user writes while the report run is going: the follow-up runs before the branch counts as idle.
+  const conversation = (await f.opened.harness.conversation(id, context))!
+  await conversation.submit(
+    { type: 'input', content: 'one more thing', whenBusy: 'followUp', requestId: 'user-late' },
+    context,
+  )
+  release()
+  await until(async () => (await concludedIds(f)).includes(id))
+  // Settled before the conclusion: answered alone, or joined into the report's run (Pi records that as unanswered).
+  expect(seen).toHaveLength(1)
+  expect(['done', 'unanswered']).toContain(seen[0])
+  await until(async () => (await concludeTask(f, id))?.state.status === 'terminal')
 })
 it.concurrent('leaves a landed branch open while it waits on a reply it asked for', async () => {
   const { f, id, concluded, release } = await concluding()
@@ -1309,13 +1340,7 @@ it.concurrent('leaves a landed branch open while it waits on a reply it asked fo
   await submitted(f, id)
   await reacted(f)
   // The conclude task finishes without concluding.
-  await until(async () => {
-    const tasks = await f.opened.harness.commit(
-      (tx) => tx.scanTasks({ conversationId: id, kind: 'lineage.conclude-landed' }, 5),
-      context,
-    )
-    return tasks.items.length === 1 && tasks.items[0].state.status === 'terminal'
-  })
+  await until(async () => (await concludeTask(f, id))?.state.status === 'terminal')
   expect(concluded).not.toHaveBeenCalled()
   expect(await concludedIds(f)).not.toContain(id)
 })
