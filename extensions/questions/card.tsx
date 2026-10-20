@@ -132,7 +132,9 @@ function Card({
         setCurrent(Math.min(questions.length - 1, Math.max(0, current + step)))
       } else if (event.key === 'Enter') {
         event.preventDefault()
-        if (current < questions.length - 1) setCurrent(current + 1)
+        // Once every question has an answer (after Accept picks, say), Enter sends from anywhere.
+        if (current < questions.length - 1 && answered.length < questions.length)
+          setCurrent(current + 1)
         else void send()
       }
     }

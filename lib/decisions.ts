@@ -28,22 +28,29 @@ const clean = (text: string) =>
     .replace(/\s+/g, ' ')
     .trim()
 
-function option(key: string, raw: string, picked: boolean): Decision['options'][number] {
+function option(
+  key: string,
+  raw: string,
+  picked: boolean,
+  split: boolean,
+): Decision['options'][number] {
   let text = clean(raw).replace(/[;,.]\s*$/, '')
   const recommended = picked || /\((recommended|my pick)\)/i.test(text)
   text = text.replace(/\s*\((recommended|my pick)\)/gi, '').trim()
-  // A short lead before ': ', '; ', ' — ' or '. ' is the label; the rest explains it.
-  const split = /^(.{3,70}?)(?::\s|;\s|\s[—–-]\s|\.\s)(.+)$/.exec(text)
-  // Never inside inline code.
-  const [label, detail] = (
-    split && (split[1].split('`').length - 1) % 2 === 0 ? [split[1], split[2]] : [text]
-  ).map(plain)
+  const lead = split ? labelSplit(text) : undefined
+  const [label, detail] = (lead ? [lead[1], lead[2]] : [text]).map(plain)
   return {
     key,
     label,
     ...(detail ? { detail } : {}),
     ...(recommended ? { recommended: true } : {}),
   }
+}
+
+/** A short lead before ': ', '; ', ' — ' or '. ' is the label and the rest explains it; never inside inline code. */
+function labelSplit(text: string) {
+  const split = /^(.{3,70}?)(?::\s|;\s|\s[—–-]\s|\.\s)(.+)$/.exec(text)
+  return split && (split[1].split('`').length - 1) % 2 === 0 ? split : undefined
 }
 
 /** The picks a message states: "my picks: 1a 2b", "(my picks are 1a, 2a, go)", "\"1b 2a\" are my picks". */
@@ -70,29 +77,31 @@ export function parseDecisions(text: string): Decision[] {
       else if (options.length) options[options.length - 1][1] += `(${parts[i]}) ${parts[i + 1]}`
       else return undefined
     }
-    return topic && options.length >= 2
-      ? {
-          ref,
-          topic,
-          options: options.map(([key, raw]) => option(key, raw, picks.get(ref) === key)),
-        }
-      : undefined
+    if (!topic || options.length < 2) return undefined
+    // Answers name an option by its label, so labels stay distinct: when shortening would repeat one, keep them whole.
+    const leads = options.map(([, raw]) => labelSplit(clean(raw))?.[1] ?? raw)
+    const split = new Set(leads).size === leads.length
+    return {
+      ref,
+      topic,
+      options: options.map(([key, raw]) => option(key, raw, picks.get(ref) === key, split)),
+    }
   }
   // Runs of numbered items; blank lines stay inside a run, any other line ends it, indented lines continue an item.
-  const blocks: Decision[][] = []
-  let block: { ref: string; body: string }[] = []
-  const close = () => {
-    const decisions = block.flatMap(({ ref, body }) => decision(ref, body) ?? [])
-    if (decisions.length) blocks.push(decisions)
-    block = []
-  }
+  // Only the final run counts: when it is no decisions block ("Land it?\n1. Yes\n2. No"), an earlier lettered list
+  // must not stand in for it.
+  let last: { ref: string; body: string }[] = []
+  let block: typeof last = []
   for (const line of text.split('\n')) {
     const item = ITEM.exec(line)
     if (item) block.push({ ref: item[1], body: item[2] })
     else if (block.length && /^\s{2,}\S/.test(line))
       block[block.length - 1].body += ' ' + line.trim()
-    else if (line.trim()) close()
+    else if (line.trim() && block.length) {
+      last = block
+      block = []
+    }
   }
-  close()
-  return blocks.at(-1) ?? []
+  if (block.length) last = block
+  return last.flatMap(({ ref, body }) => decision(ref, body) ?? [])
 }

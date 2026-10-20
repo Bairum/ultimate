@@ -91,6 +91,19 @@ describe('the decisions block', () => {
     expect(second.options[0].recommended).toBe(true)
   })
 
+  it('never lets an earlier lettered report stand in for a closing question', () => {
+    expect(
+      parseDecisions(
+        'Checks completed:\n1. Verified: (a) unit tests pass; (b) build passes.\n\nLand it?\n1. Yes\n2. Change something first',
+      ),
+    ).toEqual([])
+  })
+
+  it('keeps option labels whole when shortening them would repeat one', () => {
+    const [keep] = parseDecisions('1. **Keep:** (a) Keep: summaries only; (b) Keep: full history.')
+    expect(keep.options.map((o) => o.label)).toEqual(['Keep: summaries only', 'Keep: full history'])
+  })
+
   it('finds no decisions in plain numbered options, prose or reports', () => {
     expect(parseDecisions('Land it?\n1. Yes\n2. Change something first')).toEqual([])
     expect(parseDecisions('Landed `abc1234`. Nothing to decide.')).toEqual([])

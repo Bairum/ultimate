@@ -73,4 +73,20 @@ it('answers a decisions card with letters, arrows and Enter', async () => {
     "1c. Branch starts in the context: leave as is\n\n2a. Boxer's copied agents/ultimate.md: assess a way to add tools without forking it\n\n3b. Land it: no, change something first",
   )
   await card.waitFor({ state: 'detached' })
+
+  // A fresh card: Accept picks, then a single Enter sends.
+  await (
+    await conversation.submit({ type: 'input', content: 'decisions demo' }, context)
+  ).wait(context)
+  await until(async () => (await ask())!.id !== asked.id)
+  const second = (await ask())!
+  const next = page.locator(`[data-questions-card="message:${second.id}"]`)
+  await next.locator('fieldset').nth(2).waitFor()
+  await next.getByRole('button', { name: 'Accept picks' }).click()
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.keyboard.press('Enter')
+  const picked = async () =>
+    (await board())?.messages.find((m) => m.re === second.id && m.from === 'user')
+  await until(async () => !!(await picked()))
+  expect((await picked())!.text).toMatch(/^1a\. .+\n\n2a\. .+\n\n3a\. Land it: yes$/)
 })
