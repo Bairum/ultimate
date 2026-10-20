@@ -33,6 +33,8 @@ export interface LeaseRecord {
   secretsComplete: boolean
   /** The snapshot the last release uploaded, and the epoch it was taken at. */
   snapshot?: { id: string; epoch: number }
+  /** The machine that released it last, which the fleet page names while the lease is free. */
+  last?: string
 }
 
 /** The common subset of Durable Object SQL and a node:sqlite adapter. */
@@ -282,7 +284,12 @@ export class ReplicaStore {
     return this.sql.transaction(() => {
       const lease = this.lease()
       if (lease?.machine == null || lease.epoch !== epoch) return false
-      this.put('metadata', 5, { ...lease, machine: null, snapshot: { id, epoch } })
+      this.put('metadata', 5, {
+        ...lease,
+        machine: null,
+        last: lease.machine,
+        snapshot: { id, epoch },
+      })
       return true
     })
   }

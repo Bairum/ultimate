@@ -8,11 +8,9 @@ import { expect, it } from 'vitest'
 import {
   checkout,
   cloud,
-  idleRelease,
   inventory,
   KEY,
   machine,
-  MINUTE,
   ownHistory,
   seed,
   sleep,
@@ -24,16 +22,16 @@ import type { KillPoint, Machine } from './cloud-lease-fixture.ts'
 import { joinOnStandby } from '../extensions/cloud/server.ts'
 import { temp, until } from './helpers.ts'
 
-/** The desk wrote some history and released it idle: the lease is free at epoch 1 with the desk's snapshot. */
+/** The desk wrote some history and released it on a clean stop: the lease is free at epoch 1 with its snapshot. */
 async function released() {
   snapshotFetch()
   const project = cloud()
   const repo = await checkout()
-  const desk = await machine('desk', project, repo.root)
+  let desk = await machine('desk', project, repo.root)
   await writer(desk)
   await seed(desk.harness())
   const before = await inventory(desk.harness())
-  await idleRelease(desk)
+  desk = await desk.stopped()
   return { project, repo, desk, before }
 }
 /** `m` writes the project with the released history, alone, with no claim or download left behind. */
@@ -116,12 +114,12 @@ it('takes over after a relink, sealing and finding snapshots under the replica k
   snapshotFetch()
   const project = cloud({ aliases: { [renamed]: KEY } })
   const repo = await checkout()
-  const desk = await machine('desk', project, repo.root)
+  let desk = await machine('desk', project, repo.root)
   await writer(desk)
   await seed(desk.harness())
   const before = await inventory(desk.harness())
-  await idleRelease(desk)
-  const laptop = await machine('laptop', project, repo.root, { key: renamed })
+  desk = await desk.stopped()
+  let laptop = await machine('laptop', project, repo.root, { key: renamed })
   await writer(laptop)
   expect(project.settled()).toBe(true)
   expect(await inventory(laptop.harness())).toEqual(before)
@@ -131,7 +129,7 @@ it('takes over after a relink, sealing and finding snapshots under the replica k
     expect.objectContaining({ key: KEY }),
   )
   // Its own release goes under the replica key too, so the desk takes the project back.
-  await idleRelease(laptop)
+  laptop = await laptop.stopped()
   expect(await desk.lease.move()).toBe(true)
   await recovered(project, desk, before)
 })
@@ -259,7 +257,10 @@ it('lets the draining writer keep the project when its target crashes during the
   expect(await restarted.lease.state()).toMatchObject({ blocked: undefined })
 })
 
-/** The desk, holding the lease with some history, releases idle and crashes at `point`. */
+/**
+ * The desk, holding the lease with some history, releases for the laptop's move and crashes at `point`. The laptop
+ * freezes before its claim and crashes too, so the lease stays where the desk's release left it.
+ */
 async function holder(point: 'upload' | 'release dropped' | 'release muted' | 'released') {
   snapshotFetch()
   const project = cloud()
@@ -279,11 +280,14 @@ async function holder(point: 'upload' | 'release dropped' | 'release muted' | 'r
       : point === 'release muted'
         ? project.hold('desk', 'release', 'mute')
         : undefined
-  const start = Date.now()
-  expect(await desk.lease.checkIdle(start)).toBe(false)
-  const releasing = desk.lease.checkIdle(start + 10 * MINUTE)
-  await (point === 'upload' ? desk.reached : (held ?? releasing))
+  const laptop = await machine('laptop', project, repo.root, { autoClaim: false, kill: 'download' })
+  await standbyOn(laptop)
+  void laptop.lease.move()
+  await (point === 'upload'
+    ? desk.reached
+    : (held ?? until(() => project.replica.store.lease()?.machine === null)))
   await desk.crash()
+  await laptop.crash()
   return { project, repo, desk, before }
 }
 
@@ -310,7 +314,7 @@ it.each(['release muted', 'released'] as const)(
     await standbyOn(restarted)
     expect(project.settled()).toBe(true)
     expect(project.replica.store.lease()).toMatchObject({ machine: null, epoch: 1 })
-    expect(restarted.host.standby()).toMatchObject({ reason: 'Released · resume here' })
+    expect(restarted.host.standby()).toMatchObject({ reason: 'Moved to laptop' })
     // Its database is that snapshot: resuming here needs no download.
     expect(await restarted.lease.move()).toBe(true)
     await recovered(project, restarted, before)

@@ -1,6 +1,7 @@
 // Two machines hand one project over through a local Worker (`cloud-helpers.ts`): a new project registers, a second
 // machine joins on standby, the project moves to it and back, and a move is cancelled during its download.
 import { randomBytes } from 'node:crypto'
+import { once } from 'node:events'
 import { existsSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -54,6 +55,17 @@ async function follow(id?: string) {
 const step = (transition: NonNullable<CloudInfo['transition']>, name: string) =>
   transition.steps.find((candidate) => candidate.name === name)
 
+/** B, behind the proxy that can hold its downloads; it never claims a free lease by itself. */
+const startB = () =>
+  host(root, 'b', {
+    project: repo.project,
+    mount: repo.clones.b,
+    cloud: proxy.url,
+    token,
+    settings: { autoClaim: false },
+    secrets: { ULTIMATE_CLOUD_SNAPSHOT_KEY: snapshotKey },
+  })
+
 describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})` : ''}`, () => {
   beforeAll(async () => {
     root = await temp('cloud-handoff-')
@@ -71,7 +83,7 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
       project: repo.project,
       cloud: cloud.url,
       token,
-      settings: { idleRelease: 0, autoClaim: false },
+      settings: { autoClaim: false },
       secrets: { ULTIMATE_CLOUD_SNAPSHOT_KEY: snapshotKey, E2E_ONLY_A: secretValue() },
     })
     await until(async () => (await project.info().catch(() => undefined))?.lease?.machine === 'a')
@@ -98,14 +110,7 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
   }, 120_000)
 
   it('joins a second machine on standby without opening storage', async () => {
-    b = await host(root, 'b', {
-      project: repo.project,
-      mount: repo.clones.b,
-      cloud: proxy.url,
-      token,
-      settings: { idleRelease: 0.1, autoClaim: false },
-      secrets: { ULTIMATE_CLOUD_SNAPSHOT_KEY: snapshotKey },
-    })
+    b = await startB()
     await until(async () => {
       const machine = (await project.info()).machines.find((item) => item.machine === 'b')
       return machine?.connected === true
@@ -180,9 +185,13 @@ describe.skipIf(cloudSkip)(`cloud handoff${cloudSkip ? ` (skipped: ${cloudSkip})
     )
   }, 180_000)
 
-  it('releases an idle writer, and a standby takes the free lease without a handover', async () => {
-    // B releases after 0.1 idle minutes.
-    await until(async () => (await project.info()).lease?.machine === null, 60_000)
+  it('releases on a clean stop, and a standby takes the free lease without a handover', async () => {
+    // A clean stop releases B's lease, and B starts again on standby.
+    const exited = once(b.child, 'exit')
+    b.child.kill('SIGTERM')
+    await exited
+    expect((await project.info()).lease).toMatchObject({ machine: null, epoch: 2 })
+    b = await startB()
     expect(await serving(b)).toBe(false)
     expect(JSON.parse(await readFile(join(b.home, 'standby.json'), 'utf8'))).toMatchObject({
       released: true,

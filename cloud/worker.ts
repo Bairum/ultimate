@@ -373,6 +373,7 @@ export class SharedReplica {
         machine: lease.machine,
         online: this.sockets().some((socket) => socket !== closing),
         lastSeen: lease.machine === null ? undefined : known[lease.machine]?.lastSeen,
+        ...(lease.machine === null && lease.last ? { last: lease.last } : {}),
         ...(this.store.tailnet() ? { tailnet: this.store.tailnet() } : {}),
       },
       machines,

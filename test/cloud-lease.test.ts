@@ -27,7 +27,6 @@ import {
   bucket,
   checkout,
   cloud,
-  idleRelease,
   inventory,
   KEY,
   machine,
@@ -64,11 +63,11 @@ it('classifies a failure into a short reason, never echoing the raw error', () =
   expect(classify('Bearer sk-secret-token rejected')).toBe('failed')
 })
 
-it('releases an idle writer, and another machine prepares and takes over the same history', async () => {
+it('releases on a clean stop, and another machine prepares and takes over the same history', async () => {
   snapshotFetch()
   const project = cloud()
   const { root } = await checkout()
-  const desk = await machine('desk', project, root)
+  let desk = await machine('desk', project, root)
   await writer(desk)
   const laptop = await machine('laptop', project, root)
   // A machine new to the project starts serving its fresh database, hears it is a standby, and closes storage.
@@ -85,8 +84,11 @@ it('releases an idle writer, and another machine prepares and takes over the sam
   const before = await inventory(desk.harness())
   expect(before.tasks).toEqual([['lease-test.sleeper', true]])
 
-  await idleRelease(desk)
-  expect(desk.host.standby()).toMatchObject({ reason: 'Released · resume here', released: true })
+  desk = await desk.stopped()
+  expect(desk.host.standby()).toMatchObject({
+    reason: 'Released when Ultimate stopped',
+    released: true,
+  })
   expect(await desk.files()).toEqual(['state.sqlite'])
   const released = project.replica.store.lease()!
   expect(released).toMatchObject({ machine: null, epoch: 1, snapshot: { epoch: 1 } })
@@ -252,9 +254,9 @@ it('fast-forwards the checkout and installs when the lockfile changed, rerunning
   snapshotFetch()
   const project = cloud()
   const repo = await checkout()
-  const desk = await machine('desk', project, repo.root)
+  let desk = await machine('desk', project, repo.root)
   await writer(desk)
-  await idleRelease(desk)
+  desk = await desk.stopped()
   let failing = true
   const laptop = await machine('laptop', project, repo.root, {
     autoClaim: false,
@@ -291,10 +293,10 @@ it('records who started each move: @sync through the bearer route or loopback, t
   snapshotFetch()
   const project = cloud()
   const { root } = await checkout()
-  const desk = await machine('desk', project, root)
+  let desk = await machine('desk', project, root)
   await writer(desk)
-  await idleRelease(desk)
-  const laptop = await machine('laptop', project, root, { autoClaim: false })
+  desk = await desk.stopped()
+  let laptop = await machine('laptop', project, root, { autoClaim: false })
   await standbyOn(laptop)
   await until(() => !!laptop.role()?.free)
   // The Worker sends @sync's `/sync/move` to this replica path, which no browser request reaches.
@@ -309,13 +311,13 @@ it('records who started each move: @sync through the bearer route or loopback, t
   await writer(laptop)
   expect(project.replica.store.transition()).toMatchObject({ id, by: 'sync' })
 
-  await idleRelease(laptop)
+  laptop = await laptop.stopped()
   await until(() => !!desk.role()?.free)
   const local = desk.lease.moveHere()
   await writer(desk)
   expect(project.replica.store.transition()).toMatchObject({ id: local.id, by: 'local' })
 
-  await idleRelease(desk)
+  desk = await desk.stopped()
   await until(() => !!laptop.role()?.free)
   const loopback = laptop.lease.moveHere({ by: 'sync' })
   await writer(laptop)
@@ -327,9 +329,9 @@ it('fails the checks without a model login, also when forced, leaving the lease 
   snapshotFetch()
   const project = cloud()
   const repo = await checkout()
-  const desk = await machine('desk', project, repo.root)
+  let desk = await machine('desk', project, repo.root)
   await writer(desk)
-  await idleRelease(desk)
+  desk = await desk.stopped()
   const login = { provider: 'anthropic', ok: false }
   const laptop = await machine('laptop', project, repo.root, { autoClaim: false, login })
   await standbyOn(laptop)
@@ -380,11 +382,11 @@ it('refuses a plain move when the writer has more secrets than its hello could n
   snapshotFetch()
   const project = cloud()
   const repo = await checkout()
-  const desk = await machine('desk', project, repo.root)
+  let desk = await machine('desk', project, repo.root)
   // One past the limit: the hello names 64 and says the list is incomplete.
   for (let index = 0; index <= 64; index++) await writeSecret(desk.home, `SECRET_${index}`, 'x')
   await writer(desk)
-  await idleRelease(desk)
+  desk = await desk.stopped()
   const laptop = await machine('laptop', project, repo.root, { autoClaim: false })
   for (let index = 0; index < 64; index++) await writeSecret(laptop.home, `SECRET_${index}`, 'x')
   await standbyOn(laptop)
@@ -442,9 +444,9 @@ it('names the fast-forward and its commit count in the fetch step', async () => 
   snapshotFetch()
   const project = cloud()
   const repo = await checkout()
-  const desk = await machine('desk', project, repo.root)
+  let desk = await machine('desk', project, repo.root)
   await writer(desk)
-  await idleRelease(desk)
+  desk = await desk.stopped()
   const laptop = await machine('laptop', project, repo.root, { autoClaim: false })
   await standbyOn(laptop)
   const before = await git(repo.root, 'rev-parse', 'HEAD')
@@ -699,9 +701,9 @@ it('bounds a successful step detail too, so a long branch name never stalls the 
   snapshotFetch()
   const project = cloud()
   const repo = await checkout()
-  const desk = await machine('desk', project, repo.root)
+  let desk = await machine('desk', project, repo.root)
   await writer(desk)
-  await idleRelease(desk)
+  desk = await desk.stopped()
   const laptop = await machine('laptop', project, repo.root, { autoClaim: false })
   await standbyOn(laptop)
   // Long as a whole; each path segment stays within file-name limits.
@@ -720,9 +722,9 @@ it('reports an oversized install failure by its last 500 characters, which the c
   snapshotFetch()
   const project = cloud()
   const repo = await checkout()
-  const desk = await machine('desk', project, repo.root)
+  let desk = await machine('desk', project, repo.root)
   await writer(desk)
-  await idleRelease(desk)
+  desk = await desk.stopped()
   const lines = Array.from({ length: 20 }, (_, index) => `${index}`.padEnd(200, '.'))
   const laptop = await machine('laptop', project, repo.root, {
     autoClaim: false,
@@ -778,9 +780,9 @@ it('cancels a move mid-download, removing the download and keeping the lease fre
         )
       : toWorker(input, init),
   )
-  const desk = await machine('desk', project, repo.root)
+  let desk = await machine('desk', project, repo.root)
   await writer(desk)
-  await idleRelease(desk)
+  desk = await desk.stopped()
   const laptop = await machine('laptop', project, repo.root, { autoClaim: false })
   await standbyOn(laptop)
   const moving = laptop.lease.move()
@@ -917,9 +919,6 @@ it('keeps the lease and keeps serving while busy, also when its connection drops
   const desk = await machine('desk', project, root)
   await writer(desk)
   await sleep(desk.harness(), false)
-  const start = Date.now()
-  expect(await desk.lease.checkIdle(start)).toBe(false)
-  expect(await desk.lease.checkIdle(start + 60 * MINUTE)).toBe(false)
   const laptop = await machine('laptop', project, root)
   await standbyOn(laptop)
   project.drop('desk')
@@ -934,9 +933,9 @@ it('returns an old holder to standby, parking its database only when it changed'
   snapshotFetch()
   const project = cloud()
   const { root } = await checkout()
-  const desk = await machine('desk', project, root)
+  let desk = await machine('desk', project, root)
   await writer(desk)
-  await idleRelease(desk)
+  desk = await desk.stopped()
   const laptop = await machine('laptop', project, root)
   // A starting machine claims the free lease by itself.
   await writer(laptop)
@@ -991,7 +990,7 @@ it('claims its own released snapshot on start without downloading it', async () 
   snapshotFetch()
   const project = cloud()
   const { root } = await checkout()
-  const desk = await machine('desk', project, root)
+  let desk = await machine('desk', project, root)
   await writer(desk)
   await desk
     .harness()
@@ -1000,7 +999,7 @@ it('claims its own released snapshot on start without downloading it', async () 
       context,
     )
   const before = await inventory(desk.harness())
-  await idleRelease(desk)
+  desk = await desk.stopped()
   await desk.close()
   const restarted = await machine('desk', project, root, { home: desk.home })
   await writer(restarted)
@@ -1050,9 +1049,9 @@ it('refuses to claim when the writer runs the project at another root', async ()
   snapshotFetch()
   const project = cloud()
   const { root } = await checkout()
-  const desk = await machine('desk', project, root)
+  let desk = await machine('desk', project, root)
   await writer(desk)
-  await idleRelease(desk)
+  desk = await desk.stopped()
   const elsewhere = await temp('ultimate-lease-elsewhere-')
   const laptop = await machine('laptop', project, elsewhere)
   // The automatic claim on start is refused too.
@@ -1222,52 +1221,6 @@ it('reports each backup and a move that ended here once, to the feedback point o
   expect(deskHeard.events).toHaveLength(2)
 })
 
-it('lets an idle release that falls due mid-backup wait for the upload, then release coherently', async () => {
-  snapshotFetch()
-  const project = cloud()
-  const { root } = await checkout()
-  const gate = Promise.withResolvers<void>()
-  const started = Promise.withResolvers<void>()
-  const order: string[] = []
-  const deferred = {
-    ...snapshot,
-    uploadSnapshot: vi.fn<typeof snapshot.uploadSnapshot>(async (o) => {
-      // The first upload is the backup, held open; the next is the release's.
-      if (order.length === 0) {
-        order.push('backup start')
-        started.resolve()
-        await gate.promise
-        const manifest = await snapshot.uploadSnapshot(o)
-        order.push('backup end')
-        return manifest
-      }
-      order.push('release')
-      return snapshot.uploadSnapshot(o)
-    }),
-  }
-  const desk = await machine('desk', project, root, { snapshots: deferred })
-  await writer(desk)
-  const backingUp = desk.lease.backup()
-  await started.promise
-  // The idle deadline passes while the backup uploads: the release queues behind it, storage stays open.
-  const start = Date.now()
-  expect(await desk.lease.checkIdle(start)).toBe(false)
-  const releasing = desk.lease.checkIdle(start + 10 * MINUTE)
-  await new Promise((resolve) => setImmediate(resolve))
-  expect(desk.serving()).toBe(true)
-  expect(desk.host.standby()).toBeUndefined()
-  expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
-  gate.resolve()
-  const done = await backingUp
-  expect(await releasing).toBe(true)
-  // The backup finished on open storage before the release closed it and uploaded its own snapshot.
-  expect(order).toEqual(['backup start', 'backup end', 'release'])
-  const lease = project.replica.store.lease()!
-  expect(lease).toMatchObject({ machine: null, epoch: 1 })
-  expect(lease.snapshot?.id).not.toBe(done.id)
-  expect(desk.host.standby()).toMatchObject({ reason: 'Released · resume here' })
-})
-
 /** Desk as the writer with a backup held open mid-upload, and laptop on standby; `finish` lets the upload end. */
 async function heldBackup() {
   snapshotFetch()
@@ -1377,7 +1330,7 @@ it('refuses a second backup while one runs, during a release, and on a standby',
       return snapshot.uploadSnapshot(o)
     }),
   }
-  const desk = await machine('desk', project, root, { snapshots: slow })
+  let desk = await machine('desk', project, root, { snapshots: slow })
   await writer(desk)
   const laptop = await machine('laptop', project, root, { autoClaim: false })
   await standbyOn(laptop)
@@ -1394,7 +1347,7 @@ it('refuses a second backup while one runs, during a release, and on a standby',
     'This machine does not run the project; back it up on its writer',
   )
   // Not a writer either once it released: the snapshot it uploads is the release's, not a backup.
-  await idleRelease(desk)
+  desk = await desk.stopped()
   await expect(desk.lease.backup()).rejects.toThrow('does not run the project')
   expect(slow.uploadSnapshot).toHaveBeenCalledTimes(2)
 })
@@ -1473,7 +1426,7 @@ it('claims a reset home as its released snapshot: no download, the fresh databas
   snapshotFetch()
   const project = cloud()
   const { root } = await checkout()
-  const desk = await machine('desk', project, root)
+  let desk = await machine('desk', project, root)
   await writer(desk)
   const fresh = await inventory(desk.harness())
   await desk
@@ -1482,7 +1435,7 @@ it('claims a reset home as its released snapshot: no download, the fresh databas
       (tx) => tx.appendEntry(ROOT_CONVERSATION_ID, { kind: 'lease-test.entry', data: {} }),
       context,
     )
-  await idleRelease(desk)
+  desk = await desk.stopped()
   await desk.close()
   const reset = await plan(desk.home, await temp('ultimate-reset-backups-'))
   expect(reset).toMatchObject({ cloud: true })
