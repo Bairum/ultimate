@@ -43,9 +43,10 @@ the system stream: `ultimate.started` (storage opened: generation, build), `suba
 automation run, new standing agent or branch configured: agent, model, thinking, parent), `board.sent` (a message
 posted: ids, `reply`, `steer`, never the text), `workspaces.check` (each lander check run: command, result, ms),
 `conversations.compacted`, `health.changed` (a provider's state flipped), `cloud.lease` (lease acquired or
-releasing), `cloud.backup` and `cloud.move` (started, done or failed). The last five follow state outside the
-caller's commit (Pi's compaction, the machine's health file, the lease's storage switch, an upload), so each commits
-on its own right after it. For debugging what the user did: `user.input` (a typed prompt, steer or follow-up, an
+releasing), `cloud.backup` and `cloud.move` (started, done or failed), `coding-tools.committed` (a commit made
+through bash: full sha, repo, worktree, branch). The last six follow state outside the caller's commit (Pi's
+compaction, the machine's health file, the lease's storage switch, an upload, a git repository), so each commits on
+its own right after it. For debugging what the user did: `user.input` (a typed prompt, steer or follow-up, an
 answer or dismissal, a review: its conversation, entry or Board message and length, never the text) and
 `ui.navigated` (the surface or Agent's conversation changed, reported by the browser after a second and deduped),
 each with the browser's `device` label and, through Tailscale Serve, the `login`. A typed input and a review commit

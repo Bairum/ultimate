@@ -233,7 +233,10 @@ export default async function fauxExtension(host: ExtensionHost) {
           ],
           [
             fauxText('Tests pass; committing.'),
-            fauxToolCall('bash', { command: 'echo "git commit -m demo"; sleep 3' }),
+            fauxToolCall('bash', {
+              // A real commit in a scratch repository in the instance home, so it records `coding-tools.committed`.
+              command: `cd ${shellPath}.git 2>/dev/null || { mkdir -p ${shellPath}.git && cd ${shellPath}.git && git init -q -b main; }; git -c user.name=Faux -c user.email=faux@example.test commit -q --allow-empty -m "demo: change before to after" && git log -1 --format=%H; sleep 3`,
+            }),
           ],
         ]
         const step = transcript.messages

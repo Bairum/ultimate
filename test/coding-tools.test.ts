@@ -3,6 +3,7 @@ import type { ToolExecutionApi } from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
 import codingTools from '../extensions/coding-tools/server.ts'
 import { context } from '../server/harness.ts'
+import type { ExtensionHost } from '../server/extensions.ts'
 
 afterEach(() => vi.unstubAllEnvs())
 
@@ -11,7 +12,9 @@ it('uses a 600-second default tripwire and leaves explicit timeouts unchanged', 
   const execute = vi
     .fn<ReturnType<typeof createBashTool>['execute']>()
     .mockRejectedValue(new Error('Command timed out after 600 seconds'))
-  const wrapper = codingTools.wraps!.find((wrap) => 'tool' in wrap && wrap.tool === 'bash')!
+  const wrapper = codingTools({
+    emit: vi.fn<ExtensionHost['emit']>() as ExtensionHost['emit'],
+  }).wraps!.find((wrap) => 'tool' in wrap && wrap.tool === 'bash')!
   if (!('tool' in wrapper)) throw new Error('Missing bash wrapper')
   const bash = wrapper.wrap({ ...createBashTool(), execute }) as ReturnType<typeof createBashTool>
   const api = {} as ToolExecutionApi
