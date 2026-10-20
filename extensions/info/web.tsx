@@ -436,7 +436,7 @@ function Extensions({ system }: { system: SystemInfo }) {
                 )}
                 {server && (
                   <div className="mt-1 flex flex-col gap-px">
-                    <List items={server.tools} label="tools" />
+                    <List items={server.tools.map((tool) => tool.name)} label="tools" />
                     <List items={server.sections} label="prompt" />
                     <List items={server.docs} label="docs" />
                     {server.hooks > 0 && <List items={[String(server.hooks)]} label="hooks" />}

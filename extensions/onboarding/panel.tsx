@@ -1,4 +1,5 @@
 import {
+  ChevronRightIcon,
   CircleAlertIcon,
   CopyPlusIcon,
   LoaderCircleIcon,
@@ -6,7 +7,7 @@ import {
   TriangleAlertIcon,
 } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
-import type { Ref } from 'react'
+import type { ReactNode, Ref } from 'react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -15,6 +16,8 @@ import {
   elidePath,
   errorMessage,
   shortenPath,
+  useAction,
+  useExtensionUiState,
   useExtensions,
   useSystem,
   useUltimate,
@@ -29,7 +32,7 @@ import {
   sources,
   useDescribed,
 } from './parts.tsx'
-import { AdoptProjectSetupAction, DecideAction, SetExtensionAction } from './refs.ts'
+import { AdoptProjectSetupAction, DecideAction, DetailsAction, SetExtensionAction } from './refs.ts'
 
 type Scope = 'project' | 'user'
 
@@ -194,9 +197,107 @@ function ProjectSetup({ system }: { system: SystemInfo }) {
   )
 }
 
+/** One labelled line of an open row; empty values are left to the caller's `none` line. */
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex min-w-0 gap-2">
+      <span className="w-16 shrink-0 text-muted-foreground/60">{label}</span>
+      <span className="min-w-0 flex-1 break-words text-foreground/80">{children}</span>
+    </div>
+  )
+}
+
+/** What an open row shows: tools, contract, dependencies and contributions; loaded when it opens. */
+function Details({ extension }: { extension: ExtensionInfo }) {
+  const web = useExtensions().find((record) => record.name === extension.name)?.extension
+  const details = useAction(DetailsAction, { name: extension.name })
+  const server = extension.server
+  const data = details.data
+  const tools = server?.tools ?? []
+  const contributions = [
+    ...Object.keys(web?.slots ?? {}).map((slot) => `slot ${slot}`),
+    ...(web?.panels ?? []).map((panel) => `panel ${panel.title}`),
+    ...(web?.surfaces ?? []).map((surface) => `surface ${surface.title}`),
+    ...(web?.commands?.length ? [`${web.commands.length} commands`] : []),
+    ...(web?.tools ? Object.keys(web.tools).map((tool) => `renders ${tool}`) : []),
+  ]
+  // Each labelled list, shown only when it has something; the empty ones share one dim line.
+  const lists: [string, readonly string[]][] = [
+    ['provides', [...(data?.provides ?? []), ...(data?.declares ?? [])]],
+    ['needs', data?.needs ?? []],
+    ['wants', data?.wants ?? []],
+    ['actions', extension.actions],
+    ['documents', server?.docs ?? []],
+    ['events', data?.events ?? []],
+    ['web', contributions],
+    ['secrets', (server?.secrets ?? []).map((secret) => secret.name)],
+  ]
+  const prompt = server?.sections.length
+    ? `${server.sections.length} ${server.sections.length === 1 ? 'section' : 'sections'}`
+    : ''
+  const hooks = server?.hooks ? `${server.hooks} ${server.hooks === 1 ? 'hook' : 'hooks'}` : ''
+  const empty = [
+    ...lists.filter(([, items]) => items.length === 0).map(([label]) => label),
+    ...(prompt || hooks ? [] : ['prompt']),
+  ]
+  return (
+    <div className="mt-1.5 ml-4 flex flex-col gap-0.5 border-l border-border/60 pl-2.5 font-mono text-[11px] leading-snug">
+      {data?.summary && (
+        <p className="mb-1 font-sans text-[12px] text-muted-foreground">
+          <Line text={data.summary} />
+        </p>
+      )}
+      {!extension.enabled ? (
+        <p className="text-muted-foreground/70">off: tools load when it's on</p>
+      ) : (
+        tools.length > 0 && (
+          <Field label={`tools ${tools.length}`}>
+            <ul className="flex flex-col gap-0.5">
+              {tools.map((tool) => (
+                <li className="min-w-0" key={tool.name}>
+                  <span className="text-foreground/90">{tool.name}</span>
+                  {tool.description && (
+                    <span
+                      className="line-clamp-2 font-sans text-[11.5px] text-muted-foreground"
+                      title={tool.description}
+                    >
+                      {tool.description}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </Field>
+        )
+      )}
+      {lists.map(
+        ([label, items]) =>
+          items.length > 0 && (
+            <Field key={label} label={label}>
+              {items.join(' · ')}
+            </Field>
+          ),
+      )}
+      {(prompt || hooks) && (
+        <Field label="prompt">{[prompt, hooks].filter(Boolean).join(' · ')}</Field>
+      )}
+      {details.loading && !data && <p className="text-muted-foreground/60">loading…</p>}
+      {details.error && <p className="text-error">{errorMessage(details.error)}</p>}
+      {data && extension.enabled && empty.length > 0 && (
+        <p className="text-muted-foreground/50">no {empty.join(' · ')}</p>
+      )}
+      <p className="mt-0.5 truncate text-[10.5px] text-muted-foreground/60" title={extension.path}>
+        {extension.path}
+      </p>
+    </div>
+  )
+}
+
 function Row({
   extension,
   line,
+  open,
+  onOpen,
   replaces,
   local,
   scope,
@@ -208,6 +309,8 @@ function Row({
 }: {
   extension: ExtensionInfo
   line: string
+  open: boolean
+  onOpen: (open: boolean) => void
   replaces: boolean
   local: boolean
   scope: Scope
@@ -232,8 +335,20 @@ function Row({
   return (
     <li className="px-3 py-1.5">
       <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-baseline gap-1.5 font-mono text-[11.5px]">
+        <button
+          aria-expanded={open}
+          className="group min-w-0 flex-1 text-left outline-none"
+          onClick={() => onOpen(!open)}
+          title={open ? 'Hide details' : 'Show tools, contract and dependencies'}
+          type="button"
+        >
+          <span className="flex min-w-0 items-baseline gap-1.5 font-mono text-[11.5px]">
+            <ChevronRightIcon
+              className={cn(
+                'size-3 shrink-0 self-center text-muted-foreground/60 transition-transform group-hover:text-foreground group-focus-visible:text-foreground',
+                open && 'rotate-90',
+              )}
+            />
             <span
               className={cn(
                 'shrink-0',
@@ -256,14 +371,17 @@ function Row({
               {sources[extension.source]}
               <span className="text-muted-foreground/60"> · {label}</span>
             </span>
-          </div>
+          </span>
           <Line
-            className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-muted-foreground"
+            className={cn(
+              'mt-0.5 block pl-[18px] text-[12px] leading-snug text-muted-foreground',
+              !open && 'line-clamp-2',
+            )}
             text={line}
           />
           {/* A project folder in place of a built-in runs its own code under a trusted name. */}
           {replaces && (
-            <p
+            <span
               className="mt-1 flex items-center gap-1.5 font-mono text-[10.5px] text-warning"
               title={`This project's .ultimate/extensions/${extension.name} runs instead of the built-in ${extension.name}`}
             >
@@ -271,9 +389,9 @@ function Row({
               {extension.source === 'project'
                 ? 'replaces the built-in'
                 : "this project's setup replaces it"}
-            </p>
+            </span>
           )}
-        </div>
+        </button>
         <span className="mt-0.5">
           <Switch
             busy={pending !== undefined}
@@ -292,6 +410,7 @@ function Row({
           />
         </span>
       </div>
+      {open && <Details extension={extension} />}
       {failure && (
         <p className="mt-1 line-clamp-3 font-mono text-[11px] leading-snug break-words whitespace-pre-wrap text-error/85">
           {failure}
@@ -318,6 +437,8 @@ export function ExtensionsPanel() {
   const system = useSystem()
   const { line, replaces } = useDescribed()
   const [chosen, setChosen] = useState<Scope>()
+  // Names of the open rows, kept across reloads.
+  const [opened, setOpened] = useExtensionUiState<string[]>('open', [])
   const [pending, setPending] = useState<Record<string, boolean>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [notes, setNotes] = useState<Record<string, string>>({})
@@ -435,6 +556,14 @@ export function ExtensionsPanel() {
                 line={line(extension.name, extension.source)}
                 local={local}
                 note={notes[extension.name]}
+                onOpen={(open) =>
+                  setOpened((names) =>
+                    open
+                      ? [...names.filter((name) => name !== extension.name), extension.name]
+                      : names.filter((name) => name !== extension.name),
+                  )
+                }
+                open={opened.includes(extension.name)}
                 onToggle={(enabled) => void toggle(extension, enabled)}
                 pending={pending[extension.name]}
                 replaces={replaces(extension.name)}

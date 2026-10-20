@@ -87,5 +87,20 @@ export const AdoptProjectSetupAction = actionRef<null, { ok: boolean }>(
   'onboarding',
   'adoptProjectSetup',
 )
+/** What the Extensions panel shows when a row opens: the contract and the dependencies the catalogue knows of. */
+export type ExtensionDetails = {
+  /** The first sentence of the api.ts or refs.ts doc comment; '' without either. */
+  summary: string
+  /** APIs and extension points it provides, and the points it declares for others. */
+  provides: string[]
+  declares: string[]
+  needs: string[]
+  wants: string[]
+  /** Durable events its refs.ts defines. */
+  events: string[]
+}
+
+/** `{ name }` → the loaded extension's contract summary, catalogue entries and events. */
+export const DetailsAction = actionRef<{ name: string }, ExtensionDetails>('onboarding', 'details')
 /** No arguments → every installed extension with its source, state and README line. */
 export const ExtensionsAction = actionRef<null, Described[]>('onboarding', 'extensions')

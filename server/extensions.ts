@@ -558,7 +558,11 @@ export async function loadExtensions(
           documents.set(name, docs)
           record.server = {
             loadedAt: new Date().toISOString(),
-            tools: extension.tools?.map((tool) => tool.name) ?? [],
+            tools:
+              extension.tools?.map((tool) => ({
+                name: tool.name,
+                description: tool.description.trim().split('\n')[0] ?? '',
+              })) ?? [],
             sections: extension.sections?.map((section) => section.key) ?? [],
             hooks: extension.hooks?.length ?? 0,
             docs: docs.map((doc) => doc.definition.kind),

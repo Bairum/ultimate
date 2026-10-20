@@ -87,7 +87,8 @@ export interface ExtensionInfo {
   facets: { server: boolean; web: boolean }
   server?: {
     loadedAt?: string
-    tools: string[]
+    /** Each tool's name and the first line of its description. */
+    tools: { name: string; description: string }[]
     sections: string[]
     hooks: number
     docs: string[]

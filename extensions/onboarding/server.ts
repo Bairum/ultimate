@@ -23,10 +23,12 @@ import { SubagentsApi } from '../subagents/api.ts'
 import { LineageApi } from '../lineage/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { contractOutline } from '../../lib/api-files.ts'
 import {
   AdoptProjectSetupAction,
   ChooseAction,
   DecideAction,
+  DetailsAction,
   ExtensionsAction,
   FirstRunDoneAction,
   HelpAction,
@@ -431,6 +433,22 @@ export const actions: Record<string, ExtensionAction> = {
     })
     await host.reloadExtensions()
     return { ok: true }
+  }),
+  details: implementAction(DetailsAction, async (args, { host }) => {
+    const name = args && typeof args === 'object' && !Array.isArray(args) ? args.name : undefined
+    const folder = host.extensions().find((entry) => entry.name === name)
+    if (typeof name !== 'string' || !folder)
+      throw new Error(`Unknown extension ${JSON.stringify(name)}`)
+    const { apis } = host.catalogue()
+    const matching = (pick: (api: (typeof apis)[number]) => boolean) =>
+      apis.filter(pick).map((api) => api.name)
+    return {
+      ...(await contractOutline(folder)),
+      provides: matching((api) => api.provider === name),
+      declares: matching((api) => api.owner === name && api.provider !== name),
+      needs: matching((api) => api.needs.includes(name)),
+      wants: matching((api) => api.wants.includes(name)),
+    }
   }),
   extensions: implementAction(ExtensionsAction, async (_args, { host }) => {
     const project = await host.projectExtensions()

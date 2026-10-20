@@ -72,7 +72,9 @@ The right-panel tab (palette **Extensions…**) shows the project decision, a wa
 everywhere, and every extension with its source, deciding layer, README line and switch. Switches save to this project
 (when its setup is in use) or everywhere. A core-tier extension's switch stays on and disabled, its deciding layer
 reads `core`: the server keeps the core tier enabled whatever the settings say. Failures show on the row; the list
-follows system info.
+follows system info. Clicking a row opens it in place (open rows are kept in UI state): its tools with their
+description's first line, contract summary, what it provides, needs and wants, actions, documents, events, web
+contributions, secrets, prompt sections and hooks, and its folder. Empty groups share one dim line.
 
 ## Actions
 
@@ -96,6 +98,8 @@ cannot apply them through codemode `ultimate.action`.
   require a local decision.
 - `adoptProjectSetup`: merges project enable/disable lists into user settings.
 - `extensions`: discovered names, sources, effective enablement, deciding layers and README first sentences.
+- `details { name }`: the extension's contract summary (first api.ts or refs.ts doc sentence), the catalogue APIs it
+  provides, declares, needs and wants, and the events its contract files define.
 
 Undecided projects use global configuration. Only a local decision enables project extension folders, settings,
 agents and skills. Settings and completion-marker writes use same-directory temporary files and atomic renames,

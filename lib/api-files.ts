@@ -54,6 +54,17 @@ export async function apiSummaries(folders: readonly Folder[]) {
   return found.flat().toSorted((a, b) => a.name.localeCompare(b.name))
 }
 
+/** The summary of `folder`'s first contract file and the event names its files define with `defineEvent`. */
+export async function contractOutline(folder: Folder) {
+  const files = await read(folder)
+  const events = files.flatMap(({ text }) =>
+    [...text.matchAll(/defineEvent\s*(?:<[\s\S]*?>)?\s*\(\s*['"]([\w.-]+)['"]/g)].map(
+      (match) => match[1],
+    ),
+  )
+  return { summary: files[0] ? apiSummary(files[0].text) : '', events: [...new Set(events)] }
+}
+
 /**
  * The contract of enabled extension `name`: its `api.ts` and `refs.ts`, each under a `// <name>/<file>` header line
  * saying what it holds. Throws naming the extensions that have one.

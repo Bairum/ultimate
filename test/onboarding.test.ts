@@ -104,6 +104,19 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
       layer: 'folder',
       readme: 'A local extension.',
     })
+    // details: the contract summary, catalogue edges and refs events of a loaded extension; tool descriptions in info.
+    const board = await action('details', { name: 'board' })
+    expect(board.summary).not.toBe('')
+    expect(board.provides).toContain('board')
+    expect(board.needs).toContain('subagents')
+    expect(board.events).toEqual(expect.arrayContaining(['board.sent', 'board.triaged']))
+    expect(
+      server.extensions.info().find((entry) => entry.name === 'board')?.server?.tools,
+    ).toContainEqual({ name: 'message', description: expect.stringMatching(/\S/) })
+    expect(
+      (await post(server, '/api/extensions/onboarding/actions/details', { args: { name: 'nope' } }))
+        .data.error,
+    ).toContain('Unknown extension "nope"')
     const denied = await post(server, '/api/extensions/onboarding/actions/setExtension', {
       args: { name: 'splash', enabled: false, scope: 'project' },
     })
