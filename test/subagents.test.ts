@@ -2000,6 +2000,29 @@ describe('subagents', () => {
       actions.deleteDefinition({ name: 'scout', scope: 'builtin' }, ctx),
     ).rejects.toThrow('scope must be user or project')
   })
+  it('refuses to save a definition an overlay extends, so its additions never become a whole copy', async () => {
+    const { prepared, opened, userHome } = await fixture()
+    const ctx = {
+      host: { ...prepared, harness: () => opened.harness },
+    } as unknown as ActionContext
+    const overlay = join(userHome, '.ultimate/agents/scout.md')
+    await mkdir(join(userHome, '.ultimate/agents'), { recursive: true })
+    await writeFile(overlay, '---\nname: scout\naddTools: [write]\n---\nMore.\n')
+    await expect(
+      actions.saveDefinition(
+        {
+          name: 'scout',
+          scope: 'user',
+          frontmatter: { description: 'Search', tools: ['read', 'bash', 'write'] },
+          instructions: 'Original instructions\n\n## User additions\n\nMore.',
+        },
+        ctx,
+      ),
+    ).rejects.toThrow(`scout is extended by ${overlay}`)
+    expect(await readFile(overlay, 'utf8')).toBe(
+      '---\nname: scout\naddTools: [write]\n---\nMore.\n',
+    )
+  })
   it('foreground returns the answer, exposes child details, inherits the parent and rereads scout on next start', async () => {
     const { opened, ultimateRoot } = await fixture()
     const result = await call(opened, { action: 'start', agent: 'scout', task: 'facts' })

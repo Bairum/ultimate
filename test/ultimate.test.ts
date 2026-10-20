@@ -342,7 +342,19 @@ it.concurrent('notes an @ultimate overlay as changed instructions and applies it
     (entry) => entry.kind === 'prompt.build',
   )
   expect(note.data).toEqual({ instructions: ['~/.ultimate/agents/ultimate.md'] })
+  // Removing the overlay drops its additions and is named as an instruction change.
+  await rm(overlay)
+  await ask(f.server, ultimate, 'third')
+  expect(await agentInstructions(f, ultimate)).not.toContain('## User additions')
+  const [latest] = (await entries(f.server, ultimate)).filter(
+    (entry) => entry.kind === 'prompt.build',
+  )
+  expect(latest.data).toEqual({ instructions: ['~/.ultimate/agents/ultimate.md (removed)'] })
 })
+
+async function agentInstructions(f: Awaited<ReturnType<typeof fixture>>, id: ConversationId) {
+  return (await (await f.server.harness.conversation(id, context))!.agent(context)).instructions
+}
 
 it.concurrent('re-applies an updated @ultimate definition on a typed input and notes changed instructions once', async () => {
   const f = await fixture()

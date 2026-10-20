@@ -129,13 +129,14 @@ async function instructionChanges(
     : []
   // The definition's files (its own and any overlays) are named as instructions when they changed; a text re-applied
   // here with no file changed since the last run (a Board delivery applied it already) names the definition's own
-  // file. An overlay removed since the last run is no longer listed, so it counts as a doc removal.
-  const touched = own.filter((path) => changed.includes(path))
+  // file. An overlay removed since the last run is found by its file name.
+  const ownFile = `/agents/${name}.md`
+  const touched = changed.filter((path) => own.includes(path) || path.endsWith(ownFile))
   const instructions = (touched.length || !reapplied ? touched : own.slice(0, 1)).map((path) =>
-    shown(host, path),
+    path in files ? shown(host, path) : `${shown(host, path)} (removed)`,
   )
   const named = changed
-    .filter((path) => !own.includes(path))
+    .filter((path) => !touched.includes(path))
     .map((path) => (path in files ? shown(host, path) : `${shown(host, path)} (removed)`))
   return { instructions, docs: named }
 }
