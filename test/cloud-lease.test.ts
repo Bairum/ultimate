@@ -914,17 +914,24 @@ it('keeps the project when the move is cancelled while it scans for uncommitted 
 })
 
 it('keeps the lease and keeps serving however long it idles, also when its connection drops', async () => {
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
-  const project = cloud()
   const { root } = await checkout()
+  // The clock and every timer move together from the start, so a deadline on either would come due.
+  vi.useFakeTimers({
+    toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+  })
+  const project = cloud()
   const desk = await machine('desk', project, root)
   try {
     await until(() => !!desk.role()?.connected && desk.role()?.role === 'writer', 30000, tick)
+    const start = Date.now()
     // An idle writer keeps its project: nothing but a move, a standby's request or a clean stop releases it.
-    await vi.advanceTimersByTimeAsync(60 * MINUTE)
+    await vi.advanceTimersByTimeAsync(61 * MINUTE)
+    expect(Date.now() - start).toBeGreaterThan(60 * MINUTE)
   } finally {
     vi.useRealTimers()
   }
+  // Any lifecycle work the hour queued, such as a release, has run.
+  await desk.lease.settled()
   expect(desk.serving()).toBe(true)
   expect(desk.snapshots.uploadSnapshot).not.toHaveBeenCalled()
   expect(project.replica.store.lease()).toMatchObject({ machine: 'desk', epoch: 1 })
