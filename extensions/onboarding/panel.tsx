@@ -202,7 +202,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex min-w-0 gap-2">
       <span className="w-16 shrink-0 text-muted-foreground/60">{label}</span>
-      <span className="min-w-0 flex-1 break-words text-foreground/80">{children}</span>
+      <div className="min-w-0 flex-1 break-words text-foreground/80">{children}</div>
     </div>
   )
 }
@@ -219,7 +219,25 @@ function Details({ extension }: { extension: ExtensionInfo }) {
     ...(web?.panels ?? []).map((panel) => `panel ${panel.title}`),
     ...(web?.surfaces ?? []).map((surface) => `surface ${surface.title}`),
     ...(web?.commands?.length ? [`${web.commands.length} commands`] : []),
-    ...(web?.tools ? Object.keys(web.tools).map((tool) => `renders ${tool}`) : []),
+    ...Object.keys(web?.tools ?? {}).map((tool) => `renders ${tool}`),
+    ...Object.keys(web?.toolLines ?? {}).map((tool) => `step line ${tool}`),
+    ...Object.keys(web?.entries ?? {}).map((kind) => `entry ${kind}`),
+    ...(web?.documents ?? []).map((document) => `document ${document.kind}`),
+    ...(web?.provides ?? []).map((provision) => `point ${provision.point}`),
+    ...(
+      [
+        ['inbox', web?.inbox],
+        ['composer', web?.composer],
+        ['links', web?.link],
+        ['chat', web?.chat],
+        ['intro', web?.intro],
+      ] as const
+    )
+      .filter(([, value]) => value)
+      .map(([label]) => label),
+    ...(web?.messageActions?.length ? ['message actions'] : []),
+    ...(web?.messageDetails?.length ? ['message details'] : []),
+    ...(web?.answerLabels?.length ? ['answer labels'] : []),
   ]
   // Each labelled list, shown only when it has something; the empty ones share one dim line.
   const lists: [string, readonly string[]][] = [
