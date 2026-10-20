@@ -265,6 +265,34 @@ export const actions = { state: async () => state }`
     })
   })
 
+  it('ignores late notices from disposed facets without losing the replacement’s notices', async () => {
+    const source = `import { defineExtension } from '@earendil-works/pi-durable'
+export let raise
+export default host => {
+  raise = message => host.notice(message)
+  return defineExtension({ name: 'late-notice' })
+}`
+    const { server, options } = await fixture(false, { 'late-notice': source })
+    const path = join(options.ultimateRoot, 'extensions/late-notice/server.ts')
+    const previous = (await server.vite.ssrLoadModule(path)).raise as (message: string) => void
+    const initial = server.extensions.info().find((entry) => entry.name === 'late-notice')!
+      .server!.loadedAt
+    await writeFile(path, source + '\n')
+    await until(
+      () =>
+        server.extensions.info().find((entry) => entry.name === 'late-notice')!.server!.loadedAt !==
+        initial,
+    )
+    expect(() => previous('retired notice')).not.toThrow()
+    const current = (await server.vite.ssrLoadModule(path)).raise as (message: string) => void
+    current('current notice')
+    expect(server.extensions.info.diagnostics()).toContain('current notice')
+    expect(server.extensions.info.diagnostics()).not.toContain('retired notice')
+    servers.splice(servers.indexOf(server), 1)
+    await server.close()
+    expect(() => current('shutdown notice')).not.toThrow()
+  })
+
   it('runs late facet openers immediately and continues after throwing cleanups', async () => {
     const { server } = await fixture(false, {
       cleanup: `import { defineExtension } from '@earendil-works/pi-durable'
