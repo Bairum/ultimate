@@ -203,9 +203,9 @@ function TranscriptEntries() {
     useStickToBottomContext()
   // While following, the browser must not anchor: a row above that shrinks as the last one grows would move the view up,
   // and the library reads that scroll as the reader leaving. A reader who scrolled up keeps anchoring, so rows changing
-  // above them stay put.
+  // above them stay put. A passive effect: the scroller, an ancestor, attaches its ref after these rows' layout effects.
   const following = isAtBottom && !escapedFromLock
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (scrollRef.current) scrollRef.current.style.overflowAnchor = following ? 'none' : ''
   }, [following, scrollRef])
   // Retain already displayed rows when a live compaction replaces the active context, or a fresh window moves past them.
