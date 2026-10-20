@@ -59,4 +59,19 @@ export type BoardService = {
 export { Asked, MessageSent, Triaged } from './refs.ts'
 /** Messages between conversations; core, so `need` it. */
 export const BoardApi = defineApi<BoardService>()('board')
+
+/** What gates the model calls Board makes inside its tasks; an optional extension (pause) fills it. */
+export type GateService = {
+  /**
+   * Run `work`, a model call of task `task` in conversation `conversationId` described by `what`: start it only once
+   * nothing holds such work (it waits meanwhile, until `signal` aborts), and count it as in flight while it runs.
+   */
+  work<T>(
+    call: { task: number; conversationId: number; what: string },
+    work: () => Promise<T>,
+    signal: AbortSignal,
+  ): Promise<T>
+}
+/** Board's gate for in-task model calls, an extension point; `want` it: without a provider, work runs at once. */
+export const Gate = defineApi<GateService>()('board.gate')
 export const tier = 'core'
