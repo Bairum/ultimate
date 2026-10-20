@@ -12,8 +12,17 @@ import { exec } from '../../lib/exec.ts'
 import { fastForward, Refusal } from '../../lib/fast-forward.ts'
 import type { Git } from '../../lib/fast-forward.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
+import { ConversationsApi } from '../conversations/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
-import { cloneState, fetchIfDue, layersOf } from './clone.ts'
+import {
+  cloneState,
+  fetchIfDue,
+  gitPath,
+  layersOf,
+  SUMMARY_SYSTEM,
+  summaryFor,
+  withLock,
+} from './clone.ts'
 import { Applied, DemoAction, Refused, StateAction, UpdateAction } from './refs.ts'
 import type { UpdateResult, UpdateState } from './refs.ts'
 
@@ -120,15 +129,24 @@ export function demoState(root: string, state: string, now: number): UpdateState
         install: 'done',
       },
     }
-  return { ...base, behind: 5, commits, layers, compare }
+  const summary = [
+    'Review surface: comment on diff lines and send them to an agent',
+    'Backups and moves now show in the System stream',
+    'Open questions stay in a panel until you answer or dismiss them',
+  ]
+  return { ...base, behind: 5, commits, summary, layers, compare }
 }
 
+/** A preview started by another Ultimate's `instance` tool: it shares the clone and must never touch it. */
+const preview = () => Boolean(process.env.ULTIMATE_INSTANCE_OWNER)
+
 export default function update(host: ExtensionHost) {
-  // Resolved where it is called; declared here so the catalogue lists it.
+  // Resolved where they are called; declared here so the catalogue lists them.
   host.need(WorkspacesApi)
+  host.need(ConversationsApi)
   const shared = state(host)
   // Faux and previews never fetch: the demo stands in, and a preview must not race the host on the same clone.
-  if (host.faux || process.env.ULTIMATE_INSTANCE_OWNER) return defineExtension({ name: 'update' })
+  if (host.faux || preview()) return defineExtension({ name: 'update' })
   const tick = () => {
     shared.ticking ??= refresh(host, true)
       .catch((error: unknown) => host.notice(`Update check: ${String(error)}`))
@@ -164,19 +182,55 @@ const state = (host: ExtensionHost) =>
     demo: undefined,
   }))
 
-/** Compare the clone with origin (fetching it when `fetch` and due) and keep the result for `state`. */
-async function refresh(host: ExtensionHost, fetch: boolean) {
+/** The clone-wide lock: fetches, updates and installs of one clone never overlap across the Ultimates on it. */
+const lockOf = (root: string) => gitPath(gitIn(root), root, 'ultimate-update.lock')
+
+/** Ask the summary model once with the range's commit messages; undefined without one. */
+async function ask(host: ExtensionHost, input: string) {
+  const conversations = host.need(ConversationsApi)
+  const model = await conversations.summaryModel()
+  if (!model) return undefined
+  const response = await conversations.askSummaryModel(
+    host.modelRuntime,
+    SUMMARY_SYSTEM,
+    input,
+    AbortSignal.timeout(60_000),
+    { model },
+  )
+  return response.stopReason === 'stop' ? response.text : undefined
+}
+
+/**
+ * Compare the clone with origin and keep the result for `state`. A `check` fetches when due and summarizes a new
+ * range (once per range, cached in the clone's git directory); a plain refresh only reads.
+ */
+async function refresh(host: ExtensionHost, check: boolean) {
   const shared = state(host)
   const root = host.ultimateRoot
   const git = gitIn(root)
-  const error = fetch ? await fetchIfDue(git, root, Date.now()) : shared.latest?.error
+  // Fetch freshness is read again under the lock, so Ultimates on one clone fetch once between them.
+  const fetched = check
+    ? await withLock(await lockOf(root), async () => ({
+        error: await fetchIfDue(git, root, Date.now()),
+      }))
+    : undefined
+  const error = fetched ? fetched.error : shared.latest?.error
   const clone = await cloneState(git, root)
   const repo = clone.remoteHead ? await githubRepo(root) : undefined
   const startedAt = Date.parse(host.system().process.startedAt)
   const { head, remoteHead, ...rest } = clone
+  const summary = remoteHead
+    ? await summaryFor(
+        await gitPath(git, root, 'ultimate-update-summary.json'),
+        `${head}..${remoteHead}`,
+        () => git('log', '--format=%s%n%n%b', `${head}..${remoteHead}`),
+        check ? (input) => ask(host, input) : undefined,
+      )
+    : undefined
   shared.latest = {
     root,
     ...rest,
+    ...(summary ? { summary } : {}),
     refused: rest.refused ?? (rest.behind ? await landing(host) : undefined),
     ...(error ? { error } : {}),
     ...(repo && remoteHead ? { compare: compareUrl(repo, head, remoteHead) } : {}),
@@ -214,19 +268,31 @@ async function record<D extends JsonValue>(host: ExtensionHost, event: EventToke
   }
 }
 
-/** Fast-forward the clone, install when the lockfile is owed, and record what happened. */
+/**
+ * Fast-forward the clone, install when the lockfile is owed (also with nothing to pull, so a failed install is retried),
+ * and record what happened. Holds the clone-wide lock throughout.
+ */
 async function run(host: ExtensionHost): Promise<UpdateResult> {
   const root = host.ultimateRoot
-  const git = gitIn(root)
   const refuse = async (refused: string): Promise<UpdateResult> => {
     await record(host, Refused, { root, reason: refused })
     return { ok: false, refused }
   }
-  const waiting = await landing(host)
-  if (waiting) return refuse(waiting)
+  const result = await withLock(await lockOf(root), () => apply(host, refuse))
+  return result ?? refuse('Another Ultimate is updating this clone')
+}
+
+async function apply(
+  host: ExtensionHost,
+  refuse: (refused: string) => Promise<UpdateResult>,
+): Promise<UpdateResult> {
+  const root = host.ultimateRoot
+  const git = gitIn(root)
   let moved
   try {
-    moved = await fastForward(git)
+    // The landing check runs again right before the merge, after the fetch. A landing that starts after it is safe:
+    // the lander fast-forwards only from the base it merged onto, sees the moved branch and retries.
+    moved = await fastForward(git, undefined, () => landing(host))
   } catch (error) {
     if (error instanceof Refusal) return refuse(error.message)
     throw error
@@ -257,8 +323,8 @@ async function run(host: ExtensionHost): Promise<UpdateResult> {
     install,
     ...(installError ? { installError } : {}),
   }
+  if (moved.behind || install !== 'skipped') state(host).updated = result
   if (moved.behind) {
-    state(host).updated = result
     await record(host, Applied, {
       root,
       from: moved.before,
@@ -278,6 +344,8 @@ export const actions = {
   state: implementAction(StateAction, async (_args, { host }) => {
     const shared = state(host)
     if (host.faux) return demoState(host.ultimateRoot, shared.demo ?? 'behind', Date.now())
+    if (preview())
+      return { root: host.ultimateRoot, behind: 0, commits: [], install: false, restart: false }
     if (!shared.latest) await refresh(host, false)
     return shared.latest!
   }),
@@ -288,6 +356,7 @@ export const actions = {
       const demo = demoState(host.ultimateRoot, shared.demo, Date.now())
       return demo.updated ?? { ok: false, refused: demo.refused! }
     }
+    if (preview()) return { ok: false, refused: 'A preview never updates the clone it runs from' }
     // One update at a time: a second click joins the first.
     shared.updating ??= run(host).finally(() => {
       shared.updating = undefined

@@ -1,8 +1,9 @@
 /** The Ultimate clone against origin: what it lacks, what that touches, and fetching it at most hourly. */
-import { stat } from 'node:fs/promises'
+import { readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import type { Git } from '../../lib/fast-forward.ts'
 import { fetchOrigin, standing } from '../../lib/fast-forward.ts'
+import { readJson, writeJson } from '../../lib/json-file.ts'
 import type { Layers, UpdateState } from './refs.ts'
 
 /** Origin is fetched when the last fetch of the clone, by any Ultimate on it, is older than this. */
@@ -19,10 +20,15 @@ export function layersOf(files: string[]): Layers {
   return layers
 }
 
+/** `name` inside the clone's git directory, shared by every Ultimate on the clone. */
+export async function gitPath(git: Git, root: string, name: string) {
+  const path = await git('rev-parse', '--git-path', name)
+  return isAbsolute(path) ? path : join(root, path)
+}
+
 /** When origin was last fetched into the clone (`FETCH_HEAD`'s mtime), or undefined before the first fetch. */
 export async function fetchedAt(git: Git, root: string) {
-  const path = await git('rev-parse', '--git-path', 'FETCH_HEAD')
-  return stat(isAbsolute(path) ? path : join(root, path)).then(
+  return stat(await gitPath(git, root, 'FETCH_HEAD')).then(
     (info) => info.mtimeMs,
     () => undefined,
   )
@@ -36,6 +42,45 @@ export async function fetchIfDue(git: Git, root: string, now: number) {
     () => undefined,
     (error: unknown) => (error instanceof Error ? error.message : String(error)),
   )
+}
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM: the process exists under another user; ESRCH: it is gone.
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/**
+ * Run `work` holding `lock` (a file with this process's pid), so fetches, updates and installs of one clone never
+ * overlap across Ultimates; undefined without running when a live process holds it. A dead holder's lock is taken over.
+ */
+export async function withLock<T>(lock: string, work: () => Promise<T>): Promise<T | undefined> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await writeFile(lock, String(process.pid), { flag: 'wx' })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      const holder = Number(
+        await readFile(lock, 'utf8').catch(
+          // Gone between the failed create and this read: the next attempt takes it.
+          () => '',
+        ),
+      )
+      if (holder && alive(holder)) return undefined
+      await rm(lock, { force: true })
+      continue
+    }
+    try {
+      return await work()
+    } finally {
+      await rm(lock, { force: true })
+    }
+  }
+  return undefined
 }
 
 /** The clone against `origin/<default branch>` as of the last fetch: commits behind, what they touch, refusals. */
@@ -75,4 +120,46 @@ export async function cloneState(
       }),
     layers: layersOf(files.split('\n').filter(Boolean)),
   }
+}
+
+/** What the summary model reads: the range's commit messages, never diffs, clipped. */
+export const SUMMARY_INPUT_CAP = 12_000
+
+export const SUMMARY_SYSTEM = `You summarize an update to Ultimate, a coding agent app, for its user.
+You get the commit messages of the update, newest first. Answer with 2 to 4 lines, one per notable change, most
+useful first, each under 90 characters, in plain language about what the user gets ("Review surface: comment on diff
+lines and send them to an agent"). Group small fixes into one line. No bullets, numbering, commit hashes or preamble.`
+
+/** The answer's lines, at most 4, without bullets or numbering. */
+export function summaryLines(text: string) {
+  return text
+    .split('\n')
+    .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim())
+    .filter(Boolean)
+    .slice(0, 4)
+}
+
+/**
+ * The summary of `range` (`<head>..<remote head>`): the cached one when `file` holds it, else asked once with the
+ * commit messages from `log` and cached; undefined when asking fails or answers nothing. Asked at most once per range
+ * across every Ultimate on the clone, since `file` lives in the clone's git directory.
+ */
+export async function summaryFor(
+  file: string,
+  range: string,
+  log: () => Promise<string>,
+  ask?: (input: string) => Promise<string | undefined>,
+): Promise<string[] | undefined> {
+  const cached = await readJson<{ range?: string; lines?: string[] }>(file, {})
+  if (cached.range === range) return cached.lines?.length ? cached.lines : undefined
+  // Without `ask` only the cache is read: a status poll never waits for a model.
+  if (!ask) return undefined
+  const text = await ask((await log()).slice(0, SUMMARY_INPUT_CAP)).catch(
+    // No summary model, or it failed: the commit list stands in for the summary.
+    () => undefined,
+  )
+  const lines = text === undefined ? [] : summaryLines(text)
+  // A failed or empty answer is cached too: the list stands in, and the range is not asked again.
+  await writeJson(file, { range, lines })
+  return lines.length ? lines : undefined
 }

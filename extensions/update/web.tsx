@@ -102,6 +102,10 @@ function Popup({
   const restart = useRestart()
   const coreStale = useSystem()?.code.coreStale
   const updated = state.behind === 0 ? state.updated : undefined
+  // Under a summary the commit list folds to the first few.
+  const shown = Math.min(state.commits.length, state.summary ? 3 : 5)
+  // Packages owed or loaded since start, with nothing new to pull: retry the install, or restart.
+  const owes = !state.behind && (state.install || state.restart)
   return (
     <>
       <div className="border-b border-border/70 px-3 py-2 text-[11.5px]">
@@ -134,8 +138,18 @@ function Popup({
               behind origin/
               {state.branch ?? 'main'}
             </div>
+            {state.summary && (
+              <ul className="space-y-0.5 font-sans text-[12.5px] text-foreground">
+                {state.summary.map((line) => (
+                  <li className="flex gap-1.5" key={line}>
+                    <span className="text-brand">•</span>
+                    <span className="min-w-0">{line}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
             <ul className="space-y-0.5">
-              {state.commits.map((commit) => (
+              {state.commits.slice(0, shown).map((commit) => (
                 <li className="flex min-w-0 gap-2" key={commit.sha}>
                   <span className="shrink-0 text-muted-foreground">{commit.sha}</span>
                   <span className="truncate text-foreground/85" title={commit.subject}>
@@ -143,10 +157,8 @@ function Popup({
                   </span>
                 </li>
               ))}
-              {state.behind > state.commits.length && (
-                <li className="text-muted-foreground">
-                  … {state.behind - state.commits.length} more
-                </li>
+              {state.behind > shown && (
+                <li className="text-muted-foreground">… {state.behind - shown} more</li>
               )}
             </ul>
             {state.compare && (
@@ -168,6 +180,13 @@ function Popup({
               </div>
             )}
           </>
+        )}
+        {owes && !updated && (
+          <div>
+            {state.install
+              ? 'pnpm-lock.yaml differs from the installed packages: pnpm install is owed.'
+              : 'Packages were installed after this Ultimate started: restart it to load them.'}
+          </div>
         )}
         {state.refused && !updated && (
           <div className="flex items-start gap-1.5 text-warning">
@@ -192,8 +211,19 @@ function Popup({
             ''
           )}
         </span>
-        {updated ? (
-          (updated.layers.core || updated.layers.lockfile || coreStale || state.restart) && (
+        {!state.behind && state.install ? (
+          <Button
+            className="h-7 font-sans text-[12px]"
+            disabled={busy || !!state.refused}
+            onClick={run}
+            size="sm"
+            title={state.refused}
+            variant="outline"
+          >
+            {busy ? 'Installing…' : 'Retry pnpm install'}
+          </Button>
+        ) : updated || owes ? (
+          (updated?.layers.core || updated?.layers.lockfile || coreStale || state.restart) && (
             <Button
               className="h-7 font-sans text-[12px]"
               disabled={restart.busy}
@@ -237,9 +267,13 @@ function Update() {
     return () => clearInterval(timer)
   }, [refetch])
   if (!data) return null
-  const updated = data.behind === 0 && data.updated
-  const restartOwed = updated && (updated.layers.core || updated.layers.lockfile)
-  if (!data.behind && !restartOwed && !(updated && updated.layers.bin)) return null
+  const updated = data.behind === 0 ? data.updated : undefined
+  // Another Ultimate on the clone may have updated it: `restart` and `install` come from the clone, not this server.
+  const owed =
+    data.restart ||
+    data.install ||
+    !!(updated && (updated.layers.core || updated.layers.lockfile || updated.layers.bin))
+  if (!data.behind && !owed) return null
   const run = () => {
     setBusy(true)
     setError(undefined)
@@ -254,30 +288,36 @@ function Update() {
         void refetch()
       })
   }
-  const label = updated ? (
-    <>
-      <CheckIcon className="size-3" />
-      <span className="max-md:hidden">updated · </span>restart
-    </>
-  ) : (
-    <>
-      {busy ? (
-        <LoaderCircleIcon className="size-3 animate-spin" />
-      ) : data.refused ? (
+  const label =
+    !data.behind && data.install ? (
+      <>
         <TriangleAlertIcon className="size-3" />
-      ) : (
-        <ArrowDownIcon className="size-3" />
-      )}
-      {data.behind} new<span className="max-md:hidden"> · update</span>
-    </>
-  )
+        install owed
+      </>
+    ) : !data.behind ? (
+      <>
+        <CheckIcon className="size-3" />
+        <span className="max-md:hidden">updated · </span>restart
+      </>
+    ) : (
+      <>
+        {busy ? (
+          <LoaderCircleIcon className="size-3 animate-spin" />
+        ) : data.refused ? (
+          <TriangleAlertIcon className="size-3" />
+        ) : (
+          <ArrowDownIcon className="size-3" />
+        )}
+        {data.behind} new<span className="max-md:hidden"> · update</span>
+      </>
+    )
   return (
     <Popover>
       <PopoverTrigger asChild>
         <button
           className={cn(
             statusButton,
-            busy ? 'text-brand' : updated || data.refused ? 'text-warning' : 'text-brand',
+            busy ? 'text-brand' : !data.behind || data.refused ? 'text-warning' : 'text-brand',
           )}
           data-update
           title="Updates to the Ultimate clone"

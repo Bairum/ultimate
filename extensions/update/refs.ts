@@ -23,6 +23,8 @@ export type UpdateState = {
   behind: number
   /** The newest of them (at most 5), newest first. */
   commits: { sha: string; subject: string }[]
+  /** 2–4 plain lines on what the range brings, from the summary model; absent without one. */
+  summary?: string[]
   /** What those commits touch. */
   layers?: Layers
   /** DiffsHub's view of the range, for a GitHub origin. */

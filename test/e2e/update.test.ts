@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 import { beforeEach, expect, it } from 'vitest'
 import { git } from '../../lib/git.ts'
 import { fastForward, Refusal } from '../../lib/fast-forward.ts'
-import { cloneState, fetchIfDue, layersOf } from '../../extensions/update/clone.ts'
+import { cloneState, fetchIfDue, layersOf, withLock } from '../../extensions/update/clone.ts'
 import { gitIn, installOwed } from '../../extensions/update/server.ts'
 import { temp } from '../helpers.ts'
 
@@ -88,10 +88,19 @@ it('refuses a dirty, switched or diverged clone and leaves it alone', async () =
   const head = await git(clone, 'rev-parse', 'HEAD')
 
   await writeFile(join(clone, 'README.md'), 'local edit\n')
+  const remote = await git(clone, 'rev-parse', 'origin/main')
   await expect(fastForward(run)).rejects.toThrow(
     new Refusal('The checkout has uncommitted changes'),
   )
+  // Refused before fetching: origin's refs stay as they were.
+  expect(await git(clone, 'rev-parse', 'origin/main')).toBe(remote)
   await git(clone, 'checkout', '-q', '--', 'README.md')
+
+  // A landing that starts after the fetch is caught right before the merge.
+  await expect(fastForward(run, undefined, async () => 'The lander is landing')).rejects.toThrow(
+    'The lander is landing',
+  )
+  expect(await git(clone, 'rev-parse', 'HEAD')).toBe(head)
 
   await git(clone, 'checkout', '-q', '-b', 'side')
   await expect(fastForward(run)).rejects.toThrow('The checkout is on side, not main')
@@ -105,6 +114,19 @@ it('refuses a dirty, switched or diverged clone and leaves it alone', async () =
   expect(local).not.toBe(head)
   expect(await git(clone, 'rev-parse', 'HEAD')).toBe(local)
   expect((await cloneState(run, clone)).refused).toBe('main has diverged from origin/main')
+})
+
+it('runs one holder of the clone lock at a time and takes over a dead one', async () => {
+  const lock = join(clone, '.git/ultimate-update.lock')
+  let inner: unknown = 'unset'
+  const outer = await withLock(lock, async () => {
+    inner = await withLock(lock, async () => 'second')
+    return 'first'
+  })
+  expect([outer, inner]).toEqual(['first', undefined])
+  // A pid that cannot exist holds it: taken over.
+  await writeFile(lock, '999999999')
+  expect(await withLock(lock, async () => 'taken')).toBe('taken')
 })
 
 it('owes an install while the lockfile differs from the installed one', async () => {

@@ -4,7 +4,9 @@ Keeps the Ultimate clone the host runs from (`host.ultimateRoot`, the `<self>` b
 
 ## Checking
 
-Every running Ultimate compares the clone with `origin/<default branch>` every 5 minutes, and 30 s after start. That comparison is local and costs nothing. It fetches origin only when the clone's last fetch is older than an hour. The last fetch is read from `.git/FETCH_HEAD`'s mtime, so several Ultimates on one clone (each project's host, the machine home) fetch at most once an hour between them, and a fetch by hand counts too. The fetch uses `lib/fast-forward.ts`, which retries a GitHub origin over the other transport (SSH ↔ HTTPS), and git never prompts. Faux servers and previews never check.
+Every running Ultimate compares the clone with `origin/<default branch>` every 5 minutes, and 30 s after start. That comparison is local and costs nothing. It fetches origin only when the clone's last fetch is older than an hour. The last fetch is read from `.git/FETCH_HEAD`'s mtime, so several Ultimates on one clone (each project's host, the machine home) fetch at most once an hour between them, and a fetch by hand counts too. The fetch uses `lib/fast-forward.ts`, which retries a GitHub origin over the other transport (SSH ↔ HTTPS), and git never prompts. Fetches and updates hold a clone-wide lock (`.git/ultimate-update.lock`, the holder's pid; a dead holder's lock is taken over), and the fetch's age is read again under it. Faux servers and previews never check, and their `state` and `update` never touch the clone.
+
+When a check finds a new range, the summary model is asked once (`ConversationsApi.askSummaryModel`) for 2–4 plain lines on what it brings. Its input is the range's commit subjects and bodies, never diffs, clipped to 12,000 characters. The answer is cached by `<head>..<origin head>` in `.git/ultimate-update-summary.json`, shared by every Ultimate on the clone; a missing or failing model caches no lines, and the popover shows the commit list instead.
 
 ## Status line
 
@@ -12,7 +14,8 @@ While the clone is behind, the status line shows `↓ 5 new · update` (`↓ 5 n
 
 - the clone's path;
 - how far `main` is behind;
-- the newest 5 commits and a DiffsHub ↗ link to the range (GitHub origins);
+- the summary, when there is one;
+- the newest commits (3 under a summary, else 5) and a DiffsHub ↗ link to the range (GitHub origins);
 - what the range touches: extensions and web, server, lockfile, bin;
 - what each of those needs after an update:
   - extensions and web reload by themselves;
@@ -20,7 +23,7 @@ While the clone is behind, the status line shows `↓ 5 new · update` (`↓ 5 n
   - a changed lockfile also needs `pnpm install`;
   - bin needs a supervisor restart.
 
-**Update now** runs the update. After an update that needs a restart, the item reads `updated · restart`, and the popover offers **Restart now** (the core swap, as `core changed · restart` does). Nothing restarts by itself.
+**Update now** runs the update. After an update that needs a restart, the item reads `updated · restart`, and the popover offers **Restart now** (the core swap, as `core changed · restart` does). Every Ultimate on the clone shows it once packages were installed after it started, also when another one updated. While `pnpm-lock.yaml` differs from the installed packages, the item reads `install owed` and offers **Retry pnpm install**. Nothing restarts by itself.
 
 ## Updating
 
@@ -35,7 +38,8 @@ It refuses, and changes nothing, when:
 - the clone has uncommitted changes to tracked files;
 - it is on another branch or detached;
 - it has diverged from origin;
-- the lander is landing into the clone: on a machine where the clone is also the project, landings fast-forward the same branch.
+- the lander is landing into the clone: on a machine where the clone is also the project, landings fast-forward the same branch. It is checked after the fetch, right before the merge; a landing that starts after that sees the moved branch and retries;
+- another Ultimate holds the clone's lock.
 
 It never stashes, rebases or resets. A refusal's popover offers **Ask @sync**, a link to this machine's home.
 
