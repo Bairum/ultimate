@@ -199,7 +199,15 @@ function TranscriptEntries() {
   const failed = useRef<[number, number][]>([])
   const [filling, setFilling] = useState(0)
   const sentinel = useRef<HTMLDivElement>(null)
-  const { contentRef, scrollRef, stopScroll } = useStickToBottomContext()
+  const { contentRef, scrollRef, stopScroll, state, isAtBottom, escapedFromLock } =
+    useStickToBottomContext()
+  // While following, the browser must not anchor: a row above that shrinks as the last one grows would move the view up,
+  // and the library reads that scroll as the reader leaving. A reader who scrolled up keeps anchoring, so rows changing
+  // above them stay put.
+  const following = isAtBottom && !escapedFromLock
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.style.overflowAnchor = following ? 'none' : ''
+  }, [following, scrollRef])
   // Retain already displayed rows when a live compaction replaces the active context, or a fresh window moves past them.
   const entries = useMemo(() => {
     const rows = new Map(history.map((entry) => [entry.id, entry]))
@@ -377,10 +385,9 @@ function TranscriptEntries() {
             top: candidates[0].getBoundingClientRect().top,
           }
       }
-      // The anchor holds the rows in place; only a reader at the very bottom keeps following. Measured, not the library's
-      // flag, which settles a moment after a scroll.
-      const scroll = scrollRef.current
-      if (scroll && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 1) stopScroll()
+      // The anchor holds the rows in place; a reader who left the bottom stops following. The lock, not the distance:
+      // while a run streams, the follow animation is still catching up and the distance is briefly larger.
+      if (!state.isAtBottom) stopScroll()
       // A short transcript needs its existing empty tail to remain scrollable after prepending.
       setTailSpace((space) =>
         Math.max(
