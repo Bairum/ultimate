@@ -3,6 +3,7 @@ import { defineDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-dur
 import type { ConversationId, Cursor, SubmissionId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { Board } from '../board/api.ts'
 import { PauseApi } from './api.ts'
 import { lasted } from './lasted.ts'
 import { PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
@@ -40,20 +41,28 @@ function serial<T>(host: Pick<ExtensionHost, 'resource'>, work: () => Promise<T>
 
 /**
  * Background phases that only wait on other work (a run, a submission, a timer), which a pause holds: they never end
- * while paused and execute nothing meanwhile, so they never keep the pause from being safe. `board.delivery` is not
- * one: its `deliver` phase may ask the summary model to triage a message.
+ * while paused and execute nothing meanwhile, so they never keep the pause from being safe. A `board.delivery` in
+ * `deliver` waits for its receipt too, except while it asks the summary model to triage its message: the Board stores
+ * that message's verdict as `assessing` until the answer is recorded.
  */
 const PASSIVE: Record<string, string[]> = {
   'ultimate.subagent-reporter': ['deliver', 'retry'],
   'ultimate.automation-scheduler': ['sleep'],
   'ultimate.automation-run': ['deliver'],
+  'board.delivery': ['deliver'],
   'board.route': ['observe'],
   'conversations.summary': ['observe'],
   'lineage.notify': ['wait'],
 }
-export const passive = (record: { kind: string; state: unknown }) => {
+export const passive = (
+  record: { kind: string; state: unknown; input?: unknown },
+  board?: { messages: readonly { id: number; triage?: { verdict: string } }[] },
+) => {
   const phase = (record.state as { checkpoint?: { phase?: string } }).checkpoint?.phase
-  return !!phase && (PASSIVE[record.kind] ?? []).includes(phase)
+  if (!phase || !(PASSIVE[record.kind] ?? []).includes(phase)) return false
+  if (record.kind !== 'board.delivery') return true
+  const id = (record.input as { message?: { id?: number } } | undefined)?.message?.id
+  return board?.messages.find((m) => m.id === id)?.triage?.verdict !== 'assessing'
 }
 
 /**
@@ -78,9 +87,13 @@ async function running(host: Host): Promise<RunningTask[]> {
     }
     return tools.get(conversationId)!.get(task)
   }
+  // Read only when a delivery runs: its triage state decides whether it executes.
+  const board = tasks.some(({ record }) => record.kind === 'board.delivery')
+    ? await harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
+    : undefined
   const result: RunningTask[] = []
   for (const { record, state: inspected } of tasks) {
-    if (inspected.kind !== 'running' || (record.background && passive(record))) continue
+    if (inspected.kind !== 'running' || (record.background && passive(record, board))) continue
     const what =
       record.kind === 'pi.generation'
         ? 'model response'
