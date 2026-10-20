@@ -47,28 +47,34 @@ export function buildNote(build: ReturnType<ExtensionHost['build']>, seen: strin
 
 const digest = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16)
 
-/** Ultimate's own docs the primary agent reads on demand: `AGENTS.md`, `docs/*.md` and `agents/*.md` in the clone. */
-async function cloneDocs(ultimateRoot: string) {
+/** Ultimate's own docs the primary agent reads on demand, by absolute path: `AGENTS.md`, `docs/*.md`, `agents/*.md`. */
+async function cloneDocs(ultimateRoot: string, files: Record<string, string>) {
   const listed = async (folder: string) =>
+    // A missing folder lists nothing.
     (await readdir(join(ultimateRoot, folder)).catch(() => [] as string[]))
       .filter((name) => name.endsWith('.md'))
-      .map((name) => `${folder}/${name}`)
-  const paths = ['AGENTS.md', ...(await listed('docs')), ...(await listed('agents'))]
-  const files: Record<string, string> = {}
+      .map((name) => join(ultimateRoot, folder, name))
+  const paths = [
+    join(ultimateRoot, 'AGENTS.md'),
+    ...(await listed('docs')),
+    ...(await listed('agents')),
+  ]
   for (const path of paths) {
     // A doc removed between the listing and the read is simply not there.
-    const text = await readFile(join(ultimateRoot, path), 'utf8').catch(() => undefined)
+    const text = await readFile(path, 'utf8').catch(() => undefined)
     if (text !== undefined) files[path] = digest(text)
   }
-  return files
 }
 
-/** `path` as the agent knows it: relative to the clone or the project, else with the home as `~`. */
+/**
+ * `path` as the agent knows it: relative to the project, or to the clone (`Ultimate/…` when the clone is another
+ * folder), else with the home as `~`.
+ */
 function shown(host: ExtensionHost, path: string) {
-  for (const root of [host.ultimateRoot, host.projectRoot]) {
-    const inside = relative(root, path)
-    if (!inside.startsWith('..')) return inside
-  }
+  const inProject = relative(host.projectRoot, path)
+  if (!inProject.startsWith('..')) return inProject
+  const inClone = relative(host.ultimateRoot, path)
+  if (!inClone.startsWith('..')) return `Ultimate/${inClone}`
   return path.startsWith(host.userHome) ? `~${path.slice(host.userHome.length)}` : path
 }
 
@@ -96,32 +102,40 @@ async function instructionChanges(
     host.modelRuntime,
   )
   const definition = definitions.find((candidate) => candidate.name === name)
-  const instructions: string[] = []
   // Board deliveries refresh a standing agent; a typed input did not, so an updated definition waited for a message.
-  if (
-    definition &&
+  const reapplied =
+    definition !== undefined &&
     (await tx.doc(AgentDoc, conversationId)).instructions !== definition.instructions
-  ) {
-    await configure(tx, conversationId, { instructions: definition.instructions })
-    instructions.push(shown(host, definition.path))
-  }
-  const files: Record<string, string> = await cloneDocs(host.ultimateRoot)
+  if (reapplied) await configure(tx, conversationId, { instructions: definition.instructions })
+  // Keyed by absolute path, so the project's and the clone's AGENTS.md stay apart (and are one file when the clone is
+  // the project).
+  const files: Record<string, string> = {}
+  await cloneDocs(host.ultimateRoot, files)
   for (const file of loadProjectContextFiles({
     cwd: host.projectRoot,
     agentDir: join(host.userHome, '.ultimate'),
   }))
-    files[shown(host, file.path)] = digest(file.content)
-  // The definition is compared as applied text above; listing its file as well would name it twice.
-  if (definition) delete files[shown(host, definition.path)]
+    files[file.path] = digest(file.content)
+  // The file was just parsed; one removed since then hashes as empty and counts as changed.
+  if (definition)
+    files[definition.path] = digest(await readFile(definition.path, 'utf8').catch(() => ''))
   const previous = seen.files
   seen.files = files
-  // The first run records what it saw; afterwards every added or changed file counts.
+  // The first run records what it saw; afterwards every added, changed or removed file counts.
   const changed = previous
-    ? Object.keys(files)
+    ? [...new Set([...Object.keys(previous), ...Object.keys(files)])]
         .filter((path) => previous[path] !== files[path])
         .toSorted()
     : []
-  return { instructions, docs: changed }
+  // The definition is named once, as instructions: when its text was re-applied here or its file changed (a Board
+  // delivery may have applied it already).
+  const own = definition?.path
+  const instructions =
+    own && (reapplied || changed.includes(own)) ? [shown(host, own)] : ([] as string[])
+  const named = changed
+    .filter((path) => path !== own)
+    .map((path) => (path in files ? shown(host, path) : `${shown(host, path)} (removed)`))
+  return { instructions, docs: named }
 }
 
 /** The note's text: what changed, so the agent knows its instructions or Ultimate's docs moved. */

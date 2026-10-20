@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterAll, expect, it } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -345,6 +345,17 @@ it.concurrent('re-applies an updated @ultimate definition on a typed input and n
   // The note comes once per change.
   await ask(f.server, ultimate, 'third')
   expect(await notes()).toHaveLength(1)
+  // A definition a Board delivery already applied, and a removed doc, are still named.
+  await writeFile(path, (await readFile(path, 'utf8')) + '\nBoard rule.\n')
+  await rm(join(f.root, 'docs/worktrees.md'))
+  await f.subagents.standing('ultimate', context)
+  expect(await instructions()).toContain('Board rule.')
+  await ask(f.server, ultimate, 'fourth')
+  // Entries come newest first.
+  expect((await notes())[0].data).toEqual({
+    instructions: ['agents/ultimate.md'],
+    docs: ['docs/worktrees.md (removed)'],
+  })
   // Other conversations never get it.
   await writeFile(path, (await readFile(path, 'utf8')) + '\nAnother rule.\n')
   await ask(f.server, ROOT_CONVERSATION_ID, 'root')
