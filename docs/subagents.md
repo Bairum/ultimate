@@ -7,5 +7,6 @@ extension, subject to the parent's tool subset; they follow their assigned role,
 
 Definitions live in `agents/`, `~/.ultimate/agents/`, and the project root's `.ultimate/agents/` (later wins by name; a later file with only `name` and `addTools` extends the earlier one instead: it adds tools and appends its body), and are reread at every start; the Agents tab lists them. See `extensions/subagents/README.md` for frontmatter. Shipped models inherit the parent's model.
 
-Review goes through one `reviewer`: here a Luna lead (`.ultimate/agents/reviewer.md`) that starts every `reviewer-*`
-definition in parallel and returns one merged verdict. Add a reviewer by adding a `reviewer-<name>.md`.
+Review goes through one `reviewer`. When any `reviewer-*` definition exists, the shipped reviewer leads them: it starts
+every one in parallel and returns one merged verdict; otherwise it reviews alone. Add a reviewer by adding a
+`reviewer-<name>.md`; here `.ultimate/agents/` has three.

@@ -63,7 +63,7 @@ When all tasks are done, start one `reviewer` with the explicit immutable `base.
 
 ### Review team
 
-The shipped `reviewer` reviews alone on the parent's model. For a team, override `reviewer` with a lead that lists `subagent` in `tools` and starts every `reviewer-*` definition in parallel, like this repository's `.ultimate/agents/reviewer.md`: a Luna lead that only relays and merges. Leaves need tools within the lead's. Add a reviewer by copying a `reviewer-*` file under a new `reviewer-<name>` with another model; definitions are reread on every start, so no restart is needed.
+The shipped `reviewer` reviews alone on the parent's model. For a team, add `reviewer-<name>.md` definitions: when any exist, the shipped `reviewer` leads them instead, on the parent's model. It starts every one in parallel, only relays and merges, and returns one verdict, like this repository's `.ultimate/agents/reviewer-*.md`. Leaves need tools within the lead's (`read`, `bash`, `subagent`). Add a reviewer by copying a `reviewer-*` file under a new `reviewer-<name>` with another model; definitions are reread on every start, so no restart is needed.
 
 ## History forks
 
@@ -80,7 +80,11 @@ An isolate is where a child's tools run, separate from the parent. The workspace
 Optional project `.ultimate/settings.json` configuration:
 
 ```json
-{ "isolates": { "worktree": { "setup": ["pnpm install --frozen-lockfile --prefer-offline"] } } }
+{
+  "isolates": {
+    "worktree": { "setup": ["pnpm install --frozen-lockfile --prefer-offline"] }
+  }
+}
 ```
 
 Commands run in order with `sh -c`, closed stdin and a two-minute timeout. `ULTIMATE_SOURCE` is the parent checkout path. Interrupted setup repeats, so commands must be safe to repeat. Failure keeps the output tail and removes only a clean checkout; dirty output stays. Failed or removed workspaces block tool calls with an explanation, which the child's answer can report to its parent.
