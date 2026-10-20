@@ -308,7 +308,11 @@ export function LaneRow({
               )}
               <span className="flex min-w-0 items-center gap-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
                 <span className={cn('shrink-0', laneTone(state))}>{laneWord(state)}</span>
-                {lane.agent && !standing && <span className="shrink-0">· {lane.agent}</span>}
+                {lane.agent && !standing && (
+                  <span className="shrink-0">
+                    · {lane.kind === 'branch' ? 'branch · coordinator' : lane.agent}
+                  </span>
+                )}
                 {lane.model && <span className="truncate">· {modelName(lane.model)}</span>}
               </span>
             </span>

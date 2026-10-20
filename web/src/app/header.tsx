@@ -106,7 +106,10 @@ function Trail() {
       ) : (
         <>
           {summary?.label && (
-            <span className="shrink-0 font-mono text-[12px] text-brand">{summary.label}</span>
+            // A branch names its kind before the agent running it: `branch · coordinator`.
+            <span className="shrink-0 font-mono text-[12px] text-brand">
+              {summary.label === 'coordinator' ? 'branch · coordinator' : summary.label}
+            </span>
           )}
           <span className="truncate text-[13px] font-medium" title={title}>
             {title}

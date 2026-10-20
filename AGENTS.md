@@ -22,7 +22,8 @@ A project is a forest of conversation trees, like commit histories.
 - **Talk to @ultimate in its conversation.** The user's standing agent starts and steers branches and relays their answers there.
   The top-bar **@ultimate** button or first sidebar row opens it; its messages and questions to you appear in that transcript.
   Conversations and roots are not created by hand.
-- **Coordinators carry the work.** A branch plans, decides and verifies; subagents are for bounded execution and
+- **Coordinators carry the work.** A branch is the conversation; the coordinator is the agent that runs it, so the UI
+  labels it `branch · coordinator`. A branch plans, decides and verifies; subagents are for bounded execution and
   reconnaissance, and the lander is the final gate on main.
 - **Zoom out when you need to.** Read any root or sibling with codemode `ultimate.entries(id)` and
   `ultimate.search()`; commits name the conversation that made them (`Ultimate-Conversation` trailer).
