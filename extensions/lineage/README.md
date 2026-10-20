@@ -80,6 +80,27 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   anchor after the landing. Every lander note in a tally is placed in one transaction that checks for an open
   abstract and freezes it if there is one, with request-id deduplication, so no abstract can open between the check
   and the landing.
+- **Go back** (`rewind.ts`, `rewind.tsx`): the message action **Go back to here** on any stored message of a non-root
+  conversation (standing agents included) opens a confirm dialog fed by `rewindPreview {conversation, at}`: steps set
+  aside; the files the set-aside path touched (files of its commits, a merge's against its first parent, and paths
+  the `edit` and `write` calls in every stored entry after the point named, resolved as those tools resolve them) with
+  their `git diff --numstat` against the checkout's tip at the entry, untracked, "changed" (no HEAD to count against,
+  or no difference), or "changed, outside the checkout" (never passed to Git), so uncommitted work from before the
+  entry stays out;
+  commits since; and the conversations that built on the path (subagents and branches it started, conversations it
+  messaged per `board.sent` events, read by kind since board needs lineage). User-only `rewind {conversation, at, summarize?}` runs task
+  `lineage.rewind` in the conversation: it appends one `lineage.rewound` entry whose `edits` omit every entry after
+  `at` that still contributes (and restore entries up to `at` an earlier go-back changed), and whose user-role message
+  is the note. The conversation keeps its id, worktree, files and commits; nothing runs until the next input, and the
+  prefix up to `at` contributes byte-identically, so a warm provider cache can hit. With `summarize`, the summary model
+  summarizes the set-aside path into the note (memoized; without an answer the note lists the files). The task reads
+  the context first and memoizes the facts with that revision (its newest entry); a retry or the final commit refuses
+  with "changed meanwhile" once any entry that the model sees lands after it. It refuses roots, busy conversations (a
+  run or queued input), running compactions (both at admission and in the final commit), and points before the newest
+  head marker (a compaction or reset). A suffix of only tool results can be set aside too. It
+  emits `lineage.rewound {conversation, at, entry, dependents}` and writes a display-only
+  `lineage.rewound-dependent` marker in each dependent, which keeps running. The transcript folds what a go-back set
+  aside (`data.setAside`) into **N steps set aside · show**.
 - **Notify**: `notify` `{ id, wake? }` starts `lineage.notify` in the caller. It waits until the target and its
   subagents are idle, then delivers `#id finished · <title>` with its last own answer (≤1500 chars), not an inherited
   source answer. `wake` (default true) submits a follow-up placed as `lineage.finished`; `wake: false` leaves a note

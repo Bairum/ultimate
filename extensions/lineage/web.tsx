@@ -29,6 +29,7 @@ import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open } from '../workspaces/ui.tsx'
 import { TallyDoc } from './refs.ts'
 import { column, EmptyRoot, useRoots } from './ui.tsx'
+import { GoBackAction, Rewound, RewoundDependent } from './rewind.tsx'
 
 function userText(entry: EntryRecord) {
   const message = entry.model?.[0]
@@ -461,8 +462,11 @@ export default defineWebExtension({
     'lineage.note': Note,
     'lineage.finished': Finished,
     'lineage.abstract': Abstract,
+    'lineage.rewound': Rewound,
+    'lineage.rewound-dependent': RewoundDependent,
     'pi.reset': Reset,
   },
+  messageActions: [GoBackAction],
   composer: RootComposer,
   slots: { overlay: [Roots] },
   // A root runs no turns and gets no summaries: its tally speaks for it.
