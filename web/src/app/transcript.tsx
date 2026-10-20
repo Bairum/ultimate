@@ -62,6 +62,7 @@ import { ExtensionBoundary } from './boundary.tsx'
 import { chatRows, runOf, windowGaps, windowKey } from './chat.ts'
 import { useFold } from './fold.tsx'
 import type { ChatPart, WorkRun } from './chat.ts'
+import { readerLeft } from './follow.ts'
 import { column } from './layout.ts'
 import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
 import type { ToolResult } from './model.ts'
@@ -199,7 +200,40 @@ function TranscriptEntries() {
   const failed = useRef<[number, number][]>([])
   const [filling, setFilling] = useState(0)
   const sentinel = useRef<HTMLDivElement>(null)
-  const { contentRef, scrollRef, stopScroll } = useStickToBottomContext()
+  const { contentRef, scrollRef, stopScroll, state, isAtBottom, escapedFromLock } =
+    useStickToBottomContext()
+  // While following, the browser must not anchor: a row above that shrinks as the last one grows would move the view up,
+  // and the library reads that scroll as the reader leaving. A reader who scrolled up keeps anchoring, so rows changing
+  // above them stay put. A passive effect: the scroller, an ancestor, attaches its ref after these rows' layout effects.
+  const following = isAtBottom && !escapedFromLock
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.style.overflowAnchor = following ? 'none' : ''
+  }, [following, scrollRef])
+  // Stop following the moment the reader moves the view up: the library notices touch, keyboard and scrollbar scrolls a
+  // moment late, or not at all while content resizes. Captured, so it reads the library's own last placement before
+  // the library's listener clears it.
+  const seenTop = useRef(0)
+  const left = useEffectEvent(() => {
+    const scroll = scrollRef.current
+    if (!scroll) return false
+    return readerLeft({
+      top: scroll.scrollTop,
+      seen: seenTop.current,
+      placed: state.ignoreScrollToTop,
+      distance: scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight,
+    })
+  })
+  useEffect(() => {
+    const scroll = scrollRef.current
+    if (!scroll) return undefined
+    seenTop.current = scroll.scrollTop
+    const onScroll = () => {
+      if (left()) stopScroll()
+      seenTop.current = scroll.scrollTop
+    }
+    scroll.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    return () => scroll.removeEventListener('scroll', onScroll, { capture: true })
+  }, [scrollRef, stopScroll])
   // Retain already displayed rows when a live compaction replaces the active context, or a fresh window moves past them.
   const entries = useMemo(() => {
     const rows = new Map(history.map((entry) => [entry.id, entry]))
@@ -377,10 +411,9 @@ function TranscriptEntries() {
             top: candidates[0].getBoundingClientRect().top,
           }
       }
-      // The anchor holds the rows in place; only a reader at the very bottom keeps following. Measured, not the library's
-      // flag, which settles a moment after a scroll.
-      const scroll = scrollRef.current
-      if (scroll && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 1) stopScroll()
+      // The anchor holds the rows in place; a reader who left the bottom stops following, even when the page arrives
+      // before their scroll's event.
+      if (!state.isAtBottom || left()) stopScroll()
       // A short transcript needs its existing empty tail to remain scrollable after prepending.
       setTailSpace((space) =>
         Math.max(
