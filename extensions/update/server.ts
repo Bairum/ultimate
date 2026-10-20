@@ -208,25 +208,33 @@ async function refresh(host: ExtensionHost, check: boolean) {
   const shared = state(host)
   const root = host.ultimateRoot
   const git = gitIn(root)
-  // Fetch freshness is read again under the lock, so Ultimates on one clone fetch once between them.
-  const fetched = check
-    ? await withLock(await lockOf(root), async () => ({
-        error: await fetchIfDue(git, root, Date.now()),
-      }))
+  const summaryFile = await gitPath(git, root, 'ultimate-update-summary.json')
+  /** The summary of the clone's current range; asks the model only with `asking`, else reads the cache. */
+  const summarize = async (asking: boolean) => {
+    const { head, remoteHead } = await cloneState(git, root)
+    if (!remoteHead) return undefined
+    return summaryFor(
+      summaryFile,
+      `${head}..${remoteHead}`,
+      () => git('log', '--format=%s%n%n%b', `${head}..${remoteHead}`),
+      asking ? (input) => ask(host, input) : undefined,
+    )
+  }
+  // Under the clone's lock the fetch's age and the summary cache are read again, so the Ultimates on one clone fetch
+  // and ask the summary model once between them.
+  const checked = check
+    ? await withLock(await lockOf(root), async () => {
+        const error = await fetchIfDue(git, root, Date.now())
+        await summarize(true)
+        return { error }
+      })
     : undefined
-  const error = fetched ? fetched.error : shared.latest?.error
+  const error = checked ? checked.error : shared.latest?.error
   const clone = await cloneState(git, root)
   const repo = clone.remoteHead ? await githubRepo(root) : undefined
   const startedAt = Date.parse(host.system().process.startedAt)
   const { head, remoteHead, ...rest } = clone
-  const summary = remoteHead
-    ? await summaryFor(
-        await gitPath(git, root, 'ultimate-update-summary.json'),
-        `${head}..${remoteHead}`,
-        () => git('log', '--format=%s%n%n%b', `${head}..${remoteHead}`),
-        check ? (input) => ask(host, input) : undefined,
-      )
-    : undefined
+  const summary = await summarize(false)
   shared.latest = {
     root,
     ...rest,

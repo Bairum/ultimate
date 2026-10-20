@@ -1,9 +1,11 @@
 /** The Ultimate clone against origin: what it lacks, what that touches, and fetching it at most hourly. */
-import { readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import type { Git } from '../../lib/fast-forward.ts'
 import { fetchOrigin, standing } from '../../lib/fast-forward.ts'
 import { readJson, writeJson } from '../../lib/json-file.ts'
+// oxlint-disable-next-line no-restricted-imports -- the core's process-safe lock, shared with secrets and tailscale
+import { acquireLock } from '../../server/lock.ts'
 import type { Layers, UpdateState } from './refs.ts'
 
 /** Origin is fetched when the last fetch of the clone, by any Ultimate on it, is older than this. */
@@ -44,43 +46,25 @@ export async function fetchIfDue(git: Git, root: string, now: number) {
   )
 }
 
-const alive = (pid: number) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    // EPERM: the process exists under another user; ESRCH: it is gone.
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
 /**
- * Run `work` holding `lock` (a file with this process's pid), so fetches, updates and installs of one clone never
- * overlap across Ultimates; undefined without running when a live process holds it. A dead holder's lock is taken over.
+ * Run `work` holding `lock`, so fetches, summaries, updates and installs of one clone never overlap across Ultimates;
+ * undefined without running while another holds it. The lock is the core's SQLite-held one (`server/lock.ts`): the
+ * exclusive transaction ends with its process, so a dead holder never blocks the next.
  */
 export async function withLock<T>(lock: string, work: () => Promise<T>): Promise<T | undefined> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      await writeFile(lock, String(process.pid), { flag: 'wx' })
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      const holder = Number(
-        await readFile(lock, 'utf8').catch(
-          // Gone between the failed create and this read: the next attempt takes it.
-          () => '',
-        ),
-      )
-      if (holder && alive(holder)) return undefined
-      await rm(lock, { force: true })
-      continue
-    }
-    try {
-      return await work()
-    } finally {
-      await rm(lock, { force: true })
-    }
+  let held: Awaited<ReturnType<typeof acquireLock>>
+  try {
+    held = await acquireLock(lock, { pid: process.pid })
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Ultimate core already owns'))
+      return undefined
+    throw error
   }
-  return undefined
+  try {
+    return await work()
+  } finally {
+    await held.close()
+  }
 }
 
 /** The clone against `origin/<default branch>` as of the last fetch: commits behind, what they touch, refusals. */

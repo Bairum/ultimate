@@ -116,16 +116,25 @@ it('refuses a dirty, switched or diverged clone and leaves it alone', async () =
   expect((await cloneState(run, clone)).refused).toBe('main has diverged from origin/main')
 })
 
-it('runs one holder of the clone lock at a time and takes over a dead one', async () => {
+it('admits one holder of the clone lock among simultaneous ones, and recovers a stale sidecar', async () => {
   const lock = join(clone, '.git/ultimate-update.lock')
-  let inner: unknown = 'unset'
-  const outer = await withLock(lock, async () => {
-    inner = await withLock(lock, async () => 'second')
-    return 'first'
-  })
-  expect([outer, inner]).toEqual(['first', undefined])
-  // A pid that cannot exist holds it: taken over.
-  await writeFile(lock, '999999999')
+  let inside = 0
+  let most = 0
+  const results = await Promise.all(
+    Array.from({ length: 8 }, (_, index) =>
+      withLock(lock, async () => {
+        inside++
+        most = Math.max(most, inside)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        inside--
+        return index
+      }),
+    ),
+  )
+  expect(most).toBe(1)
+  expect(results.filter((result) => result !== undefined)).toHaveLength(1)
+  // A sidecar left by a dead holder (no transaction behind it) never blocks the next.
+  await writeFile(lock, JSON.stringify({ pid: 999999999 }))
   expect(await withLock(lock, async () => 'taken')).toBe('taken')
 })
 
