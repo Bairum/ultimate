@@ -13,8 +13,6 @@ import {
   ChevronRightIcon,
   CircleAlertIcon,
   CircleStopIcon,
-  CopyIcon,
-  LinkIcon,
   PauseIcon,
   RotateCwIcon,
 } from 'lucide-react'
@@ -45,7 +43,7 @@ import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai/r
 import { Shimmer } from '@/components/ai/shimmer'
 import { ToolImage, ToolStatusIcon } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { elidePath, formatDuration, formatTime, shortenPath } from '../sdk/format.ts'
+import { elidePath, formatDuration, shortenPath } from '../sdk/format.ts'
 import {
   TranscriptContext,
   useChat,
@@ -61,6 +59,7 @@ import { entryRenderers, messageItems, toolLine } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary, Provided } from './boundary.tsx'
 import { ParkedRuns } from '../sdk/types.ts'
+import { MessageActions } from './message-actions.tsx'
 import { chatRows, groupAside, runOf, setAsideIds, windowGaps, windowKey } from './chat.ts'
 import { useFold } from './fold.tsx'
 import type { AsideGroup, ChatPart, WorkRun } from './chat.ts'
@@ -975,87 +974,6 @@ function coreEntry(
     default:
       return <UnknownEntry entry={entry} />
   }
-}
-
-/** Hover actions on a stored message, always shown on touch screens: extensions' details, its time, and copies of its text or of a reference another conversation can follow. */
-function MessageActions({
-  entry,
-  text,
-  timestamp,
-  className,
-}: {
-  entry: EntryRecord
-  text: string
-  timestamp: number
-  className?: string
-}) {
-  const extensions = useExtensions()
-  const details = messageItems(extensions, 'messageDetails')
-  const contributions = messageItems(extensions, 'messageActions')
-  const { conversationId: conversation, id } = entry
-  const reference = `Ultimate conversation #${conversation}, message #${id}. Read it in codemode with ultimate.entries(${conversation}, { before: ${id + 1}, limit: 1 }).`
-  const date = new Date(timestamp)
-  return (
-    <div
-      className={cn(
-        'flex items-center gap-2 font-mono text-[11px] text-muted-foreground/60 opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100',
-        className,
-      )}
-    >
-      {details.map(({ key, extension, version, component: Detail }) => (
-        <ExtensionBoundary extension={extension} fallback={null} key={key} version={version}>
-          <Detail entry={entry} />
-        </ExtensionBoundary>
-      ))}
-      <time className="tabular-nums" dateTime={date.toISOString()} title={date.toLocaleString()}>
-        {formatTime(date)}
-      </time>
-      {text && (
-        <CopyButton label="Copy message" value={text}>
-          <CopyIcon />
-        </CopyButton>
-      )}
-      {contributions.map(({ key, extension, version, component: Action }) => (
-        <ExtensionBoundary extension={extension} fallback={null} key={key} version={version}>
-          <Action entry={entry} />
-        </ExtensionBoundary>
-      ))}
-      <CopyButton label={`Copy reference to message #${id}`} value={reference}>
-        <LinkIcon />
-      </CopyButton>
-    </div>
-  )
-}
-
-function CopyButton({
-  value,
-  label,
-  children,
-}: {
-  value: string
-  label: string
-  children: ReactNode
-}) {
-  const [copied, setCopied] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  useEffect(() => () => clearTimeout(timer.current), [])
-  return (
-    <button
-      aria-label={label}
-      className="cursor-pointer rounded p-0.5 transition-colors hover:text-foreground [&_svg]:size-3"
-      onClick={() =>
-        void navigator.clipboard.writeText(value).then(() => {
-          setCopied(true)
-          clearTimeout(timer.current)
-          timer.current = setTimeout(() => setCopied(false), 1200)
-        })
-      }
-      title={label}
-      type="button"
-    >
-      {copied ? <CheckIcon className="text-success" /> : children}
-    </button>
-  )
 }
 
 function UserView({ entry, message }: { entry: EntryRecord; message: UserMessage }) {

@@ -1,7 +1,9 @@
+import type { EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import { accentIndex, accentOf } from '../../extensions/board/accent.tsx'
 import {
   answeredMessages,
+  callerOf,
   conversationState,
   stateWord,
   messageStatus,
@@ -14,6 +16,30 @@ import {
   waitingOnUser,
 } from '../../extensions/board/data.tsx'
 import type { BoardMessage } from '../../extensions/board/refs.ts'
+
+const response = (id: number, calls: string[]) =>
+  ({
+    id,
+    conversationId: 7,
+    kind: 'pi.assistant',
+    model: [
+      {
+        role: 'assistant',
+        content: calls.map((call) => ({ type: 'toolCall', id: call, name: 'message' })),
+      },
+    ],
+  }) as unknown as EntryRecord
+
+describe('callerOf', () => {
+  const entries = [response(1, ['a']), response(2, ['b', 'c'])]
+  it('finds the response whose tool call sent a message, so go back returns there', () => {
+    expect(callerOf(entries, 'c')?.id).toBe(2)
+    expect(callerOf(entries, 'a')?.id).toBe(1)
+  })
+  it('finds nothing for a call outside the loaded entries', () => {
+    expect(callerOf(entries, 'z')).toBeUndefined()
+  })
+})
 
 describe('board answer labels', () => {
   const request = {
