@@ -140,7 +140,7 @@ export function ChatBubble({
       data-board-outgoing={message?.id}
       data-chat-bubble
       className={cn(
-        'min-w-0 rounded-md border border-l-2 border-border max-sm:w-full sm:w-fit sm:max-w-[85%] sm:min-w-[20rem]',
+        'w-full min-w-0 rounded-md border border-l-2 border-border',
         accent.left,
         accent.fill,
       )}

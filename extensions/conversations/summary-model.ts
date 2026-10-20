@@ -6,7 +6,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { parseSummaryModel } from './summary-model-ref.ts'
 
 /** Titles, summaries and reply summaries use this model unless settings name another. */
-export const DEFAULT_SUMMARY_MODEL = 'openai-codex/gpt-6-luna:medium'
+const DEFAULT_SUMMARY_MODEL = 'openai-codex/gpt-6-luna:medium'
 
 /** A resolved summary model, kept in a task's memo so a resumed task asks the same one. */
 export type SummaryModel = { provider: string; id: string; thinking: ModelThinkingLevel }

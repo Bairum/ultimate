@@ -196,7 +196,9 @@ export async function loadExtensions(
       notice: (message) => {
         // Each distinct message once per facet load: a notice raised by a commit watcher cannot loop through its event.
         // One raised while storage is closed is recorded when it opens.
-        const messages = facetNotices.get(facetHost)!
+        const messages = facetNotices.get(facetHost)
+        // Pending facet work can finish after reload or shutdown; it must not revive a disposed facet's notices.
+        if (!messages) return
         if (!messages.has(message)) {
           messages.set(message, open)
           if (open) log.notice(name, message)

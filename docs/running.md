@@ -13,7 +13,7 @@
 - `ULTIMATE_GENERATION` defaults to `1` and labels the process in system info.
 - `ULTIMATE_FAUX=1` uses a looping demo provider without tokens; its tools edit only a scratch file in the home.
 - Pi's models, settings, and auth are shared with `~/.pi/agent`; the `models` extension logs in to providers.
-- `pnpm check` checks format/lint/types; `pnpm test` runs the fast in-process faux tests with temporary homes (about 20 s today); `pnpm test:e2e` runs `test/e2e`, the tests that spawn real supervisors and instances; `pnpm eval` runs the real-model agent evals in `evals/` and ends with their cost. There are no browser tests: UI is verified on a faux instance with screenshot or browser.
+- `pnpm check` checks format/lint/types; `pnpm test` runs the fast in-process faux tests with temporary homes (about 20 s today); `pnpm test:e2e` runs `test/e2e`, the tests that spawn real supervisors and instances. There are no browser tests: UI is verified on a faux instance with screenshot or browser.
 - `tsconfig.swap.json` is the server-only type-check gate for swaps.
 - `tsconfig.json` (server, tests, tooling) references `tsconfig.web.json` (browser: `web/src`, `extensions/**/*.tsx`).
   `pnpm check` type-checks both; with plain `tsc`, run `tsc -b`.
