@@ -7,7 +7,7 @@ import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
 import type { ConversationSubject, KeptWork } from './types.ts'
 import type { accountResponse, askSummaryModel, SummaryRequest } from './summary.ts'
-import type { SummaryModel } from './summary-model.ts'
+import type { SummaryModel, SummaryModelStatus } from './summary-model.ts'
 
 export type ConversationsService = {
   /** What conversation `id` is about now: its title, summary and feature, for a record that outlives a retitle. */
@@ -16,6 +16,8 @@ export type ConversationsService = {
   concluded: (caller: Context) => Promise<Set<ConversationId>>
   /** The summary model to ask now, from settings; undefined while none is valid and available. */
   summaryModel(): Promise<SummaryModel | undefined>
+  /** The summary model with why: the configured one, a fallback for a default without a login, or why none runs. */
+  summaryModelStatus(): Promise<SummaryModelStatus>
   /** Request a summary of `id` inside the trigger's transaction, with the model resolved before it. */
   requestSummary(
     tx: Tx,

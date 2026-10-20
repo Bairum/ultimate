@@ -2,7 +2,6 @@ import { ExternalLinkIcon, EyeIcon, EyeOffIcon, KeyRoundIcon, LoaderCircleIcon }
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   api,
   cn,
@@ -392,39 +391,6 @@ function SecretsPanel() {
   )
 }
 
-/** "n missing" while an enabled extension lacks a secret it declares; opens the panel at the first one. */
-function Missing() {
-  const { data } = useSecrets()
-  const ui = useUltimate()
-  const absent = missing(data)
-  if (absent.length === 0) return null
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          className="-mx-1 flex items-center gap-1.5 rounded-sm px-1 text-warning transition-colors hover:bg-accent"
-          onClick={() => {
-            request(absent[0].name)
-            ui.openPanel('secrets')
-          }}
-          type="button"
-        >
-          <KeyRoundIcon className="size-3" />
-          {absent.length} secret{absent.length === 1 ? '' : 's'} missing
-        </button>
-      </TooltipTrigger>
-      <TooltipContent className="font-mono text-[11px]" side="top">
-        {absent.map((secret) => (
-          <div key={secret.name}>
-            {secret.name}
-            <span className="text-muted-foreground"> · {secret.declaredBy.join(', ')}</span>
-          </div>
-        ))}
-      </TooltipContent>
-    </Tooltip>
-  )
-}
-
 /** Other facets open the panel at a row with `events.emit('secrets:open', { name })`. */
 function Opener() {
   const ui = useUltimate()
@@ -437,7 +403,7 @@ function Opener() {
 }
 
 export default defineWebExtension({
-  slots: { 'statusline.right': [Missing], overlay: [Opener] },
+  slots: { overlay: [Opener] },
   panels: [{ id: 'secrets', title: 'Secrets', icon: KeyRoundIcon, component: SecretsPanel }],
   commands: [
     {

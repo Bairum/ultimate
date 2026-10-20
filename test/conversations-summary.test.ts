@@ -954,7 +954,7 @@ it.concurrent.each(['reply', 'spawn'] as const)(
 )
 
 it.concurrent.each(['none', 'legacy'])(
-  'skips summaries and assessments when current Codex Luna is unavailable (%s)',
+  'skips summaries and assessments when the chosen Codex Luna is unavailable (%s)',
   async (available) => {
     const fixture = await launch()
     const server = fixture.server
@@ -974,7 +974,8 @@ it.concurrent.each(['none', 'legacy'])(
             harness: () => server.harness,
             metadata: Metadata,
             userHome: server.host.userHome,
-            projectSettings: async () => ({}),
+            // Chosen explicitly: only the default falls back to another available model.
+            projectSettings: async () => ({ summaryModel: 'openai-codex/gpt-6-luna:medium' }),
             notice: () => {},
             modelRuntime: { getAvailableSnapshot: () => models },
           },

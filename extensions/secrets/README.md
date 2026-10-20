@@ -15,6 +15,6 @@ The Secrets panel (palette: `Secrets…`) lists every secret an enabled extensio
 - **Delete:** asks first, with focus on Cancel.
 - **Errors:** inline, with the action's message.
 
-While an enabled extension lacks a secret it declares, the status line shows `n secrets missing`. Hover it for the names; click it to open the panel at the first.
+While an enabled extension lacks a secret it declares, the `setup` status-line item warns, with an Add button that opens the panel at it.
 
 Other facets open the panel at a row with `events.emit('secrets:open', { name })` from `@/sdk`, as parallel's Add key and onboarding do. Each save and delete emits `secrets:changed`.

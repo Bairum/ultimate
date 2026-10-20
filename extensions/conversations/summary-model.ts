@@ -36,31 +36,103 @@ export async function summaryModelSetting(
   }
 }
 
-const reported = new Set<string>()
+/** Cheap models known to write good summaries, tried in order when the default has no login here. */
+export const FALLBACK_SUMMARY_MODELS = [
+  'openai-codex/gpt-6-luna',
+  'anthropic/claude-haiku-5-5',
+  'openrouter/anthropic/claude-haiku-5.5',
+  'openrouter/~openai/gpt-luna-latest',
+  'openai/gpt-6-luna',
+  'google/gemini-2.5-flash-lite',
+]
+
+type Available = ReturnType<SummaryModelHost['modelRuntime']['getAvailableSnapshot']>[number]
+
+/** The fallback among `available`: the first known-good one, else the cheapest; never the faux provider. */
+export function fallbackModel(available: readonly Available[]) {
+  const real = available.filter((model) => model.provider !== 'faux')
+  for (const ref of FALLBACK_SUMMARY_MODELS) {
+    const found = real.find((model) => `${model.provider}/${model.id}` === ref)
+    if (found) return found
+  }
+  let best: Available | undefined
+  for (const model of real)
+    if (!best || model.cost.input + model.cost.output < best.cost.input + best.cost.output)
+      best = model
+  return best
+}
 
 /**
- * The summary model to ask now, read from settings at each request so a change applies to the next one. An invalid
- * value is reported once as a notice; an invalid or unavailable model is undefined, so callers skip quietly.
+ * What the summary features run on, and why: `model` is undefined while they are off. `configured` is the setting's
+ * `provider/id`; `fellBack` says the default had no login here and `model` is the fallback; `problem` is why none runs.
  */
-export async function summaryModel(host: SummaryModelHost): Promise<SummaryModel | undefined> {
+export type SummaryModelStatus = {
+  model?: SummaryModel
+  configured: string
+  source: 'default' | 'user' | 'project'
+  fellBack?: true
+  problem?: 'invalid' | 'unavailable'
+}
+
+const reported = new Set<string>()
+const once = (host: Pick<SummaryModelHost, 'notice'>, message: string) => {
+  if (reported.has(message)) return
+  reported.add(message)
+  host.notice(message)
+}
+
+/**
+ * The summary model to ask now and why, read from settings at each request so a change applies to the next one. The
+ * default falls back to an available model when it has no login here, said once as a notice; a model the settings name
+ * never does, it is only reported (the setup check shows it).
+ */
+export async function summaryModelStatus(host: SummaryModelHost): Promise<SummaryModelStatus> {
   const { value, source } = await summaryModelSetting(host)
-  if (host.faux && source === 'default') return { provider: 'faux', id: 'faux-1', thinking: 'off' }
+  const configured = typeof value === 'string' ? value : JSON.stringify(value)
+  if (host.faux && source === 'default')
+    return { model: { provider: 'faux', id: 'faux-1', thinking: 'off' }, configured, source }
   const parsed = typeof value === 'string' ? parseSummaryModel(value) : undefined
   if (!parsed) {
-    const message = `Invalid summaryModel ${JSON.stringify(value)} in ${source} settings: expected "provider/id[:thinking]"; summaries are off`
-    if (!reported.has(message)) {
-      reported.add(message)
-      host.notice(message)
+    once(
+      host,
+      `Invalid summaryModel ${JSON.stringify(value)} in ${source} settings: expected "provider/id[:thinking]"; summaries are off`,
+    )
+    return { configured, source, problem: 'invalid' }
+  }
+  const available = host.modelRuntime.getAvailableSnapshot()
+  const model = available.find(
+    (candidate) => candidate.provider === parsed.provider && candidate.id === parsed.id,
+  )
+  const thinking = parsed.thinking ?? 'medium'
+  if (model)
+    return {
+      model: {
+        provider: model.provider,
+        id: model.id,
+        thinking: clampThinkingLevel(model, thinking),
+      },
+      configured,
+      source,
     }
-    return undefined
-  }
-  const model = host.modelRuntime
-    .getAvailableSnapshot()
-    .find((candidate) => candidate.provider === parsed.provider && candidate.id === parsed.id)
-  if (!model) return undefined
+  const fallback = source === 'default' ? fallbackModel(available) : undefined
+  if (!fallback) return { configured, source, problem: 'unavailable' }
+  once(
+    host,
+    `Summary model ${configured} has no login here; using ${fallback.provider}/${fallback.id} instead. Choose one with ⌘K → Summary model.`,
+  )
   return {
-    provider: model.provider,
-    id: model.id,
-    thinking: clampThinkingLevel(model, parsed.thinking ?? 'medium'),
+    model: {
+      provider: fallback.provider,
+      id: fallback.id,
+      thinking: clampThinkingLevel(fallback, thinking),
+    },
+    configured,
+    source,
+    fellBack: true,
   }
+}
+
+/** The summary model to ask now; undefined while none is valid and available, so callers skip. */
+export async function summaryModel(host: SummaryModelHost): Promise<SummaryModel | undefined> {
+  return (await summaryModelStatus(host)).model
 }

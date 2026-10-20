@@ -20,7 +20,7 @@ import {
   Summaries,
   summaryBehavior,
 } from './summary.ts'
-import { summaryModel, summaryModelSetting } from './summary-model.ts'
+import { summaryModel, summaryModelSetting, summaryModelStatus } from './summary-model.ts'
 import { parseSummaryModel } from './summary-model-ref.ts'
 import { implementAction } from '../../lib/actions.ts'
 import type { ActionInput } from '../../lib/actions.ts'
@@ -212,6 +212,7 @@ export default (host: ExtensionHost) => {
   host.implement(ConversationsApi, {
     subject: (id, caller) => subject(host, id, caller),
     summaryModel: () => summaryModel(host),
+    summaryModelStatus: () => summaryModelStatus(host),
     requestSummary: (tx, id, request, model) => requestSummary(tx, host, id, request, model),
     askSummaryModel,
     accountResponse,

@@ -1,4 +1,4 @@
-Tracks whether each model provider works on this machine, from every real response and an hourly heartbeat in the machine home, and shows an amber `<provider> failing` item in the status line while one does not.
+Tracks whether each model provider works on this machine, from every real response and an hourly heartbeat in the machine home, and reports a failing one to the `setup` status-line item.
 
 ## What is stored
 
@@ -57,4 +57,4 @@ The write that turns a provider failing (from ok or unknown) calls the `health.f
 
 ## Status line
 
-In every home the status line polls `state` every minute and shows an amber `<provider> failing` (or `2 providers failing`) only while a provider fails; its popover lists each failing provider's error and age. A move's checks step also refuses a failing default provider (`cloud/login.ts`).
+In every home the `setup` status-line item lists a failing provider with its error (`providers()`). A move's checks step also refuses a failing default provider (`cloud/login.ts`).

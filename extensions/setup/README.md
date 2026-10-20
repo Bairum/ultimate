@@ -1,0 +1,39 @@
+# Setup
+
+What isn't set up on this machine, and what that costs: one status-line item, `⚠ N setup issues`, shown only while
+something warns. Its popover lists every area with what is set up, what is missing, what the user loses and a fix
+button (a ⌘K command, or the Secrets panel at the missing secret).
+
+| Area              | Warns when                                                                   | Fix               |
+| ----------------- | ---------------------------------------------------------------------------- | ----------------- |
+| Summary model     | the configured model has no login here (the default falls back, see below)   | Summary model…    |
+| Agent models      | a definition pins a model whose provider has no login here                   | Log in            |
+| Agent definitions | a definition file fails to parse                                             |                   |
+| Providers         | a provider's latest call on this machine failed (`health`)                   | Log in again      |
+| Secrets           | an enabled extension lacks a secret it declares                              | the Secrets panel |
+| Extensions        | an enabled extension's server facet failed to load                           | Extensions panel  |
+| Cloud sync        | `cloud.url` is set but `ULTIMATE_CLOUD_TOKEN` or the snapshot key is missing | the Secrets panel |
+| Tailscale         | never; `info` while not published                                            |                   |
+| Lander checks     | never; `info` while `lander.checks` is empty                                 |                   |
+
+A definition pinned to a provider without a login still loads (Pi resolves its model among every known model) and
+fails at its first model call, so its row says that.
+
+## Summary model fallback
+
+`conversations`' `summaryModelStatus()` says what the summary features run on. When the **default** summary model has
+no login here, it falls back to the first available of a short known-good list (`FALLBACK_SUMMARY_MODELS`), else the
+cheapest available model, and says so once as a notice; the Summary model row warns. A model the settings name
+explicitly never falls back: the features are off and the row warns.
+
+## The agent's note
+
+The primary agent (@ultimate, @sync in the machine home) hears about setup through a hidden `setup.note` entry placed
+before an input that starts its run, by the patched `beforeInput` hook, only when its set of warnings differs from the
+one it last heard (`setup.seen`, per conversation), and once more with "resolved" when they clear. No system-prompt
+section, so the prompt stays cached. The check is cached for 30 seconds.
+
+## Actions
+
+`check` returns every area as `{ area, status: 'warn' | 'info' | 'ok', summary, impact?, fix? }`, warnings first (a
+poll action). Faux only: `demo { issues }` shows a fixed set instead of the real check, `null` for the real one.
