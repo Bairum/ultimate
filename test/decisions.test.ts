@@ -102,6 +102,27 @@ describe('the decisions block', () => {
   it('keeps option labels whole when shortening them would repeat one', () => {
     const [keep] = parseDecisions('1. **Keep:** (a) Keep: summaries only; (b) Keep: full history.')
     expect(keep.options.map((o) => o.label)).toEqual(['Keep: summaries only', 'Keep: full history'])
+    // Compared after inline code loses its backticks.
+    const [code] = parseDecisions(
+      '1. **Keep:** (a) `Keep`: summaries only; (b) Keep: full history.',
+    )
+    expect(code.options.map((o) => o.label)).toEqual(['Keep: summaries only', 'Keep: full history'])
+    // Identical options leave one, so a choice never maps to another option's letter.
+    expect(parseDecisions('1. **Mode:** (a) Keep; (b) Keep.')).toEqual([])
+    const [mode] = parseDecisions('1. **Mode:** (a) Keep; (b) Keep; (c) Drop.')
+    expect(mode.options.map((o) => [o.key, o.label])).toEqual([
+      ['a', 'Keep'],
+      ['c', 'Drop'],
+    ])
+  })
+
+  it('answers b with b when labels were made distinct', () => {
+    const questions = decisionQuestions(
+      '1. **Keep:** (a) Keep: summaries only; (b) Keep: full history.',
+    )
+    expect(
+      answerText([{ question: 'Keep', answer: questions[0].options![1].label }], questions),
+    ).toBe('1b. Keep: Keep: full history')
   })
 
   it('finds no decisions in plain numbered options, prose or reports', () => {

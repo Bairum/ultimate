@@ -78,14 +78,17 @@ export function parseDecisions(text: string): Decision[] {
       else return undefined
     }
     if (!topic || options.length < 2) return undefined
-    // Answers name an option by its label, so labels stay distinct: when shortening would repeat one, keep them whole.
-    const leads = options.map(([, raw]) => labelSplit(clean(raw))?.[1] ?? raw)
-    const split = new Set(leads).size === leads.length
-    return {
-      ref,
-      topic,
-      options: options.map(([key, raw]) => option(key, raw, picks.get(ref) === key, split)),
-    }
+    // Answers name an option by its label, so labels stay distinct: when shortening would repeat one, keep them
+    // whole; an option whose whole text repeats an earlier one offers nothing new and is left out.
+    const build = (split: boolean) =>
+      options.map(([key, raw]) => option(key, raw, picks.get(ref) === key, split))
+    const distinct = (list: Decision['options']) =>
+      new Set(list.map((o) => o.label)).size === list.length
+    const shortened = build(true)
+    const kept = (distinct(shortened) ? shortened : build(false)).filter(
+      (o, i, list) => list.findIndex((other) => other.label === o.label) === i,
+    )
+    return kept.length >= 2 ? { ref, topic, options: kept } : undefined
   }
   // Runs of numbered items; blank lines stay inside a run, any other line ends it, indented lines continue an item.
   // Only the final run counts: when it is no decisions block ("Land it?\n1. Yes\n2. No"), an earlier lettered list
