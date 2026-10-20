@@ -17,6 +17,34 @@ const routedExtensions = {
   disable: ['codemode'],
 }
 
+// boxer's @ultimate wrote a whole .ultimate/extensions/processes extension itself instead of branching.
+test('standing agent branches a project extension instead of writing it', async () => {
+  const ultimate = await start({
+    project: { files: { 'package.json': '{"scripts":{"dev":"vite"}}\n' } },
+    extensions: routedExtensions,
+    toolResults: { branch: branchResult },
+  })
+  try {
+    await ultimate.conversation({
+      id: 1 as ConversationId,
+      history: [assistant('Example project. Root #1 is the only line of work.')],
+    })
+    const c = await ultimate.conversation({ id: await standing(ultimate) })
+    const turn = await c.run(
+      'Can you build a small extension for this project in the status line where I can see, start, stop and restart the dev processes?',
+    )
+    const wrote = turn.toolCalls.filter(
+      ({ name, arguments: args }) =>
+        ['edit', 'write'].includes(name) &&
+        JSON.stringify(args.path).includes('.ultimate/extensions'),
+    )
+    assert.lengthOf(wrote, 0, turn.text)
+    expect(turn.toolCalls.filter((call) => call.name === 'branch')).toHaveLength(1)
+  } finally {
+    await ultimate.stop()
+  }
+})
+
 test('standing agent answers a landing in one line without duplicate user messages', async () => {
   const ultimate = await start({
     extensions: routedExtensions,

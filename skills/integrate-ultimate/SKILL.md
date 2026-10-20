@@ -86,10 +86,12 @@ settings apply live; nothing needs a restart.
 
 ## 3. Build and verify
 
-- **Files:** `.ultimate/settings.json`; `.ultimate/README.md`, a short explainer that onboarding shows; one folder per extension in `.ultimate/extensions/<name>/` (`server.ts`, `web.tsx`, `README.md`). Follow `extensions/README.md` in the Ultimate clone.
+- **Configuration, written directly:** `.ultimate/settings.json`; `.ultimate/README.md`, a short explainer that onboarding shows; agent definitions; skills with their small helper scripts.
+- **Extensions go to a coordinator branch** (as @ultimate, start one per picked extension with the user's words; a coordinator builds it): one folder per extension in `.ultimate/extensions/<name>/` (`server.ts`, `web.tsx`, `README.md`). Follow `extensions/README.md` in the Ultimate clone.
   - Extensions outside the clone import what built-ins import (`@/sdk`, `@/components/…`, clone packages), and nothing type-checks them.
   - Keep the project's own tooling (type check, lint, format) from scanning `.ultimate/`.
-- **Verify against the real project**, not a copy of Ultimate. Use a temporary `HOME` with the project trusted (`~/.ultimate/trust.json`) and onboarding done, then run `node <clone>/bin/ultimate.ts <project> --port <free> --no-open`.
+  - A worktree's `.ultimate/` does not hot-reload the running host. Preview it with `instance start` (`faux: true` for token-free checks): it runs the worktree as its project and loads its `.ultimate/extensions`.
+- **Verify against the real project**, not a copy of Ultimate: the preview above, or a temporary `HOME` with the project trusted (`~/.ultimate/trust.json`) and onboarding done, then `node <clone>/bin/ultimate.ts <project> --port <free> --no-open`.
   - Check the extension info for load errors.
   - Call the actions.
   - Open the surfaces in a browser and take screenshots.
