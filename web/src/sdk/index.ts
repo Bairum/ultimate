@@ -44,6 +44,8 @@ export {
 export { ExtensionBoundary } from '../app/boundary.tsx'
 /** A card that folds to one quiet line in a chat, and whether one is open; the reader's choice survives reloads. */
 export { Fold, useFold } from '../app/fold.tsx'
+/** A message's footer as the transcript shows it: details such as usage, time, copy, go back and a reference link. */
+export { MessageActions } from '../app/message-actions.tsx'
 /** Renders with the value another extension provides for your point; see `definePoint`. */
 export { Provided } from '../app/boundary.tsx'
 export { api } from './client.ts'

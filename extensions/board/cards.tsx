@@ -19,12 +19,14 @@ import {
   cn,
   events,
   Fold,
+  MessageActions,
   Provided,
   useChat,
   useConversation,
   useConversations,
   useDocOf,
   useNow,
+  useTranscript,
   useUltimate,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
@@ -34,6 +36,7 @@ import { useWorkspaceIndex } from '../workspaces/ui.tsx'
 import { accentOf } from './accent.tsx'
 import {
   answeredMessages,
+  callerOf,
   emptyBoard,
   messageStatus,
   outgoingState,
@@ -114,13 +117,15 @@ function Status({ message, perspective }: { message: BoardMessage; perspective: 
 /**
  * A message to you in a chat: a bubble on the left in the sender's accent, its text, and whether it waits on you.
  * `children` mount beneath the text; that is where the answer card of a question goes. `running` is whether the call
- * that sends it is still running.
+ * that sends it is still running. With `entry`, the stored answer or the response that sent the message, its footer
+ * carries the transcript's message actions: usage, time, copy, go back and a reference link.
  */
 export function ChatBubble({
   from,
   message,
   text,
   running,
+  entry,
   at = message?.at,
   children,
 }: {
@@ -128,6 +133,7 @@ export function ChatBubble({
   message: BoardMessage | undefined
   text: string
   running: boolean
+  entry?: EntryRecord
   /** When it was said; a message's own time by default. */
   at?: number
   children?: ReactNode
@@ -135,12 +141,13 @@ export function ChatBubble({
   const now = useNow(60000)
   const accent = accentOf(from)
   const status = sentStatus(message, running)
+  const stored = entry?.model?.[0]
   return (
     <section
       data-board-outgoing={message?.id}
       data-chat-bubble
       className={cn(
-        'w-full min-w-0 rounded-md border border-l-2 border-border',
+        'group/bubble w-full min-w-0 rounded-md border border-l-2 border-border',
         accent.left,
         accent.fill,
       )}
@@ -149,7 +156,7 @@ export function ChatBubble({
         <span className={cn('flex min-w-0 font-semibold', accent.name)}>
           <Address id={from} mark />
         </span>
-        {at !== undefined && (
+        {at !== undefined && !entry && (
           <time
             className="ml-auto"
             dateTime={new Date(at).toISOString()}
@@ -161,11 +168,21 @@ export function ChatBubble({
       </header>
       <Body text={text} />
       {children}
-      {status && (
-        <footer className="flex flex-wrap items-center gap-3 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
-          {message ? <Status message={message} perspective="user" /> : <span>{status}</span>}
+      {(status || entry) && (
+        <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+          {status &&
+            (message ? <Status message={message} perspective="user" /> : <span>{status}</span>)}
           {message?.error && (
             <span className="min-w-0 break-words text-destructive">{message.error}</span>
+          )}
+          {entry && (
+            <MessageActions
+              bubble
+              className="ml-auto"
+              entry={entry}
+              text={text}
+              timestamp={at ?? (stored && 'timestamp' in stored ? stored.timestamp : 0)}
+            />
           )}
         </footer>
       )}
@@ -182,6 +199,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
   const { switchConversation, showSurface } = useUltimate()
   const chat = useChat()
   const sender = useConversation((conversation) => conversation.id)
+  const caller = useCaller(call.id)
   if (call.status === 'error' || call.status === 'interrupted') return core
   const sent = /^Message (\d+) sent\.$/.exec(call.output)
   const message = sent ? board?.messages.find((m) => m.id === Number(sent[1])) : undefined
@@ -196,6 +214,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
   if (chat && toUser && sender !== undefined)
     return (
       <ChatBubble
+        entry={caller}
         from={sender}
         message={message}
         running={call.status !== 'done'}
@@ -443,7 +462,7 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
       <section
         data-board-input={origin.id}
         className={cn(
-          'min-w-0 rounded-md border border-l-2 border-border',
+          'group/bubble min-w-0 rounded-md border border-l-2 border-border',
           accent.left,
           accent.fill,
         )}
@@ -484,10 +503,24 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
         </header>
         <Body text={origin.text} />
         <InputImages entry={entry} />
+        {origin.from === 'user' && (
+          <footer className="border-t border-border/60 px-3 py-1.5">
+            <MessageActions
+              bubble
+              className="justify-end"
+              entry={entry}
+              text={origin.text}
+              timestamp={entry.model?.[0]?.role === 'user' ? entry.model[0].timestamp : 0}
+            />
+          </footer>
+        )}
       </section>
     </Fold>
   )
 }
+
+/** The loaded response that made tool call `call`. */
+const useCaller = (call: string) => callerOf(useTranscript(), call)
 
 const imageCount = (count: number) => `${count} image${count === 1 ? '' : 's'}`
 
@@ -558,6 +591,7 @@ function ScriptMessages({
   if (!sent.length) return core
   const bubbles = sent.map((message) => (
     <ChatBubble
+      entry={entry}
       from={entry.conversationId}
       key={message.id}
       message={message}
@@ -606,6 +640,7 @@ function ReplyFold({
     return text ? (
       <ChatBubble
         at={at}
+        entry={entry}
         from={entry.conversationId}
         message={undefined}
         running={false}
