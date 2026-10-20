@@ -60,19 +60,22 @@ Ask the user to choose, offering defaults. Ask only questions whose answers chan
 
 ## Review team and lander
 
-Both work without setup: the shipped `reviewer` reviews alone on the parent's model, and `workspace submit` merges and
+Both work without setup: the shipped `reviewer` reviews alone on the parent's model, or leads any `reviewer-*`
+definitions, and `workspace submit` merges and
 fast-forwards with no checks and no push. Ultimate's own clone is the working example: copy from its `.ultimate/agents/`
 and `.ultimate/settings.json`, then adjust models and commands.
 Worker reports and submissions state divergence from the task as given (agreements, approach, scope), or "None";
 `workspace submit` requires that `divergence` string, and lander reports distinguish any additional changes.
 
 - **Review team:** agent definitions, so it can live in `<project>/.ultimate/agents/` or, for every project, in
-  `~/.ultimate/agents/` (a project's file wins by name). Override `reviewer` with a lead that lists `subagent` in
-  `tools`, starts every `reviewer-*` definition in parallel and merges their reports without reviewing itself
-  (`.ultimate/agents/reviewer.md`). Add one `reviewer-<name>.md` per reviewer, each pinned to a different model the
+  `~/.ultimate/agents/` (a project's file wins by name). Add one `reviewer-<name>.md` per reviewer; the shipped
+  `reviewer` then starts them all in parallel and merges their reports, so never override `reviewer` itself. Each is pinned to a different model the
   user is logged in to and named after what it checks (`reviewer-correctness.md`, `reviewer-simplicity.md`,
   `reviewer-architecture.md`). Details: "Review team" in
   `extensions/subagents/README.md`.
+- **Project tools for a built-in agent** (@ultimate, @sync, the lander): never copy its definition. Add a file of
+  the same name with only `name` and `addTools: [tool]`, plus an optional body that is appended to the built-in
+  instructions as project additions; a copy stops following the built-in and the setup check warns about it.
 - **Lander:** checks and push are per project, in `<project>/.ultimate/settings.json` (read once the project is
   chosen): `"lander": { "checks": [...], "push": "origin" }` lists the project's own check commands in order (an array
   runs as a concurrent group) and the remote to push to; push only with the owner's consent. The lander's checkout

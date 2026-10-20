@@ -38,7 +38,7 @@ function userText(entry: EntryRecord) {
     : message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n')
 }
 
-/** A branch started from this conversation: in its tree's root a card with the prompt, elsewhere a quiet divider. */
+/** A branch started from this conversation: in its tree's root a card with its intent, elsewhere a quiet divider. */
 function Branched({ entry }: { entry: EntryRecord }) {
   const { switchConversation } = useUltimate()
   const { branch, intent } = entry.data as { branch: number; intent: string }
@@ -60,7 +60,7 @@ function Branched({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/** The tally's prompt node: which branch started, from where, with what prompt (three lines until opened). */
+/** The tally's branch node: which branch started, from where, with what intent (older nodes carry the whole prompt). */
 function Started({ entry }: { entry: EntryRecord }) {
   const { switchConversation } = useUltimate()
   const { branch, at, intent, images, from } = entry.data as {
@@ -112,7 +112,7 @@ function Started({ entry }: { entry: EntryRecord }) {
         aria-expanded={open}
         className="block w-full min-w-0 cursor-pointer px-3 py-2.5 text-left text-[13px] leading-relaxed"
         onClick={() => setOpen((current) => !current)}
-        title={open ? 'Show less' : 'Show the whole prompt'}
+        title={open ? 'Show less' : 'Show more'}
         type="button"
       >
         <span className={cn('block break-words whitespace-pre-wrap', !open && 'line-clamp-3')}>

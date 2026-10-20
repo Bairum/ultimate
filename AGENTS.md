@@ -8,7 +8,7 @@ tells you which change reloads how, so the conversation you are in keeps running
 
 A project is a forest of conversation trees, like commit histories.
 
-- **Roots** run no turns. Their read-only tallies supply each branch's starting context: prompts, latest conversation
+- **Roots** run no turns. Their read-only tallies supply each branch's starting context: branch intents, latest conversation
   abstracts and landings with divergence and `#conversation/entry` breadcrumbs. The UI calls a tally **context**;
   code, tools and model text call it "tally". The footer shows estimated tokens and **Talk to @ultimate**; the sidebar
   shows each root heading its tree with its last three events (landings, notes, branches, compactions).
@@ -22,7 +22,8 @@ A project is a forest of conversation trees, like commit histories.
 - **Talk to @ultimate in its conversation.** The user's standing agent starts and steers branches and relays their answers there.
   The top-bar **@ultimate** button or first sidebar row opens it; its messages and questions to you appear in that transcript.
   Conversations and roots are not created by hand.
-- **Coordinators carry the work.** A branch plans, decides and verifies; subagents are for bounded execution and
+- **Coordinators carry the work.** A branch is the conversation; the coordinator is the agent that runs it, so the UI
+  labels it `branch · coordinator`. A branch plans, decides and verifies; subagents are for bounded execution and
   reconnaissance, and the lander is the final gate on main.
 - **Zoom out when you need to.** Read any root or sibling with codemode `ultimate.entries(id)` and
   `ultimate.search()`; commits name the conversation that made them (`Ultimate-Conversation` trailer).

@@ -334,7 +334,7 @@ export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode
         <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] whitespace-nowrap text-muted-foreground">
           <GitBranchIcon className="size-3.5 shrink-0 text-brand" />
           <span className="shrink-0">
-            <span className="max-sm:hidden">Started branch</span>
+            <span className="max-sm:hidden">Started branch · coordinator</span>
             <span className="sm:hidden">Branch</span>
           </span>
           {id !== undefined && (

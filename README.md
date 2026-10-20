@@ -29,7 +29,7 @@ place.
 - **Everything on, switch off what you don't need.** A fresh Ultimate is Pi's coding agent with every built-in:
   subagents, plans, documents, automations, remote access and the rest ship in the clone and are on by default; turn any
   of them off per machine or per project (see "Building blocks" below).
-- **A forest of conversation trees.** Each root keeps a read-only context: prompts, latest conversation abstracts,
+- **A forest of conversation trees.** Each root keeps a read-only context: branch intents, latest conversation abstracts,
   and landings with divergence and links back to their source. Talk to @ultimate in its conversation: it starts coordinator
   branches that inherit a root's context before their prompt. Resuming a branch catches it up on what its tree learned.
   @ultimate keeps each root's context accurate and compacts it without deleting history.

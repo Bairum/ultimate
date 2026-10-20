@@ -145,6 +145,25 @@ it('keeps the other areas when one throws synchronously', async () => {
   expect(issues.some((issue) => issue.summary === 'one check failed: boom')).toBe(true)
 })
 
+it('names each file that replaces a built-in definition whole, but not an overlay', async () => {
+  const host = await checkHost({ logins: ['openrouter', 'openai-codex'] })
+  const builtin = '---\nname: NAME\ndescription: Built in\ntools: [read]\n---\nBuilt-in body.\n'
+  await mkdir(join(host.ultimateRoot, 'agents'), { recursive: true })
+  for (const name of ['lander', 'ultimate'])
+    await writeFile(join(host.ultimateRoot, `agents/${name}.md`), builtin.replace('NAME', name))
+  await writeFile(
+    join(host.userHome, '.ultimate/agents/ultimate.md'),
+    '---\nname: ultimate\naddTools: [laravel]\n---\nAdded.\n',
+  )
+  const issues = (await check(host)).filter((issue) => issue.area === 'Agent definitions')
+  expect(issues).toEqual([
+    expect.objectContaining({
+      status: 'warn',
+      summary: '~/.ultimate/agents/lander.md replaces the built-in lander',
+    }),
+  ])
+})
+
 it('has no agent warning once the pinned provider has a login', async () => {
   const issues = await check(await checkHost({ logins: ['openrouter', 'openai-codex'] }))
   expect(issues.find((issue) => issue.area === 'Agent models')?.status).toBe('ok')

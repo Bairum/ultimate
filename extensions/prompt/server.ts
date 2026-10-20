@@ -117,8 +117,8 @@ async function instructionChanges(
   }))
     files[file.path] = digest(file.content)
   // The file was just parsed; one removed since then hashes as empty and counts as changed.
-  if (definition)
-    files[definition.path] = digest(await readFile(definition.path, 'utf8').catch(() => ''))
+  const own = definition ? [definition.path, ...(definition.overlays ?? [])] : []
+  for (const path of own) files[path] = digest(await readFile(path, 'utf8').catch(() => ''))
   const previous = seen.files
   seen.files = files
   // The first run records what it saw; afterwards every added, changed or removed file counts.
@@ -127,13 +127,16 @@ async function instructionChanges(
         .filter((path) => previous[path] !== files[path])
         .toSorted()
     : []
-  // The definition is named once, as instructions: when its text was re-applied here or its file changed (a Board
-  // delivery may have applied it already).
-  const own = definition?.path
-  const instructions =
-    own && (reapplied || changed.includes(own)) ? [shown(host, own)] : ([] as string[])
+  // The definition's files (its own and any overlays) are named as instructions when they changed; a text re-applied
+  // here with no file changed since the last run (a Board delivery applied it already) names the definition's own
+  // file. An overlay removed since the last run is found by its file name.
+  const ownFile = `/agents/${name}.md`
+  const touched = changed.filter((path) => own.includes(path) || path.endsWith(ownFile))
+  const instructions = (touched.length || !reapplied ? touched : own.slice(0, 1)).map((path) =>
+    path in files ? shown(host, path) : `${shown(host, path)} (removed)`,
+  )
   const named = changed
-    .filter((path) => path !== own)
+    .filter((path) => !touched.includes(path))
     .map((path) => (path in files ? shown(host, path) : `${shown(host, path)} (removed)`))
   return { instructions, docs: named }
 }

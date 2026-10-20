@@ -598,21 +598,18 @@ function head(host: ExtensionHost) {
     )
 }
 
-/** What the tree root's model reads about a new branch: where it started and the prompt it started with. */
-function branchedText(
-  branch: number,
-  from: number,
-  root: number,
-  at: number,
-  input: BranchInput,
-  caller?: string,
-) {
-  const images = input.images?.length ?? 0
-  return [
-    `#${branch} was started from ${from === root ? `the tally (#${root}/${at})` : `#${from}/${at}`}${caller ? `, started by ${caller},` : ''} with the prompt:`,
-    input.prompt.trim(),
-    ...(images ? [`(${images} image${images === 1 ? '' : 's'}, in #${branch})`] : []),
-  ].join('\n')
+/** A branch's intent in one line: its title until its summary names it, and what its tree's tally reads. */
+function intentLine(prompt: string) {
+  const text = prompt.replace(/\s+/g, ' ').trim()
+  return text.length > 80 ? `${text.slice(0, 79)}…` : text
+}
+
+/**
+ * The one line the tree root's model reads about a new branch: who started it, where, and its intent. The prompt
+ * itself stays the branch's own first input, so later branches never inherit it.
+ */
+function branchedText(branch: number, from: number, at: number, intent: string, caller?: string) {
+  return `#${branch} started${caller ? ` by ${caller}` : ''} from #${from}/${at}: ${intent}`
 }
 
 /**
@@ -692,9 +689,9 @@ async function forkBranch(
   if (tally !== undefined) (await tx.doc(Seen, fork.id)).tally = tally
   ;(await tx.doc(Branch, fork.id)).branch = { from, at, intent: prompt }
   // Until the summary names it, a branch is called by its intent, not by the first message it inherited.
-  const title = prompt.replace(/\s+/g, ' ').slice(0, 80)
+  const intent = intentLine(prompt)
   const metadata = await tx.doc(host.metadata, fork.id)
-  metadata.title = title
+  metadata.title = intent
   // The prompt is its first input, placed right after this commit: it sorts as asked for now.
   metadata.inputAt = Date.now()
   await host.emit(tx, Branched, { id: fork.id, from, at, intent: prompt })
@@ -707,7 +704,7 @@ async function forkBranch(
     ...(agent.thinkingLevel ? { thinking: agent.thinkingLevel } : {}),
   })
   const images = input.images?.length ?? 0
-  const marker = { branch: fork.id, at, intent: prompt, ...(images ? { images } : {}) }
+  const marker = { branch: fork.id, at, intent, ...(images ? { images } : {}) }
   if (root !== undefined)
     await tx.appendEntry(root, {
       kind: 'lineage.branched',
@@ -718,7 +715,7 @@ async function forkBranch(
       model: [
         {
           role: 'user',
-          content: branchedText(fork.id, from, root, at, input, caller),
+          content: branchedText(fork.id, from, at, intent, caller),
           timestamp: Date.now(),
         },
       ],
@@ -874,7 +871,7 @@ export async function lineageSection(
   const rooted = root === undefined ? '' : `\nRoot: #${root}.`
   const state = (await host.harness().snapshot(Branch, id, ctx))?.branch
   if (!state) return `You are #${id}.${rooted}\n${ZOOM}`
-  return `You are #${id}, branched from #${state.from} at entry ${state.at} for: ${state.intent}${rooted}\nYour context starts with the tally of your tree, kept in its root: the prompt each conversation was started with, the latest abstract of each, and every landing, with #<conversation>/<entry> breadcrumbs to read in full with codemode \`ultimate.entries(id)\`.\n${ZOOM}`
+  return `You are #${id}, branched from #${state.from} at entry ${state.at} for: ${state.intent}${rooted}\nYour context starts with the tally of your tree, kept in its root: one intent line per branch, the latest abstract of each, and every landing, with #<conversation>/<entry> breadcrumbs to read in full with codemode \`ultimate.entries(id)\`.\n${ZOOM}`
 }
 
 const COMPACT_SYSTEM =
@@ -882,7 +879,7 @@ const COMPACT_SYSTEM =
 
 function compactFocus(root: boolean, intent?: string) {
   return root
-    ? 'This is the tally of one line of work: the prompts its conversations were started with, their latest abstracts, and its landings. Keep the idea, principles and standing decisions, and for every conversation its #id, prompt, outcome, divergence from the prompt and landed commits, with their #<conversation>/<entry> breadcrumbs. Merge superseded detail into the current state.'
+    ? 'This is the tally of one line of work: one intent line per branch (older nodes carry the whole prompt), their latest abstracts, and its landings. Keep the idea, principles and standing decisions, and for every conversation its #id, intent in one line, outcome, divergence from the prompt and landed commits, with their #<conversation>/<entry> breadcrumbs. Merge superseded detail into the current state.'
     : `This is a branch${intent ? ` started for: ${intent}` : ''}. Keep its intent and progress toward it: decisions, changed files, verification, what remains. Drop what the intent no longer needs.`
 }
 
@@ -1143,7 +1140,7 @@ export default function lineageExtension(host: ExtensionHost) {
   host.react('named', [Branched, Rooted], async (tx, { data }) => {
     const id = data.id as ConversationId
     if (!(await tx.conversation(id))) return
-    await conversations.generatedTitle(tx, id, data.intent.replace(/\s+/g, ' ').slice(0, 80))
+    await conversations.generatedTitle(tx, id, intentLine(data.intent))
   })
   const { Notify, Prompt, LandingNote } = lineage(host)
   // Every landing notes its submitter's tree root once: a tally in this reactor's transaction, any other root through
@@ -1314,9 +1311,7 @@ export default function lineageExtension(host: ExtensionHost) {
               })
               roots.roots.push(root.id)
               // Called by its title until its summary names it, like a branch by its intent.
-              ;(await tx.doc(host.metadata, root.id)).title = title
-                .replace(/\s+/g, ' ')
-                .slice(0, 80)
+              ;(await tx.doc(host.metadata, root.id)).title = intentLine(title)
               await host.emit(tx, Rooted, { id: root.id, intent: title })
               receipt.roots[api.callId] = root.id
               return root.id

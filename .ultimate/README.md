@@ -8,8 +8,8 @@ Every built-in is already on; this setup adds how the repository is landed and r
 - `settings.json`: each worktree isolate installs its dependencies, and the lander runs `pnpm check`, then
   `pnpm test`, `pnpm test:e2e` and `pnpm eval` in parallel, and pushes to `origin`.
 - `agents/lander.md`: the lander fixes a submission that fails to land, then lands it once every check passes again.
-- `agents/reviewer.md`: the review lead starts every `reviewer-*` definition (`reviewer-astra`, `reviewer-sol`) in
-  parallel and returns one merged verdict.
+- `agents/reviewer-*.md`: the review team (correctness, simplicity, architecture), each on its own model; the shipped
+  `reviewer` starts them in parallel and returns one merged verdict.
 - `skills/ultimate-cloud-dev`: working on this repository's Worker (`cloud/`): probe Workers, rolling deploys,
   Durable Object resets and deep telemetry. @sync deploys it.
 
