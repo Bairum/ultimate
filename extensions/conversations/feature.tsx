@@ -39,7 +39,8 @@ export function FeatureTag({ feature, className }: { feature: string; className?
 }
 
 /**
- * A conversation as a person recognises it: its feature tag and `title`, else its live title, then `#id` in gray. Only
+ * A conversation as a person recognises it: a standing agent by its `@name`; else its feature tag and `title`, else
+ * its live title; then `#id` in gray. Only
  * the name: the caller's button or link opens it. It never grows past its container: a long name truncates, with the
  * full name on hover, as long as the caller's flex item may shrink (`min-w-0`).
  */
@@ -52,9 +53,12 @@ export function ConversationRef({
   title?: string
   className?: string
 }) {
-  const feature = useOverview()[id]?.feature
-  const live = useConversations().find((conversation) => conversation.id === id)?.title
-  const name = title ?? (feature ? undefined : live)
+  const overview = useOverview()
+  const live = useConversations().find((conversation) => conversation.id === id)
+  // A standing agent is always itself: a feature tag would be stale, the work of whichever branch named it last.
+  const agent = live?.label === 'agent' ? live.title : undefined
+  const feature = agent ? undefined : overview[id]?.feature
+  const name = agent ?? title ?? (feature ? undefined : live?.title)
   return (
     <span
       className={cn('inline-flex max-w-full min-w-0 items-center gap-1.5', className)}
