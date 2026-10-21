@@ -22,6 +22,7 @@ import {
   useExtensionUiState,
   useNow,
   useSystem,
+  useStore,
   useUltimate,
   useViewport,
 } from '@/sdk'
@@ -31,6 +32,8 @@ import {
   since,
   stateLine,
   states,
+  showAgent,
+  takePick,
   useOpenAgent,
   useSubscriptions,
 } from './parts.tsx'
@@ -55,25 +58,31 @@ export function Subscriptions() {
   const now = useNow(1000, live)
   const { data, error } = useSubscriptions(live ? 2000 : false)
   const [stored, setSelected] = useExtensionUiState<string | null>('selected', null)
-  const { conversationId, switchConversation } = useUltimate()
+  const { switchConversation } = useUltimate()
+  // The conversation shown or loading: a switch sets it at once, so the selection follows without a gap.
+  const shown = useStore((state) => state.requested)
   const phone = useViewport() === 'phone'
   const list = data ?? []
-  // An explicit pick wins; without one, the agent shown in the shell picks its subscription.
-  const selected =
-    list.find((sub) => sub.id === stored) ??
-    list.find((sub) => sub.conversationId === conversationId) ??
-    (phone ? undefined : list[0])
+  // The shell's conversation decides: a pick switches it, and so do Back or any other navigation to an agent.
+  const byShown = list.find((sub) => sub.conversationId === shown)
+  const selected = byShown ?? list.find((sub) => sub.id === stored) ?? (phone ? undefined : list[0])
   const select = (sub: SubscriptionListItem) => {
     setSelected(sub.id)
-    switchConversation(sub.conversationId)
+    showAgent(switchConversation, sub.conversationId)
   }
-  // Show the selected subscription's agent above its script, unless the user already looks at it.
+  useEffect(() => {
+    if (byShown && byShown.id !== stored) setSelected(byShown.id)
+  }, [byShown, stored, setSelected])
+  // On screen, open a pick made elsewhere, or else the selection's agent when the shell shows none.
   const agent = selected?.conversationId
   useEffect(() => {
-    if (live && agent !== undefined && agent !== conversationId) switchConversation(agent)
-    // Only a change of selection moves the conversation; navigating elsewhere must not be undone.
-    // oxlint-disable-next-line react/exhaustive-deps -- conversationId is read, not followed
-  }, [live, agent])
+    if (!live || !data) return
+    const picked = list.find((sub) => sub.id === takePick())
+    const to = picked?.conversationId ?? (byShown ? undefined : agent)
+    if (to !== undefined && to !== shown) showAgent(switchConversation, to)
+    // Only arriving or a new selection acts; the shown conversation is read, not followed.
+    // oxlint-disable-next-line react/exhaustive-deps -- shown, list and byShown are read at that moment
+  }, [live, agent, data !== undefined])
   // On a phone the detail replaces the list; a deleted selection falls back to the list.
   const open = !!stored && !!selected
   const showList = !phone || !open

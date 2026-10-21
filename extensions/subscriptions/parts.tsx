@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
-import { api, cn, useExtensionUiState, useUltimate } from '@/sdk'
+import { api, cn, getState, useExtensionUiState, useUltimate } from '@/sdk'
 import { ListAction } from './refs.ts'
 import type { Subscription, SubscriptionListItem } from './types.ts'
 
@@ -117,10 +117,27 @@ export function useSubscriptions(ms: number | false): Polled {
 }
 
 /**
- * Leaving the Subscriptions surface shows again the conversation the user was on when they entered it, before it
- * showed a subscription's agent; `keepAgent` skips that once, for "open conversation", which goes to the agent.
+ * Leaving the Subscriptions surface shows again the conversation the user was on when they entered it, but only while
+ * the shell still shows the agent the surface itself opened (`opened`): anywhere the user navigated meanwhile stays.
+ * `keepAgent` skips it once, for "open conversation", which goes to the agent. `pick` is a subscription chosen outside
+ * the surface (sidebar, chip, card) that the surface opens once it is on screen.
  */
 let keepAgent = false
+let opened: number | undefined
+let pick: string | undefined
+/** Show agent conversation `id` on behalf of the surface, so leaving it may undo the switch. */
+export function showAgent(switchConversation: (id: number) => void, id: number) {
+  opened = id
+  switchConversation(id)
+}
+/** The subscription picked from outside the surface, once: the surface consumes it. */
+export function takePick() {
+  const id = pick
+  pick = undefined
+  return id
+}
+/** The conversation the shell shows or is loading: set at once on a switch, unlike the loaded view. */
+const requested = () => getState().requested
 /** Leave the surface for the Agent surface and stay on the subscription's agent rather than restore. */
 export function useOpenAgent() {
   const { showSurface } = useUltimate()
@@ -138,7 +155,7 @@ export function Restore() {
   const was = useRef<string | undefined>(undefined)
   const returnTo = useRef<number | undefined>(undefined)
   useEffect(() => {
-    if (surface !== 'subscriptions') shown.current = conversationId
+    if (surface !== 'subscriptions') shown.current = requested() ?? conversationId
   }, [surface, conversationId])
   useEffect(() => {
     const before = was.current
@@ -148,11 +165,11 @@ export function Restore() {
     if (surface === 'subscriptions') returnTo.current = shown.current
     else if (before === 'subscriptions') {
       const to = returnTo.current
-      // Only undo what the surface did: a conversation picked on the way out (the @ultimate button) stays; one
-      // picked just after leaving lands after this switch and wins too.
-      const agent = poll.state.data?.some((sub) => sub.conversationId === conversationId)
-      if (!keepAgent && agent && to !== undefined && to !== conversationId) switchConversation(to)
+      const now = requested()
+      // Only undo what the surface did: a conversation picked on the way out (the @ultimate button) stays.
+      if (!keepAgent && now === opened && to !== undefined && to !== now) switchConversation(to)
       keepAgent = false
+      opened = undefined
       returnTo.current = undefined
     }
     // Only a change of surface acts; the conversation is read at that moment.
@@ -167,9 +184,14 @@ export function Restore() {
  */
 export function useOpenSubscription() {
   const [, setSelected] = useExtensionUiState<string | null>('selected', null)
-  const { showSurface } = useUltimate()
+  const { showSurface, surface, switchConversation } = useUltimate()
   return (id: string) => {
     setSelected(id)
+    const agent = poll.state.data?.find((sub) => sub.id === id)?.conversationId
+    // Already on the surface (a card in its transcript, the chip): switch now; else the surface does on arrival.
+    if (surface === 'subscriptions' && agent !== undefined)
+      return showAgent(switchConversation, agent)
+    pick = id
     showSurface('subscriptions')
   }
 }
