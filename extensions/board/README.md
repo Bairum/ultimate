@@ -57,7 +57,10 @@ The incoming row shows it after its kind: a spinner and `assessing…`, then `ac
 `FYI · no action`, with the reason on hover and in the open card. `board.wake` renders nothing.
 
 Sending to `user` writes a message
-shown in @ultimate's transcript; it starts no run.
+shown in @ultimate's transcript; it starts no run. The message is @ultimate's answer: a direct `message` call to
+`user` returns `terminate`, so the run ends without a final answer that would restate it, when every call of that
+tool round does so. It does not while a reply-enabled message to @ultimate is still open, so that reply is still
+answered; codemode's nested calls never end the run.
 A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers that
 message: a user Reply with `re` (an answer card, or a typed Reply) marks only that message answered, in the reply's
 commit. Plain input, new posts and answers to other questions leave it open. The service's `dismiss` closes it as

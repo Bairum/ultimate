@@ -952,6 +952,10 @@ it('keeps sequential and parallel message calls distinct within one codemode scr
         .toSorted(),
     ).toEqual(['script/3', 'script/4'])
     expect(log?.messages.at(-1)).toMatchObject({ text: 'Direct', call: 'm' })
+    // The script's nested messages could not end the run; the direct message did, before 'Complete'.
+    const view = await server.root.viewState(context)
+    expect(view.value.entries.at(-1)?.kind).toBe('pi.tool-result')
+    view.dispose()
   } finally {
     await server.vite.watcher.close()
     await server.close()
