@@ -5,11 +5,24 @@
 import { docRef } from '../../shared/extension-api.ts'
 import { defineEvent } from '../../shared/events.ts'
 
+/**
+ * Another project's Ultimate: its project and machine, and `id`, that instance's id of the same message (the sender's
+ * for an incoming one, the target's once an outgoing one is delivered).
+ */
+export type Remote = {
+  project: string
+  machine: string
+  id?: number
+  /** The sender's random key for the message: the target delivers it once, and only the target can reply to it. */
+  key: string
+}
+
 /** One Board message as the `board` document stores it. */
 export type BoardMessage = {
   id: number
-  from: number | 'user'
-  to: number | 'user'
+  /** `remote`: another project's Ultimate, named by `remote`. */
+  from: number | 'user' | 'remote'
+  to: number | 'user' | 'remote'
   text: string
   at: number
   reply: boolean
@@ -24,6 +37,8 @@ export type BoardMessage = {
   images?: { entry: number; count: number }
   /** Whether a message to the primary agent woke it: assessing, then act or fyi with a one-line reason. */
   triage?: Triage
+  /** The other project's Ultimate a `remote` side names. */
+  remote?: Remote
 }
 /** A triage verdict: `act` wakes the primary agent, `fyi` leaves it as context for its next input. */
 export type Triage = { verdict: 'assessing' | 'act' | 'fyi'; reason?: string }
@@ -44,8 +59,8 @@ export const Asked = defineEvent<{ message: number; from: number }>('board.asked
  */
 export const MessageSent = defineEvent<{
   message: number
-  from: number | 'user'
-  to: number | 'user'
+  from: number | 'user' | 'remote'
+  to: number | 'user' | 'remote'
   reply: boolean
   steer: boolean
 }>('board.sent')
@@ -56,7 +71,7 @@ export const MessageSent = defineEvent<{
  */
 export const Triaged = defineEvent<{
   message: number
-  from: number
+  from: number | 'remote'
   to: number
   verdict: 'act' | 'fyi'
   reason: string

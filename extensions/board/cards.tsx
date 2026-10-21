@@ -2,6 +2,7 @@ import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
   BellRingIcon,
   CheckIcon,
+  GlobeIcon,
   ChevronRightIcon,
   GitBranchIcon,
   InboxIcon,
@@ -41,11 +42,12 @@ import {
   messageStatus,
   outgoingState,
   relativeTime,
+  remoteLabel,
   sentBy,
   sentStatus,
 } from './data.tsx'
 import { BoardDoc } from './refs.ts'
-import type { BoardMessage } from './refs.ts'
+import type { BoardMessage, Remote } from './refs.ts'
 import { MessageAnswers } from './points.tsx'
 
 /** What an optional extension shows under a message to the user: questions' answer card. */
@@ -55,11 +57,29 @@ const Answers = ({ message }: { message: BoardMessage }) => (
   </Provided>
 )
 
-/** Who `id` is: you, `@name` for a standing agent or the lander (with its mark when `mark`), else a conversation link. */
-export function Address({ id, mark = false }: { id: number | 'user'; mark?: boolean }) {
+/**
+ * Who `id` is: you, another project's Ultimate (`remote` names it), `@name` for a standing agent or the lander (with its
+ * mark when `mark`), else a conversation link.
+ */
+export function Address({
+  id,
+  mark = false,
+  remote,
+}: {
+  id: number | 'user' | 'remote'
+  mark?: boolean
+  remote?: Pick<Remote, 'project' | 'machine'>
+}) {
   const standing = useDocOf(1, StandingDoc)
   const workspaces = useWorkspaceIndex()
   if (id === 'user') return <span>you</span>
+  if (id === 'remote')
+    return (
+      <span className="flex min-w-0 items-center gap-1.5" title="Another project's Ultimate">
+        {mark && <GlobeIcon className="size-3.5 shrink-0" />}
+        <span className="truncate">{remote ? remoteLabel(remote) : 'another Ultimate'}</span>
+      </span>
+    )
   const name =
     Object.entries(standing ?? {}).find(([, value]) => value === id)?.[0] ??
     (Object.values(workspaces.landerConversations).includes(id) ? 'lander' : undefined)
@@ -100,8 +120,8 @@ function Status({ message, perspective }: { message: BoardMessage; perspective: 
   if (status === 'waiting')
     return (
       <span className="flex min-w-0 flex-wrap items-center gap-1 text-amber-700/80 dark:text-amber-300/70">
-        {message.from !== perspective && <Address id={message.from} />}
-        waiting on <Address id={message.to} />
+        {message.from !== perspective && <Address id={message.from} remote={message.remote} />}
+        waiting on <Address id={message.to} remote={message.remote} />
       </span>
     )
   if (status === 'answered')
@@ -233,7 +253,11 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
           <Icon className="size-3 shrink-0 text-brand" />
           <span className="shrink-0">Message to</span>
           <span className="flex min-w-0 text-foreground/80">
-            {recipient === undefined ? (to ?? '…') : <Address id={recipient} />}
+            {recipient === undefined ? (
+              (to ?? '…')
+            ) : (
+              <Address id={recipient} remote={message?.remote} />
+            )}
           </span>
           {state && (
             <span className={cn('shrink-0', state === 'failed' && 'text-destructive')}>
@@ -255,7 +279,11 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
           )}
           <span>Message to</span>
           <span className="flex min-w-0 text-foreground">
-            {recipient === undefined ? (to ?? '…') : <Address id={recipient} />}
+            {recipient === undefined ? (
+              (to ?? '…')
+            ) : (
+              <Address id={recipient} remote={message?.remote} />
+            )}
           </span>
           <span>
             {(message?.reply ?? reply ?? true) ? 'expects reply' : 'one-way'}
@@ -431,11 +459,12 @@ function TriageReason({ id }: { id: number }) {
 export function BoardInput({ entry }: { entry: EntryRecord }) {
   const origin = entry.data as {
     id: number
-    from: number | 'user'
+    from: number | 'user' | 'remote'
     text: string
     reply: boolean
     delivery?: 'steer' | 'followUp' | 'note'
     failed?: boolean
+    remote?: Remote
   }
   const receiver = useConversation((conversation) => conversation.id)
   const { switchConversation } = useUltimate()
@@ -449,7 +478,7 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
         <>
           <MailIcon className={cn('size-3 shrink-0', accent.name)} />
           <span className={cn('flex min-w-0', accent.name)}>
-            <Address id={origin.from} />
+            <Address id={origin.from} remote={origin.remote} />
           </span>
           <span className="shrink-0">
             {reply ? 'reply' : origin.reply ? 'message · expects reply' : 'message · one-way'}
@@ -470,7 +499,7 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
         <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
           <MailIcon className={cn('size-3.5 shrink-0', accent.name)} />
           <span className={cn('flex min-w-0 font-semibold', accent.name)}>
-            <Address id={origin.from} />
+            <Address id={origin.from} mark remote={origin.remote} />
           </span>
           <span>{reply ? 'Reply' : 'Message'}</span>
           {!reply && (
@@ -655,7 +684,7 @@ function ReplyFold({
         replied to
         {answered.map((m) => (
           <span className="flex min-w-0" key={m.id}>
-            <Address id={m.from} />
+            <Address id={m.from} remote={m.remote} />
           </span>
         ))}
         <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/reply:rotate-90" />

@@ -1,5 +1,8 @@
 import { eventHost, temp, removeTemp, until, fauxServer, linkDependencies } from './helpers.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
+import type { Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { join, resolve } from 'node:path'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
@@ -1577,4 +1580,171 @@ it('acts on a message too long to assess whole, without asking the model', async
   expect(message.triage).toEqual({ verdict: 'act', reason: 'too long to assess' })
   expect(asked).toBe(0)
   expect(runs).toBe(1)
+})
+
+/** Another Ultimate on this machine, as an HTTP server that records the actions posted to it and answers `answer`. */
+async function otherUltimate(answer: (path: string, body: JsonValue) => [number, unknown]) {
+  const posted: { path: string; body: JsonValue }[] = []
+  const server = createServer(async (request, response) => {
+    let raw = ''
+    for await (const chunk of request) raw += String(chunk)
+    const body = (JSON.parse(raw) as { args: JsonValue }).args
+    posted.push({ path: request.url ?? '', body })
+    const [status, json] = answer(request.url ?? '', body)
+    response.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(json))
+  })
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
+  servers.push(server)
+  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, posted }
+}
+const servers: Server[] = []
+afterEach(() => {
+  for (const server of servers.splice(0)) server.close()
+})
+/** A fixture whose @ultimate is conversation 1 and whose machine also runs `poe2-rust` at `url`. */
+async function remoteFixture(url?: string) {
+  const f = await fixture()
+  f.provided.set('subagents', {
+    residents: async () => [{ name: 'ultimate', description: 'Ultimate' }],
+    standing: async () => ROOT_CONVERSATION_ID,
+  })
+  Object.assign(f.host, {
+    projects: async () => [
+      { name: 'ultimate', current: true },
+      { name: 'poe2-rust', current: false, ...(url ? { running: { url } } : {}) },
+    ],
+  })
+  return f
+}
+const from = { project: 'poe2-rust', machine: 'rog' }
+it("delivers another Ultimate's message to @ultimate only, labelled as it, once per key", async () => {
+  const other = await otherUltimate(() => [200, { result: 7 }])
+  const f = await remoteFixture(other.url)
+  const post = { key: 'k1', text: 'Start a branch that adds X', reply: true, from }
+  const id = await actions.remote(post, f.action())
+  // A repeated post (a retry, a replay) returns the first delivery and delivers nothing new.
+  expect(await actions.remote(post, f.action())).toBe(id)
+  await until(async () => (await f.log())!.messages.some((m) => m.to === 'remote'))
+  const messages = (await f.log())!.messages
+  expect(messages.filter((m) => m.from === 'remote')).toMatchObject([
+    { id, to: ROOT_CONVERSATION_ID, reply: true, remote: { ...from, key: 'k1' } },
+  ])
+  // Only @ultimate's own conversation got it, and it reads who sent it, never the user.
+  expect(f.observed.filter((text) => text.includes('Start a branch that adds X'))).toHaveLength(1)
+  const delivered = f.observed.find((text) => text.includes('Start a branch'))!
+  expect(delivered).toContain(
+    "Message from @ultimate@poe2-rust on rog (another project's Ultimate, not the user):",
+  )
+  expect(f.observed.some((text) => text.includes('Start a branch') && text !== delivered)).toBe(
+    false,
+  )
+  // Its answer goes back over the same route, as a reply to that key.
+  await until(() => other.posted.length === 1)
+  expect(other.posted[0]).toMatchObject({
+    path: '/api/extensions/board/actions/remoteReply',
+    body: { key: 'k1', failed: false },
+  })
+  expect((other.posted[0].body as { text: string }).text).toContain('Start a branch that adds X')
+  await until(async () =>
+    (await f.log())!.messages.some((m) => m.to === 'remote' && m.state === 'delivered'),
+  )
+  expect((await f.log())!.messages.find((m) => m.from === 'remote')!.state).toBe('answered')
+})
+it("returns another Ultimate's answer as a reply once, and refuses a reply to a reply", async () => {
+  const other = await otherUltimate((path) =>
+    path.endsWith('/remote') ? [200, { result: 41 }] : [500, { error: 'unexpected' }],
+  )
+  const f = await remoteFixture(other.url)
+  const told = await f
+    .service()
+    .tell(ROOT_CONVERSATION_ID, { project: 'poe2-rust', text: 'Did the landing work?' }, context)
+  expect(told.delivered).toBe(41)
+  const key = (other.posted[0].body as { key: string }).key
+  expect(other.posted[0].body).toMatchObject({
+    text: 'Did the landing work?',
+    reply: true,
+    from: { project: 'ultimate' },
+  })
+  const answer = { key, text: 'Yes, landed abc.', failed: false }
+  const reply = await actions.remoteReply(answer, f.action())
+  // A replayed answer delivers once.
+  expect(await actions.remoteReply(answer, f.action())).toBe(reply)
+  await until(async () => (await replies(f)).length === 1)
+  await f.opened.root.waitForIdle(context)
+  expect(await replies(f)).toHaveLength(1)
+  const messages = (await f.log())!.messages
+  expect(messages.find((m) => m.id === told.message)).toMatchObject({
+    to: 'remote',
+    state: 'answered',
+    remote: { project: 'poe2-rust', id: 41, key },
+  })
+  // The reply expects none: @ultimate's answer to it goes nowhere, so two Ultimates cannot loop.
+  expect(messages.find((m) => m.id === reply)).toMatchObject({ from: 'remote', reply: false })
+  expect(other.posted).toHaveLength(1)
+  for (const unknown of ['unknown', 'constructor'])
+    await expect(
+      actions.remoteReply({ key: unknown, text: 'Hi', failed: false }, f.action()),
+    ).rejects.toThrow('No message from this Ultimate that expects a reply has that key')
+  // A one-way tell takes no answer.
+  await f
+    .service()
+    .tell(ROOT_CONVERSATION_ID, { project: 'poe2-rust', text: 'FYI', reply: false }, context)
+  const oneWay = (other.posted[1].body as { key: string }).key
+  await expect(
+    actions.remoteReply({ key: oneWay, text: 'Thanks', failed: false }, f.action()),
+  ).rejects.toThrow('No message from this Ultimate that expects a reply has that key')
+})
+it('takes a late answer after the log dropped its message, and keys named like object properties', async () => {
+  const other = await otherUltimate(() => [200, { result: 3 }])
+  const f = await remoteFixture(other.url)
+  const told = await f
+    .service()
+    .tell(ROOT_CONVERSATION_ID, { project: 'poe2-rust', text: 'Ping' }, context)
+  // Later traffic pushed the message out of the bounded log.
+  await f.opened.harness.commit(async (tx) => {
+    const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
+    log.messages = log.messages.filter((m) => m.id !== told.message)
+  }, context)
+  const key = (other.posted[0].body as { key: string }).key
+  const reply = await actions.remoteReply({ key, text: 'Pong', failed: false }, f.action())
+  await until(async () => (await replies(f)).length === 1)
+  expect((await f.log())!.messages.find((m) => m.id === reply)).toMatchObject({
+    from: 'remote',
+    re: told.message,
+  })
+  // A key such as `constructor` is a new message, not an inherited entry.
+  const id = await actions.remote(
+    { key: 'constructor', text: 'Hello', reply: false, from },
+    f.action(),
+  )
+  expect(typeof id).toBe('number')
+  expect((await f.log())!.messages.find((m) => m.id === id)).toMatchObject({ from: 'remote' })
+})
+it('refuses telling back an Ultimate whose question is open, and only @ultimate tells', async () => {
+  const other = await otherUltimate(() => [200, { result: 1 }])
+  const f = await remoteFixture(other.url)
+  // @ultimate is busy, so the question stays open while it is told back.
+  await f.opened.root.submit({ type: 'input', content: 'HOLD' }, context)
+  await until(() => f.holding())
+  await actions.remote({ key: 'q', text: 'Proceed?', reply: true, from }, f.action())
+  await expect(
+    f.service().tell(ROOT_CONVERSATION_ID, { project: 'poe2-rust', text: 'Yes' }, context),
+  ).rejects.toThrow('is sent back automatically')
+  f.hold.release()
+  await expect(
+    f.service().tell(f.recipient.id, { project: 'poe2-rust', text: 'Hi' }, context),
+  ).rejects.toThrow("Only @ultimate tells another project's Ultimate")
+})
+it('names the project when another Ultimate cannot be reached, and marks the message failed', async () => {
+  const closed = await otherUltimate(() => [200, {}])
+  servers.pop()!.close()
+  const f = await remoteFixture(closed.url)
+  await expect(
+    f.service().tell(ROOT_CONVERSATION_ID, { project: 'poe2-rust', text: 'Hi' }, context),
+  ).rejects.toThrow(`poe2-rust on this machine did not answer at ${closed.url}`)
+  expect((await f.log())!.messages.at(-1)).toMatchObject({ to: 'remote', state: 'failed' })
+  const stopped = await remoteFixture()
+  await expect(
+    stopped.service().tell(ROOT_CONVERSATION_ID, { project: 'poe2-rust', text: 'Hi' }, context),
+  ).rejects.toThrow('poe2-rust is not running on this machine')
 })

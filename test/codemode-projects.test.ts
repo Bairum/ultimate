@@ -3,7 +3,8 @@ import type { AddressInfo } from 'node:net'
 import { expect, it } from 'vitest'
 import type { Register } from '../lib/cloud.ts'
 import { actions } from '../extensions/codemode/server.ts'
-import { readProject, resolveProject } from '../extensions/codemode/projects.ts'
+import { readProject } from '../extensions/codemode/projects.ts'
+import { resolveProject } from '../lib/remote.ts'
 import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 
@@ -48,19 +49,34 @@ it("resolves this project, a running local one, and the last backup's tailnet ad
   // A local running project wins over the register.
   expect(
     resolveProject('poe2-rust', [here, local], register({ latest: 'https://elsewhere' })),
-  ).toEqual({ url: 'http://127.0.0.1:4748', label: 'poe2-rust on this machine' })
+  ).toEqual({ url: 'http://127.0.0.1:4748', label: 'poe2-rust on this machine', name: 'poe2-rust' })
   const tailnet = 'https://haza-pc.tail.ts.net:4748'
   // Names and keys match case-insensitively.
   for (const name of ['poe2-rust', 'github.com/HazAT/poe2-rust'])
     expect(resolveProject(name, [here], register({ latest: tailnet }))).toEqual({
       url: tailnet,
       label: 'poe2-rust on haza-pc',
+      name: 'poe2-rust',
+      machine: 'haza-pc',
     })
   // Without one on the backup, the machine's own record of the project names it.
   expect(resolveProject('poe2-rust', [here], register({ machine: tailnet }))).toEqual({
     url: tailnet,
     label: 'poe2-rust on haza-pc',
+    name: 'poe2-rust',
+    machine: 'haza-pc',
   })
+  // A named machine picks that machine's instance, even past a local one.
+  const local2 = { name: 'poe2-rust', current: false, running: { url: 'http://127.0.0.1:4748' } }
+  expect(
+    resolveProject('poe2-rust', [here, local2], register({ machine: tailnet }), {
+      name: 'haza-pc',
+      here: false,
+    }),
+  ).toMatchObject({ url: tailnet, machine: 'haza-pc' })
+  expect(() =>
+    resolveProject('poe2-rust', [here], register(), { name: 'rog', here: false }),
+  ).toThrow('poe2-rust on rog registered no tailnet address')
 })
 
 it('stops a remote read when its call is cancelled', async () => {
