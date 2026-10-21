@@ -17,6 +17,7 @@ import {
   defineExtension,
   defineTask,
   defineTool,
+  ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
 import type {
@@ -186,6 +187,14 @@ function localReads(host: ExtensionHost, context: Context) {
     traceTree: ([traceId]) => {
       if (typeof traceId !== 'string' || !traceId) throw new Error('traceId must be nonempty')
       return host.trace.tree(traceId)
+    },
+    doc: async ([kind, conversation]) => {
+      const token =
+        host.doc(kind as string) ??
+        [AgentDoc, InboxDoc, LiveDoc, UsageDoc].find((doc) => doc.definition.kind === kind)
+      if (!token) throw new Error(`Unknown conversation document: ${String(kind)}`)
+      const snapshot = await host.harness().snapshot(token, id(conversation), context)
+      return snapshot ?? token.definition.initial()
     },
   } satisfies Record<Read, (args: unknown[]) => unknown>
 }
@@ -384,17 +393,16 @@ function globals(
     {
       name: 'doc',
       description: 'Read an exported extension document by kind; defaults to this conversation.',
-      signature: '(kind: string, conversationId?: number): Promise<unknown>',
-      execute: async (args) => {
-        const [kind, conversation] = args as [string, number?]
-        const token =
-          host.doc(kind) ??
-          [AgentDoc, InboxDoc, LiveDoc, UsageDoc].find((doc) => doc.definition.kind === kind)
-        if (!token) throw new Error(`Unknown conversation document: ${kind}`)
-        const snapshot = await host
-          .harness()
-          .snapshot(token, conversation === undefined ? conversationId : id(conversation), context)
-        return snapshot ?? token.definition.initial()
+      signature:
+        '(kind: string, conversationId?: number, options?: { project?: string }): Promise<unknown>',
+      // Another project has no conversation of yours to default to: it reads conversation 1 unless one is named.
+      execute: (values, options) => {
+        const [kind, conversation, rest] = values as [unknown, unknown, unknown]
+        const remote = !!rest && typeof rest === 'object' && 'project' in rest
+        return read('doc', 2)(
+          [kind, conversation ?? (remote ? ROOT_CONVERSATION_ID : conversationId), rest ?? {}],
+          options,
+        )
       },
     },
   ]

@@ -35,7 +35,7 @@ Only inside codemode (not standalone model tools):
 
 ### Other projects
 
-`conversations`, `entries`, `search`, `trace` and `traceTree` take `{ project }` in their options object (`ultimate.conversations({ project })`, `ultimate.traceTree(id, { project })`) and then read that project instead, read-only. `project` is a name (`poe2-rust`) or a key (`github.com/hazat/poe2-rust`), case-insensitive. Only a running instance answers:
+`conversations`, `entries`, `search`, `trace`, `traceTree` and `doc` take `{ project }` in their options object (`ultimate.conversations({ project })`, `ultimate.traceTree(id, { project })`, `ultimate.doc('todos', 1, { project })`) and then read that project instead, read-only; `doc` there reads conversation 1 unless one is named. `project` is a name (`poe2-rust`) or a key (`github.com/hazat/poe2-rust`), case-insensitive. Only a running instance answers:
 
 - this project reads its own storage;
 - another running project on this machine answers over loopback (`ultimate.projects()`'s URL);
@@ -47,7 +47,7 @@ The call is the target's `codemode.read {op, args}` action, sent with the target
 
 - `ultimate.models()` — model metadata, without credentials or provider headers.
 - `ultimate.agents()` — agent definitions, the profiles subagents and automations run with: each one's source (builtin, user, project), path, fields, and instructions, plus files that failed to parse. To change one, edit its file; for a built-in, write an override with the same name to `<project>/.ultimate/agents/` or `~/.ultimate/agents/`.
-- `ultimate.doc(kind, conversationId?)` — exported conversation document or `pi.agent`/`pi.inbox`/`pi.live`/`pi.usage`; defaults to the calling conversation.
+- `ultimate.doc(kind, conversationId?, options?)` — exported conversation document or `pi.agent`/`pi.inbox`/`pi.live`/`pi.usage`; defaults to the calling conversation.
 
 Facets can export `userActions: string[]` to reserve actions for the UI. `ultimate.action` rejects these with
 `<extension>/<action> is a user-only action`; use the UI for project trust, secret changes, and provider login/logout.

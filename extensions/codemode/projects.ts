@@ -7,7 +7,7 @@ import { locate, postAction, REMOTE_BYTES } from '../../lib/remote.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
 /** What `codemode.read` answers: the same reads codemode offers for its own project. */
-export const READS = ['conversations', 'entries', 'search', 'trace', 'traceTree'] as const
+export const READS = ['conversations', 'entries', 'search', 'trace', 'traceTree', 'doc'] as const
 export type Read = (typeof READS)[number]
 /** At most this much JSON comes back from another project; a larger answer asks for a smaller `limit`. */
 export const READ_BYTES = REMOTE_BYTES
