@@ -1681,9 +1681,10 @@ it("returns another Ultimate's answer as a reply once, and refuses a reply to a 
   // The reply expects none: @ultimate's answer to it goes nowhere, so two Ultimates cannot loop.
   expect(messages.find((m) => m.id === reply)).toMatchObject({ from: 'remote', reply: false })
   expect(other.posted).toHaveLength(1)
-  await expect(
-    actions.remoteReply({ key: 'unknown', text: 'Hi', failed: false }, f.action()),
-  ).rejects.toThrow('No message from this Ultimate has that key')
+  for (const unknown of ['unknown', 'constructor'])
+    await expect(
+      actions.remoteReply({ key: unknown, text: 'Hi', failed: false }, f.action()),
+    ).rejects.toThrow('No message from this Ultimate that expects a reply has that key')
   // A one-way tell takes no answer.
   await f
     .service()
@@ -1691,7 +1692,33 @@ it("returns another Ultimate's answer as a reply once, and refuses a reply to a 
   const oneWay = (other.posted[1].body as { key: string }).key
   await expect(
     actions.remoteReply({ key: oneWay, text: 'Thanks', failed: false }, f.action()),
-  ).rejects.toThrow('That message expects no reply')
+  ).rejects.toThrow('No message from this Ultimate that expects a reply has that key')
+})
+it('takes a late answer after the log dropped its message, and keys named like object properties', async () => {
+  const other = await otherUltimate(() => [200, { result: 3 }])
+  const f = await remoteFixture(other.url)
+  const told = await f
+    .service()
+    .tell(ROOT_CONVERSATION_ID, { project: 'poe2-rust', text: 'Ping' }, context)
+  // Later traffic pushed the message out of the bounded log.
+  await f.opened.harness.commit(async (tx) => {
+    const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
+    log.messages = log.messages.filter((m) => m.id !== told.message)
+  }, context)
+  const key = (other.posted[0].body as { key: string }).key
+  const reply = await actions.remoteReply({ key, text: 'Pong', failed: false }, f.action())
+  await until(async () => (await replies(f)).length === 1)
+  expect((await f.log())!.messages.find((m) => m.id === reply)).toMatchObject({
+    from: 'remote',
+    re: told.message,
+  })
+  // A key such as `constructor` is a new message, not an inherited entry.
+  const id = await actions.remote(
+    { key: 'constructor', text: 'Hello', reply: false, from },
+    f.action(),
+  )
+  expect(typeof id).toBe('number')
+  expect((await f.log())!.messages.find((m) => m.id === id)).toMatchObject({ from: 'remote' })
 })
 it('refuses telling back an Ultimate whose question is open, and only @ultimate tells', async () => {
   const other = await otherUltimate(() => [200, { result: 1 }])

@@ -120,14 +120,20 @@ const Requests = defineDoc<{ ids: Record<string, number> }>({
   fork: 'initial',
   initial: () => ({ ids: {} }),
 })
-/** The keys of messages from other projects' Ultimates, so a repeated post delivers once. */
-const RemoteKeys = defineDoc<{ ids: Record<string, number> }>({
-  kind: 'board.remote-keys',
+/** What this instance told another project's Ultimate, kept until its answer arrives, apart from the bounded log. */
+type Told = { message: BoardMessage; answer?: number }
+/**
+ * Ultimate-to-Ultimate bookkeeping by message key, kept apart from the Board log, which drops old messages: `received`
+ * maps each incoming key to its message so a repeated post delivers once; `told` holds each outgoing reply-enabled
+ * message until its one answer arrives. Neither is pruned by count: these messages are few and small.
+ */
+const RemoteDoc = defineDoc<{ received: Record<string, number>; told: Record<string, Told> }>({
+  kind: 'board.remote',
   version: 1,
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
-  initial: () => ({ ids: {} }),
+  initial: () => ({ received: {}, told: {} }),
 })
 /**
  * Who started a branch through `branch`, so its later final answers reach that conversation. `yielded` is the newest
@@ -941,8 +947,8 @@ async function send(
 /** How another project's Ultimate is named, as data.tsx names it in the browser. */
 const remoteLabel = (remote: Pick<Remote, 'project' | 'machine'>) =>
   `@ultimate@${remote.project} on ${remote.machine}`
-/** How many remote message keys a target keeps to deliver a repeated post once. */
-const REMOTE_KEYS = 1000
+const unknownKey = () =>
+  new Error('No message from this Ultimate that expects a reply has that key')
 const field = (value: unknown, name: string, max: number) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max)
     throw new Error(`${name} must be a nonempty string of at most ${max} characters`)
@@ -998,6 +1004,7 @@ async function tell(
       state: 'sent',
       remote,
     })
+    if (reply) (await tx.doc(RemoteDoc, ROOT_CONVERSATION_ID)).told[remote.key] = { message }
     await host.emit(tx, MessageSent, {
       message: message.id,
       from,
@@ -1027,6 +1034,9 @@ async function tell(
       stored.state = 'failed'
       stored.error = message
     })
+    await host.harness().commit(async (tx) => {
+      delete (await tx.doc(RemoteDoc, ROOT_CONVERSATION_ID)).told[remote.key]
+    }, ctx)
     throw error
   }
   await settle((stored) => {
@@ -1057,8 +1067,8 @@ export const actions = {
     const to = await host.need(SubagentsApi).standing(primary, BACKGROUND_CONTEXT)
     const toLabel = await senderName(host, to, BACKGROUND_CONTEXT)
     return host.harness().commit(async (tx) => {
-      const keys = await tx.doc(RemoteKeys, ROOT_CONVERSATION_ID)
-      if (keys.ids[key] !== undefined) return keys.ids[key]
+      const { received } = await tx.doc(RemoteDoc, ROOT_CONVERSATION_ID)
+      if (Object.hasOwn(received, key)) return received[key]
       const message = await append(tx, {
         from: 'remote',
         to,
@@ -1067,8 +1077,7 @@ export const actions = {
         state: 'sent',
         remote: { ...sender, key },
       })
-      keys.ids[key] = message.id
-      for (const old of Object.keys(keys.ids).slice(0, -REMOTE_KEYS)) delete keys.ids[old]
+      received[key] = message.id
       await host.emit(tx, MessageSent, {
         message: message.id,
         from: 'remote',
@@ -1098,23 +1107,21 @@ export const actions = {
     const key = field(input.key, 'key', 100)
     const body = field(input.text, 'text', 100_000)
     const failed = input.failed === true
-    const find = (messages: BoardMessage[]) =>
-      messages.find((m) => m.to === 'remote' && m.remote?.key === key)
-    const seen = find(
-      (await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT))?.messages ??
-        [],
-    )
-    if (!seen || typeof seen.from !== 'number')
-      throw new Error('No message from this Ultimate has that key')
-    const fromLabel = await senderName(host, seen.from, BACKGROUND_CONTEXT)
+    const seen = (
+      await host.harness().snapshot(RemoteDoc, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
+    )?.told
+    if (!seen || !Object.hasOwn(seen, key)) throw unknownKey()
+    const fromLabel = await senderName(host, seen[key].message.from as number, BACKGROUND_CONTEXT)
     return host.harness().commit(async (tx) => {
-      const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
-      const original = find(log.messages)
-      if (!original) throw new Error('No message from this Ultimate has that key')
-      if (!original.reply) throw new Error('That message expects no reply')
-      const done = log.messages.find((m) => m.from === 'remote' && m.re === original.id)
-      if (done) return done.id
-      original.state = failed ? 'failed' : 'answered'
+      const { told } = await tx.doc(RemoteDoc, ROOT_CONVERSATION_ID)
+      if (!Object.hasOwn(told, key)) throw unknownKey()
+      const entry = told[key]
+      if (entry.answer !== undefined) return entry.answer
+      const original = entry.message
+      const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+        (m) => m.id === original.id,
+      )
+      if (stored) stored.state = failed ? 'failed' : 'answered'
       const response = await append(tx, {
         from: 'remote',
         to: original.from,
@@ -1124,6 +1131,7 @@ export const actions = {
         state: 'sent',
         remote: original.remote!,
       })
+      entry.answer = response.id
       await tx.createTask(
         delivery(host),
         {

@@ -141,13 +141,16 @@ never the user's.
 - **Target:** `board.remote { key, text, reply, from: { project, machine } }` logs a message `from: 'remote'` to its
   own primary agent, the only recipient it can reach, and delivers it like any other: as a steer, triaged, with
   receipts. The model reads `Message from @ultimate@<project> on <machine> (another project's Ultimate, not the
-user)`. `board.remote-keys` maps each key to its message in the same commit, so a repeated post (a retry, a replay)
-  returns the first id and delivers nothing new.
+user)`. The `board.remote` document maps each key to its message in the same commit, so a repeated post (a retry,
+  a replay) returns the first id and delivers nothing new.
 - **One hop back:** with `reply`, the delivery's answer phase posts it to the sender's `board.remoteReply { key, text,
 failed }` instead of a local conversation. The sender records it as a reply `from: 'remote'` with `re` and
-  `reply: false`, delivered by the usual reply phase, so its answer goes nowhere. `remoteReply` refuses an unknown key
-  and a message that expected no reply, and a second answer to the same key returns the first one's id. Two
-  Ultimates therefore exchange at most a message and its answer per `tell`; continuing is a new `tell`.
+  `reply: false`, delivered by the usual reply phase, so its answer goes nowhere. The sender keeps each reply-enabled
+  tell in `board.remote` until its answer arrives (the log drops old messages), so a late answer still lands;
+  `remoteReply` refuses any other key, including a one-way tell's, and a second answer returns the first one's id.
+  Two Ultimates therefore exchange at most a message and its answer per `tell`; continuing is a new `tell`.
+- **Not durable on the sender:** `tell` runs inside codemode, which is not replayed. A crash between logging and
+  posting leaves the message `sent`, never posted; telling again uses a new key.
 
 `remote` and `remoteReply` are user-only actions: only another instance's HTTP call reaches them, never an agent's
 `ultimate.action`. In the chat a remote sender is named `@ultimate@<project> on <machine>` with a globe mark and a
