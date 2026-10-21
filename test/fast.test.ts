@@ -4,11 +4,13 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
 import type { Api, Model, ProviderStreams, SimpleStreamOptions } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
+import { AgentDoc } from '@earendil-works/pi-durable'
 import type { GenerationHooks, HookApi, JsonObject } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
 import type { ActionContext } from '../server/actions.ts'
 import fastExtension, { actions, fastModels, fastStream } from '../extensions/fast/server.ts'
 import { Metadata } from '../server/metadata.ts'
+import { Profile } from '../extensions/subagents/api.ts'
 import { context as hookContext } from '../server/harness.ts'
 import { temp } from './helpers.ts'
 
@@ -117,7 +119,14 @@ it('runs a definition with fast: true on the priority tier, and only on OpenAI m
   await agent('lander')
   const providers = new Map<string, { streamSimple: ReturnType<typeof fastStream> }>()
   const resources = new Map<string, unknown>()
-  const labels: Record<number, string> = { 1: 'worker', 2: 'lander', 3: 'worker' }
+  // 1: an automation run of worker (label 'automation'), 2: the lander, 3: a worker on the OpenAI API,
+  // 4: a worker on another provider.
+  const conversations: Record<number, { label: string; definition?: string; provider: string }> = {
+    1: { label: 'automation', definition: 'worker', provider: 'openai-codex' },
+    2: { label: 'lander', provider: 'openai-codex' },
+    3: { label: 'worker', definition: 'worker', provider: 'openai' },
+    4: { label: 'worker', definition: 'worker', provider: 'anthropic' },
+  }
   const extension = fastExtension({
     userHome,
     ultimateRoot: repo,
@@ -140,14 +149,17 @@ it('runs a definition with fast: true on the priority tier, and only on OpenAI m
   const request = async (conversationId: number) => {
     const api = {
       conversationId,
-      snapshot: async (token: unknown) =>
-        token === Metadata
-          ? { label: labels[conversationId] }
-          : { sessionId: `s${conversationId}` },
+      snapshot: async (token: unknown) => {
+        const own = conversations[conversationId]
+        if (token === Metadata) return { label: own.label }
+        if (token === Profile) return own.definition ? { definition: own.definition } : undefined
+        if (token === AgentDoc) return { model: { provider: own.provider, modelId: 'gpt-6.1-sol' } }
+        return { sessionId: `s${conversationId}` }
+      },
     } as unknown as HookApi
     await hooks.beforeRequest({ messages: [] }, api, hookContext)
   }
-  for (const id of [1, 2, 3]) await request(id)
+  for (const id of [1, 2, 3, 4]) await request(id)
   // The overlay's stream decides by session; swap in a recorder for the real Responses API.
   const { payloads, api } = recordingApi()
   const sessions = resources.get('fast.sessions') as Set<string>
@@ -161,6 +173,7 @@ it('runs a definition with fast: true on the priority tier, and only on OpenAI m
     { model: 'gpt-6.1-sol', service_tier: 'priority' },
   ])
   // Only the OpenAI providers carry the overlay: a worker on another provider never reaches fastStream.
+  expect(sessions.has('s4')).toBe(false)
   expect([...providers.keys()].toSorted()).toEqual(['openai', 'openai-codex'])
   // A definition that drops fast takes its sessions off the priority tier at the next request.
   await agent('worker')

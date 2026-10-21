@@ -2,9 +2,16 @@ import { lazyStream } from '@earendil-works/pi-ai'
 import type { ProviderStreams } from '@earendil-works/pi-ai'
 import { openAICodexResponsesApi } from '@earendil-works/pi-ai/api/openai-codex-responses.lazy'
 import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy'
-import { defineExtension, GenerationTask, hook, ProviderDoc } from '@earendil-works/pi-durable'
+import {
+  AgentDoc,
+  defineExtension,
+  GenerationTask,
+  hook,
+  ProviderDoc,
+} from '@earendil-works/pi-durable'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { discoverAgents } from '../../lib/agents.ts'
+import { Profile } from '../subagents/api.ts'
 import { readSettings, updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
@@ -135,14 +142,19 @@ export default function fastExtension(host: ExtensionHost) {
     name: 'fast',
     hooks: [
       hook(GenerationTask, {
-        // Before each request: a conversation labelled with a definition's name (children, branches, the lander)
-        // runs that definition; its current `fast` decides whether the request's session goes fast.
+        // Before each request on an OpenAI model: the definition the conversation runs (children, automation runs
+        // and standing agents record it; a branch or the lander is labelled with it) decides, as it is now.
         beforeRequest: async (_request, api, context) => {
           const provider = await api.snapshot(ProviderDoc, api.conversationId, context)
           if (!provider) return
-          const label = (await api.snapshot(host.metadata, api.conversationId, context))?.label
+          const model = (await api.snapshot(AgentDoc, api.conversationId, context))?.model
+          const name =
+            model && fastProvider(`${model.provider}/`)
+              ? ((await api.snapshot(Profile, api.conversationId, context))?.definition ??
+                (await api.snapshot(host.metadata, api.conversationId, context))?.label)
+              : undefined
           const fast =
-            label !== undefined &&
+            name !== undefined &&
             (
               await discoverAgents(
                 host.ultimateRoot,
@@ -150,7 +162,7 @@ export default function fastExtension(host: ExtensionHost) {
                 host.userHome,
                 host.modelRuntime,
               )
-            ).definitions.some((definition) => definition.name === label && definition.fast)
+            ).definitions.some((definition) => definition.name === name && definition.fast)
           if (!fast) sessions.delete(provider.sessionId)
           else if (!sessions.has(provider.sessionId)) {
             if (sessions.size >= 10_000) sessions.delete(sessions.values().next().value!)

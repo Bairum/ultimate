@@ -14,9 +14,11 @@ and the project file decides.
 
 A definition can ask for it instead: `fast: true` in its frontmatter (the shipped `worker` sets it) puts the requests
 of conversations running that definition on the priority tier, whatever `fastModels` says, so the lander on the same
-model stays standard. It applies only on `openai-codex/` and `openai/` models; on any other provider it is ignored. A
-`beforeRequest` hook reads the conversation's label (its definition's name) and the definition's current `fast`, and
-marks the request's provider session for the overlay; an overlay file may set `fast` too.
+model stays standard. It applies only on `openai-codex/` and `openai/` models; on any other provider it is ignored. Before
+each request on an OpenAI model, a `beforeRequest` hook finds the definition the conversation runs (subagents'
+`Profile` doc for children, automation runs and standing agents; else its label, as for branches and the lander),
+reads that definition's current `fast`, and marks the request's provider session for the overlay. A compaction uses the
+same session, so it follows the conversation's last request. An overlay file may set `fast` too.
 
 Every request to a listed model goes fast: conversations, subagents whose definition names it (workers, the lander,
 reviewers), and summaries. The list is read at each request, so a change applies to the next one. Only `openai-codex/`

@@ -45,7 +45,7 @@ import { implementAction } from '../../lib/actions.ts'
 import { exec } from '../../lib/exec.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
-import { Standing, Subagents, SubagentsApi } from './api.ts'
+import { Profile, Standing, Subagents, SubagentsApi } from './api.ts'
 import {
   DefinitionAction,
   DefinitionsAction,
@@ -54,7 +54,7 @@ import {
   StandingAction,
 } from './refs.ts'
 
-export const docs = [Subagents, Standing]
+export const docs = [Subagents, Standing, Profile]
 const Anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'ultimate.subagent-anchor',
   version: 1,
@@ -649,6 +649,7 @@ export default function subagents(
         const change = definitionAgent(definition, base, host.modelRuntime)
         await configure(tx, id, { ...change, cwd: host.projectRoot })
         Object.assign(await tx.doc(host.metadata, id), { label: 'agent', title: `@${name}` })
+        ;(await tx.doc(Profile, id)).definition = name
         // Only a new conversation starts: a refresh reconfigures one that already runs.
         if (created) await started(host, tx, created, name, 'standing')
         return id

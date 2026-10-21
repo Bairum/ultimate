@@ -13,6 +13,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent } from '../../lib/agents.ts'
 import type { AgentDefinition } from '../../lib/agents.ts'
 import { Started } from './refs.ts'
+import { Profile } from './api.ts'
 
 /**
  * Emit `subagents.started` for `conversation`, configured in `tx` to run as `agent`: its model and thinking level as
@@ -71,5 +72,6 @@ export async function createChild(
     label: options.label,
     title: options.title,
   })
+  if (definition) (await tx.doc(Profile, child.id)).definition = definition.name
   return child
 }

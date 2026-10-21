@@ -17,7 +17,7 @@ import { prepareHarness } from '../server/harness.ts'
 import { emit } from '../server/events.ts'
 import type { OpenHost } from '../server/harness.ts'
 import subagents from '../extensions/subagents/server.ts'
-import { Standing, Started } from '../extensions/subagents/api.ts'
+import { Profile, Standing, Started } from '../extensions/subagents/api.ts'
 import type { SubagentsService } from '../extensions/subagents/api.ts'
 import { Metadata } from '../server/metadata.ts'
 import { parseDefinition, saveDefinition } from '../lib/agents.ts'
@@ -141,6 +141,7 @@ it('keeps one ownerless standing conversation, refreshes its definition and recr
     label: 'agent',
     title: '@x',
   })
+  expect(await host.harness.snapshot(Profile, id, ctx)).toEqual({ definition: 'x' })
   expect(await host.harness.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)).toEqual({ x: id })
   await writeFile(file, definition('Edited', 'model: anthropic/claude-opus-4-8\n'))
   await service.standing('x', ctx)
