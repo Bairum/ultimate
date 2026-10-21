@@ -1,6 +1,7 @@
-import { chmod, mkdir, writeFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import type { JsonValue } from '@earendil-works/chord'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { Board } from '../../extensions/board/api.ts'
@@ -14,7 +15,7 @@ afterEach(async () => {
   await server?.close()
 })
 
-it('delivers FIRE once, investigates exits only in the owning agent, recovers, and escalates through Board', async () => {
+async function fixture() {
   const root = await temp('ultimate-subscriptions-')
   const userHome = join(root, 'user')
   const home = join(root, 'project-state')
@@ -27,7 +28,37 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
     )
   const options = { ultimateRoot: resolve('.'), projectRoot: root, userHome, home }
   server = await fauxServer(options)
-  let app = server
+  return {
+    root,
+    userHome,
+    home,
+    options,
+    app: server,
+    folder: (id: string) => join(userHome, '.ultimate/subscriptions', basename(home), id),
+  }
+}
+async function create(app: NonNullable<typeof server>) {
+  const caller = await app.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
+  return (await app.extensions.invoke(
+    'subscriptions',
+    'create',
+    { ask: 'Watch this script' },
+    new AbortController().signal,
+    caller.id,
+  )) as Subscription
+}
+async function writeRun(folder: string, script: string) {
+  await mkdir(join(folder, 'state'), { recursive: true })
+  await writeFile(join(folder, 'run'), `#!/bin/sh\n${script}\n`)
+  await chmod(join(folder, 'run'), 0o700)
+}
+function call(app: NonNullable<typeof server>, action: string, id: string) {
+  return app.extensions.invoke('subscriptions', action, { id }, new AbortController().signal)
+}
+
+it('delivers FIRE once, investigates exits only in the owning agent, recovers, and escalates through Board', async () => {
+  const { root, userHome, home, options, app: initial } = await fixture()
+  let app = initial
   const caller = await app.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
   const invoke = (action: string, args: JsonValue = null) =>
     app.extensions.invoke('subscriptions', action, args, new AbortController().signal, caller.id)
@@ -167,4 +198,113 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
       throw error
     }
   })
+})
+
+it('waits for a SIGTERM-ignoring script to die before stop returns and removes its pid file', async () => {
+  const { app, folder } = await fixture()
+  const sub = await create(app)
+  await writeRun(folder(sub.id), "trap '' TERM; echo ready; exec sleep 60")
+  const running = (await call(app, 'start', sub.id)) as Subscription
+  await until(async () =>
+    ((await call(app, 'log', sub.id)) as { text: string }).text.includes('ready'),
+  )
+  expect(Number(await readFile(join(folder(sub.id), 'pid'), 'utf8'))).toBe(running.pid)
+  await call(app, 'stop', sub.id)
+  expect(() => process.kill(-running.pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+  await expect(readFile(join(folder(sub.id), 'pid'))).rejects.toMatchObject({ code: 'ENOENT' })
+})
+
+it('sweeps a crashed process pid file even when no subscription record exists', async () => {
+  const { app, folder, options } = await fixture()
+  await app.close()
+  server = undefined
+  const child = spawn('sleep', ['60'], { detached: true, stdio: 'ignore' })
+  const exited = new Promise<void>((done) => child.once('close', () => done()))
+  try {
+    await mkdir(folder('S999'), { recursive: true })
+    await writeFile(join(folder('S999'), 'pid'), `${child.pid}\n`)
+    server = await fauxServer(options)
+    await exited
+    expect(() => process.kill(-child.pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+    await expect(readFile(join(folder('S999'), 'pid'))).rejects.toMatchObject({ code: 'ENOENT' })
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid!, 'SIGKILL')
+    await exited
+  }
+})
+
+it('commits a one-shot as done before termination and never starts it again on reopen', async () => {
+  const { app, folder, options } = await fixture()
+  const sub = await create(app)
+  await writeRun(
+    folder(sub.id),
+    'trap "" TERM; echo started >> "$SUBSCRIPTION_STATE/starts"; echo FIRE done; exec sleep 60',
+  )
+  await call(app, 'start', sub.id)
+  await until(
+    async () =>
+      (await app.harness.snapshot(Subscriptions, context))!.subscriptions[sub.id].state === 'done',
+  )
+  expect((await app.harness.snapshot(Subscriptions, context))!.subscriptions[sub.id]).toMatchObject(
+    { enabled: false, fires: 1 },
+  )
+  await app.close()
+  server = undefined
+  server = await fauxServer(options)
+  expect(
+    (await server.harness.snapshot(Subscriptions, context))!.subscriptions[sub.id],
+  ).toMatchObject({ state: 'done', enabled: false, fires: 1 })
+  expect(await readFile(join(folder(sub.id), 'state/starts'), 'utf8')).toBe('started\n')
+  await expect(readFile(join(folder(sub.id), 'pid'))).rejects.toMatchObject({ code: 'ENOENT' })
+})
+
+it('closes during a pending start without spawning a process after cleanup', async () => {
+  const { app, folder } = await fixture()
+  const sub = await create(app)
+  await writeRun(folder(sub.id), 'echo $$ > "$SUBSCRIPTION_STATE/started"; exec sleep 60')
+  const entered = Promise.withResolvers<void>()
+  const resume = Promise.withResolvers<void>()
+  let held = false
+  const original = app.harness.snapshot.bind(app.harness) as (
+    ...args: unknown[]
+  ) => Promise<unknown>
+  // Snapshot is overloaded; preserve its API while holding this specific launch before its async file work.
+  const snapshot = vi.spyOn(app.harness, 'snapshot').mockImplementation((async (
+    ...args: unknown[]
+  ) => {
+    const result = await original(...args)
+    if (
+      !held &&
+      (args[0] as typeof Subscriptions).definition.kind === Subscriptions.definition.kind &&
+      (result as { subscriptions: Record<string, Subscription> })?.subscriptions[sub.id]?.state ===
+        'running'
+    ) {
+      held = true
+      entered.resolve()
+      await resume.promise
+    }
+    return result
+  }) as typeof app.harness.snapshot)
+  try {
+    const starting = call(app, 'start', sub.id).then(
+      () => '',
+      (error: unknown) => String(error),
+    )
+    await entered.promise
+    // Release invokes the same supervisor close callback synchronously, before full host shutdown awaits it.
+    const releasing = app.extensions.released()
+    const closing = app.close()
+    resume.resolve()
+    expect(await starting).toContain('supervisor is closing')
+    await releasing
+    await closing
+    server = undefined
+    await expect(readFile(join(folder(sub.id), 'pid'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(folder(sub.id), 'state/started'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+  } finally {
+    resume.resolve()
+    snapshot.mockRestore()
+  }
 })
