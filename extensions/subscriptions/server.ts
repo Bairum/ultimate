@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { constants } from 'node:fs'
-import { access, appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { constants, writeFileSync } from 'node:fs'
+import type { Dirent } from 'node:fs'
+import { access, appendFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { basename, join } from 'node:path'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord'
@@ -69,9 +71,9 @@ function required(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} is required`)
   return value.trim()
 }
-function kill(pid: number) {
+function kill(pid: number, signal: NodeJS.Signals = 'SIGTERM') {
   try {
-    process.kill(-pid, 'SIGTERM')
+    process.kill(-pid, signal)
   } catch (error) {
     // The group may already have exited between the snapshot and the kill.
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
@@ -80,7 +82,7 @@ function kill(pid: number) {
 function alive(pid?: number) {
   if (!pid) return false
   try {
-    process.kill(pid, 0)
+    process.kill(-pid, 0)
     return true
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false
@@ -100,6 +102,8 @@ type Run = {
   fires: number
   afterFire: boolean
   queue: Promise<void>
+  closed: Promise<void>
+  cleanup?: Promise<void>
   error?: string
   finished?: boolean
   stopped?: 'stop' | 'restart' | 'shutdown'
@@ -108,6 +112,7 @@ type Run = {
 function backend(host: ExtensionHost) {
   return host.resource('subscriptions.supervisor', () => {
     const runs = new Map<string, Run>()
+    const launches = new Set<Promise<void>>()
     let closing = false
     // home is the stable project state directory (~/.ultimate/projects/<name>-<hash>), not a worktree cwd.
     const folder = (id: string) =>
@@ -159,13 +164,10 @@ function backend(host: ExtensionHost) {
           for (const target of targets) {
             const id = target as ConversationId
             const requestId = `subscriptions:${sub.id}:${event}:${target}`
-            const delivered = await host
-              .harness()
-              .commit((tx) => tx.submissionByRequest(id, requestId), ctx)
-            if (delivered) continue
             const conversation = await runtime.conversation(id, ctx)
             if (!conversation)
               throw new Error(`Subscription ${sub.id}: conversation #${id} is missing`)
+            // Pi admits requestId in the submission transaction, including queued follow-ups.
             await conversation.submit(
               {
                 type: 'input',
@@ -206,6 +208,41 @@ function backend(host: ExtensionHost) {
         owner,
       )
     }
+    async function readPid(id: string): Promise<number | undefined> {
+      let text: string
+      try {
+        text = await readFile(join(folder(id), 'pid'), 'utf8')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+        throw error
+      }
+      const pid = Number(text.trim())
+      if (!Number.isSafeInteger(pid) || pid < 1) throw new Error(`Invalid pid file for ${id}`)
+      return pid
+    }
+    function cleanup(id: string, pid: number, run?: Run): Promise<void> {
+      if (run?.cleanup) return run.cleanup
+      const work = (async () => {
+        kill(pid)
+        const grace = Date.now() + 3000
+        while (alive(pid) && Date.now() < grace) await sleep(20)
+        if (alive(pid)) kill(pid, 'SIGKILL')
+        if (run) await run.closed
+        const deadline = Date.now() + 3000
+        while (alive(pid) && Date.now() < deadline) await sleep(20)
+        if (alive(pid)) throw new Error(`Subscription ${id}: process group ${pid} did not exit`)
+        // Never erase evidence for a replacement process, or before the whole group is confirmed gone.
+        if ((await readPid(id)) === pid) await rm(join(folder(id), 'pid'), { force: true })
+        if (runs.get(id) === run) runs.delete(id)
+      })()
+      if (!run) return work
+      run.cleanup = work.catch((error: unknown) => {
+        // Keep the pid file and allow a later close/open to retry cleanup after a failed kill.
+        delete run.cleanup
+        throw error
+      })
+      return run.cleanup
+    }
     async function finish(
       id: string,
       run: Run | undefined,
@@ -218,7 +255,8 @@ function backend(host: ExtensionHost) {
         run.finished = true
         run.active = false
       }
-      if (runs.get(id) === run) runs.delete(id)
+      if (run?.child.pid) await cleanup(id, run.child.pid, run)
+      else if (run && runs.get(id) === run) runs.delete(id)
       // Release leaves the durable running state intact for the next open; storage is closing.
       if (closing || run?.stopped === 'shutdown') return
       await host.harness().commit(async (tx) => {
@@ -250,24 +288,38 @@ function backend(host: ExtensionHost) {
         }
       }, BACKGROUND_CONTEXT)
     }
-    async function stopProcess(id: string, reason: Run['stopped'] = 'stop') {
+    async function stopProcess(id: string, pid?: number, reason: Run['stopped'] = 'stop') {
+      // Receipts target the process present at mutation time, never a later start.
+      if (!pid) return
       const run = runs.get(id)
-      if (!run) return
-      run.stopped = reason
-      run.active = false
-      runs.delete(id)
-      if (run.child.pid) kill(run.child.pid)
-      await run.queue
+      if (run && run.child.pid !== pid) return
+      if (run) {
+        run.stopped = reason
+        run.active = false
+        await cleanup(id, pid, run)
+        await run.queue
+      } else if ((await readPid(id)) === pid) await cleanup(id, pid)
     }
     async function launch(id: string, previousPid?: number) {
+      const work = launchRun(id, previousPid)
+      launches.add(work)
+      try {
+        await work
+      } finally {
+        launches.delete(work)
+      }
+    }
+    async function launchRun(id: string, previousPid?: number) {
+      if (closing) throw new Error('Subscription supervisor is closing')
       const sub = await snapshot(id)
       if (!sub.enabled || sub.state !== 'running') return
       const current = runs.get(id)
       // A replay of a start receipt (including after onOpen reconciliation) reuses this process.
       if (current?.active && current.child.pid === sub.pid && current.child.pid !== previousPid)
         return
-      await stopProcess(id, 'restart')
-      if (sub.pid) kill(sub.pid)
+      await stopProcess(id, current?.child.pid, 'restart')
+      const recorded = await readPid(id)
+      if (recorded) await cleanup(id, recorded)
       const dir = folder(id)
       await mkdir(join(dir, 'state'), { recursive: true })
       const env: NodeJS.ProcessEnv = {
@@ -281,20 +333,43 @@ function backend(host: ExtensionHost) {
         env[name] = value
       }
       await access(join(dir, 'run'), constants.X_OK)
+      if (closing) throw new Error('Subscription supervisor is closing')
       const child = spawn(join(dir, 'run'), [], {
         cwd: dir,
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         env,
       })
-      const run: Run = { child, active: true, fires: 0, afterFire: false, queue: Promise.resolve() }
+      const closed = Promise.withResolvers<void>()
+      const run: Run = {
+        child,
+        active: true,
+        fires: 0,
+        afterFire: false,
+        queue: Promise.resolve(),
+        closed: closed.promise,
+      }
       runs.set(id, run)
+      child.on('error', (error) => {
+        run.error = error.message
+      })
+      child.on('close', (code, signal) => {
+        closed.resolve()
+        enqueue(() => finish(id, run, code, signal ?? undefined, run.error))
+      })
+      try {
+        // Synchronous, before the first await: a crash before Started commits still leaves cleanup evidence.
+        if (child.pid) writeFileSync(join(dir, 'pid'), `${child.pid}\n`)
+      } catch (error) {
+        run.active = false
+        if (child.pid) await cleanup(id, child.pid, run)
+        throw error
+      }
       // Hold output until the pid and Started event are committed, even for an immediately exiting script.
       run.queue = host.harness().commit(async (tx) => {
         const saved = (await tx.doc(Subscriptions)).subscriptions[id]
         if (!saved || !saved.enabled || saved.state !== 'running') {
           run.active = false
-          if (child.pid) kill(child.pid)
           return
         }
         delete saved.pid
@@ -312,7 +387,6 @@ function backend(host: ExtensionHost) {
           .then(work)
           .catch(async (error: unknown) => {
             host.notice(`Subscription ${id}: ${String(error)}`)
-            if (child.pid) kill(child.pid)
             await finish(id, run, null, undefined, String(error))
           })
           .catch((error: unknown) => {
@@ -337,10 +411,18 @@ function backend(host: ExtensionHost) {
           saved.fires++
           run.fires++
           const event = await host.emit(tx, Fired, { id, text: fire, fire: saved.fires })
+          if (saved.once) {
+            saved.state = 'done'
+            saved.enabled = false
+            delete saved.pid
+            run.afterFire = true
+          }
           await deliver(tx, saved, event.id, 'fired', fire)
-          if (saved.once) run.afterFire = true
         }, BACKGROUND_CONTEXT)
-        if (run.afterFire && child.pid) kill(child.pid)
+        if (run.afterFire && child.pid) {
+          run.active = false
+          await cleanup(id, child.pid, run)
+        }
       }
       for (const [stream, stdout] of [
         [child.stdout, true],
@@ -367,13 +449,8 @@ function backend(host: ExtensionHost) {
           if (pending) enqueue(() => line(pending, stdout))
         })
       }
-      child.on('error', (error) => {
-        run.error = error.message
-      })
-      child.on('close', (code, signal) =>
-        enqueue(() => finish(id, run, code, signal ?? undefined, run.error)),
-      )
       await run.queue
+      if (!run.active && !run.afterFire) await stopProcess(id, child.pid)
     }
     async function effect(value: Effect) {
       if (value.action === 'start') {
@@ -383,7 +460,7 @@ function backend(host: ExtensionHost) {
           await finish(value.id, undefined, null, undefined, String(error))
           throw error
         }
-      } else await stopProcess(value.id)
+      } else await stopProcess(value.id, value.previousPid)
     }
     async function prepare(args: Args, caller?: number) {
       const valid = [
@@ -537,10 +614,9 @@ function backend(host: ExtensionHost) {
           await deliver(tx, sub, event.id, 'escalated', sub.error)
         }
         if (args.action === 'delete') delete state.subscriptions[id]
-        // Stop sweeps a recorded pid too, even when no process-local handle survived a crash.
         return {
           result: args.action === 'delete' ? { id } : sub,
-          effect: { id, action: pid ? `stop:${pid}` : 'stop' },
+          effect: { id, action: 'stop', ...(pid ? { previousPid: pid } : {}) },
         }
       }
       return { result: sub }
@@ -550,7 +626,6 @@ function backend(host: ExtensionHost) {
       if (!value) return
       const previous = effects.get(value.id) ?? Promise.resolve()
       const work = previous.then(async () => {
-        if (value.action.startsWith('stop:')) kill(Number(value.action.slice(5)))
         await effect(value)
       })
       // A failed start has already become an investigating subscription; it must not block its repair.
@@ -573,10 +648,28 @@ function backend(host: ExtensionHost) {
     }
     const close = async () => {
       closing = true
-      for (const id of runs.keys()) await stopProcess(id, 'shutdown')
+      // A pending launch may be reading secrets or checking its executable; it must settle before cleanup.
+      await Promise.allSettled(launches)
+      for (const [id, run] of runs) await stopProcess(id, run.child.pid, 'shutdown')
     }
     const open = async () => {
       closing = false
+      let folders: Dirent[]
+      try {
+        folders = await readdir(
+          join(host.userHome, '.ultimate/subscriptions', basename(host.home)),
+          { withFileTypes: true },
+        )
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        folders = []
+      }
+      // Sweep files, not ledger records: stop/delete may have committed just before a crash.
+      for (const entry of folders) {
+        if (!entry.isDirectory() || !/^S[1-9]\d*$/.test(entry.name)) continue
+        const pid = await readPid(entry.name)
+        if (pid) await cleanup(entry.name, pid, runs.get(entry.name))
+      }
       const state = await host.harness().snapshot(Subscriptions, BACKGROUND_CONTEXT)
       for (const sub of Object.values(state?.subscriptions ?? {})) {
         if (sub.state !== 'running' || !sub.enabled) continue
