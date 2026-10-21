@@ -47,7 +47,7 @@ const notes = (home: string) => {
 const back = (
   at: { projectRoot: string; home: string },
   name: string,
-  extra: { force?: boolean; tailnet?: string; key?: string } = {},
+  extra: { force?: boolean; tailnet?: string; key?: string; fetch?: typeof fetch } = {},
 ) => backUp({ ...cloud, key, machine: name, ...at, ...extra })
 /** A project of its own for each test, so earlier backups never make its first one stale. */
 let projects = 0
@@ -119,6 +119,40 @@ it('takes a 409 naming this very backup as latest for success: a retried commit 
   const done = await backUp({ ...cloud, key: other, machine: 'desk', ...a, fetch: retried })
   expect(stub.register.projects.find((project) => project.key === other)?.latest.id).toBe(done.id)
   expect(await readBackup(a.home, other)).toEqual({ key: other, parent: done.id, last: done })
+})
+
+it('adopts its own backup the Worker registered behind a 500, and retries the next on top of it', async () => {
+  const other = own()
+  const a = await machine(['x'])
+  // The Worker registers backup 1, then answers 500.
+  const lost = async (input: string | URL | Request, init?: RequestInit) => {
+    const response = await stub.fetch(input, init)
+    return init?.method === 'POST' ? new Response('internal error', { status: 500 }) : response
+  }
+  await expect(back(a, 'desk', { key: other, fetch: lost })).rejects.toThrow('returned 500')
+  const first = stub.register.projects.find((project) => project.key === other)!.latest
+  expect(await readBackup(a.home, other)).toBeUndefined()
+
+  const posts = stub.commits.length
+  const second = await back(a, 'desk', { key: other })
+  // The first commit (parent null) got the 409 naming backup 1; the retry builds on it.
+  expect(stub.commits.slice(posts)).toMatchObject([{ parent: null }, { parent: first.id }])
+  expect(stub.register.projects.find((project) => project.key === other)!.latest).toMatchObject({
+    id: second.id,
+    parent: first.id,
+  })
+  expect((await readBackup(a.home, other))?.parent).toBe(second.id)
+})
+
+it('keeps a 409 naming another machine’s backup a conflict, without adopting it', async () => {
+  const other = own()
+  const a = await machine(['x'])
+  const b = await machine(['y'])
+  await back(b, 'laptop', { key: other })
+  const posts = stub.commits.length
+  await expect(back(a, 'desk', { key: other })).rejects.toBeInstanceOf(Conflict)
+  expect(stub.commits.length).toBe(posts + 1)
+  expect(await readBackup(a.home, other)).toBeUndefined()
 })
 
 it('names an HTTP failure and keeps the parent', async () => {

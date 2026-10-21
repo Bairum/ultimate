@@ -61,6 +61,10 @@ export interface BackupOptions {
  * Upload a snapshot of `<home>/state.sqlite` and the `ultimate/*` branches, then `POST /sync/backups/<p>/<id>` with the
  * parent from `cloud-backup.json`. On 200 the record names the new backup as parent; on 409 it stays and `Conflict`
  * carries the Worker's sentence. Uploaded chunks of a refused backup stay for the Worker's retention.
+ *
+ * Two 409s are this machine's own: one naming this very backup (a retried commit the Worker already made) is success,
+ * and one naming a backup this machine made on top of its recorded parent (registered, but answered with a 500) is
+ * adopted as the parent, and the commit retried once on it.
  */
 export async function backUp(o: BackupOptions): Promise<LastBackup> {
   const record = await readBackup(o.home, o.key)
@@ -84,16 +88,15 @@ export async function backUp(o: BackupOptions): Promise<LastBackup> {
     uploaded: (manifest.database.uploaded ?? 0) + (manifest.bundle?.uploaded ?? 0),
   }
   const project = createHash('sha256').update(o.key).digest('hex')
-  const response = await (o.fetch ?? fetch)(
-    new URL(`/sync/backups/${project}/${manifest.id}`, httpBase(o.url)),
-    {
+  const commit = (parent: string | null) =>
+    (o.fetch ?? fetch)(new URL(`/sync/backups/${project}/${manifest.id}`, httpBase(o.url)), {
       method: 'POST',
       headers: { Authorization: `Bearer ${o.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         key: o.key,
         name: basename(o.projectRoot),
         machine: o.machine,
-        parent: record?.parent ?? null,
+        parent,
         ...(o.force ? { force: true } : {}),
         createdAt: done.at,
         bytes: done.bytes,
@@ -102,18 +105,37 @@ export async function backUp(o: BackupOptions): Promise<LastBackup> {
         ...(o.health ? { health: o.health } : {}),
       }),
       signal: o.signal,
-    },
-  )
-  if (response.status === 409) {
+    })
+  let parent = record?.parent ?? null
+  let response = await commit(parent)
+  for (let adopted = false; response.status === 409; adopted = true) {
     const body = (await response.json().catch(() => ({}))) as {
       error?: unknown
-      latest?: Partial<Latest> | null
+      latest?: (Partial<LastBackup> & { parent?: string | null }) | null
     }
-    const { id, machine, at } = body.latest ?? {}
+    const latest = body.latest ?? {}
+    const { id, machine, at } = latest
     // A retry after the Worker registered this backup but failed to answer: the latest is ours.
     if (id === done.id) {
       await writeBackup(o.home, { key: o.key, parent: done.id, last: done })
       return done
+    }
+    // This machine's previous backup, registered on top of our parent though its answer was lost: build on it.
+    if (
+      !adopted &&
+      typeof id === 'string' &&
+      machine === o.machine &&
+      (latest.parent ?? null) === parent &&
+      typeof at === 'number'
+    ) {
+      parent = id
+      await writeBackup(o.home, {
+        key: o.key,
+        parent: id,
+        last: { id, at, machine, bytes: latest.bytes ?? 0, uploaded: latest.uploaded ?? 0 },
+      })
+      response = await commit(parent)
+      continue
     }
     throw new Conflict(
       typeof body.error === 'string' ? body.error : 'Another machine backed up this project first',
