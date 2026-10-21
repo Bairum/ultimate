@@ -51,7 +51,6 @@ export interface BackupOptions {
   /** Replace the latest backup even when it is not this home's parent. */
   force?: boolean
   tailnet?: string
-  health?: unknown
   signal?: AbortSignal
   progress?: (done: number, total: number, uploaded: number) => void
   fetch?: typeof fetch
@@ -102,7 +101,6 @@ export async function backUp(o: BackupOptions): Promise<LastBackup> {
         bytes: done.bytes,
         uploaded: done.uploaded,
         ...(o.tailnet ? { tailnet: o.tailnet } : {}),
-        ...(o.health ? { health: o.health } : {}),
       }),
       signal: o.signal,
     })

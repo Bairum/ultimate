@@ -49,7 +49,6 @@ export function cloudStub(token = 'dev') {
         bytes: number
         uploaded: number
         tailnet?: string
-        health?: unknown
       }
       commits.push(body)
       if (!objects.has(`${hash}/${id}/manifest`))
@@ -77,7 +76,6 @@ export function cloudStub(token = 'dev') {
         register.machines.push(machine)
       }
       machine.at = body.createdAt
-      if (body.health) machine.health = body.health
       machine.projects[hash] = {
         name: body.name,
         at: body.createdAt,

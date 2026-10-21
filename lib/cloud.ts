@@ -58,7 +58,6 @@ export interface Register {
   machines: {
     machine: string
     at: number
-    health?: unknown
     projects: Record<string, { name: string; at: number; tailnet?: string }>
   }[]
 }

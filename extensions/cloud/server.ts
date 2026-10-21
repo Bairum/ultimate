@@ -8,7 +8,6 @@ import { implementAction } from '../../lib/actions.ts'
 import { cloudConfig } from '../../lib/cloud.ts'
 import { projectIdentity } from '../../lib/project-identity.ts'
 import { readSecret } from '../../lib/secrets.ts'
-import { HealthApi } from '../health/api.ts'
 import { PauseApi } from '../pause/api.ts'
 import { SecretsApi } from '../secrets/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
@@ -90,7 +89,6 @@ async function upload(
     if (!secret)
       throw new Error(`Missing ${SNAPSHOT_KEY}. Add it in the Secrets panel (⌘K → Secrets).`)
     const tailnet = host.want(TailscaleApi)?.status().url
-    const health = await host.want(HealthApi)?.providers()
     const done = await backUp({
       ...ready.config,
       secret,
@@ -99,7 +97,6 @@ async function upload(
       projectRoot: host.projectRoot,
       force,
       ...(tailnet?.startsWith('https://') ? { tailnet } : {}),
-      ...(health?.length ? { health } : {}),
       signal: AbortSignal.timeout(BACKUP_CAP),
       progress: (read, total, uploaded) => {
         running.backup = { done: read, total, uploaded }
@@ -177,7 +174,6 @@ export const userActions = ['backup', 'join']
 
 export default function cloud(host: ExtensionHost) {
   // Optional services, resolved where they are called; declared here so the catalogue lists them.
-  host.want(HealthApi)
   host.want(TailscaleApi)
   host.want(PauseApi)
   host.need(SecretsApi)

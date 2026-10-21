@@ -27,16 +27,16 @@ The Worker lives in the private repository `HazAT/ultimate-fleet` and is deploye
 needs `Authorization: Bearer <ULTIMATE_CLOUD_TOKEN>`; `<p>` is the SHA-256 hex of the project key:
 
 - `PUT|GET /sync/snapshots/<p>/<id>/<name>`: the encrypted objects of one backup (`snapshot.ts`).
-- `POST /sync/backups/<p>/<id>` `{ key, name, machine, parent, force?, createdAt, bytes, uploaded, tailnet?, health? }`,
+- `POST /sync/backups/<p>/<id>` `{ key, name, machine, parent, force?, createdAt, bytes, uploaded, tailnet? }`,
   after the manifest is up: makes `<id>` the project's latest backup. `200 { latest }`, or `409 { error, latest }` when
   `parent` is not the project's latest (`error` is a sentence for the user, `latest` the register's
   `{ id, machine, at, bytes, uploaded, parent, tailnet? }`).
-- `GET /sync/register`: `{ projects: [{ hash, key, name, latest }], machines: [{ machine, at, health?, projects }] }`.
+- `GET /sync/register`: `{ projects: [{ hash, key, name, latest }], machines: [{ machine, at, projects }] }`.
 
 **Back up now** (`backup { force? }`, user-only) uploads an encrypted snapshot of the open database and the `ultimate/*`
 branches, then commits it with this home's **parent**: the backup it last uploaded or restored, kept in
 `<home>/cloud-backup.json` (`{ key, parent, last }`). The commit names the machine, the project's folder name, the key,
-the tailnet address (from `tailscale`, when published) and the provider health (from `health`). On 200 the new backup
+and the tailnet address (from `tailscale`, when published). On 200 the new backup
 becomes the parent. On 409 another machine backed up after this home's parent: the parent stays, the uploaded chunks
 stay for the Worker's retention, and `state` reports `conflict { error, latest }`. Two 409s are this machine's own and
 not conflicts: one whose `latest` is this very backup (a retried commit already made) counts as done, and one whose
