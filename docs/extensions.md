@@ -87,7 +87,8 @@ extension depending on an optional one. The core layers, lowest first, each depe
 9. sidebar: the sidebar and the @ultimate button, the UI that brings the core together.
 
 Where a lower extension needs something a higher one knows, it declares the contract and the higher one fills it:
-server extension points (`conversations.trees` and `conversations.release` from conversations), web points (`conversations.phase`, `conversations.task`, `conversations.unsummarized`,
+server extension points (`conversations.trees` and `conversations.release` from conversations, `workspaces.handoff`
+from workspaces), web points (`conversations.phase`, `conversations.task`, `conversations.unsummarized`,
 `board.message-answers`, `lineage.empty-root`, `workspaces.review`), or durable events (`board.asked`,
 `models.login-changed`). Optional extensions plug into the core the same way: phase, plan and questions provide
 points and react to events; the core never imports them. A web point is `definePoint` in the owner's `ui.tsx`,

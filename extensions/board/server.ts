@@ -27,7 +27,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { WorkspacesApi } from '../workspaces/api.ts'
+import { Handoff, WorkspacesApi } from '../workspaces/api.ts'
 import { isolatable } from '../../lib/git.ts'
 
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
@@ -910,6 +910,11 @@ export default function board(host: ExtensionHost) {
   host.need(WorkspacesApi)
   // Board's own extension point, resolved where triage calls the model.
   host.want(Gate)
+  // The lander's deploy handoff, through workspaces' extension point, so workspaces depends on no board.
+  host.implement(Handoff, {
+    send: (from, input, requestId, ctx) =>
+      send(host, from, input, ctx, undefined, undefined, requestId),
+  })
   host.implement(BoardApi, {
     answer: async (messageId, text, ctx, device) => {
       const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx)
