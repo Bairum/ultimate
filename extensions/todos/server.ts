@@ -77,7 +77,8 @@ export async function mark(tx: Tx, id: unknown, done: boolean) {
     )
     todos.items = todos.items.filter((item) => !drop.has(item.id))
   } else delete todo.done
-  return todo
+  // A copy: the document's overlay is unusable once the commit settles, and callers reply with this.
+  return { ...todo }
 }
 
 const line = (todo: Todo) => `- ${todo.id}: ${todo.text}`
