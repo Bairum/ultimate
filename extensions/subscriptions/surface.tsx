@@ -66,8 +66,11 @@ export function Subscriptions() {
   // The shell's conversation decides: a pick switches it, and so do Back or any other navigation to an agent.
   const byShown = list.find((sub) => sub.conversationId === shown)
   const selected = byShown ?? list.find((sub) => sub.id === stored) ?? (phone ? undefined : list[0])
+  // On a phone the detail replaces the list; which one shows is separate from the selection, which follows the shell.
+  const [phoneList, setPhoneList] = useState(!stored)
   const select = (sub: SubscriptionListItem) => {
     setSelected(sub.id)
+    setPhoneList(false)
     showAgent(switchConversation, sub.conversationId)
   }
   useEffect(() => {
@@ -77,14 +80,16 @@ export function Subscriptions() {
   const agent = selected?.conversationId
   useEffect(() => {
     if (!live || !data) return
-    const picked = list.find((sub) => sub.id === takePick())
+    const pick = takePick()
+    const picked = list.find((sub) => sub.id === pick)
+    if (picked) setPhoneList(false)
     const to = picked?.conversationId ?? (byShown ? undefined : agent)
     if (to !== undefined && to !== shown) showAgent(switchConversation, to)
     // Only arriving or a new selection acts; the shown conversation is read, not followed.
     // oxlint-disable-next-line react/exhaustive-deps -- shown, list and byShown are read at that moment
   }, [live, agent, data !== undefined])
-  // On a phone the detail replaces the list; a deleted selection falls back to the list.
-  const open = !!stored && !!selected
+  // A deleted selection falls back to the list.
+  const open = !phoneList && !!selected
   const showList = !phone || !open
   const showDetail = !phone || open
   return (
@@ -95,7 +100,7 @@ export function Subscriptions() {
             <button
               aria-label="All subscriptions"
               className="-ml-1 grid size-6 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-              onClick={() => setSelected(null)}
+              onClick={() => setPhoneList(true)}
               type="button"
             >
               <ArrowLeftIcon className="size-4" />
