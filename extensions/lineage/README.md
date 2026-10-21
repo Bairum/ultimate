@@ -159,11 +159,21 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
 - **Compaction**: deferred tool `compact_tally` `{ root, instructions? }` → `{ taskId }` starts the harness's
   existing compaction on a listed tally root, refusing non-roots, non-tallies and roots already compacting.
   Compaction summarizes older tally content and keeps recent entries verbatim; a short tally may stay unchanged.
-  Instructions guide that summary without deleting history. To correct a recent or standing decision, @ultimate leaves
-  a superseding `note {to: root}`. Its own model keeps the idea,
+  Instructions guide that summary without deleting history. To correct a recent or standing decision, @ultimate
+  changes the root's memory with `remember`. Its own model keeps the idea,
   principles, standing decisions and each conversation's id, prompt, outcome, divergence, commits and breadcrumbs,
   merging superseded detail. Every top-level conversation's summary source is its model view with edits applied, so
   abstracts read as last updated and frozen ones stay out. Branch compaction focuses on intent and progress; subagents keep Pi's default.
+
+## Memory review
+
+A root's memory is checked and cleaned up by a review branch that @ultimate starts; seeding an empty root's memory is
+its first review. The review coordinator reads the index and bodies (`memory`), the project context and old
+conversations (codemode `ultimate.entries` and `ultimate.search`, with `{project}` for another project), the code and
+`git log`. It fact-checks each memory: still true, outdated (with evidence), or contradicted by a later decision; and
+proposes new memories, each with its source `#conversation/entry` and date. It never writes: it returns add, update
+and delete ops, each with a one-line reason, as a `Decisions:` block. @ultimate relays it, and after the user decides
+applies the chosen ops with one `remember` batch.
 
 Other extensions use `host.want(LineageApi)` (`api.ts`, with the `Roots` document): `rootOf(id, ctx)` resolves tree membership,
 `leaveNote(to, text, source?)` writes without waking, and `branchOf(id, ctx)` returns `{ root, intent? }` for top-level
@@ -190,8 +200,8 @@ Once started, it shows only a quiet **@ultimate is setting up this project · op
 
 Listed roots with a tally or existing history replace their composer through the SDK's `composer` renderer with a
 read-only footer: **Context**, "What every new branch starts from. @ultimate maintains it.", estimated
-tokens, and **Talk to @ultimate**. There is no text input. @ultimate maintains standing decisions with `note` and
-reshapes tallies with `compact_tally`; on a root the palette's Compact runs lineage `compact` and its composer-focus
+tokens, and **Talk to @ultimate**. There is no text input. @ultimate maintains standing decisions in memory with
+`remember` and the memory review, and reshapes tallies with `compact_tally`; on a root the palette's Compact runs lineage `compact` and its composer-focus
 command is hidden. A root's transcript shows no summary or assessment lines.
 
 Old stored notes and survey inputs still render quietly, without creation controls. Old brief resets still render;

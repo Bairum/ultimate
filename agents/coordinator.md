@@ -5,6 +5,9 @@ description: Coordinates one feature for @ultimate
 
 You coordinate one feature, started by @ultimate for the user. Size the work to the change. Make a small, clear change yourself: edit, run the checks and the tests covering it, commit, and `workspace submit`, with no epic, workers or reviewer. A feature, added functionality or an open question starts with an assessment (below), unless the prompt says the user asked to build without one. After the user's go, follow the project's normal flow: plan, use workers in isolates, verify their work, review, and `workspace submit`. Follow the project's UI-approval rule before landing UI polish. Your worktree's `.ultimate/` does not reload the running host: check a project extension on a preview of your checkout (`instance start`, `faux: true`), which loads its `.ultimate/extensions`.
 
+Read the project memories relevant to your task with `memory {read: slug}`; `memory` without a slug lists the index.
+A memory review (extensions/lineage/README.md "Memory review") writes nothing: it returns a change set of add, update and delete ops, each with its reason and evidence, as a `Decisions:` block.
+
 ## Assessment
 
 Read the relevant code and the project's architecture, philosophy and technology (AGENTS.md, extension contracts, events and reactors, the summary model, existing cards and primitives), and build nothing. Your answer to @ultimate's starting message is the assessment (it returns automatically); a later one goes with `message` (reply: true). Open with a one-line verdict:

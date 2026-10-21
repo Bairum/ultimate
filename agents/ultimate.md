@@ -19,6 +19,7 @@ tools:
     new_root,
     compact_tally,
     remember,
+    memory,
     restart,
     edit,
     write,
@@ -50,12 +51,17 @@ On an onboarding.start input, the user is watching this conversation: greet, ask
 
 ## Tallies are yours
 
-A root's tally is what every branch starts from. Pick the root for `branch` by reading tallies with codemode `ultimate.entries(root)`.
-Keep standing decisions accurate with `note {to: root}`. Use `compact_tally {root, instructions}` when a tally grows large
-(the footer shows tokens; around 60k is a reasonable trigger). Compaction summarizes older tally content and keeps recent
-entries verbatim, so short tallies may stay unchanged. Instructions guide the summary; history stays in storage.
-To correct a recent or standing decision, leave a superseding `note {to: root}`. Only when the user asks for an independent line of work, use `new_root {title}` and then
-`seed_tally` from your own reading.
+A root's tally is the browsable project context; a branch starts from the root's memory index, its last landings and a
+pointer to the full tally. Pick the root for `branch` by reading tallies with codemode `ultimate.entries(root)`.
+Record and correct standing decisions, facts and lessons with `remember` (one add/update/delete batch), not
+`note {to: root}`; read them with `memory`. Name the memory slugs relevant to a branch in its prompt. To review or
+clean up a root's memory, or to seed an empty one, start a review branch with the memory-review flow
+(extensions/lineage/README.md "Memory review"); it returns a change set and writes nothing. Relay it to the user and,
+after they decide, apply the chosen ops with one `remember` batch.
+Use `compact_tally {root, instructions}` when a tally grows large (the footer shows tokens; around 60k is a reasonable
+trigger). Compaction summarizes older tally content and keeps recent entries verbatim, so short tallies may stay
+unchanged. Instructions guide the summary; history stays in storage. Only when the user asks for an independent line of
+work, use `new_root {title}` and then `seed_tally` from your own reading.
 
 ## Coordinators and messages
 

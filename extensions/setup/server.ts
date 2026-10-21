@@ -5,7 +5,13 @@ import {
   hook,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, JsonObject, Tx } from '@earendil-works/pi-durable'
+import type {
+  ConversationDocToken,
+  ConversationId,
+  JsonObject,
+  Tx,
+} from '@earendil-works/pi-durable'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { discoverAgents } from '../../lib/agents.ts'
@@ -16,6 +22,7 @@ import { readSecret, secretMetadata } from '../../lib/secrets.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { HealthApi } from '../health/api.ts'
+import type { MemoryDoc, RootsDoc } from '../lineage/refs.ts'
 import { Standing } from '../subagents/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
 import { CheckAction, DemoAction } from './refs.ts'
@@ -45,6 +52,8 @@ type CheckHost = Pick<
   | 'need'
   | 'want'
   | 'faux'
+  | 'doc'
+  | 'harness'
 >
 
 const configured = (host: Pick<CheckHost, 'modelRuntime'>, provider: string) =>
@@ -269,8 +278,48 @@ async function worktreeArea(host: CheckHost): Promise<SetupIssue | undefined> {
   }
 }
 
+/** Reads a conversation document; inside a transaction it must read through `tx`, or it waits on its own line. */
+type ReadDoc = (
+  doc: ConversationDocToken<JsonObject>,
+  id: ConversationId,
+) => Promise<Readonly<JsonObject> | undefined>
+
+const snapshots =
+  (host: Pick<CheckHost, 'harness'>): ReadDoc =>
+  (doc, id) =>
+    host.harness().snapshot(doc, id, BACKGROUND_CONTEXT)
+
+/** Listed roots without a memory: their branches start from the whole tally instead of a memory brief. */
+async function memoryArea(host: CheckHost, read: ReadDoc): Promise<SetupIssue | undefined> {
+  const rootsDoc = host.doc('lineage.roots')
+  const memoryDoc = host.doc('lineage.memory')
+  if (!rootsDoc || !memoryDoc) return undefined
+  const listed = (await read(rootsDoc, ROOT_CONVERSATION_ID)) as
+    | (typeof RootsDoc)['value']
+    | undefined
+  const empty: number[] = []
+  for (const root of listed?.roots ?? []) {
+    const doc = (await read(memoryDoc, root as ConversationId)) as
+      | (typeof MemoryDoc)['value']
+      | undefined
+    if (!Object.keys(doc?.memories ?? {}).length) empty.push(root)
+  }
+  if (!empty.length) return undefined
+  return {
+    area: 'Project memory',
+    status: 'warn',
+    summary: `none in root ${empty.map((root) => `#${root}`).join(', ')}`,
+    // No fix button: no command opens @ultimate with a request, so the row says what to ask.
+    impact:
+      "New branches start from the full project context (large, slow, costly). Ask @ultimate to review the project's memory.",
+  }
+}
+
 /** Every area, warnings first, then information, then what is set up; a failing area is skipped, not fatal. */
-export async function check(host: CheckHost): Promise<SetupIssue[]> {
+export async function check(
+  host: CheckHost,
+  read: ReadDoc = snapshots(host),
+): Promise<SetupIssue[]> {
   const areas = await Promise.all(
     (
       [
@@ -283,13 +332,15 @@ export async function check(host: CheckHost): Promise<SetupIssue[]> {
         tailscaleArea,
         landerArea,
         worktreeArea,
+        memoryArea,
       ] as ((
         host: CheckHost,
+        read: ReadDoc,
       ) => SetupIssue | SetupIssue[] | undefined | Promise<SetupIssue | SetupIssue[] | undefined>)[]
     ).map((area) =>
       // Started inside the promise, so an area that throws synchronously is caught like one that rejects.
-      Promise.resolve(host)
-        .then(area)
+      Promise.resolve()
+        .then(() => area(host, read))
         .catch((error: unknown): SetupIssue => ({
           area: 'Setup check',
           status: 'info',
@@ -353,10 +404,10 @@ let demo: SetupIssue[] | null = null
 export default function setup(host: ExtensionHost) {
   // The check reads files and the model runtime: cached briefly so a burst of inputs reads once.
   const cache = host.resource('setup.check', () => ({ at: 0, issues: [] as SetupIssue[] }))
-  const current = async () => {
+  const current = async (tx: Tx) => {
     if (host.faux && demo) return demo
     if (Date.now() - cache.at > 30_000) {
-      cache.issues = await check(host)
+      cache.issues = await check(host, (doc, id) => tx.doc(doc, id))
       cache.at = Date.now()
     }
     return cache.issues
@@ -372,7 +423,7 @@ export default function setup(host: ExtensionHost) {
           const standing = await tx.doc(Standing, ROOT_CONVERSATION_ID)
           if (standing.ultimate !== conversationId) return undefined
           // A check that fails here only skips the note; the status line still shows the setup.
-          return noteFor(tx, conversationId, await current().catch(() => undefined), Date.now())
+          return noteFor(tx, conversationId, await current(tx).catch(() => undefined), Date.now())
         },
       }),
     ],

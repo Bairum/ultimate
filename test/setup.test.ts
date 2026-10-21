@@ -113,6 +113,7 @@ async function checkHost(options: { logins: string[]; secrets?: string[] }) {
       }),
     }),
     want: () => undefined,
+    doc: () => undefined,
   } as unknown as Parameters<typeof check>[0]
 }
 
@@ -209,6 +210,30 @@ it('warns about a missing worktree setup until one is configured', async () => {
   expect(await row({ isolates: { worktree: { setup: ['composer install'] } } })).toMatchObject({
     status: 'ok',
   })
+})
+
+it('warns about a listed root without memories until it has one', async () => {
+  const host = await checkHost({ logins: ['openrouter', 'openai-codex'] })
+  const docs: Record<string, Record<number, JsonObject>> = {
+    'lineage.roots': { 1: { roots: [1] } },
+    'lineage.memory': { 1: { memories: {} } },
+  }
+  const row = async () =>
+    (
+      await check(
+        { ...host, doc: (kind: string) => (docs[kind] ? { kind } : undefined) } as never,
+        async (doc, id) => docs[(doc as unknown as { kind: string }).kind][id],
+      )
+    ).find((issue) => issue.area === 'Project memory')
+  expect(await row()).toMatchObject({
+    status: 'warn',
+    summary: 'none in root #1',
+    impact: expect.stringContaining('full project context'),
+  })
+  docs['lineage.memory'][1] = {
+    memories: { stack: { kind: 'fact', line: 'TypeScript', body: 'TypeScript.', updated: 0 } },
+  }
+  expect(await row()).toBeUndefined()
 })
 
 it('notes the primary agent only when its warnings change, and once when they clear', async () => {

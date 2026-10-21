@@ -1536,7 +1536,7 @@ export default function lineageExtension(host: ExtensionHost) {
         name: 'compact_tally',
         deferred: true,
         description:
-          'Summarize older content in a listed tally root, keeping recent entries verbatim; short tallies may stay unchanged. Use instructions to guide the summary. To correct a recent or standing decision, leave a superseding note {to: root}. Full history stays in storage. Returns the compaction task id.',
+          'Summarize older content in a listed tally root, keeping recent entries verbatim; short tallies may stay unchanged. Use instructions to guide the summary. To record or correct a standing decision, use remember. Full history stays in storage. Returns the compaction task id.',
         parameters: Type.Object({
           root: Type.Integer({ minimum: 1 }),
           instructions: Type.Optional(Type.String()),
