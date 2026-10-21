@@ -2,7 +2,18 @@ import { randomUUID } from 'node:crypto'
 import { readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { defineExtension, type ToolExecutionApi, wrapTool } from '@earendil-works/pi-durable'
+import type { Context } from '@earendil-works/chord'
+import { withCancel } from '@earendil-works/chord/context'
+import { Type } from '@earendil-works/pi-ai'
+import {
+  defineExtension,
+  defineTool,
+  InboxDoc,
+  type ToolExecutionApi,
+  type ToolExecutionResult,
+  type ToolRegistration,
+  wrapTool,
+} from '@earendil-works/pi-durable'
 import {
   type BashExecution,
   createBashTool,
@@ -58,6 +69,56 @@ export function prepareBash(
   }
   execution.env.GIT_CONFIG_COUNT = String(count)
   if (log) execution.env.ULTIMATE_COMMIT_LOG = log
+}
+
+/** Why a command marked `interruptible` must not be cut mid-way, if it changes something; `undefined` when it only waits. */
+export function changes(command: string) {
+  return (
+    /\bgit\b[^;&|\n]*?\b(push|commit|merge)\b/.exec(command)?.[0] ??
+    /\b(install|migrate)\b/.exec(command)?.[0]
+  )
+}
+
+/**
+ * Run `run` until it finishes or a steer is queued in this call's conversation, whichever comes first. A steer joins a
+ * run only after the tool round, so a wait would otherwise hold it; ending the command here lets the run go on and the
+ * steer be placed at once. Follow-ups wait for the run's end anyway, so they never interrupt.
+ */
+async function untilSteered(
+  run: (context: Context) => Promise<ToolExecutionResult>,
+  api: ToolExecutionApi,
+  context: Context,
+): Promise<ToolExecutionResult> {
+  const inbox = await api.watchDoc(InboxDoc, api.conversationId, context)
+  if (!inbox) return run(context)
+  const started = performance.now()
+  const { context: command, cancel } = withCancel(context)
+  let steered = false
+  const inspect = (value: typeof inbox.value) => {
+    if (steered || !value?.items.some((item) => item.mode === 'steer')) return
+    steered = true
+    cancel(new Error('Interrupted by a steering message'))
+  }
+  inbox.start(async (value) => inspect(value))
+  try {
+    inspect(inbox.value)
+    return await run(command)
+  } catch (error) {
+    if (!steered || context.abortSignal?.aborted) throw error
+    const retained = api.retainedOutput()
+    const seconds = Math.round((performance.now() - started) / 1000)
+    return {
+      output: [
+        {
+          type: 'text',
+          text: `Interrupted by a steering message after ${seconds}s. Last output:\n${retained.text || '(none)'}`,
+        },
+      ],
+      structuredOutput: { output: retained.text, truncated: retained.truncated, exitCode: 130 },
+    }
+  } finally {
+    await inbox.stop()
+  }
 }
 
 type Made = {
@@ -135,17 +196,34 @@ async function madeCommits(path: string, conversation: number) {
 
 export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
   const shell = createBashTool()
+  const parameters = Type.Object({
+    ...shell.parameters.properties,
+    interruptible: Type.Optional(
+      Type.Boolean({
+        description:
+          'Only for commands that just wait or poll (CI checks, deploys, a file appearing): a steering message ends the command early. Never combine with commands that change things.',
+      }),
+    ),
+  })
   // In the tool itself, not a wrap, so the events carry the call's trace and conversation.
-  const bashTool: typeof shell = {
+  const bashTool = defineTool({
     ...shell,
-    async execute(args, api, context) {
+    description: `${shell.description} Set interruptible for a command that only waits or polls, so a steering message can end it early.`,
+    parameters,
+    async execute({ interruptible, ...args }, api, context) {
+      const change = interruptible ? changes(args.command) : undefined
+      if (change)
+        throw new Error(
+          `An interruptible command must only wait, but this one changes things (${change}). Run the change in its own bash call, then wait in a separate interruptible one.`,
+        )
       // One log per invocation: task ids repeat across projects and a retried call reruns its task.
       const log = join(tmpdir(), `ultimate-commits-${randomUUID()}.log`)
       const call = createBashTool({
         prepare: (execution) => prepareBash(execution, api, log),
       })
+      const run = (command: Context) => call.execute(args, api, command)
       try {
-        return await call.execute(args, api, context)
+        return interruptible ? await untilSteered(run, api, context) : await run(context)
       } finally {
         // A failed or stopped command may still have committed, so record what it made either way.
         const commits = await madeCommits(log, api.conversationId)
@@ -160,10 +238,11 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
             )
       }
     },
-  }
+  })
   return defineExtension({
     name: 'coding-tools',
-    tools: [createReadTool(), createWriteTool(), createEditTool(), bashTool],
+    // Each tool keeps its own parameters; the list is only read through the base registration.
+    tools: [createReadTool(), createWriteTool(), createEditTool(), bashTool] as ToolRegistration[],
     wraps: [
       wrapTool(createBashTool(), (bash) => ({
         ...bash,

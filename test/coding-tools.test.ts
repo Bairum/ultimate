@@ -16,7 +16,7 @@ it('uses a 600-second default tripwire and leaves explicit timeouts unchanged', 
     emit: vi.fn<ExtensionHost['emit']>() as ExtensionHost['emit'],
   }).wraps!.find((wrap) => 'tool' in wrap && wrap.tool === 'bash')!
   if (!('tool' in wrapper)) throw new Error('Missing bash wrapper')
-  const bash = wrapper.wrap({ ...createBashTool(), execute }) as ReturnType<typeof createBashTool>
+  const bash = wrapper.wrap({ ...createBashTool(), execute })
   const api = {} as ToolExecutionApi
   await expect(bash.execute({ command: 'sleep' }, api, context)).rejects.toThrow(
     'Tripwire: bash ran past the 600 s default limit',
