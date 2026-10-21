@@ -16,7 +16,7 @@ import {
   SquareArrowOutUpRightIcon,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { MentionText, MessageResponse } from '@/components/ai/message'
+import { MessageResponse } from '@/components/ai/message'
 import { ToolImage } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
@@ -32,6 +32,7 @@ import {
   useNow,
   useTranscript,
   useUltimate,
+  UserText,
   UserView,
 } from '@/sdk'
 import type { ChatSummaryProps, ToolCallView } from '@/sdk'
@@ -252,10 +253,10 @@ function AttachedAnswer({ answer, question }: { answer: BoardMessage; question: 
         </time>
       </div>
       {!dismissed && (
-        // Your words as you wrote them, as a typed turn shows them.
-        <p className="mt-1.5 rounded-md border border-border/70 bg-secondary/60 px-3 py-2 text-[13px] leading-relaxed break-words whitespace-pre-wrap">
-          <MentionText text={answer.text} />
-        </p>
+        <UserText
+          className="mt-1.5 rounded-md border border-border/70 bg-secondary/60 px-3 py-2 text-[13px] leading-relaxed"
+          text={answer.text}
+        />
       )}
     </div>
   )

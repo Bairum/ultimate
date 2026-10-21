@@ -50,7 +50,7 @@ export { Fold, useFold } from '../app/fold.tsx'
 /** A message's footer as the transcript shows it: details such as usage, time, copy, go back and a reference link. */
 export { MessageActions } from '../app/message-actions.tsx'
 /** A turn of the user's as the transcript shows a typed one; `text` gives the words a delivered message carries. */
-export { UserView } from '../app/user-turn.tsx'
+export { UserText, UserView } from '../app/user-turn.tsx'
 /** Renders with the value another extension provides for your point; see `definePoint`. */
 export { Provided } from '../app/boundary.tsx'
 export { api } from './client.ts'

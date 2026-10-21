@@ -2,6 +2,7 @@ import type { ImageContent, TextContent, UserMessage } from '@earendil-works/pi-
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { MentionText, Message, MessageContent } from '@/components/ai/message'
 import { ToolImage } from '@/components/ai/tool'
+import { cn } from 'cn'
 import { MessageActions } from './message-actions.tsx'
 
 /** The text blocks of a user message, joined. */
@@ -9,6 +10,15 @@ export function textOf(content: string | readonly (TextContent | ImageContent)[]
   return typeof content === 'string'
     ? content
     : content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n')
+}
+
+/** The user's words as written, with mentions as chips: the body of every user turn. */
+export function UserText({ text, className }: { text: string; className?: string }) {
+  return (
+    <p className={cn('break-words whitespace-pre-wrap', className)}>
+      <MentionText text={text} />
+    </p>
+  )
 }
 
 /**
@@ -31,9 +41,7 @@ export function UserView({
   return (
     <Message className="group/message mt-3 first:mt-0" from="user">
       <MessageContent>
-        <p className="break-words whitespace-pre-wrap">
-          <MentionText text={text} />
-        </p>
+        <UserText text={text} />
         {images.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {images.map((image, index) => (
