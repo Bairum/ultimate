@@ -38,7 +38,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import type { LandedData } from '../workspaces/api.ts'
 import { Branch, Branched, LineageApi, Rooted, Roots } from './api.ts'
-import { ConversationsApi, Release, Trees } from '../conversations/api.ts'
+import { Compacted, ConversationsApi, Release, Trees } from '../conversations/api.ts'
 import { Standing, Started, Subagents } from '../subagents/api.ts'
 
 /** The fields of a Board message the landed-branch check reads. */
@@ -640,8 +640,36 @@ function lineage(host: ExtensionHost) {
       if ((await tx.doc(LiveDoc, child.conversationId)).run) return true
     return false
   }
-  return { Notify, Prompt, LandingNote, ConcludeLanded }
+  /** Wakes @ultimate after a manual compaction of it: one input per summary entry, queued behind a running turn. */
+  const Woken = defineTask<{ id: ConversationId; entry: number }, { phase: 'deliver' }, null>({
+    name: 'lineage.woken',
+    version: 1,
+    initial: () => ({ phase: 'deliver' }),
+    phases: {
+      deliver: async (task, runtime, ctx) => {
+        const { id, entry } = task.input
+        // Keyed by the summary entry, so a rerun after a crash finds the input it already submitted.
+        await (await host.harness().conversation(id, ctx))!.submit(
+          {
+            type: 'input',
+            content: WOKEN_TEXT,
+            whenBusy: 'followUp',
+            requestId: `lineage:woken:${entry}`,
+            entry: { kind: 'lineage.woken', data: { entry } },
+          },
+          ctx,
+        )
+        await runtime.commit(() => done, ctx)
+      },
+    },
+    abort: (_task, runtime, ctx) =>
+      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+  })
+  return { Notify, Prompt, LandingNote, ConcludeLanded, Woken }
 }
+
+const WOKEN_TEXT =
+  'Your context was just compacted. Read the summary above and your project memory, then check what is open: unanswered questions, running branches and to-dos. Tell the user in one or two lines that you are back and what is open.'
 
 /** The note a landing leaves in its submitter's tree root: what landed, how it diverged, and the card's data. */
 function landingNote(landing: LandedData) {
@@ -1331,7 +1359,23 @@ export default function lineageExtension(host: ExtensionHost) {
     if (!(await tx.conversation(id))) return
     await conversations.generatedTitle(tx, id, intentLine(data.intent))
   })
-  const { Notify, Prompt, LandingNote, ConcludeLanded } = lineage(host)
+  const { Notify, Prompt, LandingNote, ConcludeLanded, Woken } = lineage(host)
+  // A manual compaction of @ultimate ends with a wake-up; an automatic one continues the run it interrupted.
+  host.react(
+    'woken',
+    [Compacted],
+    async (tx, { data }) => {
+      if (data.reason !== 'manual') return
+      if ((await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate !== data.conversation) return
+      const id = data.conversation as ConversationId
+      await tx.createTask(
+        Woken,
+        { id, entry: data.entry },
+        { conversationId: id, ownership: { kind: 'conversation' }, background: true },
+      )
+    },
+    { from: 'now' },
+  )
   // A landed branch is done: conclude it once its report run ends. Background, in the submitter's conversation.
   host.react('conclude-landed', [SubmissionLanded], async (tx, { data: landing }) => {
     const id = landing.conversationId as ConversationId
@@ -1399,7 +1443,7 @@ export default function lineageExtension(host: ExtensionHost) {
   watchTally(host, context)
   return defineExtension({
     name: 'lineage',
-    tasks: [Notify, Prompt, LandingNote, ConcludeLanded, Memorize, rewindTask(host)],
+    tasks: [Notify, Prompt, LandingNote, ConcludeLanded, Woken, Memorize, rewindTask(host)],
     sections: [section('lineage', (input, ctx) => lineageSection(host, input.conversationId, ctx))],
     hooks: [
       hook(GenerationTask, {
@@ -1570,6 +1614,25 @@ export default function lineageExtension(host: ExtensionHost) {
         async execute({ root, instructions }, api, ctx) {
           const taskId = await api.commit((tx) => compactTally(tx, root, instructions), ctx)
           host.harness().resume()
+          return { output: [{ type: 'text', text: JSON.stringify({ taskId }) }] }
+        },
+      }),
+      defineTool({
+        name: 'compact',
+        deferred: true,
+        description:
+          'Compact your own context: older turns become a summary, recent ones stay verbatim, full history stays in storage. Use instructions to guide the summary. It runs after this turn; end the turn, and you are woken once it is done.',
+        parameters: Type.Object({ instructions: Type.Optional(Type.String()) }),
+        async execute({ instructions }, api, ctx) {
+          if (
+            await api.commit(
+              (tx) => liveTask(tx, api.conversationId, CompactionTask.definition.name),
+              ctx,
+            )
+          )
+            throw new Error('Already compacting')
+          const conversation = await host.harness().conversation(api.conversationId, ctx)
+          const taskId = await conversation!.compact(instructions, ctx)
           return { output: [{ type: 'text', text: JSON.stringify({ taskId }) }] }
         },
       }),

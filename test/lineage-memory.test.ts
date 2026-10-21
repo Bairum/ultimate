@@ -14,6 +14,7 @@ import {
 import { Seen } from '../extensions/lineage/catchup.ts'
 import { abstract } from '../extensions/lineage/server.ts'
 import { Standing } from '../extensions/subagents/api.ts'
+import { Compacted } from '../extensions/conversations/api.ts'
 import { SubmissionLanded } from '../extensions/workspaces/api.ts'
 import type { LandedData } from '../extensions/workspaces/api.ts'
 import { emit, EventLog } from '../server/events.ts'
@@ -441,6 +442,48 @@ it.concurrent('ends a compaction of @ultimate with its project memory', async ()
   expect(summary).toMatch(
     /<summary>\n\{\}\n\n<project_memory root="#1">\nkept-fact \[fact\] — The project keeps this fact \(updated [\d-]+\)\n<\/project_memory>\nThe full project context[^\n]*`ultimate.entries\(1\)`[^\n]*\n<\/summary>$/,
   )
+})
+
+it.concurrent('wakes @ultimate once after its manual compaction, never after an automatic one', async () => {
+  const { server } = await fixture()
+  const ultimate = await server.harness.createConversation(
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  const { model } = await server.root.agent(context)
+  await server.harness.commit(async (tx) => {
+    await configure(tx, ultimate.id, { model })
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = ultimate.id
+    for (let n = 0; n < 8; n++)
+      await tx.appendEntry(ultimate.id, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: `Part ${n} ${'word '.repeat(4000)}`, timestamp: n }],
+      })
+  }, context)
+  // An automatic compaction continues the run it interrupted: its event comes first and must wake nothing.
+  await server.harness.commit(
+    (tx) => emit(tx, Compacted, { conversation: ultimate.id, entry: 1, reason: 'threshold' }),
+    context,
+  )
+  const { taskId } = JSON.parse(await run(server, 'compact', {}, ultimate.id))
+  await expect(run(server, 'compact', {}, ultimate.id)).rejects.toThrow('Already compacting')
+  await server.harness.waitForTask(taskId, context)
+  const woken = async () =>
+    (await ultimate.context(context)).entries.filter((entry) => entry.kind === 'lineage.woken')
+  await until(async () => (await woken()).length > 0)
+  await ultimate.waitForIdle(context)
+  const [entry, ...more] = await woken()
+  expect(more).toEqual([])
+  expect(textOf(entry.model?.[0]?.content)).toContain('Your context was just compacted')
+  const tasks = await server.harness.commit(
+    async (tx) =>
+      (await tx.scanTasks({ conversationId: ultimate.id, kind: 'lineage.woken' }, 10)).items,
+    context,
+  )
+  expect(tasks).toHaveLength(1)
+  // The wake-up started a turn, which answered it.
+  const last = (await ultimate.context(context)).entries.at(-1)!
+  expect(last.kind).toBe('pi.assistant')
 })
 
 it.concurrent('completes a landing task without asking when no summary model runs', async () => {

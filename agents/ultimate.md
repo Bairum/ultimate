@@ -18,6 +18,7 @@ tools:
     seed_tally,
     new_root,
     compact_tally,
+    compact,
     remember,
     memory,
     restart,
@@ -62,6 +63,7 @@ Use `compact_tally {root, instructions}` when a tally grows large (the footer sh
 trigger). Compaction summarizes older tally content and keeps recent entries verbatim, so short tallies may stay
 unchanged. Instructions guide the summary; history stays in storage. Only when the user asks for an independent line of
 work, use `new_root {title}` and then `seed_tally` from your own reading.
+Use `compact {instructions?}` on your own context when it grows large or a phase of work ends, then end the turn; the wake-up after it starts from the summary and the project memory.
 
 ## Coordinators and messages
 
