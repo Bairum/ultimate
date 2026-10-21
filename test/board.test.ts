@@ -637,6 +637,28 @@ it('answers questions to the user through answer cards or input in the sender co
   await f.open()
   expect(await state(second.id)).toBe('delivered')
 })
+it("ends @ultimate's run with its message to the user, unless it still owes a reply", async () => {
+  const f = await fixture()
+  await f.send('user', 'Landed')
+  const root = await f.opened.root.viewState(context)
+  // No final answer restates the message.
+  expect(root.value.entries.at(-1)?.kind).toBe('pi.tool-result')
+  root.dispose()
+  expect(f.observed).not.toContain('Message 1 sent.')
+
+  // A message to @ultimate that expects a reply still gets its answer after the message to the user.
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = f.recipient.id
+  }, context)
+  await f.send(`#${f.recipient.id}`, 'SEND ' + JSON.stringify({ to: 'user', text: 'Relayed' }))
+  await until(async () => (await replies(f)).length === 1)
+  expect((await f.log())!.messages.map((m) => [m.from, m.to, m.text])).toEqual([
+    [1, 'user', 'Landed'],
+    [1, f.recipient.id, expect.stringContaining('Relayed')],
+    [f.recipient.id, 'user', 'Relayed'],
+    [f.recipient.id, 1, 'Done'],
+  ])
+})
 it('atomically admits only one answer-card reply through the Board service', async () => {
   const f = await fixture()
   await f.send('user', 'Keep it running?')
@@ -1269,6 +1291,25 @@ it("routes an answer to the starter's one-way message, waking it for a decision 
   root.dispose()
   expect((await f.log())!.messages.filter((m) => m.to === b.id)).toHaveLength(2)
   expect(await b.from()).toHaveLength(2)
+})
+it("does not route a branch's reaction to its starter's own reply", async () => {
+  const f = await fixture()
+  const b = await branched(f)
+  await b.later('SEND ' + JSON.stringify({ to: '#1', text: 'Approve?' }))
+  // @ultimate answers, the reply wakes the branch, and the branch's answer to it stays in the branch.
+  await until(async () =>
+    (await f.log())!.messages.some((m) => m.to === b.id && m.re !== undefined && m.re > 1),
+  )
+  await b.branch.waitForIdle(context)
+  await b.settled()
+  const view = await b.branch.viewState(context)
+  expect(view.value.entries.findLast((e) => e.kind === 'board.reply')).toBeDefined()
+  expect(view.value.entries.at(-1)?.kind).toBe('pi.assistant')
+  view.dispose()
+  expect((await b.from()).map((m) => m.text)).toEqual([
+    expect.stringContaining('Explore'),
+    'Approve?',
+  ])
 })
 it('does not route the final answer of a run that messaged its starter', async () => {
   const f = await fixture()

@@ -108,7 +108,7 @@ The tool records the caller in the branch's `board.started` document, so later a
 by a subagent, a notify, a lander report or steering, ends with a final answer nobody receives. After each such run, a
 background `board.route` task (one per generation, from an `onYield` hook) sends that answer to the starter as a one-way
 board message from the branch, with the usual outgoing and incoming cards. It skips the answer when the run answered the
-starter's reply-enabled message (board.delivery replies to it), when the run itself called `message` to the starter, and when the answer is empty, failed or aborted. An answer whose last line is a question or a
+starter's reply-enabled message (board.delivery replies to it), when the run itself called `message` to the starter, when only the starter's own replies woke it (the starter already knows what it answered), and when the answer is empty, failed or aborted. An answer whose last line is a question or a
 numbered option asks for a decision and wakes the starter as a follow-up; any other answer is a note, which wakes nothing.
 An answer to the starter's one-way message is routed like any other: it gets no reply, and may carry a decision.
 This cannot loop: routing goes only from a branch to its starter, which existed before it, and a routed message is
