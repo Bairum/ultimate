@@ -832,12 +832,11 @@ export default function subagents(
           'A yielded wait is not a child answer. Use message, stop, or wait with these IDs; parent stop does not stop them. Queued inputs are delivered only at the normal boundary; do not act on them early.',
         ].join(' ')
       }),
-      section('subagents', async (input, context) => {
-        const canDelegate = input.agent.tools.some((tool) => tool.name === 'subagent')
-        const needsDefinitions = input.agent.tools.some((tool) =>
-          ['branch', 'automation'].includes(tool.name),
+      section('subagents', async (input) => {
+        const usesDefinitions = input.agent.tools.some((tool) =>
+          ['subagent', 'branch', 'automation'].includes(tool.name),
         )
-        if (!canDelegate && !needsDefinitions) return undefined
+        if (!usesDefinitions) return undefined
         const discovered = await discoverAgents(
           host.ultimateRoot,
           host.projectRoot,
@@ -847,61 +846,7 @@ export default function subagents(
         const definitions = discovered.definitions
           .map((agent) => `${agent.name}: ${agent.description}`)
           .join('\n')
-        if (!canDelegate) return `Available definitions:\n${definitions}`
-        const conversation = await host
-          .harness()
-          .commit((tx) => tx.conversation(input.conversationId), context)
-        return (
-          (conversation?.owner
-            ? `Follow your assigned role and instructions. Delegate only the bounded work that role requires.
-Do not assume the root coordinator's role, create epics, or spawn implementation workers.
-Verify child reports against evidence; never push or ship.
-Available definitions:\n`
-            : `You coordinate. Own requirements, the plan, decomposition, acceptance criteria,
-verification, landing, and the verdict. Delegate bounded execution and reconnaissance,
-never judgment. Never accept a child's claim without evidence.
-Do quick fixes and simple questions directly, without an epic. Orchestrate substantive work:
-several dependent changes, several files or systems, or independent reconnaissance worth doing.
-An epic means the full flow: tasks, isolated workers, land, and review before its verdict.
-
-1. Inspect the code and recommend one approach.
-   When the user asked a question rather than gave an instruction, stop here for their go.
-   Ask only for decisions that change behaviour or scope.
-2. Write the epic with the plan tool and binary acceptance criteria.
-3. Once you write an epic, every unit of work is a task in it via plan add.
-   Give each task a self-contained description for its child.
-4. Delegate implementation to workers in worktree isolates.
-   Parallel by default: start independent tasks as background children in the same tool round.
-   Wait for their answers instead of polling; children touching the same files run sequentially.
-   Link each child to its task with plan; record dependencies and status.
-   Before ending a turn with children still running, name the ones you wait for; their answers
-   wake you. Never conclude while they run.
-5. Workers verify their chunk with checks, tests, and screenshots where needed, and report evidence.
-   Read each report and inspect its commit diff. Rerun checks only for missing or thin evidence,
-   reported failures, changes crossing workers, server/shared changes, or surprises in the diff.
-6. Epic commits come from workers in isolates and reach the checkout only through land.
-   Land workers with sufficient evidence into your current checkout, then use workspace submit.
-   The lander is the final gate: it runs every configured check on the merged result and reports
-   back, landed or not, with findings. It fixes small failures when the project configures it to.
-   Use restart only for required server/ and shared/ changes after verification and authorization.
-   Discard a child's clean isolate only when explicitly requested; never auto-clean up.
-7. Record verification evidence with plan and set the task done; only you do this.
-8. When all tasks are done, start one reviewer with the explicit immutable base..head commit
-   range, not a directory, and the acceptance criteria. It runs any review team and returns one
-   verdict; never start several reviewers yourself.
-   Verify the findings yourself; never delegate the verdict.
-   Message the responsible worker with confirmed fixes, or create a new task.
-   Verify, land, and review fixes before concluding.
-9. Post the verdict on the epic with plan and report to the user.
-
-The user's checkout is not a test bed. Never land, commit, or reset in the parent
-checkout to test something. Never rewrite, reset, or rebase the user's branch.
-Test isolate behaviour in a temporary git repository or a preview instance (instance start, faux).
-An idle or finished child is not evidence. Trust concrete worker evidence; investigate gaps and risks.
-Never push, merge to remotes, or ship unless the user asks. Children never push.
-Available definitions:
-`) + definitions
-        )
+        return `Available definitions:\n${definitions}`
       }),
     ],
     tools: [

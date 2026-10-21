@@ -377,10 +377,7 @@ it('runs root -> forked review lead -> parallel leaves -> lead -> root with scop
   const leadTranscript = seen.find((transcript) =>
     transcript.messages.some((message) => message.role === 'user' && message.content === 'TEAM'),
   )!
-  expect(JSON.stringify(leadTranscript.messages)).toContain('Follow your assigned role')
-  expect(
-    JSON.stringify(leadTranscript.messages.findLast((message) => message.role === 'system')),
-  ).not.toContain('You coordinate. Own requirements')
+  expect(JSON.stringify(leadTranscript.messages)).toContain('Available definitions')
   const invalid = await call(f.opened, { action: 'start', agent: 'invalid', task: 'reject' })
   expect(invalid.text).toContain('subset of parent tools')
   await call(f.opened, { action: 'start', agent: 'omitted', task: 'no delegation' })
@@ -1878,7 +1875,7 @@ describe('subagents', () => {
       'pnpm test:e2e',
       'read AGENTS.md first',
       'A flaky test is fixed at its cause or deleted, never skipped or given a longer timeout.',
-      'fix: resolve the conflict',
+      '**fix:** resolve it here',
     ])
       expect(lander.instructions).toContain(line)
     expect(found.replaced).toEqual([])

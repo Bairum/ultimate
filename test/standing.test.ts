@@ -80,7 +80,7 @@ async function fixture() {
   return { path, prepared, host, service, file, reopen }
 }
 
-it('gives coordinator guidance only to agents with subagent, retaining definitions for branch and automation', async () => {
+it('lists definitions only to agents that can use them', async () => {
   const { service, host, prepared } = await fixture()
   const standing = (await host.harness.conversation(await service.standing('x', ctx), ctx))!
   const section = prepared.registry
@@ -96,14 +96,13 @@ it('gives coordinator guidance only to agents with subagent, retaining definitio
   expect(await render()).toBeUndefined()
   for (const name of ['branch', 'automation']) {
     const text = await render([{ ...agent.tools[0], name }])
-    expect(text).toContain('Available definitions:\nx: Test')
-    expect(text).not.toContain('You coordinate')
+    expect(text).toBe('Available definitions:\nx: Test')
   }
   const coordinator = await host.root.agent(ctx)
   expect(coordinator.tools.some((tool) => tool.name === 'subagent')).toBe(true)
   const text = await render(coordinator.tools, host.root.id)
-  expect(text).toContain('You coordinate. Own requirements')
-  expect(text).toContain('9. Post the verdict')
+  expect(text).toContain('Available definitions:\n')
+  expect(text).toContain('x: Test')
 })
 
 it('parses and saves the resident field, refusing non-booleans', async () => {
