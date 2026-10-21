@@ -101,7 +101,7 @@ export const userActions = ['login', 'answer', 'cancel', 'logout']
 
 /**
  * Record that `provider`'s login changed: its recorded health is meaningless now, and health resets it to unknown. The
- * machine home sees `auth.json` change, pings the provider and reports it to the cloud (`extensions/health`).
+ * machine home sees `auth.json` change and pings the provider (`extensions/health`).
  */
 const loginChanged = async (host: ActionContext['host'], provider: string) =>
   host
