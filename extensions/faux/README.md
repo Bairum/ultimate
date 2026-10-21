@@ -10,7 +10,7 @@ that reports a landing back, and sends you a one-way update and a question; `ask
 from another conversation gets a short acknowledgement.
 In @ultimate's conversation, `cards demo` produces one of each card its chat folds to one line: it starts a
 `landing demo` branch, messages it, calls the `seedCards {from}` action through codemode (messages, a reply, a report,
-notes, a catch-up, finished, an abstract, a lander report and a landing note, display only),
+notes, a catch-up, finished, a post-compaction wake-up, an abstract, a lander report and a landing note, display only),
 then sends you an update and a question, which stay open.
 Under faux, summaries run on scripted neutral responses unless `summaryModel` is set. Their title and Ask line
 come from the latest user prompt, with generic demo summary, feature and activity text (a prompt containing `no feature` leaves the feature unset, to

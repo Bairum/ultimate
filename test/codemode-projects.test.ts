@@ -164,6 +164,25 @@ it('caps an answer at 1 MiB of encoded JSON, counting multibyte characters as by
   await expect(actions.read({ op: 'trace', args: [] }, ctx)).rejects.toThrow('larger than 1 MiB')
 })
 
+it("answers another project's read of an exported document, and refuses an unknown kind", async () => {
+  const todos = { definition: { kind: 'todos', initial: () => ({ next: 1, items: [] }) } }
+  const host = {
+    doc: (kind: string) => (kind === 'todos' ? todos : undefined),
+    harness: () => ({
+      snapshot: async (_doc: unknown, id: number) => (id === 1 ? { next: 2, items: [1] } : null),
+    }),
+  } as unknown as ExtensionHost
+  const ctx = { host, signal: new AbortController().signal } as ActionContext
+  expect(await actions.read({ op: 'doc', args: ['todos', 1] }, ctx)).toEqual({
+    next: 2,
+    items: [1],
+  })
+  expect(await actions.read({ op: 'doc', args: ['todos', 4] }, ctx)).toEqual({ next: 1, items: [] })
+  await expect(actions.read({ op: 'doc', args: ['nope', 1] }, ctx)).rejects.toThrow(
+    'Unknown conversation document: nope',
+  )
+})
+
 it('names the machine when the project cannot be reached, and never offers a copy', () => {
   expect(() => resolveProject('poe2-rust', [here], register())).toThrow(
     'poe2-rust was last backed up from haza-pc, which registered no tailnet address',

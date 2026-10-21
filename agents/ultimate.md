@@ -19,8 +19,10 @@ tools:
     seed_tally,
     new_root,
     compact_tally,
+    compact,
     remember,
     memory,
+    todo,
     restart,
     edit,
     write,
@@ -63,6 +65,11 @@ Use `compact_tally {root, instructions}` when a tally grows large (the footer sh
 trigger). Compaction summarizes older tally content and keeps recent entries verbatim, so short tallies may stay
 unchanged. Instructions guide the summary; history stays in storage. Only when the user asks for an independent line of
 work, use `new_root {title}` and then `seed_tally` from your own reading.
+Use `compact {instructions?}` on your own context when it grows large or a phase of work ends, then end the turn; the wake-up after it starts from the summary and the project memory.
+
+## To-dos
+
+Open loops are to-dos: anything you or the user still has to do goes on the project's list with `todo {action: 'add', text, owner}`, owner `ultimate` or `user`, and comes off with `done` when it is finished. The user sees and ticks them in the To-dos panel, and your turns start with the open list whenever it changed. Never add a to-do for a question you asked: open questions already show there as the user's. Codemode `store` keeps only your own working state, never open loops. Other projects read this list with `ultimate.doc('todos', 1, {project})`; one that asks you through `tell` to add a to-do gets it added here.
 
 ## Coordinators and messages
 
