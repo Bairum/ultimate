@@ -67,6 +67,8 @@ const terminal = {
   status: 'terminal' as const,
   outcome: { status: 'completed' as const, result: null },
 }
+/** The executable cannot start until its pid file exists; host death before go produces EOF instead. */
+export const launchHandshake = 'read -r _ || exit 1; exec "$0"'
 const json = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 function required(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} is required`)
@@ -258,32 +260,21 @@ function backend(host: ExtensionHost) {
       }
       if (run?.child.pid) await cleanup(id, run.child.pid, run)
       else if (run && runs.get(id) === run) runs.delete(id)
-      // Release leaves the durable running state intact for the next open; storage is closing.
-      if (closing || run?.stopped === 'shutdown') return
+      if (closing && !run) return
       await host.harness().commit(async (tx) => {
         const sub = (await tx.doc(Subscriptions)).subscriptions[id]
-        if (!sub) return
-        if (run?.stopped) {
-          if (!sub.pid) {
-            sub.updatedAt = sub.exitedAt = Date.now()
-            if (code !== null) sub.exitCode = code
-          }
-          await host.emit(tx, Exited, { id, code, ...(signal ? { signal } : {}) })
-          return
-        }
-        if (sub.state !== 'running' || (run && sub.pid !== run.child.pid)) return
-        sub.state = exitState(
-          sub.once,
-          run?.fires ?? 0,
-          code,
-          !!run?.afterFire && signal === 'SIGTERM',
-        )
+        if (!sub || (run && sub.pid !== run.child.pid)) return
+        const done = sub.once && sub.state === 'done'
+        const stopped = !!run?.stopped || closing
+        if (!stopped && sub.state !== 'running' && !done) return
+        // Shutdown keeps running subscriptions enabled for reopen; completed one-shots remain done.
+        if (!stopped && !done) sub.state = exitState(sub.once, run?.fires ?? 0, code, false)
         sub.updatedAt = sub.exitedAt = Date.now()
         if (code !== null) sub.exitCode = code
         delete sub.pid
         const event = await host.emit(tx, Exited, { id, code, ...(signal ? { signal } : {}) })
         if (sub.state === 'done') sub.enabled = false
-        else {
+        else if (!stopped) {
           sub.error = error ?? `Process exited with code ${code}${signal ? ` (${signal})` : ''}`
           await deliver(tx, sub, event.id, 'failed', sub.error)
         }
@@ -335,10 +326,10 @@ function backend(host: ExtensionHost) {
       }
       await access(join(dir, 'run'), constants.X_OK)
       if (closing) throw new Error('Subscription supervisor is closing')
-      const child = spawn(join(dir, 'run'), [], {
+      const child = spawn('/bin/sh', ['-c', launchHandshake, join(dir, 'run')], {
         cwd: dir,
         detached: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         env,
       })
       const closed = Promise.withResolvers<void>()
@@ -354,13 +345,19 @@ function backend(host: ExtensionHost) {
       child.on('error', (error) => {
         run.error = error.message
       })
+      child.stdin.on('error', (error) => {
+        run.error = error.message
+      })
       child.on('close', (code, signal) => {
         closed.resolve()
         enqueue(() => finish(id, run, code, signal ?? undefined, run.error))
       })
       try {
-        // Synchronous, before the first await: a crash before Started commits still leaves cleanup evidence.
-        if (child.pid) writeFileSync(join(dir, 'pid'), `${child.pid}\n`)
+        // The wrapper waits for go until its pid is recorded; exec preserves the pid and process group.
+        if (child.pid) {
+          writeFileSync(join(dir, 'pid'), `${child.pid}\n`)
+          child.stdin.end('\n')
+        }
       } catch (error) {
         run.active = false
         if (child.pid) await cleanup(id, child.pid, run)
@@ -415,7 +412,6 @@ function backend(host: ExtensionHost) {
           if (saved.once) {
             saved.state = 'done'
             saved.enabled = false
-            delete saved.pid
             run.afterFire = true
           }
           await deliver(tx, saved, event.id, 'fired', fire)
@@ -606,9 +602,9 @@ function backend(host: ExtensionHost) {
         }
       } else if (args.action === 'stop' || args.action === 'delete' || args.action === 'escalate') {
         sub.enabled = false
-        sub.state = args.action === 'escalate' ? 'failed' : 'stopped'
+        if (args.action === 'escalate') sub.state = 'failed'
+        else if (sub.state !== 'done') sub.state = 'stopped'
         const pid = sub.pid
-        delete sub.pid
         if (args.action === 'escalate') {
           sub.error = required(args.reason, 'reason')
           const event = await host.emit(tx, Escalated, { id, reason: sub.error })

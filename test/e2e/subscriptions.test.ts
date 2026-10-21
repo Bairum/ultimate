@@ -5,14 +5,17 @@ import { afterEach, expect, it, vi } from 'vitest'
 import type { JsonValue } from '@earendil-works/chord'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { Board } from '../../extensions/board/api.ts'
-import { Subscriptions } from '../../extensions/subscriptions/server.ts'
+import { launchHandshake, Subscriptions } from '../../extensions/subscriptions/server.ts'
+import { Exited } from '../../extensions/subscriptions/refs.ts'
 import type { Subscription } from '../../extensions/subscriptions/types.ts'
 import { context } from '../../server/harness.ts'
-import { fauxServer, temp, until } from '../helpers.ts'
+import { eventHost, fauxServer, temp, until } from '../helpers.ts'
 
 let server: Awaited<ReturnType<typeof fauxServer>> | undefined
 afterEach(async () => {
-  await server?.close()
+  const app = server
+  server = undefined
+  await app?.close()
 })
 
 async function fixture() {
@@ -212,6 +215,89 @@ it('waits for a SIGTERM-ignoring script to die before stop returns and removes i
   await call(app, 'stop', sub.id)
   expect(() => process.kill(-running.pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
   await expect(readFile(join(folder(sub.id), 'pid'))).rejects.toMatchObject({ code: 'ENOENT' })
+})
+
+it.each(['stop', 'delete'])(
+  'awaits %s of a fired one-shot during its termination grace period',
+  async (action) => {
+    const { app, folder } = await fixture()
+    const sub = await create(app)
+    await writeRun(folder(sub.id), 'trap "" TERM; echo FIRE done; exec sleep 60')
+    await call(app, 'start', sub.id)
+    await until(
+      async () =>
+        (await app.harness.snapshot(Subscriptions, context))!.subscriptions[sub.id].state ===
+        'done',
+    )
+    const pid = Number(await readFile(join(folder(sub.id), 'pid'), 'utf8'))
+    expect(
+      (await app.harness.snapshot(Subscriptions, context))!.subscriptions[sub.id],
+    ).toMatchObject({ state: 'done', enabled: false, pid })
+    expect(process.kill(-pid, 0)).toBe(true)
+    await call(app, action, sub.id)
+    expect(() => process.kill(-pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+    await expect(readFile(join(folder(sub.id), 'pid'))).rejects.toMatchObject({ code: 'ENOENT' })
+    const saved = (await app.harness.snapshot(Subscriptions, context))!.subscriptions[sub.id]
+    const stopped = expect.objectContaining({
+      state: 'done',
+      enabled: false,
+      exitedAt: expect.any(Number),
+    })
+    expect(saved).toEqual(action === 'delete' ? undefined : stopped)
+    expect(saved?.pid).toBeUndefined()
+  },
+)
+
+it.each([false, true])(
+  'launch handshake go=%s: EOF aborts; exec keeps the pid and gives the script empty stdin',
+  async (go) => {
+    const root = await temp('ultimate-subscription-handshake-')
+    await writeRun(
+      root,
+      'echo "$$"; if read -r value; then echo unexpected-input; else echo eof; fi',
+    )
+    const child = spawn('/bin/sh', ['-c', launchHandshake, join(root, 'run')], {
+      detached: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    let output = ''
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      output += chunk
+    })
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (done, reject) => {
+        child.once('error', reject)
+        child.once('close', (code, signal) => done({ code, signal }))
+      },
+    )
+    child.stdin.end(go ? '\n' : undefined)
+    expect(await exited).toEqual({ code: go ? 0 : 1, signal: null })
+    expect(output).toBe(go ? `${child.pid}\neof\n` : '')
+    expect(() => process.kill(-child.pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+  },
+)
+
+it('records the exit metadata and event for a successful done one-shot without a failure', async () => {
+  const { app, folder } = await fixture()
+  const sub = await create(app)
+  await writeRun(folder(sub.id), "trap 'exit 0' TERM; echo FIRE done; while :; do :; done")
+  await call(app, 'start', sub.id)
+  await until(
+    async () =>
+      !!(await app.harness.snapshot(Subscriptions, context))!.subscriptions[sub.id].exitedAt,
+  )
+  const saved = (await app.harness.snapshot(Subscriptions, context))!.subscriptions[sub.id]
+  expect(saved).toMatchObject({ state: 'done', enabled: false, fires: 1, exitCode: 0 })
+  expect(saved.pid).toBeUndefined()
+  const events = await eventHost(() => app.harness, 'test').eventLog.recent({ events: [Exited] })
+  expect(events.filter((event) => event.data.id === sub.id).map((event) => event.data)).toEqual([
+    { id: sub.id, code: 0 },
+  ])
+  const agent = (await app.harness.conversation(sub.conversationId as ConversationId, context))!
+  expect(
+    (await agent.context(context)).entries.filter((entry) => entry.kind === 'subscriptions.failed'),
+  ).toHaveLength(0)
 })
 
 it('sweeps a crashed process pid file even when no subscription record exists', async () => {
