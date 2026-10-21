@@ -65,13 +65,15 @@ export function Subscriptions() {
     // Only a change of selection moves the conversation; navigating elsewhere must not be undone.
     // oxlint-disable-next-line react/exhaustive-deps -- conversationId is read, not followed
   }, [live, agent])
-  const showList = !phone || !stored
-  const showDetail = !phone || !!stored
+  // On a phone the detail replaces the list; a deleted selection falls back to the list.
+  const open = !!stored && !!selected
+  const showList = !phone || !open
+  const showDetail = !phone || open
   return (
     <>
       <Header>
         <span className="flex min-w-0 items-center gap-2 text-[13px] font-medium">
-          {phone && stored && selected ? (
+          {phone && open ? (
             <button
               aria-label="All subscriptions"
               className="-ml-1 grid size-6 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -83,7 +85,7 @@ export function Subscriptions() {
           ) : (
             <RadarIcon className="size-4 shrink-0 text-muted-foreground" />
           )}
-          {phone && stored && selected ? (
+          {phone && open ? (
             <span className="truncate">
               <span className="font-mono text-muted-foreground">{selected.id}</span>{' '}
               {selected.title}
@@ -225,6 +227,7 @@ function Script({
   const home = useSystem()?.machine.home
   const [view, setView] = useExtensionUiState<'output' | 'script'>('pane', 'output')
   const [busy, setBusy] = useState(false)
+  // Read errors show inline in the pane instead of as a notice on every poll.
   const log = useAction(LogAction, { id: sub.id, lines: 200 }, { onError: () => {} })
   // Always read once for the command's path; only the script tab polls it for edits.
   const script = useAction(ScriptAction, { id: sub.id }, { onError: () => {} })
@@ -350,8 +353,12 @@ function Script({
           {output ? (
             <Output text={output} />
           ) : (
-            <span className="text-muted-foreground/70">
-              {sub.state === 'writing' ? 'no output yet · the agent is writing run' : 'no output'}
+            <span className={log.error ? 'text-destructive' : 'text-muted-foreground/70'}>
+              {log.error
+                ? `Could not read output: ${errorMessage(log.error)}`
+                : sub.state === 'writing'
+                  ? 'no output yet · the agent is writing run'
+                  : 'no output'}
             </span>
           )}
           {running && (
@@ -368,8 +375,17 @@ function Script({
               showLineNumbers
             />
           ) : (
-            <p className="px-3 py-2 text-muted-foreground/70">
-              {script.loading && !script.data ? 'loading…' : 'run is not written yet'}
+            <p
+              className={cn(
+                'px-3 py-2',
+                script.error ? 'text-destructive' : 'text-muted-foreground/70',
+              )}
+            >
+              {script.error
+                ? `Could not read run: ${errorMessage(script.error)}`
+                : script.loading && !script.data
+                  ? 'loading…'
+                  : 'run is not written yet'}
             </p>
           )}
         </div>

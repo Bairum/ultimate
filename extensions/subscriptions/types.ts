@@ -40,18 +40,6 @@ export function fireText(line: string, stdout: boolean): string | undefined {
   return stdout && /^FIRE(?:\s|$)/.test(line) ? line.slice(4).trim() : undefined
 }
 
-/** Fires are counted per run, not over the subscription's lifetime. */
-export function exitState(
-  once: boolean,
-  fires: number,
-  code: number | null,
-  stoppedAfterFire: boolean,
-) {
-  return once && fires > 0 && (code === 0 || (code === null && stoppedAfterFire))
-    ? 'done'
-    : 'investigating'
-}
-
 /** Keep both bounds even for a single very long output line. */
 export function trimLog(text: string): string {
   const lines = text.split('\n').slice(-2001).join('\n')

@@ -39,7 +39,7 @@ import {
   SubscribeAction,
   UnsubscribeAction,
 } from './refs.ts'
-import { exitState, fireText, trimLog } from './types.ts'
+import { fireText, trimLog } from './types.ts'
 import type { Args, Subscription } from './types.ts'
 
 export const Subscriptions = defineDoc<{
@@ -102,7 +102,6 @@ type Delivery = {
 type Run = {
   child: ChildProcess
   active: boolean
-  fires: number
   afterFire: boolean
   queue: Promise<void>
   closed: Promise<void>
@@ -267,8 +266,9 @@ function backend(host: ExtensionHost) {
         const done = sub.once && sub.state === 'done'
         const stopped = !!run?.stopped || closing
         if (!stopped && sub.state !== 'running' && !done) return
-        // Shutdown keeps running subscriptions enabled for reopen; completed one-shots remain done.
-        if (!stopped && !done) sub.state = exitState(sub.once, run?.fires ?? 0, code, false)
+        // A fired one-shot is already done in its FIRE commit, so any other unplanned exit is a failure.
+        // Shutdown keeps running subscriptions enabled for reopen.
+        if (!stopped && !done) sub.state = 'investigating'
         sub.updatedAt = sub.exitedAt = Date.now()
         if (code !== null) sub.exitCode = code
         delete sub.pid
@@ -336,7 +336,6 @@ function backend(host: ExtensionHost) {
       const run: Run = {
         child,
         active: true,
-        fires: 0,
         afterFire: false,
         queue: Promise.resolve(),
         closed: closed.promise,
@@ -407,7 +406,6 @@ function backend(host: ExtensionHost) {
           if (fire === undefined || run.afterFire) return
           saved.lastFireAt = Date.now()
           saved.fires++
-          run.fires++
           const event = await host.emit(tx, Fired, { id, text: fire, fire: saved.fires })
           if (saved.once) {
             saved.state = 'done'
