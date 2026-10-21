@@ -46,6 +46,11 @@ export interface ReactorStatus {
   failure?: { error: string; at: string; entryId?: number }
 }
 
+export interface ReactOptions {
+  /** Where a reactor without a cursor starts: the start of the log (default), or after its newest event. */
+  from?: 'start' | 'now'
+}
+
 /** What the extension host offers; `react` is facet-scoped and named `<extension>/<name>`. */
 export interface EventHost {
   /** Append event `event` with `data` inside `tx`: it commits or rolls back with the caller's writes. */
@@ -54,12 +59,14 @@ export interface EventHost {
    * Run `handler` once for every event of `events` after the reactor's cursor, oldest first: those emitted before it
    * started, then each new one, serially per name. Each event commits with the cursor advance in one transaction; a
    * throw rolls both back and the event is retried on the next matching commit or harness open. Runs while the harness
-   * is open and the facet installed; a facet reload under the same name continues from the cursor.
+   * is open and the facet installed; a facet reload under the same name continues from the cursor. With `from: 'now'`, a
+   * reactor that has no cursor yet starts after the newest event instead of at the start of the log.
    */
   react<T extends EventToken>(
     name: string,
     events: readonly T[],
     handler: Reactor<EventData<T>>,
+    options?: ReactOptions,
   ): void
   eventLog: {
     /** Newest first (oldest first with `order: 'ascending'`), plain copies; `since` and `before` are exclusive event ids. */
@@ -149,7 +156,7 @@ export function eventLog(
   trace: CallTrace['run'],
   keep: CallTrace['keep'] = () => {},
 ) {
-  type Active = { kinds: Set<string>; handler: Reactor<JsonValue> }
+  type Active = { kinds: Set<string>; handler: Reactor<JsonValue>; from: 'start' | 'now' }
   const reactors = new Map<
     string,
     {
@@ -172,6 +179,20 @@ export function eventLog(
         try {
           const handled = await harness().commit(async (tx) => {
             const index = await tx.doc(EventLog, ROOT_CONVERSATION_ID)
+            if (index.cursors[name] === undefined && active.from === 'now') {
+              // A new reactor that skips the past starts after the newest event, handling none.
+              const newest =
+                index.conversation === undefined
+                  ? undefined
+                  : (
+                      await tx.scanEntries(
+                        { conversationId: index.conversation as ConversationId },
+                        1,
+                      )
+                    ).items[0]
+              index.cursors[name] = newest?.id ?? 0
+              return false
+            }
             if (index.conversation === undefined) return false
             const after = index.cursors[name] ?? 0
             let pending: EntryRecord | undefined
@@ -232,10 +253,12 @@ export function eventLog(
       name: string,
       events: readonly T[],
       handler: Reactor<EventData<T>>,
+      options: ReactOptions = {},
     ) {
       const active: Active = {
         kinds: new Set(events.map((event) => event.kind)),
         handler: handler as Reactor<JsonValue>,
+        from: options.from ?? 'start',
       }
       if (!reactors.has(name)) reactors.set(name, { kinds: active.kinds, chain: Promise.resolve() })
       const state = reactors.get(name)!

@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import {
@@ -13,6 +13,7 @@ import {
 } from '../extensions/lineage/memory.ts'
 import { Seen } from '../extensions/lineage/catchup.ts'
 import { abstract } from '../extensions/lineage/server.ts'
+import { Standing } from '../extensions/subagents/api.ts'
 import { SubmissionLanded } from '../extensions/workspaces/api.ts'
 import type { LandedData } from '../extensions/workspaces/api.ts'
 import { emit, EventLog } from '../server/events.ts'
@@ -47,7 +48,7 @@ async function fixture(settings?: object) {
   }
   const server = await fauxServer({ ultimateRoot, home, userHome: home })
   servers.push(server)
-  const state = { memorize: '{"ops":[]}', asked: [] as string[] }
+  const state = { memorize: '{"ops":[]}', asked: [] as string[], condensed: [] as string[] }
   const route: FauxResponseFactory = async (transcript) => {
     server.host.faux!.appendResponses([route])
     const [system, first] = transcript.messages
@@ -55,7 +56,9 @@ async function fixture(settings?: object) {
       state.asked.push(textOf(first.content))
       return fauxAssistantMessage(state.memorize)
     }
-    // Titles and reply summaries carry a system prompt of their own.
+    if (system?.role === 'system' && textOf(system.content).startsWith('You condense'))
+      state.condensed.push(textOf(first.content))
+    // Titles, reply summaries and compactions carry a system prompt of their own.
     if (system?.role === 'system' && textOf(system.content)) return fauxAssistantMessage('{}')
     const last = transcript.messages.findLast((message) => message.role === 'user')
     return fauxAssistantMessage(`echo ${textOf(last?.content)}`)
@@ -384,6 +387,60 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
       ] ?? 0) >= repeat,
   )
   expect(await memorizeTasks(server)).toHaveLength(104)
+})
+
+it.concurrent('a fresh memorize reactor skips landings from before it and distils new ones', async () => {
+  const { server, state } = await fixture()
+  const { id } = await branch(server, 'Land me')
+  state.memorize = JSON.stringify({ ops: [add('fresh')] })
+  // Past landings with no memorize cursor, as on a fresh install: the reactor starts after them.
+  await server.harness.commit(async (tx) => {
+    for (let index = 0; index < 3; index++)
+      await emit(tx, SubmissionLanded, landing(`past-${index}`, id))
+    delete (await tx.doc(EventLog, ROOT_CONVERSATION_ID)).cursors['lineage/memorize']
+  }, context)
+  const cursor = async () =>
+    (await server.harness.snapshot(EventLog, ROOT_CONVERSATION_ID, context))?.cursors[
+      'lineage/memorize'
+    ]
+  await until(async () => (await cursor()) !== undefined)
+  expect(await memorizeTasks(server)).toEqual([])
+  await server.harness.commit((tx) => emit(tx, SubmissionLanded, landing('new', id)), context)
+  await settledTasks(server, 1)
+  expect(state.asked).toHaveLength(1)
+  expect(state.asked[0]).toContain('Landed newabcd on main')
+  expect(Object.keys(await memories(server))).toEqual(['fresh'])
+})
+
+it.concurrent('ends a compaction of @ultimate with its project memory', async () => {
+  const { server, state } = await fixture()
+  await apply(server, [add('kept-fact', 'The project keeps this fact')])
+  const ultimate = await server.harness.createConversation(
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  const { model } = await server.root.agent(context)
+  await server.harness.commit(async (tx) => {
+    await configure(tx, ultimate.id, { model })
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = ultimate.id
+    for (let n = 0; n < 8; n++)
+      await tx.appendEntry(ultimate.id, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: `Part ${n} ${'word '.repeat(4000)}`, timestamp: n }],
+      })
+  }, context)
+  await server.harness.waitForTask(await ultimate.compact(undefined, context), context)
+  // The summary prompt carries the memory and says to leave out what it states.
+  expect(state.condensed).toHaveLength(1)
+  expect(state.condensed[0]).toContain('leave out what it already states')
+  expect(state.condensed[0]).toContain('kept-fact [fact]')
+  const marker = (await ultimate.context(context)).entries[0]
+  expect(marker.kind).toBe('pi.compaction')
+  const summary = textOf(marker.model?.[0]?.content)
+  // The summary model's answer (faux answers `{}`), then the memory block.
+  expect(summary).toMatch(
+    /<summary>\n\{\}\n\n<project_memory root="#1">\nkept-fact \[fact\] — The project keeps this fact \(updated [\d-]+\)\n<\/project_memory>\nThe full project context[^\n]*`ultimate.entries\(1\)`[^\n]*\n<\/summary>$/,
+  )
 })
 
 it.concurrent('completes a landing task without asking when no summary model runs', async () => {
