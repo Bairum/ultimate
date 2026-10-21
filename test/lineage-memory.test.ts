@@ -51,6 +51,8 @@ async function fixture(settings?: object) {
   servers.push(server)
   const state = {
     memorize: '{"ops":[]}',
+    // Answers to the next memorize requests, before `memorize`.
+    queued: [] as string[],
     asked: [] as string[],
     condensed: [] as string[],
     // Holds a compaction's summary request until it resolves.
@@ -61,7 +63,7 @@ async function fixture(settings?: object) {
     const [system, first] = transcript.messages
     if (system?.role === 'system' && textOf(system.content).startsWith('You keep a software')) {
       state.asked.push(textOf(first.content))
-      return fauxAssistantMessage(state.memorize)
+      return fauxAssistantMessage(state.queued.shift() ?? state.memorize)
     }
     if (system?.role === 'system' && textOf(system.content).startsWith('You condense')) {
       state.condensed.push(textOf(first.content))
@@ -371,11 +373,24 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
   )
   expect(await memorizeTasks(server)).toHaveLength(1)
 
-  // A malformed answer, and a batch applyMemoryOps refuses, write nothing.
+  // A batch applyMemoryOps refuses is asked once more with the reason; a valid retry is written.
+  const long = 'x'.repeat(121)
+  state.queued.push(
+    JSON.stringify({ ops: [add('retried', long)] }),
+    JSON.stringify({ ops: [add('retried', 'Short enough')] }),
+  )
+  await land(landing('long', id))
+  await settledTasks(server, 2)
+  expect(state.asked).toHaveLength(3)
+  expect(state.asked[2]).toContain('Op 1: line must be at most 120 characters')
+  expect(state.asked[2]).toContain(long)
+  expect((await memories(server)).retried).toMatchObject({ line: 'Short enough' })
+
+  // A malformed answer, and a batch applyMemoryOps refuses, write nothing, retried or not.
   const before = await memories(server)
   state.memorize = 'Sure! Here are the ops: none'
   await land(landing('s2', id))
-  await settledTasks(server, 2)
+  await settledTasks(server, 3)
   state.memorize = JSON.stringify({
     ops: [
       { op: 'add', slug: 'fine', kind: 'fact', line: 'Fine', body: 'Fine.' },
@@ -383,8 +398,9 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
     ],
   })
   await land(landing('s3', id))
-  await settledTasks(server, 3)
-  expect(state.asked).toHaveLength(3)
+  await settledTasks(server, 4)
+  expect(state.asked).toHaveLength(7)
+  expect(state.asked[6]).toContain('Op 2: no memory missing')
   expect(await memories(server)).toEqual(before)
 
   // Receipts are never evicted: after more than 100 further landings, the first again starts no task.
@@ -393,7 +409,7 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
     for (let index = 0; index < 101; index++)
       await emit(tx, SubmissionLanded, landing(`bulk-${index}`, id))
   }, context)
-  await settledTasks(server, 104)
+  await settledTasks(server, 105)
   const repeat = (await land(landing('s1', id))).id
   await until(
     async () =>
@@ -401,7 +417,7 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
         'lineage/memorize'
       ] ?? 0) >= repeat,
   )
-  expect(await memorizeTasks(server)).toHaveLength(104)
+  expect(await memorizeTasks(server)).toHaveLength(105)
 })
 
 it.concurrent('a fresh memorize reactor skips landings from before it and distils new ones', async () => {
