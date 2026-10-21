@@ -44,6 +44,8 @@ export type LineageService = {
     text: string,
     source?: Parameters<typeof leaveNote>[3],
   ) => ReturnType<typeof leaveNote>
+  /** Apply memory `ops` to root `root` in one atomic batch, written at `now`; returns what changed. */
+  remember: (root: number, ops: readonly unknown[], ctx: Context, now?: number) => Promise<string>
 }
 export { Branched, Rooted } from './refs.ts'
 

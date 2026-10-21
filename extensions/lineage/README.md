@@ -92,7 +92,10 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   caller's tree root; it refuses any caller but the standing `ultimate` agent, since a branch can find a deferred tool
   with `tool_search`. Tool `memory {read?, root?}`, offered to every agent, returns the index, one
   `slug [kind] — line (updated YYYY-MM-DD)` per memory, or with `read` one memory's body and source. User-only
-  `forget {root, slug}` (`ForgetAction`) deletes one through the same path.
+  `forget {root, slug}` (`ForgetAction`) deletes one through the same path, as does `LineageApi.remember` for other
+  extensions. The root's context footer folds them to `Memory · N` (open state in UI state `ext.lineage.memoryOpen`),
+  newest first: kind, slug, line and age per row; a row expands to its Markdown body and source chip, and a trash icon
+  (always visible on touch) calls `forget`.
   **Brief**: a branch forked from a root that has memories does not start from the tally. Its fork gets a
   `pi.reset` (`head: 'self'`, `data.lineage.brief: {tally}`, the root tip it covers) right after the fork point,
   before its prompt, whose model text is `<project_memory root="#R">` with the index, the root's last 10 landings (`<sha7> <feature: title> (#conv)`) and

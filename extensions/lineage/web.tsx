@@ -5,14 +5,18 @@ import {
   GitForkIcon,
   ScrollTextIcon,
   StickyNoteIcon,
+  Trash2Icon,
 } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { MentionText, MessageResponse } from '@/components/ai/message'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
+  api,
   cn,
   defineWebExtension,
+  events,
   Fold,
   provide,
   Provided,
@@ -20,6 +24,8 @@ import {
   formatTokens,
   useConversation,
   useDocOf,
+  useExtensionUiState,
+  useNow,
   useTranscript,
   useUltimate,
 } from '@/sdk'
@@ -27,7 +33,8 @@ import type { EntryRecord, ToolCallView } from '@/sdk'
 import { ConversationRef, Unsummarized } from '../conversations/ui.tsx'
 import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open } from '../workspaces/ui.tsx'
-import { TallyDoc } from './refs.ts'
+import { ForgetAction, MemoryDoc, TallyDoc } from './refs.ts'
+import type { MemoryItem } from './refs.ts'
 import { column, EmptyRoot, useRoots } from './ui.tsx'
 import { GoBackAction, Rewound, RewoundDependent } from './rewind.tsx'
 
@@ -432,8 +439,165 @@ function TallyFooter({ id, tokens, dock }: { id: number; tokens?: number; dock?:
         <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
           What every new branch starts from. @ultimate maintains it.
         </p>
+        <Memory id={id} />
       </div>
     </div>
+  )
+}
+
+const kindTones: Record<MemoryItem['kind'], string> = {
+  decision: 'bg-brand/10 text-brand',
+  fact: 'bg-muted text-muted-foreground',
+  lesson: 'bg-note/15 text-amber-700 dark:text-note',
+}
+
+/** How long ago `at` was, in the sidebar's short form: now, 5m, 3h, 2d, then a date. */
+function age(at: number, now: number) {
+  const minutes = Math.max(0, (now - at) / 60000)
+  if (minutes < 1) return 'now'
+  if (minutes < 60) return `${Math.floor(minutes)}m`
+  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)}h`
+  if (minutes < 60 * 24 * 7) return `${Math.floor(minutes / 60 / 24)}d`
+  return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/** Where a memory was learned, `#conversation/entry`, as that conversation's chip; a click opens it at the entry. */
+function MemorySource({ source }: { source: string }) {
+  const { switchConversation, showSurface } = useUltimate()
+  const [conversation, entry] = source.slice(1).split('/').map(Number)
+  return (
+    <p className="mt-1 flex min-w-0 items-center gap-1 font-mono text-[10.5px] text-muted-foreground/70">
+      <span className="shrink-0">learned in</span>
+      <button
+        className="flex min-w-0 cursor-pointer items-center rounded-sm px-0.5 text-[11px] text-foreground hover:bg-accent"
+        data-memory-source={source}
+        onClick={() => {
+          if (entry !== undefined) events.emit('board:open', { conversation, entry })
+          showSurface('agent')
+          switchConversation(conversation)
+        }}
+        title={`Open ${source}`}
+        type="button"
+      >
+        <ConversationRef className="gap-1" id={conversation} />
+        {entry !== undefined && <span className="shrink-0 text-muted-foreground/70">/{entry}</span>}
+      </button>
+    </p>
+  )
+}
+
+/** A root's project memory, folded to `Memory · N`, newest first; nothing while it has none. */
+function Memory({ id }: { id: number }) {
+  const memories = useDocOf(id, MemoryDoc)?.memories
+  const [unfolded, setUnfolded] = useExtensionUiState<number[]>('memoryOpen', [])
+  const now = useNow(60_000)
+  const open = unfolded.includes(id)
+  const slugs = Object.keys(memories ?? {}).toSorted(
+    (a, b) => memories![b].updated - memories![a].updated || a.localeCompare(b),
+  )
+  if (!memories || !slugs.length) return null
+  return (
+    <section className="mt-2 border-t border-border/60 pt-1.5" data-lineage-memory={id}>
+      <button
+        aria-expanded={open}
+        className="flex cursor-pointer items-center gap-1 font-mono text-[9.5px] tracking-wider text-muted-foreground/70 uppercase outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        onClick={() =>
+          setUnfolded((previous) => [
+            ...previous.filter((root) => root !== id),
+            ...(open ? [] : [id]),
+          ])
+        }
+        type="button"
+      >
+        Memory · {slugs.length}
+        <ChevronRightIcon className={cn('size-2.5 transition-transform', open && 'rotate-90')} />
+      </button>
+      {open && (
+        <ul className="-mx-1.5 mt-1 flex max-h-[45vh] flex-col overflow-y-auto">
+          {slugs.map((slug) => (
+            <MemoryRow item={memories[slug]} key={slug} now={now} root={id} slug={slug} />
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+/** One memory: its kind, slug, line and age; a click shows its body and source. The trash icon forgets it. */
+function MemoryRow({
+  root,
+  slug,
+  item,
+  now,
+}: {
+  root: number
+  slug: string
+  item: MemoryItem
+  now: number
+}) {
+  const [open, setOpen] = useState(false)
+  const [forgetting, setForgetting] = useState(false)
+  return (
+    <li className="group/memory min-w-0 rounded-sm hover:bg-muted/40" data-memory={slug}>
+      <div className="flex min-w-0 items-start">
+        <button
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 px-1.5 py-1 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          onClick={() => setOpen((current) => !current)}
+          title={open ? 'Show less' : 'Show the memory'}
+          type="button"
+        >
+          <span className="flex w-full min-w-0 items-center gap-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
+            <span className={cn('shrink-0 rounded-sm px-1', kindTones[item.kind])}>
+              {item.kind}
+            </span>
+            <span className="min-w-0 truncate text-foreground/80">{slug}</span>
+            <span
+              className="ml-auto shrink-0 pl-1 text-muted-foreground/60"
+              title={new Date(item.updated).toLocaleString()}
+            >
+              {age(item.updated, now)}
+            </span>
+          </span>
+          <span
+            className={cn(
+              'block text-[12px] leading-snug break-words text-foreground/85',
+              !open && 'truncate',
+            )}
+          >
+            {item.line}
+          </span>
+        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              aria-label={`Forget ${slug}`}
+              className="invisible mt-0.5 mr-0.5 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/70 outline-none group-focus-within/memory:visible group-hover/memory:visible pointer-coarse:visible hover:bg-muted hover:text-error focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+              disabled={forgetting}
+              onClick={() => {
+                setForgetting(true)
+                // A failure becomes a notice, as every unhandled action error does.
+                void api.action(ForgetAction, { root, slug }).finally(() => setForgetting(false))
+              }}
+              type="button"
+            >
+              <Trash2Icon className="size-3" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent className="font-mono text-[11px]" side="left">
+            Forget this memory
+          </TooltipContent>
+        </Tooltip>
+      </div>
+      {open && (
+        <div className="min-w-0 px-1.5 pb-2">
+          <div className="min-w-0 text-[12.5px] leading-relaxed text-muted-foreground">
+            <MessageResponse>{item.body}</MessageResponse>
+          </div>
+          {item.source && <MemorySource source={item.source} />}
+        </div>
+      )}
+    </li>
   )
 }
 

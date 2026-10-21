@@ -1302,6 +1302,8 @@ export default function lineageExtension(host: ExtensionHost) {
     branch: (input, ctx) => startBranch(host, input, ctx),
     rootOf: (id, ctx) => rootOf(host, id, ctx),
     leaveNote: (to, text, source) => leaveNote(host, to, text, source),
+    remember: (root, ops, ctx, now) =>
+      host.harness().commit((tx) => applyMemoryOps(tx, root, ops, now), ctx),
   })
   // What summaries need to know of a conversation's tree, through conversations' extension point.
   host.implement(Trees, {

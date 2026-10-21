@@ -637,6 +637,106 @@ const demoLandings = [
   ['45a315f', '9057c43', 'Lander Row', "The lander's feature tag", 1],
 ] as const
 
+/** Memories for `seedMemory`: slug, kind, line, body, source, age in hours. */
+const demoMemories = [
+  [
+    'extensions-over-server',
+    'decision',
+    'New behaviour goes in extensions/, not server/: extensions hot-reload without a restart',
+    'Put agent behaviour in `extensions/<name>/server.ts` and UI in `web.tsx`. `server/` and `shared/` need the `restart` tool, which boots a second process and type-checks it first.\n\nOnly move something into core when two extensions need it and no extension point fits.',
+    '#12/48',
+    2,
+  ],
+  [
+    'pi-durable-pinned',
+    'decision',
+    'Pin @earendil-works packages to exact versions; Pi Durable is experimental',
+    'Pi Durable changes its storage and replay semantics between minor versions. Pin exact versions in `package.json` and upgrade on a branch that runs `pnpm test:e2e`.',
+    '#3/112',
+    30,
+  ],
+  [
+    'faux-for-ui-previews',
+    'lesson',
+    'Preview UI on a faux instance, never on the shared host',
+    'A faux instance (`instance start` with `faux: true`) costs no tokens and has seed actions (`seedLandings`, `seedFlights`, `seedMemory`). Screenshots of the shared host leak real conversations into reports.',
+    '#41/7',
+    5,
+  ],
+  [
+    'fast-tests-no-waits',
+    'fact',
+    'pnpm test runs in-process: no real-time waits, no spawned processes',
+    'Lint enforces it with `ultimate/no-real-wait-in-fast-tests` and `ultimate/no-test-timeout`. Anything that spawns goes to `test/e2e`. Use `until` from `test/helpers.ts` for real deadlines.',
+    '#18/220',
+    76,
+  ],
+  [
+    'roots-never-concluded',
+    'fact',
+    'Roots and standing agents are never concluded or cleared, only compacted',
+    'A root runs no turns; its tally is what every branch starts from. `compact_tally` reshapes it without deleting history.',
+    undefined,
+    200,
+  ],
+  [
+    'lander-runs-all-suites',
+    'fact',
+    'The lander merges, runs every suite on the merged tip, then fast-forwards and pushes',
+    'A worker runs the tests covering its change; the lander runs `pnpm check`, `pnpm test` and `pnpm test:e2e` again on the merge with whatever landed meanwhile. A failure leaves the target untouched.',
+    '#27/96',
+    12,
+  ],
+  [
+    'cards-not-markdown',
+    'decision',
+    'Every user-visible outcome gets a designed card, never raw Markdown in a message',
+    'Reports, landings and failures render through entry renderers that match `extensions/subagents/messages.tsx` and `extensions/workspaces/log.tsx`.',
+    '#9/301',
+    400,
+  ],
+  [
+    'vite-hmr-facets',
+    'fact',
+    'A broken web facet shows an error card; the rest of the UI keeps running',
+    'Each contribution renders in an `ExtensionBoundary`. A thrown render falls back to the previous composer renderer or an error card naming the extension.',
+    '#33/14',
+    50,
+  ],
+  [
+    'worktree-cleanup-race',
+    'lesson',
+    'Wait for a worktree to be ready before writing to it',
+    'A branch with `isolated: true` gets its worktree asynchronously. Writing before `state === "ready"` races `git worktree add` and loses the file.',
+    '#52/33',
+    1,
+  ],
+  [
+    'summary-model-faux',
+    'fact',
+    'Under faux, the summary model is faux/faux-1:off unless settings say otherwise',
+    'Titles, abstracts and memory distillation all go through `summaryModel`. Faux answers them with short canned text, so distilled memory stays empty in a preview.',
+    undefined,
+    150,
+  ],
+  [
+    'no-silent-catch',
+    'lesson',
+    'A swallowed error needs a comment saying why ignoring it is correct',
+    '`ultimate/no-silent-catch` flags empty catch blocks and `.catch` handlers that return nothing. Add a reason comment or handle the error.',
+    '#20/58',
+    700,
+  ],
+  [
+    'phone-layout',
+    'decision',
+    'Every surface must work at 390px: rows wrap or truncate, actions stay reachable without hover',
+    'Use `pointer-coarse:visible` for hover-only controls and `min-w-0` with `truncate` on flexible text.',
+    '#61/12',
+    20,
+  ],
+] as const
+
 /** What `seedCards` writes: one of each card that reaches @ultimate as an entry rather than a tool call. */
 function demoCards(from: number): { kind: string; data: JsonObject }[] {
   const subject = { title: 'Fold cards in the chat', feature: 'Chat Cards' }
@@ -791,6 +891,51 @@ export const actions = {
       })
     }
     return { seeded: demoLandings.length }
+  },
+  /**
+   * Faux only: `{root?, op?}` previews project memory in root `root` (default 1). Without `op` it writes twelve
+   * memories of every kind with ages from an hour to a month; `op: 'update'` rewrites one, `op: 'delete'` drops one.
+   */
+  async seedMemory(args: JsonValue, { host }: ActionContext) {
+    if (!host.faux) throw new Error('seedMemory runs only under faux')
+    const { root = 1, op } = (args ?? {}) as { root?: unknown; op?: unknown }
+    if (typeof root !== 'number') throw new Error('root must be a conversation id')
+    const lineage = host.need(LineageApi)
+    if (op === 'update')
+      return {
+        summary: await lineage.remember(
+          root,
+          [
+            {
+              op: 'update',
+              slug: 'pi-durable-pinned',
+              line: 'Pin @earendil-works packages exactly; upgrade Pi Durable only on a branch that runs e2e',
+              body: 'Pi Durable changes its storage and replay semantics between minor versions. Pin exact versions in `package.json`.\n\n- Upgrade on its own branch.\n- Run `pnpm test:e2e` before landing: replay bugs only show across restarts.',
+              // A conversation every faux project has, so the source shows as its chip.
+              source: '#1/2',
+            },
+          ],
+          BACKGROUND_CONTEXT,
+        ),
+      }
+    if (op === 'delete')
+      return {
+        summary: await lineage.remember(
+          root,
+          [{ op: 'delete', slug: 'worktree-cleanup-race' }],
+          BACKGROUND_CONTEXT,
+        ),
+      }
+    if (op !== undefined) throw new Error('op must be update or delete')
+    const now = Date.now()
+    for (const [slug, kind, line, body, source, hours] of demoMemories)
+      await lineage.remember(
+        root,
+        [{ op: 'add', slug, kind, line, body, ...(source ? { source } : {}) }],
+        BACKGROUND_CONTEXT,
+        now - hours * 3_600_000,
+      )
+    return { seeded: demoMemories.length }
   },
   /**
    * Faux only: two isolated branches of root 1 with work in their worktrees, to preview the root's In flight rows: one
