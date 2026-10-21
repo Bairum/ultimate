@@ -176,17 +176,29 @@ it('adopts at most once: a 409 on the retry is final', async () => {
   }
   await expect(back(a, 'desk', { key: other, fetch: lost })).rejects.toThrow('returned 500')
   const first = stub.register.projects.find((project) => project.key === other)!.latest
-  // Another machine replaces the latest between the adoption and the retry.
-  const b = await machine(['y'])
+  // Between the adoption and the retry, another home of this machine builds on backup 1: a 409 the client would
+  // adopt again, were adoption not limited to once.
+  const b = await machine([])
+  await restore({
+    ...cloud,
+    key: other,
+    id: first.id,
+    home: b.home,
+    projectRoot: a.projectRoot,
+    backups: await temp(),
+  })
   let posts = 0
   const racing = async (input: string | URL | Request, init?: RequestInit) => {
-    if (init?.method === 'POST' && ++posts === 2)
-      await back(b, 'laptop', { key: other, force: true })
+    if (init?.method === 'POST' && ++posts === 2) await back(b, 'desk', { key: other })
     return stub.fetch(input, init)
   }
   const before = stub.commits.length
   await expect(back(a, 'desk', { key: other, fetch: racing })).rejects.toBeInstanceOf(Conflict)
-  // A's first commit, B's forced one, A's single retry.
+  expect(stub.register.projects.find((project) => project.key === other)!.latest).toMatchObject({
+    machine: 'desk',
+    parent: first.id,
+  })
+  // A's first commit, B's, A's single retry: no third commit from A.
   expect(stub.commits.length - before).toBe(3)
   expect((await readBackup(a.home, other))?.parent).toBe(first.id)
 })
