@@ -126,6 +126,33 @@ to the user, Ultimate sends one consolidated `message {to: 'user', text}` when t
 It appears there as a bubble with an answer card for questions. Decisions use a reply-expected message, ending with
 a `Decisions:` block (see [Questions](../questions/README.md)); reports that need no answer use `reply: false`.
 
+## Other projects' Ultimates
+
+One @ultimate can message another project's @ultimate, on this machine or over the tailnet, so it can drive that
+instance end to end. Nothing else crosses: the sender cannot address any other conversation there, and the message is
+never the user's.
+
+- **Sender:** codemode `ultimate.tell({ project, text, reply? })` (@ultimate only) logs a message `to: 'remote'` with
+  `remote: { project, machine, key }`, a fresh random key, then posts the target's `board.remote` action, located as
+  codemode's `{ project }` reads are (`lib/remote.ts`: loopback, else the tailnet address from the cloud register; the
+  target's own `Origin`, admitted by `tailscale.allow` on the tailnet). A failed post marks the message failed and the
+  call throws a sentence naming the project and machine. Telling an Ultimate whose reply-expected message to you is
+  still open is refused: answer it instead.
+- **Target:** `board.remote { key, text, reply, from: { project, machine } }` logs a message `from: 'remote'` to its
+  own primary agent, the only recipient it can reach, and delivers it like any other: as a steer, triaged, with
+  receipts. The model reads `Message from @ultimate@<project> on <machine> (another project's Ultimate, not the
+user)`. `board.remote-keys` maps each key to its message in the same commit, so a repeated post (a retry, a replay)
+  returns the first id and delivers nothing new.
+- **One hop back:** with `reply`, the delivery's answer phase posts it to the sender's `board.remoteReply { key, text,
+failed }` instead of a local conversation. The sender records it as a reply `from: 'remote'` with `re` and
+  `reply: false`, delivered by the usual reply phase, so its answer goes nowhere. `remoteReply` refuses an unknown key
+  and a message that expected no reply, and a second answer to the same key returns the first one's id. Two
+  Ultimates therefore exchange at most a message and its answer per `tell`; continuing is a new `tell`.
+
+`remote` and `remoteReply` are user-only actions: only another instance's HTTP call reaches them, never an agent's
+`ultimate.action`. In the chat a remote sender is named `@ultimate@<project> on <machine>` with a globe mark and a
+violet accent no conversation uses.
+
 ## Document and typed inputs
 
 `Board` (kind `board`, version 1) is exported on `ROOT_CONVERSATION_ID`:
@@ -140,20 +167,21 @@ Version 1 remains loadable: Pi documents do not validate object fields, so exist
 ```ts
 type BoardMessage = {
   id: number
-  from: number | 'user'
-  to: number | 'user'
+  from: number | 'user' | 'remote'
+  to: number | 'user' | 'remote'
   text: string
   at: number // Unix milliseconds
   reply: boolean
   re?: number
-  state: 'sent' | 'delivered' | 'answered' | 'failed'
+  state: 'sent' | 'delivered' | 'answered' | 'dismissed' | 'failed'
   entry?: EntryId
   answer?: EntryId
   error?: string
+  remote?: { project: string; machine: string; key: string; id?: number } // the other Ultimate
 }
 ```
 
-`board.message` data: `{ id, from, text, reply, delivery: 'steer' | 'followUp' | 'note', images? }`, where `images` counts the forwarded images in its model content; the card shows them as thumbnails.
+`board.message` data: `{ id, from, text, reply, delivery: 'steer' | 'followUp' | 'note', images?, remote? }`, where `images` counts the forwarded images in its model content; the card shows them as thumbnails.
 `board.reply` data: `{ id, re, from, text, failed }`. A reply has its own id and `re` points to the original message.
 The reply's `answer` links to the recipient's assistant entry; the original also stores its input `entry`.
 

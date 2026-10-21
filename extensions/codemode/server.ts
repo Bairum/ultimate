@@ -38,6 +38,7 @@ import type { ActionContext } from '../../server/actions.ts'
 import { READ_BYTES, READS, readProject } from './projects.ts'
 import type { Read } from './projects.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { BoardApi } from '../board/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
 import { Summarized } from './refs.ts'
@@ -300,6 +301,33 @@ function globals(
           args as JsonValue,
           context.abortSignal!,
           conversationId,
+        )
+      },
+    },
+    {
+      name: 'tell',
+      description:
+        "Message another project's @ultimate (only @ultimate reaches it, as a message from you, never the user), as @ultimate only; with reply (default true) its answer returns to you as a reply. machine picks one instance when the project runs on several.",
+      signature:
+        '(input: { project: string; text: string; reply?: boolean; machine?: string }): Promise<{ message: number; delivered: number }>',
+      execute: ([input], { signal }) => {
+        const { project, text, reply, machine } = (input ?? {}) as Record<string, unknown>
+        if (typeof project !== 'string' || !project) throw new Error('project must be nonempty')
+        if (typeof text !== 'string' || !text.trim()) throw new Error('text must be nonempty')
+        if (reply !== undefined && typeof reply !== 'boolean')
+          throw new Error('reply must be a boolean')
+        if (machine !== undefined && (typeof machine !== 'string' || !machine))
+          throw new Error('machine must be nonempty')
+        return host.need(BoardApi).tell(
+          conversationId,
+          {
+            project,
+            text,
+            ...(reply === undefined ? {} : { reply }),
+            ...(machine ? { machine } : {}),
+          },
+          context,
+          signal,
         )
       },
     },

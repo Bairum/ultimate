@@ -16,7 +16,8 @@ function BoardAnswerLabel({ entry }: { entry: EntryRecord }) {
       key={message.id}
       className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-1 text-muted-foreground"
     >
-      {message.reply ? '↩ sent to' : 'not sent · one-way from'} <Address id={message.from} />
+      {message.reply ? '↩ sent to' : 'not sent · one-way from'}{' '}
+      <Address id={message.from} remote={message.remote} />
     </span>
   ))
 }

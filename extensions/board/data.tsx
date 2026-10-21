@@ -1,5 +1,9 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
-import type { BoardData, BoardMessage } from './refs.ts'
+import type { BoardData, BoardMessage, Remote } from './refs.ts'
+
+/** How another project's Ultimate is named; the server says the same in its model text. */
+export const remoteLabel = (remote: Pick<Remote, 'project' | 'machine'>) =>
+  `@ultimate@${remote.project} on ${remote.machine}`
 
 /** The stored response that made tool call `call`: going back from a message it sent returns there. */
 export const callerOf = (entries: readonly EntryRecord[], call: string) =>

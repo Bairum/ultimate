@@ -1,4 +1,5 @@
-import type { Context } from '@earendil-works/chord'
+import { randomUUID } from 'node:crypto'
+import type { Context, JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT, awaitWithContext } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import {
@@ -32,6 +33,7 @@ import { isolatable } from '../../lib/git.ts'
 
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import { primaryAgent } from '../../lib/machine.ts'
+import { locate, postAction, selfAddress } from '../../lib/remote.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { parseDecisions } from '../../lib/decisions.ts'
 import { LineageApi, Roots } from '../lineage/api.ts'
@@ -40,7 +42,7 @@ import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
 import { Asked, Board, BoardApi, Gate, MessageSent, Triaged } from './api.ts'
 import type { BoardMessage } from './api.ts'
-import type { Triage } from './refs.ts'
+import type { Remote, Triage } from './refs.ts'
 import { declared, needsDecision, parseVerdict, TRIAGE_SYSTEM, triageInput } from './triage.ts'
 import type { Verdict } from './triage.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
@@ -112,6 +114,15 @@ const Sent = defineDoc<{ ids: Record<string, number> }>({
 // Pipeline requests outlive their calling task, so their receipts belong to the sender conversation.
 const Requests = defineDoc<{ ids: Record<string, number> }>({
   kind: 'board.requests',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({ ids: {} }),
+})
+/** The keys of messages from other projects' Ultimates, so a repeated post delivers once. */
+const RemoteKeys = defineDoc<{ ids: Record<string, number> }>({
+  kind: 'board.remote-keys',
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -250,7 +261,7 @@ async function recordTriage(host: ExtensionHost, tx: Tx, id: number, triage: Tri
   stored.triage = triage
   if (
     triage.verdict !== 'assessing' &&
-    typeof stored.from === 'number' &&
+    (typeof stored.from === 'number' || stored.from === 'remote') &&
     typeof stored.to === 'number'
   )
     await host.emit(tx, Triaged, {
@@ -335,17 +346,25 @@ function delivery(host: ExtensionHost) {
       await service.standing(name, ctx)
   }
   return defineTask<
-    { message: BoardMessage; steer: boolean; note: boolean; fromLabel: string; toLabel: string },
+    {
+      message: BoardMessage
+      steer: boolean
+      note: boolean
+      fromLabel: string
+      toLabel: string
+      /** Another project's Ultimate answered `message`: deliver only this reply. */
+      reply?: { message: BoardMessage; failed: boolean }
+    },
     { phase: 'deliver' } | { phase: 'reply'; message: BoardMessage; failed: boolean },
     null
   >({
     name: 'board.delivery',
     version: 1,
-    initial: () => ({ phase: 'deliver' }),
+    initial: (input) => (input.reply ? { phase: 'reply', ...input.reply } : { phase: 'deliver' }),
     phases: {
       deliver: async (task, runtime, ctx) => {
         const m = task.input.message
-        if (m.to === 'user') throw new Error('Messages to the user need no delivery task')
+        if (typeof m.to !== 'number') throw new Error('Only conversations take a delivery')
         await refresh(m.to, ctx)
         const recipient = await host.harness().conversation(m.to as ConversationId, ctx)
         if (!recipient) throw new Error(`Unknown conversation #${m.to}`)
@@ -362,18 +381,19 @@ function delivery(host: ExtensionHost) {
             reply: m.reply,
             delivery: task.input.note ? 'note' : task.input.steer ? 'steer' : 'followUp',
             ...(images.length ? { images: images.length } : {}),
+            ...(m.remote ? { remote: m.remote } : {}),
           },
         }
         const body = task.input.note
           ? `Note from ${task.input.fromLabel} (one-way update, no answer goes back):\n${m.text}`
-          : `Message from ${task.input.fromLabel}:\n${m.text}${m.reply ? `\nAnswer here; your answer is sent to ${task.input.fromLabel} automatically. Do not use message to reply.` : `\nOne-way message: ${task.input.fromLabel} expects no answer, and your answer here is not sent to it. If it needs to hear from you, message it.`}`
+          : `Message from ${task.input.fromLabel}${m.from === 'remote' ? " (another project's Ultimate, not the user)" : ''}:\n${m.text}${m.reply ? `\nAnswer here; your answer is sent to ${task.input.fromLabel} automatically. Do not use message to reply.` : `\nOne-way message: ${task.input.fromLabel} expects no answer, and your answer here is not sent to it. If it needs to hear from you, message it.`}`
         const content = images.length ? [{ type: 'text' as const, text: body }, ...images] : body
         const requestId = `board:${m.id}`
         // A conversation's message to the primary agent is triaged. One that expects a reply or asks for a decision
         // acts at once; another one-way message goes in as context and wakes the agent only when the summary model
         // says act. Notes never wake; without a summary model nothing is gated.
         const triaged =
-          typeof m.from === 'number' &&
+          (typeof m.from === 'number' || m.from === 'remote') &&
           !task.input.note &&
           m.to === (await primaryConversation(host, ctx))
         const sure: Verdict | undefined = !triaged
@@ -519,12 +539,42 @@ function delivery(host: ExtensionHost) {
             state: failed ? 'failed' : 'sent',
             ...(answer ? { answer } : {}),
             ...(error ? { error } : {}),
+            ...(m.remote ? { remote: m.remote } : {}),
           })
           return { status: 'running', checkpoint: { phase: 'reply', message: response, failed } }
         }, ctx)
       },
       reply: async (task, runtime, ctx) => {
         const { message: m, failed } = task.state.checkpoint
+        if (m.to === 'remote') {
+          // The answer travels back to the Ultimate that asked; it delivers it once, as a reply that expects none.
+          let error: string | undefined
+          try {
+            const target = await locate(host, m.remote!.project, m.remote!.machine)
+            if ('current' in target) throw new Error(`${m.remote!.project} is this project`)
+            await postAction(
+              target,
+              'board',
+              'remoteReply',
+              { key: m.remote!.key, text: m.text, failed },
+              runtime.signal,
+            )
+          } catch (cause) {
+            if (runtime.signal.aborted) throw cause
+            error = `The reply did not reach ${remoteLabel(m.remote!)}: ${cause instanceof Error ? cause.message : String(cause)}`
+          }
+          await runtime.commit(async (tx) => {
+            const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+              (item) => item.id === m.id,
+            )
+            if (stored) {
+              stored.state = error || failed ? 'failed' : 'delivered'
+              if (error) stored.error = error
+            }
+            return terminal
+          }, ctx)
+          return
+        }
         if (m.to !== 'user') {
           await refresh(m.to, ctx)
           // A reply to the primary agent is triaged like a message: a failure, a decision or an answer to its own
@@ -555,7 +605,14 @@ function delivery(host: ExtensionHost) {
           const sender = await host.harness().conversation(m.to as ConversationId, ctx)
           const entry = {
             kind: 'board.reply',
-            data: { id: m.id, re: m.re!, from: m.from, text: m.text, failed },
+            data: {
+              id: m.id,
+              re: m.re!,
+              from: m.from,
+              text: m.text,
+              failed,
+              ...(m.remote ? { remote: m.remote } : {}),
+            },
           }
           const content = `Reply from ${task.input.toLabel} to your message ${m.re}${failed ? ' (failed)' : ''}:\n${m.text}`
           const requestId = `board-reply:${m.id}`
@@ -704,6 +761,7 @@ async function lander(host: ExtensionHost, ctx: Context) {
 }
 async function senderName(host: ExtensionHost, id: number | 'user', ctx: Context) {
   if (id === 'user') return 'user'
+  if (typeof id !== 'number') return 'another Ultimate'
   const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
   const name = Object.keys(index ?? {}).find((candidate) => index?.[candidate] === id)
   const workspace = await host
@@ -880,7 +938,211 @@ async function send(
     return message.id
   }, ctx)
 }
+/** How another project's Ultimate is named, as data.tsx names it in the browser. */
+const remoteLabel = (remote: Pick<Remote, 'project' | 'machine'>) =>
+  `@ultimate@${remote.project} on ${remote.machine}`
+/** How many remote message keys a target keeps to deliver a repeated post once. */
+const REMOTE_KEYS = 1000
+const field = (value: unknown, name: string, max: number) => {
+  if (typeof value !== 'string' || !value.trim() || value.length > max)
+    throw new Error(`${name} must be a nonempty string of at most ${max} characters`)
+  return value
+}
+/**
+ * From the primary agent's conversation `from`, message another project's Ultimate. The message is logged here first,
+ * so an answer that arrives before the post returns finds it by its key.
+ */
+async function tell(
+  host: ExtensionHost,
+  from: number,
+  input: { project: string; machine?: string; text: string; reply?: boolean },
+  ctx: Context,
+  signal?: AbortSignal,
+) {
+  const primary = primaryAgent(host.projectRoot, host.userHome)
+  const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
+  if (!primary || standing?.[primary] !== from)
+    throw new Error(`Only @${primary ?? 'ultimate'} tells another project's Ultimate`)
+  if (!input.text.trim()) throw new Error('Message text must not be empty')
+  const target = await locate(host, input.project, input.machine)
+  if ('current' in target)
+    throw new Error(`${input.project} is this project; message its agents with message`)
+  const self = await selfAddress(host)
+  const reply = input.reply ?? true
+  // An Ultimate answering another's question answers it; telling back would start a conversation between agents.
+  const asking = (
+    (await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx))?.messages ?? []
+  ).find(
+    (m) =>
+      m.from === 'remote' &&
+      m.to === from &&
+      m.reply &&
+      m.remote?.project === target.name &&
+      (m.state === 'sent' || m.state === 'delivered'),
+  )
+  if (asking)
+    throw new Error(
+      `Your answer to ${remoteLabel(asking.remote!)}'s message ${asking.id} is sent back automatically. Answer instead of telling.`,
+    )
+  const remote = {
+    project: target.name,
+    machine: target.machine ?? self.machine,
+    key: randomUUID(),
+  }
+  const id = await host.harness().commit(async (tx) => {
+    const message = await append(tx, {
+      from,
+      to: 'remote',
+      text: input.text,
+      reply,
+      state: 'sent',
+      remote,
+    })
+    await host.emit(tx, MessageSent, {
+      message: message.id,
+      from,
+      to: 'remote',
+      reply,
+      steer: true,
+    })
+    return message.id
+  }, ctx)
+  const settle = (change: (stored: BoardMessage) => void) =>
+    host.harness().commit(async (tx) => {
+      const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find((m) => m.id === id)
+      if (stored) change(stored)
+    }, ctx)
+  let delivered: number
+  try {
+    delivered = (await postAction(
+      target,
+      'board',
+      'remote',
+      { key: remote.key, text: input.text, reply, from: self },
+      signal,
+    )) as number
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    await settle((stored) => {
+      stored.state = 'failed'
+      stored.error = message
+    })
+    throw error
+  }
+  await settle((stored) => {
+    stored.remote = { ...stored.remote!, id: delivered }
+    // A quick answer may have arrived first.
+    if (stored.state === 'sent') stored.state = 'delivered'
+  })
+  return { message: id, delivered }
+}
 export const actions = {
+  /**
+   * `{ key, text, reply, from: { project, machine } }`: another project's Ultimate messages this instance's primary
+   * agent, the only conversation it can reach. A repeated `key` returns the first delivery's id.
+   */
+  async remote(args: JsonValue, { host }: ActionContext) {
+    const input = (args ?? {}) as Record<string, unknown>
+    const from = (input.from ?? {}) as Record<string, unknown>
+    const key = field(input.key, 'key', 100)
+    const body = field(input.text, 'text', 100_000)
+    const sender = {
+      project: field(from.project, 'from.project', 200),
+      machine: field(from.machine, 'from.machine', 200),
+    }
+    if (typeof input.reply !== 'boolean') throw new Error('reply must be a boolean')
+    const reply = input.reply
+    const primary = primaryAgent(host.projectRoot, host.userHome)
+    if (!primary) throw new Error('This instance has no @ultimate to receive messages')
+    const to = await host.need(SubagentsApi).standing(primary, BACKGROUND_CONTEXT)
+    const toLabel = await senderName(host, to, BACKGROUND_CONTEXT)
+    return host.harness().commit(async (tx) => {
+      const keys = await tx.doc(RemoteKeys, ROOT_CONVERSATION_ID)
+      if (keys.ids[key] !== undefined) return keys.ids[key]
+      const message = await append(tx, {
+        from: 'remote',
+        to,
+        text: body,
+        reply,
+        state: 'sent',
+        remote: { ...sender, key },
+      })
+      keys.ids[key] = message.id
+      for (const old of Object.keys(keys.ids).slice(0, -REMOTE_KEYS)) delete keys.ids[old]
+      await host.emit(tx, MessageSent, {
+        message: message.id,
+        from: 'remote',
+        to,
+        reply,
+        steer: true,
+      })
+      await tx.createTask(
+        delivery(host),
+        { message, steer: true, note: false, fromLabel: remoteLabel(sender), toLabel },
+        {
+          conversationId: ROOT_CONVERSATION_ID,
+          ownership: { kind: 'conversation' },
+          background: true,
+        },
+      )
+      return message.id
+    }, BACKGROUND_CONTEXT)
+  },
+  /**
+   * `{ key, text, failed }`: the Ultimate this instance told answers its reply-enabled message `key`. The answer reaches
+   * the teller as a reply that expects none; a second answer returns the first one's id, and a message that expects no
+   * reply refuses it, so two Ultimates cannot keep answering each other.
+   */
+  async remoteReply(args: JsonValue, { host }: ActionContext) {
+    const input = (args ?? {}) as Record<string, unknown>
+    const key = field(input.key, 'key', 100)
+    const body = field(input.text, 'text', 100_000)
+    const failed = input.failed === true
+    const find = (messages: BoardMessage[]) =>
+      messages.find((m) => m.to === 'remote' && m.remote?.key === key)
+    const seen = find(
+      (await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT))?.messages ??
+        [],
+    )
+    if (!seen || typeof seen.from !== 'number')
+      throw new Error('No message from this Ultimate has that key')
+    const fromLabel = await senderName(host, seen.from, BACKGROUND_CONTEXT)
+    return host.harness().commit(async (tx) => {
+      const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
+      const original = find(log.messages)
+      if (!original) throw new Error('No message from this Ultimate has that key')
+      if (!original.reply) throw new Error('That message expects no reply')
+      const done = log.messages.find((m) => m.from === 'remote' && m.re === original.id)
+      if (done) return done.id
+      original.state = failed ? 'failed' : 'answered'
+      const response = await append(tx, {
+        from: 'remote',
+        to: original.from,
+        text: body,
+        reply: false,
+        re: original.id,
+        state: 'sent',
+        remote: original.remote!,
+      })
+      await tx.createTask(
+        delivery(host),
+        {
+          message: original,
+          steer: true,
+          note: false,
+          fromLabel,
+          toLabel: remoteLabel(original.remote!),
+          reply: { message: response, failed },
+        },
+        {
+          conversationId: ROOT_CONVERSATION_ID,
+          ownership: { kind: 'conversation' },
+          background: true,
+        },
+      )
+      return response.id
+    }, BACKGROUND_CONTEXT)
+  },
   async addresses(_args: unknown, { host }: ActionContext) {
     const agents = await host.need(SubagentsApi).residents(BACKGROUND_CONTEXT)
     const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
@@ -899,6 +1161,8 @@ export const actions = {
     }
   },
 }
+/** Only another instance posts these, over its API: no agent here can pose as a remote Ultimate. */
+export const userActions = ['remote', 'remoteReply']
 const imagesParameter = Type.Union([Type.Literal('latest'), Type.Integer({ minimum: 1 })], {
   description:
     'Forward images from your conversation: "latest" for the newest input or tool result (screenshot) with images, or that entry\'s id.',
@@ -959,6 +1223,7 @@ export default function board(host: ExtensionHost) {
     },
     send: (from, input, requestId, ctx) =>
       send(host, from, input, ctx, undefined, undefined, requestId),
+    tell: (from, input, ctx, signal) => tell(host, from, input, ctx, signal),
   })
   return defineExtension({
     name: 'board',

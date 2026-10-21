@@ -8,13 +8,14 @@ import type { EntryId } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
 import type { Device } from '../../shared/events.ts'
 import { BoardDoc } from './refs.ts'
-import type { Triage } from './refs.ts'
+import type { Remote, Triage } from './refs.ts'
 
 /** One Board message as the `board` document stores it. */
 export type BoardMessage = {
   id: number
-  from: number | 'user'
-  to: number | 'user'
+  /** `remote`: another project's Ultimate, named by `remote`. */
+  from: number | 'user' | 'remote'
+  to: number | 'user' | 'remote'
   text: string
   at: number
   reply: boolean
@@ -29,6 +30,8 @@ export type BoardMessage = {
   images?: { entry: EntryId; count: number }
   /** Whether a message to the primary agent woke it: assessing, then act or fyi with a one-line reason. */
   triage?: Triage
+  /** The other project's Ultimate a `remote` side names. */
+  remote?: Remote
 }
 /** Every message between conversations and the user, on the root conversation. */
 export const Board = defineDoc<{ messages: BoardMessage[]; next: number }>({
@@ -55,6 +58,17 @@ export type BoardService = {
     requestId: string,
     ctx: Context,
   ): Promise<number>
+  /**
+   * From the primary agent's conversation `from`, message another project's primary agent (on `machine`, else where it
+   * runs): only that Ultimate receives it. With `reply`, its answer returns here as a reply. Returns this log's id of the
+   * message and the target's id of the delivered one; throws a sentence naming the machine when it cannot be reached.
+   */
+  tell(
+    from: number,
+    input: { project: string; machine?: string; text: string; reply?: boolean },
+    ctx: Context,
+    signal?: AbortSignal,
+  ): Promise<{ message: number; delivered: number }>
 }
 export { Asked, MessageSent, Triaged } from './refs.ts'
 /** Messages between conversations; core, so `need` it. */

@@ -4,8 +4,8 @@ type Doc = Readonly<QuestionsBoard> | null | undefined
 /** The fields of a Board message the answer card reads. */
 export type Message = {
   id: number
-  from: number | 'user'
-  to: number | 'user'
+  from: number | 'user' | 'remote'
+  to: number | 'user' | 'remote'
   reply: boolean
   state: string
 }

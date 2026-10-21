@@ -46,6 +46,14 @@ const user: Accent = {
   name: 'text-brand',
 }
 
+/** Another project's Ultimate: a violet the conversation palette never uses. */
+const remote: Accent = {
+  left: 'border-l-violet-500/70',
+  right: 'border-r-violet-500/70',
+  fill: 'bg-violet-500/10',
+  name: 'text-violet-700 dark:text-violet-300',
+}
+
 /** A stable palette slot for a sender other than the user. */
 export function accentIndex(id: number, size: number) {
   let hash = 0
@@ -53,6 +61,9 @@ export function accentIndex(id: number, size: number) {
   return (hash >>> 0) % size
 }
 
-/** The accent of a sender: the user always has the brand colour, a conversation a stable slot of a small palette. */
-export const accentOf = (id: number | 'user'): Accent =>
-  id === 'user' ? user : palette[accentIndex(id, palette.length)]
+/**
+ * The accent of a sender: the user always has the brand colour, another project's Ultimate violet, a conversation a
+ * stable slot of a small palette.
+ */
+export const accentOf = (id: number | 'user' | 'remote'): Accent =>
+  id === 'user' ? user : id === 'remote' ? remote : palette[accentIndex(id, palette.length)]
