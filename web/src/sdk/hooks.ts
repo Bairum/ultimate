@@ -513,10 +513,11 @@ export function useNow(intervalMs = 1000, active = true): number {
   return now
 }
 
-/** Wall time of a tool call this page saw running, ticking while it runs; undefined for calls finished before load. */
+/** Wall time of a tool call from its durable start, ticking while it runs; undefined when it has no times. */
 export function useToolDuration(call: ToolCallView): string | undefined {
   const running = call.startedAt !== undefined && call.endedAt === undefined
   const now = useNow(100, running)
   if (call.startedAt === undefined) return undefined
-  return formatDuration((call.endedAt ?? now) - call.startedAt)
+  // The start is the server's clock; a browser clock behind it must not show a negative time.
+  return formatDuration(Math.max(0, (call.endedAt ?? now) - call.startedAt))
 }

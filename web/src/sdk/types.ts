@@ -66,7 +66,7 @@ export interface ToolCallView {
   diagnostics: readonly ToolDiagnostic[]
   /** What the output bounds dropped while running. */
   dropped?: { bytes: number; lines: number }
-  /** Epoch ms when the calling response started and when the result was written. */
+  /** Epoch ms when the call started (its answer ended) and when its result was written; absent when interrupted. */
   startedAt?: number
   endedAt?: number
   result?: ToolResultMessage
@@ -234,6 +234,11 @@ export const definePoint = <Input, Value>(point: string): Point<Input, Value> =>
  * Undefined, as none, while nothing provides it.
  */
 export const ParkedRuns = definePoint<null, ReadonlySet<number>>('ultimate.parked')
+/**
+ * When a run's task first ran, in epoch ms, by its task ID (the `tasks` extension provides it), for the working
+ * indicator's clock. Undefined while unknown or while nothing provides it.
+ */
+export const RunStart = definePoint<number | undefined, number | undefined>('ultimate.runStart')
 
 /** What a facet provides for a point: `useValue` is a hook, run once per `<Provided>` with its input. */
 export interface Provision {

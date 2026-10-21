@@ -59,7 +59,7 @@ import {
 import { entryRenderers, messageItems, toolLine } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary, Provided } from './boundary.tsx'
-import { ParkedRuns } from '../sdk/types.ts'
+import { ParkedRuns, RunStart } from '../sdk/types.ts'
 import type { ChatSummaryProps } from '../sdk/types.ts'
 import { MessageActions } from './message-actions.tsx'
 import {
@@ -77,7 +77,7 @@ import { useFold } from './fold.tsx'
 import type { AsideGroup, ChatPart, QuietGroup, WorkRun } from './chat.ts'
 import { readerLeft } from './follow.ts'
 import { column } from './layout.ts'
-import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
+import { callsStart, indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
 import type { ToolResult } from './model.ts'
 import { ToolCallBlock } from './tool-call.tsx'
 import { TranscriptSkeleton } from './transcript-skeleton.tsx'
@@ -842,12 +842,15 @@ function WorkRow({
 }
 
 /** The tool calls of a folded run, in order. */
-function runCalls(run: WorkRun): ToolCall[] {
+function runCalls(run: WorkRun): { block: ToolCall; startedAt: number }[] {
   return run.work.flatMap(({ entry, blocks }) => {
     const message = entry.model?.[0]
     if (message?.role !== 'assistant') return []
+    const startedAt = callsStart(message)
     return message.content.flatMap((block, index) =>
-      block.type === 'toolCall' && (!blocks || blocks.includes(index)) ? [block] : [],
+      block.type === 'toolCall' && (!blocks || blocks.includes(index))
+        ? [{ block, startedAt }]
+        : [],
     )
   })
 }
@@ -882,12 +885,13 @@ function StepLines({
       {calls.length > shown.length && (
         <span className="text-muted-foreground/60">+{calls.length - shown.length} earlier</span>
       )}
-      {shown.map((block) => {
+      {shown.map(({ block, startedAt }) => {
         const call = toolCallView(block, {
           result: results.get(block.id),
           slot: slots.get(block.id),
           streaming: false,
           busy,
+          startedAt,
         })
         const line = toolLine(extensions, call.name)
         return (
@@ -1201,6 +1205,7 @@ function AssistantView({
                   slot: slots.get(block.id),
                   streaming,
                   busy,
+                  startedAt: streaming ? undefined : callsStart(message),
                 })}
                 key={block.id}
               />
@@ -1354,9 +1359,6 @@ function shows(message: AssistantMessage | undefined) {
   )
 }
 
-/** When this page first saw each run, for the working indicator's clock. */
-const runSeen = new Map<number, number>()
-
 /** What the run is doing when the transcript alone does not show it; a run a pause parked says so instead. */
 function LiveStatus(props: {
   id: number | undefined
@@ -1367,7 +1369,15 @@ function LiveStatus(props: {
   return (
     <Provided input={null} point={ParkedRuns}>
       {(parked) => (
-        <LiveLines {...props} parked={props.id !== undefined && parked?.has(props.id) === true} />
+        <Provided input={props.live.run?.taskId} point={RunStart}>
+          {(since) => (
+            <LiveLines
+              {...props}
+              parked={props.id !== undefined && parked?.has(props.id) === true}
+              since={since}
+            />
+          )}
+        </Provided>
       )}
     </Provided>
   )
@@ -1378,11 +1388,14 @@ export function LiveLines({
   busy,
   partial,
   parked,
+  since,
 }: {
   live: LiveState
   busy: boolean
   partial: AssistantMessage | undefined
   parked: boolean
+  /** When the run started (its task first ran), for the working clock; none shows while unknown. */
+  since?: number
 }) {
   // Parked by a pause, nothing of the run executes, a retry's backoff and a deferred poll included: the paused line
   // replaces every other one and no clock ticks until Play.
@@ -1418,9 +1431,6 @@ export function LiveLines({
       </Shimmer>,
     )
   if (idle && lines.length === 0) {
-    const run = live.run?.taskId
-    if (run !== undefined && !runSeen.has(run)) runSeen.set(run, Date.now())
-    const since = run === undefined ? undefined : runSeen.get(run)
     const thinking = partial?.content.some((block) => block.type === 'thinking')
     lines.push(
       <span className="flex items-center gap-2" key="working">
