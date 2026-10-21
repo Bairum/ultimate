@@ -5,6 +5,7 @@ import {
   GitForkIcon,
   ScrollTextIcon,
   StickyNoteIcon,
+  SunriseIcon,
   Trash2Icon,
 } from 'lucide-react'
 import { useState } from 'react'
@@ -65,6 +66,21 @@ function Branched({ entry }: { entry: EntryRecord }) {
         <ConversationRef id={branch} title={intent} />
       </span>
     </button>
+  )
+}
+
+/** The wake-up after a manual compaction of @ultimate: a quiet divider, not a user bubble. */
+function Woken() {
+  return (
+    <div
+      className="flex items-center gap-3 font-mono text-[11px] text-muted-foreground/70 before:h-px before:flex-1 before:bg-border/70 after:h-px after:flex-1 after:bg-border/70"
+      data-lineage-woken
+    >
+      <span className="flex items-center gap-1.5">
+        <SunriseIcon className="size-3 shrink-0" />
+        woke after compaction
+      </span>
+    </div>
   )
 }
 
@@ -630,6 +646,7 @@ export default defineWebExtension({
     'lineage.branched': Branched,
     'lineage.note': Note,
     'lineage.finished': Finished,
+    'lineage.woken': Woken,
     'lineage.abstract': Abstract,
     'lineage.rewound': Rewound,
     'lineage.rewound-dependent': RewoundDependent,

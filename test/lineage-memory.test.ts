@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { CompactionTask, configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import {
@@ -49,7 +49,13 @@ async function fixture(settings?: object) {
   }
   const server = await fauxServer({ ultimateRoot, home, userHome: home })
   servers.push(server)
-  const state = { memorize: '{"ops":[]}', asked: [] as string[], condensed: [] as string[] }
+  const state = {
+    memorize: '{"ops":[]}',
+    asked: [] as string[],
+    condensed: [] as string[],
+    // Holds a compaction's summary request until it resolves.
+    gate: undefined as Promise<void> | undefined,
+  }
   const route: FauxResponseFactory = async (transcript) => {
     server.host.faux!.appendResponses([route])
     const [system, first] = transcript.messages
@@ -57,8 +63,10 @@ async function fixture(settings?: object) {
       state.asked.push(textOf(first.content))
       return fauxAssistantMessage(state.memorize)
     }
-    if (system?.role === 'system' && textOf(system.content).startsWith('You condense'))
+    if (system?.role === 'system' && textOf(system.content).startsWith('You condense')) {
       state.condensed.push(textOf(first.content))
+      await state.gate
+    }
     // Titles, reply summaries and compactions carry a system prompt of their own.
     if (system?.role === 'system' && textOf(system.content)) return fauxAssistantMessage('{}')
     const last = transcript.messages.findLast((message) => message.role === 'user')
@@ -448,6 +456,88 @@ it.concurrent('ends a compaction of @ultimate with its project memory', async ()
   expect(summary).toMatch(
     /<summary>\n\{\}\n\n<project_memory root="#1">\nkept-fact \[fact\] — The project keeps this fact \(updated [\d-]+\)\n<\/project_memory>\nThe full project context[^\n]*`ultimate.entries\(1\)`[^\n]*\n<\/summary>$/,
   )
+})
+
+it.concurrent('wakes @ultimate once after its manual compaction, never after an automatic one', async () => {
+  const { server, state } = await fixture()
+  const ultimate = await server.harness.createConversation(
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  const { model } = await server.root.agent(context)
+  const fill = (from: number) =>
+    server.harness.commit(async (tx) => {
+      for (let n = from; n < from + 8; n++)
+        await tx.appendEntry(ultimate.id, {
+          kind: 'pi.user',
+          model: [{ role: 'user', content: `Part ${n} ${'word '.repeat(4000)}`, timestamp: n }],
+        })
+    }, context)
+  await server.harness.commit(async (tx) => {
+    await configure(tx, ultimate.id, { model })
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = ultimate.id
+  }, context)
+  await fill(0)
+  const kinds = async () => (await ultimate.context(context)).entries.map((entry) => entry.kind)
+  const wakeTasks = () =>
+    server.harness.commit(
+      async (tx) =>
+        (await tx.scanTasks({ conversationId: ultimate.id, kind: 'lineage.woken' }, 10)).items,
+      context,
+    )
+  // An automatic compaction continues the run it interrupted, so it wakes nothing.
+  for (const reason of ['threshold', 'overflow'] as const) {
+    const automatic = await server.harness.commit(
+      (tx) =>
+        tx.createTask(
+          CompactionTask,
+          { reason },
+          { ownership: { kind: 'conversation' }, conversationId: ultimate.id, background: true },
+        ),
+      context,
+    )
+    await server.harness.waitForTask(automatic, context)
+    expect((await kinds())[0]).toBe('pi.compaction')
+    await fill(10)
+  }
+  expect(await wakeTasks()).toEqual([])
+  expect(await kinds()).not.toContain('lineage.woken')
+
+  // Only @ultimate compacts itself with the tool; a second call while one runs is refused.
+  await expect(run(server, 'compact', {}, ROOT_CONVERSATION_ID)).rejects.toThrow('Only @ultimate')
+  const { taskId } = JSON.parse(await run(server, 'compact', {}, ultimate.id))
+  await expect(run(server, 'compact', {}, ultimate.id)).rejects.toThrow('Already compacting')
+  await server.harness.waitForTask(taskId, context)
+  await until(async () => (await kinds()).includes('lineage.woken'))
+  await ultimate.waitForIdle(context)
+  const tasks = await wakeTasks()
+  expect(tasks.map((task) => task.input)).toEqual([{ id: ultimate.id, compaction: taskId }])
+  const view = await ultimate.context(context)
+  const woken = view.entries.filter((entry) => entry.kind === 'lineage.woken')
+  expect(woken).toHaveLength(1)
+  expect(textOf(woken[0].model?.[0]?.content)).toContain('Your context was just compacted')
+  // It follows the manual summary, which now heads the context, and started a turn that answered it.
+  expect(view.entries[0].kind).toBe('pi.compaction')
+  expect(view.entries[0].data).toEqual({ reason: 'manual' })
+  const last = (await ultimate.context(context)).entries.at(-1)!
+  expect(last.kind).toBe('pi.assistant')
+
+  // A summary that goes stale, because a reset replaced its context while it was written, wakes nothing.
+  await fill(20)
+  const release = Promise.withResolvers<void>()
+  state.gate = release.promise
+  const asked = state.condensed.length
+  const stale = await ultimate.compact(undefined, context)
+  await until(() => state.condensed.length > asked)
+  await ultimate.reset(undefined, context)
+  release.resolve()
+  await server.harness.waitForTask(stale, context)
+  await until(async () => (await wakeTasks()).every((task) => task.state.status === 'terminal'))
+  expect((await wakeTasks()).map((task) => task.input)).toContainEqual({
+    id: ultimate.id,
+    compaction: stale,
+  })
+  expect(await kinds()).toEqual(['pi.reset'])
 })
 
 it.concurrent('completes a landing task without asking when no summary model runs', async () => {
