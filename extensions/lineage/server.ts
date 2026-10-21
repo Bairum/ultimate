@@ -8,6 +8,7 @@ import {
   CompactionTask,
   configure,
   defineDoc,
+  defineDocFamily,
   defineExtension,
   defineTask,
   defineTool,
@@ -653,10 +654,13 @@ function lineage(host: ExtensionHost) {
       deliver: async (task, runtime, ctx) => {
         const { id, compaction } = task.input
         const settled = await runtime.waitForTask(compaction as TaskId<CompactionResult>, ctx)
-        const placed =
-          settled.state.outcome.status === 'completed' &&
-          (settled.state.outcome.result.entryId !== undefined ||
-            settled.state.outcome.result.submissionId !== undefined)
+        const result =
+          settled.state.outcome.status === 'completed' ? settled.state.outcome.result : {}
+        // A summary written while @ultimate runs waits for its next boundary, or goes stale when another replaced it.
+        const written =
+          result.submissionId &&
+          (await (await host.harness().submission(result.submissionId, ctx))?.wait(ctx))
+        const placed = result.entryId !== undefined || (written && written.status === 'done')
         // Keyed by the compaction, so a rerun after a crash finds the input it already submitted.
         if (placed)
           await (await host.harness().conversation(id, ctx))!.submit(
@@ -742,6 +746,17 @@ export type BranchInput = PromptInput & {
   by?: number
   receipt?: { taskId: TaskId; callId: string }
 }
+
+/** Per manual compaction of @ultimate, keyed by its task: the wake-up task its hook created, so a replay creates none. */
+const WokenReceipt = defineDocFamily<{ task?: number }, null>({
+  kind: 'lineage.woken-receipt',
+  version: 1,
+  family: true,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
 
 // Commits with creation, closing the gap before the tool records its memo.
 const RootReceipts = defineDoc<{ roots: Record<string, number> }>({
@@ -1457,17 +1472,9 @@ export default function lineageExtension(host: ExtensionHost) {
             await host.harness().commit(async (tx) => {
               const id = api.conversationId
               if ((await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate !== id) return
-              const page = await tx.scanTasks(
-                { conversationId: id, kind: Woken.definition.name },
-                100,
-              )
-              if (
-                page.items.some(
-                  (task) => (task.input as { compaction: TaskId }).compaction === api.taskId,
-                )
-              )
-                return
-              await tx.createTask(
+              const receipt = await tx.doc(WokenReceipt, id, String(api.taskId), null)
+              if (receipt.task !== undefined) return
+              receipt.task = await tx.createTask(
                 Woken,
                 { id, compaction: api.taskId },
                 { conversationId: id, ownership: { kind: 'conversation' }, background: true },

@@ -48,7 +48,13 @@ async function fixture(settings?: object) {
   }
   const server = await fauxServer({ ultimateRoot, home, userHome: home })
   servers.push(server)
-  const state = { memorize: '{"ops":[]}', asked: [] as string[], condensed: [] as string[] }
+  const state = {
+    memorize: '{"ops":[]}',
+    asked: [] as string[],
+    condensed: [] as string[],
+    // Holds a compaction's summary request until it resolves.
+    gate: undefined as Promise<void> | undefined,
+  }
   const route: FauxResponseFactory = async (transcript) => {
     server.host.faux!.appendResponses([route])
     const [system, first] = transcript.messages
@@ -56,8 +62,10 @@ async function fixture(settings?: object) {
       state.asked.push(textOf(first.content))
       return fauxAssistantMessage(state.memorize)
     }
-    if (system?.role === 'system' && textOf(system.content).startsWith('You condense'))
+    if (system?.role === 'system' && textOf(system.content).startsWith('You condense')) {
       state.condensed.push(textOf(first.content))
+      await state.gate
+    }
     // Titles, reply summaries and compactions carry a system prompt of their own.
     if (system?.role === 'system' && textOf(system.content)) return fauxAssistantMessage('{}')
     const last = transcript.messages.findLast((message) => message.role === 'user')
@@ -444,7 +452,7 @@ it.concurrent('ends a compaction of @ultimate with its project memory', async ()
 })
 
 it.concurrent('wakes @ultimate once after its manual compaction, never after an automatic one', async () => {
-  const { server } = await fixture()
+  const { server, state } = await fixture()
   const ultimate = await server.harness.createConversation(
     { ownership: { kind: 'ownerless' } },
     context,
@@ -506,6 +514,23 @@ it.concurrent('wakes @ultimate once after its manual compaction, never after an 
   expect(view.entries[0].data).toEqual({ reason: 'manual' })
   const last = (await ultimate.context(context)).entries.at(-1)!
   expect(last.kind).toBe('pi.assistant')
+
+  // A summary that goes stale, because a reset replaced its context while it was written, wakes nothing.
+  await fill(20)
+  const release = Promise.withResolvers<void>()
+  state.gate = release.promise
+  const asked = state.condensed.length
+  const stale = await ultimate.compact(undefined, context)
+  await until(() => state.condensed.length > asked)
+  await ultimate.reset(undefined, context)
+  release.resolve()
+  await server.harness.waitForTask(stale, context)
+  await until(async () => (await wakeTasks()).every((task) => task.state.status === 'terminal'))
+  expect((await wakeTasks()).map((task) => task.input)).toContainEqual({
+    id: ultimate.id,
+    compaction: stale,
+  })
+  expect(await kinds()).toEqual(['pi.reset'])
 })
 
 it.concurrent('completes a landing task without asking when no summary model runs', async () => {
