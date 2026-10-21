@@ -87,7 +87,11 @@ it('commits backups with their parent, refuses a stale one with the Worker’s s
   expect((refused as Conflict).message).toBe(
     'laptop backed up app after this machine last did; restore its backup or back up anyway to replace it',
   )
-  expect((refused as Conflict).latest).toBe(second.id)
+  expect((refused as Conflict).latest).toEqual({
+    id: second.id,
+    machine: 'laptop',
+    at: second.at,
+  })
   expect(classify(refused)).toBe('conflict')
   expect(await readFile(backupPath(a.home), 'utf8')).toBe(before)
   // The refused upload's chunks stay for the Worker's retention.

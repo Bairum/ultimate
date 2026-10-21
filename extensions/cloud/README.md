@@ -29,7 +29,8 @@ needs `Authorization: Bearer <ULTIMATE_CLOUD_TOKEN>`; `<p>` is the SHA-256 hex o
 - `PUT|GET /sync/snapshots/<p>/<id>/<name>`: the encrypted objects of one backup (`snapshot.ts`).
 - `POST /sync/backups/<p>/<id>` `{ key, name, machine, parent, force?, createdAt, bytes, uploaded, tailnet?, health? }`,
   after the manifest is up: makes `<id>` the project's latest backup. `200 { latest }`, or `409 { error, latest }` when
-  `parent` is not the project's latest (`error` is a sentence for the user).
+  `parent` is not the project's latest (`error` is a sentence for the user, `latest` the register's
+  `{ id, machine, at, bytes, uploaded, parent, tailnet? }`).
 - `GET /sync/register`: `{ projects: [{ hash, key, name, latest }], machines: [{ machine, at, health?, projects }] }`.
 
 **Back up now** (`backup { force? }`, user-only) uploads an encrypted snapshot of the open database and the `ultimate/*`

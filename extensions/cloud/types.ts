@@ -20,7 +20,7 @@ export interface CloudState {
   backup?: { done: number; total: number; uploaded: number }
   /**
    * The last backup was refused: another machine backed up after this home's parent. `error` is the Worker's sentence;
-   * `latest` names the backup a forced one replaces, when the register knows it.
+   * `latest` names the backup a forced one replaces, as the Worker's 409 names it.
    */
   conflict?: { error: string; latest?: { id: string; machine: string; at: number } }
   lastError?: string

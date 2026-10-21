@@ -53,11 +53,10 @@ export function cloudStub(token = 'dev') {
       if (!objects.has(`${hash}/${id}/manifest`))
         return json(400, { error: 'The backup has no manifest' })
       const project = register.projects.find((entry) => entry.hash === hash)
-      const latest = project?.latest.id ?? null
-      if (latest !== body.parent && !body.force)
+      if ((project?.latest.id ?? null) !== body.parent && !body.force)
         return json(409, {
           error: `${project!.latest.machine} backed up ${body.name} after this machine last did; restore its backup or back up anyway to replace it`,
-          latest,
+          latest: project!.latest,
         })
       const next = {
         id,

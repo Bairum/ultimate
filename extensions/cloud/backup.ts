@@ -27,10 +27,13 @@ export async function readBackup(home: string, key: string) {
 }
 export const writeBackup = (home: string, file: BackupFile) => writeJson(backupPath(home), file)
 
+/** The backup a forced one replaces, as the Worker's 409 names it. */
+export type Latest = Pick<LastBackup, 'id' | 'machine' | 'at'>
+
 /** The Worker refused the commit: another machine backed up after `parent`. `message` is its sentence. */
 export class Conflict extends Error {
-  readonly latest: string | null
-  constructor(message: string, latest: string | null) {
+  readonly latest: Latest | undefined
+  constructor(message: string, latest: Latest | undefined) {
     super(message)
     this.latest = latest
   }
@@ -101,10 +104,16 @@ export async function backUp(o: BackupOptions): Promise<LastBackup> {
     },
   )
   if (response.status === 409) {
-    const body = (await response.json().catch(() => ({}))) as { error?: unknown; latest?: unknown }
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: unknown
+      latest?: Partial<Latest> | null
+    }
+    const { id, machine, at } = body.latest ?? {}
     throw new Conflict(
       typeof body.error === 'string' ? body.error : 'Another machine backed up this project first',
-      typeof body.latest === 'string' ? body.latest : null,
+      typeof id === 'string' && typeof machine === 'string' && typeof at === 'number'
+        ? { id, machine, at }
+        : undefined,
     )
   }
   if (!response.ok)

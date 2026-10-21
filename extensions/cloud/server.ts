@@ -5,7 +5,7 @@ import type { JsonValue } from '@earendil-works/chord'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { EventToken } from '../../shared/events.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { cloudConfig, fetchRegister } from '../../lib/cloud.ts'
+import { cloudConfig } from '../../lib/cloud.ts'
 import { projectIdentity } from '../../lib/project-identity.ts'
 import { readSecret } from '../../lib/secrets.ts'
 import { HealthApi } from '../health/api.ts'
@@ -54,14 +54,6 @@ async function record<D extends JsonValue>(host: ExtensionHost, event: EventToke
     .harness()
     .commit((tx) => host.emit(tx, event, data), context)
     .catch((error: unknown) => host.notice(`Cloud backup: ${String(error)}`))
-}
-
-/** The backup a forced one replaces, from the register; undefined when it cannot be read. */
-async function latestIn(config: { url: string; token: string }, key: string) {
-  // The conflict's own sentence already names the machine; the register only adds the confirm's details.
-  const register = await fetchRegister(config).catch(() => undefined)
-  const latest = register?.projects.find((project) => project.key === key)?.latest
-  return latest && { id: latest.id, machine: latest.machine, at: latest.at }
 }
 
 const runningIn = (host: ExtensionHost) => host.resource('cloud.backup', (): Running => ({}))
@@ -125,8 +117,7 @@ async function upload(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (error instanceof Conflict) {
-      const latest = await latestIn(ready.config, ready.key)
-      running.conflict = { error: message, ...(latest ? { latest } : {}) }
+      running.conflict = { error: message, ...(error.latest ? { latest: error.latest } : {}) }
       running.lastError = undefined
     } else {
       running.conflict = undefined
