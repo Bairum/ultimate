@@ -279,7 +279,7 @@ async function launch(subagents = false, initialIntent = false, root = false, br
       servers.splice(servers.indexOf(server), 1)
       const prepared = await prepareFauxServer(options)
       install(prepared.host.registry)
-      server = { ...prepared, ...(await prepared.go())! }
+      server = { ...prepared, ...(await prepared.go()) }
       const close = server.close.bind(server)
       server.close = async () => {
         await server.vite.watcher.close()

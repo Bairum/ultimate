@@ -35,7 +35,7 @@ import { discoverAgents } from '../../lib/agents.ts'
 import { apiSource, apiSummaries } from '../../lib/api-files.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { ActionContext } from '../../server/actions.ts'
-import { READ_BYTES, READS, readProject, STANDBY } from './projects.ts'
+import { READ_BYTES, READS, readProject } from './projects.ts'
 import type { Read } from './projects.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
@@ -399,7 +399,6 @@ export const actions = {
     const { op, args } = (input ?? {}) as { op?: unknown; args?: unknown }
     if (!READS.includes(op as Read)) throw new Error(`op must be one of ${READS.join(', ')}`)
     if (args !== undefined && !Array.isArray(args)) throw new Error('args must be an array')
-    if (host.standby()) throw new Error(STANDBY)
     const value = await localReads(host, withAbortSignal(signal, BACKGROUND_CONTEXT))[op as Read](
       args ?? [],
     )

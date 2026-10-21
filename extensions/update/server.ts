@@ -273,7 +273,7 @@ async function landing(host: ExtensionHost) {
       .harness()
       .snapshot(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID, context)
   } catch {
-    // Storage is closed (standby, a switch): nothing lands from this home meanwhile.
+    // Storage is closed (a core swap): nothing lands from this home meanwhile.
     return undefined
   }
   const root = await realpath(host.ultimateRoot)
@@ -287,7 +287,7 @@ async function record<D extends JsonValue>(host: ExtensionHost, event: EventToke
   try {
     await host.harness().commit((tx) => host.emit(tx, event, data), context)
   } catch (error) {
-    // Storage is closed (standby, a switch) or the commit failed: the update itself stands, only its record is lost.
+    // Storage is closed (a core swap) or the commit failed: the update itself stands, only its record is lost.
     host.notice(`Update event: ${String(error)}`)
   }
 }

@@ -147,8 +147,6 @@ export interface SystemInfo {
   extensions: ExtensionInfo[]
   skills: { name: string; description: string; path: string }[]
   contextFiles: string[]
-  /** Present while the server runs without storage: the parsed `<home>/standby.json`, such as `{ reason }`. */
-  standby?: JsonObject
 }
 export interface Notice {
   level: 'info' | 'warning' | 'error'

@@ -143,65 +143,6 @@ async function runAction(
   }
 }
 
-/**
- * The API while the server runs without storage: `/api/events` streams `system` and notices, extension actions without
- * a conversation run, and everything else answers 503 `{ error: 'standby', standby }`.
- */
-export function createStandbyApi(
-  events: Events,
-  system: Awaited<ReturnType<typeof createSystem>>,
-  extensions: Extensions,
-  access: Access,
-  standby: () => JsonObject | undefined,
-) {
-  const streams = new Set<() => void>()
-  return {
-    async handle(request: IncomingMessage, response: ServerResponse) {
-      const url = new URL(request.url ?? '/', 'http://localhost')
-      if (!url.pathname.startsWith('/api/')) return false
-      try {
-        if (
-          !(await admit(request, new URL(system.current().process.url).port || '80', access.rules))
-        )
-          throw new HttpError(403, 'Forbidden')
-        if (request.method === 'GET' && url.pathname === '/api/events') {
-          const stream = eventStream(response)
-          const send: Parameters<typeof events.listeners.add>[0] = (name, data) => {
-            if (name === 'system' || name === 'notice') stream.send(name, data)
-          }
-          const stop = () => {
-            events.listeners.delete(send)
-            streams.delete(stop)
-            stream.end()
-          }
-          stream.send('system', system.current())
-          events.listeners.add(send)
-          streams.add(stop)
-          response.on('close', stop)
-          if (request.destroyed || response.destroyed) stop()
-          return true
-        }
-        const action = actionPath.exec(url.pathname)
-        if (request.method === 'POST' && action) {
-          const data = await body(request)
-          if (data.conversationId === undefined) {
-            await runAction(request, response, extensions, action, data)
-            return true
-          }
-        }
-        reply(response, 503, { error: 'standby', standby: standby() })
-      } catch (error) {
-        failed(response, error)
-      }
-      return true
-    },
-    /** End the open streams, so their clients reconnect to whatever serves next. */
-    close() {
-      for (const stop of streams) stop()
-    },
-  }
-}
-
 export async function createApi(
   host: PreparedHost,
   opened: OpenHost,

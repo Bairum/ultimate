@@ -22,7 +22,6 @@ import { ExtensionErrors, Slot } from './boundary.tsx'
 import { useShortcuts } from './keyboard.ts'
 import { CommandPalette } from './palette.tsx'
 import { Conversation, Header, StatusLine } from './primitives.tsx'
-import { Standby } from './standby.tsx'
 import { SurfaceContext } from './surface.ts'
 import { TitleBar, projectTitle } from './titlebar.tsx'
 
@@ -150,7 +149,6 @@ export function App() {
   const home = surfaceItems(records).find((item) => item.id === HOME)
   const shown = useStore((state) => state.ui.surface)
   const viewed = useStore((state) => state.view !== undefined)
-  const standby = useStore((state) => state.system?.standby)
   useDocumentTitle(shown)
   // The surface and its conversation are on screen: what a reload resumes, and what a resumed reload uncovers.
   useEffect(() => {
@@ -177,15 +175,6 @@ export function App() {
   const line = [surface, surface?.id === HOME ? undefined : home].filter(
     (item): item is SurfaceItem => item !== undefined,
   )
-  // Without storage there is nothing to show or command, only why and the extensions' way back.
-  if (standby)
-    return (
-      <TooltipProvider delayDuration={400}>
-        {loaded && <Standby standby={standby} />}
-        <ExtensionErrors />
-        <Slot name="overlay" />
-      </TooltipProvider>
-    )
   return (
     <TooltipProvider delayDuration={400}>
       <div className="flex h-dvh flex-col">

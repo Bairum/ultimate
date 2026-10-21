@@ -14,8 +14,6 @@ export const READS = ['conversations', 'entries', 'search', 'trace', 'traceTree'
 export type Read = (typeof READS)[number]
 /** At most this much JSON comes back from another project; a larger answer asks for a smaller `limit`. */
 export const READ_BYTES = 1024 * 1024
-/** `codemode.read`'s error on an instance serving standby, which has no storage open. */
-export const STANDBY = 'standby: this instance serves without storage'
 
 type LocalProject = { name: string; root?: string; current: boolean; running?: { url: string } }
 type Target = { current: true } | { url: string; label: string }
@@ -88,18 +86,16 @@ export async function readProject(
   const register = cloud ? await fetchRegister(cloud) : undefined
   const target = resolveProject(project, local, register)
   if ('current' in target) return undefined
-  const answer = await post(target, op, args, signal)
-  if (answer.standby) throw new Error(`${project} is on standby at ${target.url}`)
-  return { value: answer.value }
+  return { value: await post(target, op, args, signal) }
 }
 
-/** Ask `target`'s `codemode.read`; `standby` when that instance serves without storage. */
+/** Ask `target`'s `codemode.read`. */
 async function post(
   target: { url: string; label: string },
   op: Read,
   args: JsonValue[],
   signal?: AbortSignal,
-): Promise<{ value?: unknown; standby?: true }> {
+): Promise<unknown> {
   const response = await fetch(`${target.url}/api/extensions/codemode/actions/read`, {
     method: 'POST',
     // The instance admits its own origin; on the tailnet, Serve's identity header names who asks.
@@ -123,7 +119,6 @@ async function post(
     throw new Error(
       `${target.label} refused the read (403): your tailnet login is not in its tailscale.allow`,
     )
-  if (!response.ok && body.error === STANDBY) return { standby: true }
   if (!response.ok) throw new Error(`${target.label}: ${body.error ?? response.status}`)
-  return { value: body.result }
+  return body.result
 }

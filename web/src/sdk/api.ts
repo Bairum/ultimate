@@ -125,7 +125,7 @@ export function createApi(store: Store, options: { fetch?: typeof fetch } = {}) 
     restart: () => post<unknown>('/api/restart'),
     /**
      * Call the action `ref` names (`export const actions` in its extension's `server.ts`, typed in its `refs.ts`)
-     * with JSON `args`, on behalf of the shown conversation (none on standby), and resolve with its result. Rejects
+     * with JSON `args`, on behalf of the shown conversation, and resolve with its result. Rejects
      * with `ActionError`; an uncaught rejection shows as a notice. Aborting `signal` aborts the action's processes too; `keepalive` lets the call outlive the page, such as
      * one sent on `pagehide`.
      */
@@ -138,7 +138,7 @@ export function createApi(store: Store, options: { fetch?: typeof fetch } = {}) 
       const path = `/api/extensions/${encodeURIComponent(extension)}/actions/${encodeURIComponent(name)}`
       const body: ExtensionActionRequest = {
         args: args ?? null,
-        conversationId: conversationId ?? (store.getState().system?.standby ? undefined : shown()),
+        conversationId: conversationId ?? shown(),
       }
       try {
         const { result } = await post<ExtensionActionResponse>(path, body, { signal, keepalive })

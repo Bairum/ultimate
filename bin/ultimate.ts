@@ -2,7 +2,7 @@
 import { fork, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, readFile, realpath } from 'node:fs/promises'
+import { mkdir, realpath } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import { projectHome } from '../server/project.ts'
 import { acquireLock, readOwner, retireStorageOwner, pause } from '../server/lock.ts'
@@ -36,35 +36,10 @@ if (positionals.length > 1)
 const opening = !values['no-open'] && process.env.ULTIMATE_NO_OPEN !== '1'
 const available = (name: string) =>
   process.env.PATH?.split(':').some((path) => existsSync(join(path, name)))
-/**
- * The machine running this project, when this checkout is on standby: its tailnet address from `cloud-writer.json`
- * (written by the cloud extension), if it answers within two seconds. Any HTTP answer counts; a timeout or a network
- * error opens the local standby page instead.
- */
-async function writer(): Promise<{ machine: string; url: string } | undefined> {
-  try {
-    const { machine, tailnet } = JSON.parse(
-      await readFile(join(home, 'cloud-writer.json'), 'utf8'),
-    ) as { machine?: unknown; tailnet?: unknown }
-    if (typeof machine !== 'string' || typeof tailnet !== 'string') return undefined
-    const url = new URL(tailnet)
-    if (url.protocol !== 'https:' || !url.hostname.endsWith('.ts.net')) return undefined
-    await fetch(url, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(2000) })
-    return { machine, url: url.origin }
-  } catch {
-    // No writer recorded (this machine writes, or sync is off), or the tailnet does not reach it: open locally.
-    return undefined
-  }
-}
-/**
- * Opens a chromeless app window, like an installed web app, in the first Chrome-family browser; else a tab. On standby
- * it opens the machine running the project over the tailnet when that answers.
- */
-async function openWindow(port: number) {
-  const remote = await writer()
-  if (remote) console.log(`Opening ${remote.machine}: ${remote.url}`)
-  const app = remote?.url ?? `http://ultimate.localhost:${port}`
-  const tab = remote?.url ?? `http://127.0.0.1:${port}`
+/** Opens a chromeless app window, like an installed web app, in the first Chrome-family browser; else a tab. */
+function openWindow(port: number) {
+  const app = `http://ultimate.localhost:${port}`
+  const tab = `http://127.0.0.1:${port}`
   let command = process.platform === 'darwin' ? 'open' : 'xdg-open'
   let args = [tab]
   if (process.platform === 'darwin') {
@@ -113,7 +88,7 @@ const lock = await acquireLock(lockPath, {
   // Starting a running project again opens its window.
   const owner = opening && (await readOwner(lockPath))
   if (owner && owner.port !== undefined && String(error).includes('already running')) {
-    await openWindow(owner.port)
+    openWindow(owner.port)
     process.exit(0)
   }
   console.error(String(error))
@@ -408,7 +383,7 @@ async function start(core: Core) {
   if (!announced) {
     announced = true
     display.log('info', 'supervisor', `Ultimate: ${publicUrl}`)
-    if (opening) void openWindow(publicPort)
+    if (opening) openWindow(publicPort)
   }
 }
 async function swap(old: Core, requestId: string, previousBuild?: BuildInfo) {

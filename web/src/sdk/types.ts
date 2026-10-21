@@ -15,7 +15,6 @@ export type SlotName =
   | 'composer.status'
   | 'conversation.overlay'
   | 'overlay'
-  | 'standby'
 
 /** A slot component, optionally with an `order` (default 0; ties keep folder-name order). */
 export type Contribution = ComponentType | { component: ComponentType; order?: number }

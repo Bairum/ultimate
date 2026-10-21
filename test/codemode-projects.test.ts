@@ -142,13 +142,10 @@ it('caps an answer at 1 MiB of encoded JSON, counting multibyte characters as by
   // 400k three-byte characters: under 1 Mi characters, over 1 MiB.
   const big = [{ name: '€'.repeat(400_000) }]
   const host = {
-    standby: () => undefined,
     trace: { query: () => big, tree: () => [] },
   } as unknown as ExtensionHost
   const ctx = { host, signal: new AbortController().signal } as ActionContext
   await expect(actions.read({ op: 'trace', args: [] }, ctx)).rejects.toThrow('larger than 1 MiB')
-  const parked = { ...ctx, host: { ...host, standby: () => ({}) } as unknown as ExtensionHost }
-  await expect(actions.read({ op: 'trace', args: [] }, parked)).rejects.toThrow('standby')
 })
 
 it('names the machine when the project cannot be reached, and never offers a copy', () => {

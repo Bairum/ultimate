@@ -140,7 +140,7 @@ export async function announce(host: Pick<ExtensionHost, 'harness' | 'emit'>, fl
   try {
     harness = host.harness()
   } catch {
-    // Storage is closed (standby, a switch): the next write that flips a state is announced.
+    // Storage is closed (a core swap): the next write that flips a state is announced.
     return
   }
   await harness

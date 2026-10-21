@@ -66,23 +66,10 @@ export type ExtensionHost = Pick<
   resource<T>(key: string, create: () => T): T
   /** Run `callback` each time the harness opens, at once when it is open; the server serves once it settles. */
   onOpen(callback: () => Promise<void>): void
-  /** Run `callback` each time before the harness closes while the process stays: on deactivate and on a core swap. */
+  /** Run `callback` each time before the harness closes while the process stays: on a core swap. */
   onRelease(callback: () => Promise<void>): void
   onClose(cleanup: () => Promise<void>): void
   harness(): Harness
-  /** The parsed `<home>/standby.json` while the server runs without storage, otherwise undefined. */
-  standby(): JsonObject | undefined
-  /**
-   * Close storage and serve standby: runs the `onRelease` callbacks, closes the API and the harness, writes
-   * `standby.json` with `info`, then awaits `park(database)` while nothing has the database open. Does nothing in
-   * standby. A failing `park` leaves standby in place and rejects.
-   */
-  deactivate(info: JsonObject, park?: (database: string) => Promise<void>): Promise<void>
-  /**
-   * Leave standby: awaits `install(database)` while storage is closed, removes `standby.json`, then opens the harness,
-   * runs the `onOpen` callbacks and serves. Does nothing while open.
-   */
-  activate(install?: (database: string) => Promise<void>): Promise<void>
   system(): SystemInfo
   /** Summaries of every conversation, as the web's conversation list shows them; empty until the harness is open. */
   conversations(): ConversationSummary[]
@@ -121,10 +108,7 @@ export async function loadExtensions(
   vite: ViteDevServer,
   host: PreparedHost,
   changed: () => void | Promise<void>,
-  runtime: Pick<
-    ExtensionHost,
-    'harness' | 'system' | 'conversations' | 'access' | 'standby' | 'deactivate' | 'activate'
-  >,
+  runtime: Pick<ExtensionHost, 'harness' | 'system' | 'conversations' | 'access'>,
   watch: Watch,
   notice: (message: string) => void = () => {},
 ) {
@@ -375,9 +359,6 @@ export async function loadExtensions(
     skills: (cwd) => host.skills(cwd),
     restart: (approved) => host.restart(approved),
     harness: runtime.harness,
-    standby: runtime.standby,
-    deactivate: runtime.deactivate,
-    activate: runtime.activate,
     system: runtime.system,
     conversations: runtime.conversations,
     projects: () => projects(host.userHome, host.home),
