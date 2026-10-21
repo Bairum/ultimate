@@ -396,13 +396,19 @@ function globals(
       signature:
         '(kind: string, conversationId?: number, options?: { project?: string }): Promise<unknown>',
       // Another project has no conversation of yours to default to: it reads conversation 1 unless one is named.
-      execute: (values, options) => {
-        const [kind, conversation, rest] = values as [unknown, unknown, unknown]
-        const remote = !!rest && typeof rest === 'object' && 'project' in rest
-        return read('doc', 2)(
-          [kind, conversation ?? (remote ? ROOT_CONVERSATION_ID : conversationId), rest ?? {}],
-          options,
-        )
+      execute: async (values, { signal }) => {
+        const [kind, conversation, options] = values as [unknown, unknown, unknown]
+        const project =
+          options && typeof options === 'object' && 'project' in options
+            ? options.project
+            : undefined
+        if (project !== undefined) {
+          if (typeof project !== 'string' || !project) throw new Error('project must be nonempty')
+          const args = [kind, conversation ?? ROOT_CONVERSATION_ID] as JsonValue[]
+          const remote = await readProject(host, project, 'doc', args, signal)
+          if (remote) return remote.value
+        }
+        return reads.doc([kind, conversation ?? conversationId])
       },
     },
   ]

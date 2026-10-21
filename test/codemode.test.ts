@@ -552,9 +552,24 @@ it("reads another running project's history through its API, and names a project
     const found = await ultimate.search(needle, { project: 'poe2-rust', limit: 1 });
     const tail = await ultimate.entries(list[0].id, { project: 'POE2-RUST', kinds: ['pi.user'], limit: 1 });
     const own = await ultimate.search(needle);
-    return { found: found.length, tail: tail[0].kind, own: own.length };`,
+    const theirs = await ultimate.doc('codemode.store', undefined, { project: 'poe2-rust' });
+    return { found: found.length, tail: tail[0].kind, own: own.length, theirs: JSON.stringify(theirs) };`,
   )
-  expect(asked.data.details.value).toEqual({ found: 1, tail: 'pi.user', own: 0 })
+  // Their conversation 1 ran a script but stored nothing.
+  expect(asked.data.details.value).toEqual({
+    found: 1,
+    tail: 'pi.user',
+    own: 0,
+    theirs: '{}',
+  })
+  // Naming this project reads here, defaulting to the calling conversation as without a project.
+  await run(server, `store('here-key', 1); return 1`)
+  const stored = await run(
+    server,
+    `const here = (await ultimate.projects()).find((p) => p.current).name;
+    return await ultimate.doc('codemode.store', undefined, { project: here });`,
+  )
+  expect(JSON.stringify(stored.data.details.value)).toContain('here-key')
   await other.close()
   servers.splice(servers.indexOf(other), 1)
   await rm(join(projects, 'poe2-rust-1/ultimate.lock'))
