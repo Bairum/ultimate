@@ -148,7 +148,10 @@ export function Restore() {
     if (surface === 'subscriptions') returnTo.current = shown.current
     else if (before === 'subscriptions') {
       const to = returnTo.current
-      if (!keepAgent && to !== undefined && to !== conversationId) switchConversation(to)
+      // Only undo what the surface did: a conversation picked on the way out (the @ultimate button) stays; one
+      // picked just after leaving lands after this switch and wins too.
+      const agent = poll.state.data?.some((sub) => sub.conversationId === conversationId)
+      if (!keepAgent && agent && to !== undefined && to !== conversationId) switchConversation(to)
       keepAgent = false
       returnTo.current = undefined
     }

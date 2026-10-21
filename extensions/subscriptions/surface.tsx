@@ -58,9 +58,11 @@ export function Subscriptions() {
   const { conversationId, switchConversation } = useUltimate()
   const phone = useViewport() === 'phone'
   const list = data ?? []
-  // The agent shown in the shell picks the subscription, so following a link into one selects it here too.
-  const byShown = list.find((sub) => sub.conversationId === conversationId)
-  const selected = byShown ?? list.find((sub) => sub.id === stored) ?? (phone ? undefined : list[0])
+  // An explicit pick wins; without one, the agent shown in the shell picks its subscription.
+  const selected =
+    list.find((sub) => sub.id === stored) ??
+    list.find((sub) => sub.conversationId === conversationId) ??
+    (phone ? undefined : list[0])
   const select = (sub: SubscriptionListItem) => {
     setSelected(sub.id)
     switchConversation(sub.conversationId)
@@ -357,16 +359,17 @@ function Script({
           }}
           ref={scroller}
         >
+          {log.error && (
+            <div className="text-destructive">Could not read output: {errorMessage(log.error)}</div>
+          )}
           {output ? (
             <Output text={output} />
           ) : (
-            <span className={log.error ? 'text-destructive' : 'text-muted-foreground/70'}>
-              {log.error
-                ? `Could not read output: ${errorMessage(log.error)}`
-                : sub.state === 'writing'
-                  ? 'no output yet · the agent is writing run'
-                  : 'no output'}
-            </span>
+            !log.error && (
+              <span className="text-muted-foreground/70">
+                {sub.state === 'writing' ? 'no output yet · the agent is writing run' : 'no output'}
+              </span>
+            )
           )}
           {running && (
             <span className="ml-px inline-block h-3.5 w-1.5 animate-pulse-dot bg-success align-middle" />
@@ -374,6 +377,11 @@ function Script({
         </pre>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto bg-terminal">
+          {script.error && script.data?.text && (
+            <p className="px-3 pt-2 text-destructive">
+              Could not read run: {errorMessage(script.error)}
+            </p>
+          )}
           {script.data?.text ? (
             <CodeBlock
               className="rounded-none border-none bg-transparent"
