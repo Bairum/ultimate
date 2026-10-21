@@ -20,6 +20,7 @@ import {
   UsageDoc,
 } from '@earendil-works/pi-durable'
 import type {
+  CompactionResult,
   ConversationId,
   ConversationRecord,
   Cursor,
@@ -38,7 +39,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import type { LandedData } from '../workspaces/api.ts'
 import { Branch, Branched, LineageApi, Rooted, Roots } from './api.ts'
-import { Compacted, ConversationsApi, Release, Trees } from '../conversations/api.ts'
+import { ConversationsApi, Release, Trees } from '../conversations/api.ts'
 import { Standing, Started, Subagents } from '../subagents/api.ts'
 
 /** The fields of a Board message the landed-branch check reads. */
@@ -640,25 +641,34 @@ function lineage(host: ExtensionHost) {
       if ((await tx.doc(LiveDoc, child.conversationId)).run) return true
     return false
   }
-  /** Wakes @ultimate after a manual compaction of it: one input per summary entry, queued behind a running turn. */
-  const Woken = defineTask<{ id: ConversationId; entry: number }, { phase: 'deliver' }, null>({
+  /**
+   * Wakes @ultimate once its manual compaction `compaction` placed a summary: one follow-up input, queued behind a
+   * running turn and the summary itself. Created by the compaction's own hook, so no crash between them loses it.
+   */
+  const Woken = defineTask<{ id: ConversationId; compaction: TaskId }, { phase: 'deliver' }, null>({
     name: 'lineage.woken',
     version: 1,
     initial: () => ({ phase: 'deliver' }),
     phases: {
       deliver: async (task, runtime, ctx) => {
-        const { id, entry } = task.input
-        // Keyed by the summary entry, so a rerun after a crash finds the input it already submitted.
-        await (await host.harness().conversation(id, ctx))!.submit(
-          {
-            type: 'input',
-            content: WOKEN_TEXT,
-            whenBusy: 'followUp',
-            requestId: `lineage:woken:${entry}`,
-            entry: { kind: 'lineage.woken', data: { entry } },
-          },
-          ctx,
-        )
+        const { id, compaction } = task.input
+        const settled = await runtime.waitForTask(compaction as TaskId<CompactionResult>, ctx)
+        const placed =
+          settled.state.outcome.status === 'completed' &&
+          (settled.state.outcome.result.entryId !== undefined ||
+            settled.state.outcome.result.submissionId !== undefined)
+        // Keyed by the compaction, so a rerun after a crash finds the input it already submitted.
+        if (placed)
+          await (await host.harness().conversation(id, ctx))!.submit(
+            {
+              type: 'input',
+              content: WOKEN_TEXT,
+              whenBusy: 'followUp',
+              requestId: `lineage:woken:${compaction}`,
+              entry: { kind: 'lineage.woken', data: {} },
+            },
+            ctx,
+          )
         await runtime.commit(() => done, ctx)
       },
     },
@@ -1360,22 +1370,6 @@ export default function lineageExtension(host: ExtensionHost) {
     await conversations.generatedTitle(tx, id, intentLine(data.intent))
   })
   const { Notify, Prompt, LandingNote, ConcludeLanded, Woken } = lineage(host)
-  // A manual compaction of @ultimate ends with a wake-up; an automatic one continues the run it interrupted.
-  host.react(
-    'woken',
-    [Compacted],
-    async (tx, { data }) => {
-      if (data.reason !== 'manual') return
-      if ((await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate !== data.conversation) return
-      const id = data.conversation as ConversationId
-      await tx.createTask(
-        Woken,
-        { id, entry: data.entry },
-        { conversationId: id, ownership: { kind: 'conversation' }, background: true },
-      )
-    },
-    { from: 'now' },
-  )
   // A landed branch is done: conclude it once its report run ends. Background, in the submitter's conversation.
   host.react('conclude-landed', [SubmissionLanded], async (tx, { data: landing }) => {
     const id = landing.conversationId as ConversationId
@@ -1458,6 +1452,27 @@ export default function lineageExtension(host: ExtensionHost) {
             .harness()
             .commit((tx) => tx.conversation(api.conversationId), ctx)
           if (!record || record.owner) return undefined
+          // A manual compaction of @ultimate ends with a wake-up; an automatic one continues the run it interrupted.
+          if (compaction.reason === 'manual')
+            await host.harness().commit(async (tx) => {
+              const id = api.conversationId
+              if ((await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate !== id) return
+              const page = await tx.scanTasks(
+                { conversationId: id, kind: Woken.definition.name },
+                100,
+              )
+              if (
+                page.items.some(
+                  (task) => (task.input as { compaction: TaskId }).compaction === api.taskId,
+                )
+              )
+                return
+              await tx.createTask(
+                Woken,
+                { id, compaction: api.taskId },
+                { conversationId: id, ownership: { kind: 'conversation' }, background: true },
+              )
+            }, ctx)
           let summary = await api.memo<string>('lineage.summary', ctx)
           if (summary === undefined) {
             const agent = await (await host.harness().conversation(api.conversationId, ctx))!.agent(
@@ -1624,6 +1639,9 @@ export default function lineageExtension(host: ExtensionHost) {
           'Compact your own context: older turns become a summary, recent ones stay verbatim, full history stays in storage. Use instructions to guide the summary. It runs after this turn; end the turn, and you are woken once it is done.',
         parameters: Type.Object({ instructions: Type.Optional(Type.String()) }),
         async execute({ instructions }, api, ctx) {
+          const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
+          if (standing?.ultimate !== api.conversationId)
+            throw new Error('Only @ultimate compacts itself with compact')
           if (
             await api.commit(
               (tx) => liveTask(tx, api.conversationId, CompactionTask.definition.name),

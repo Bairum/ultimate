@@ -790,7 +790,7 @@ function demoCards(from: number): { kind: string; data: JsonObject }[] {
       kind: 'lineage.finished',
       data: { from, title: 'Landing demo', text: 'Landed `1a2b3c4` on `main`.' },
     },
-    { kind: 'lineage.woken', data: { entry: 1 } },
+    { kind: 'lineage.woken', data: {} },
     {
       kind: 'lineage.abstract',
       data: {

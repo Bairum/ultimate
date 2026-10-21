@@ -68,5 +68,4 @@ export type ReleaseService = {
 export const Release = defineApi<ReleaseService>()('conversations.release')
 /** Conversation subjects and the summary model; core, so `need` it. */
 export const ConversationsApi = defineApi<ConversationsService>()('conversations')
-export { Compacted } from './refs.ts'
 export const tier = 'core'
