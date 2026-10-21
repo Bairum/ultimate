@@ -5,9 +5,9 @@ board, and shows what optional extensions provide through points (`conversations
 Its UI state keeps the keys it had as part of conversations (`ext.conversations.*`).
 
 Every standing agent's row leads with its mark (conversations' `AgentMark`): a small tinted tile with a glyph — a brand
-`U` for @ultimate (the title bar's wordmark), a green merge for the lander, arrows for @sync,
+`U` for @ultimate (the title bar's wordmark), a green merge for the lander,
 a bot for any other resident — with a presence dot in its corner (pulsing while it works or lands, amber while it
-waits on you). Then a fixed display name (`Ultimate`, `Lander`, `Sync`, else the name capitalised) with
+waits on you). Then a fixed display name (`Ultimate`, `Lander`, else the name capitalised) with
 `@name` small and muted. The same mark sits in the title bar's button and before standing senders in chat bubbles.
 
 @ultimate has its own section at the very top: its row shows `working`, `idle` or an amber
@@ -60,7 +60,7 @@ lagging title/timestamp list.
 A solid purple dot means an unread reply, not ongoing work; only the pulsing dot means working.
 
 Every row reads one state from board's `conversationState`, the same the System surface shows: working;
-**waits on you** (only the primary agent, @ultimate or @sync in the machine home: an open question to the user);
+**waits on you** (only the primary agent, @ultimate: an open question to the user);
 **awaiting @ultimate** (amber question mark, never on a subagent: an open reply-expected message the conversation sent
 the primary agent); **done** (green check, subagents only: it answered, and its answer went to its parent);
 **failed** (red cross: its latest input ended unanswered); else idle. Working includes queued input. Standing rows,

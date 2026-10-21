@@ -10,7 +10,7 @@ button (a ⌘K command, or the Secrets panel at the missing secret).
 | Providers         | a provider's latest call on this machine failed (`health`)                                                                    | Log in again      |
 | Secrets           | an enabled extension lacks a secret it declares                                                                               | the Secrets panel |
 | Extensions        | an enabled extension's server facet failed to load                                                                            | Extensions panel  |
-| Cloud sync        | `cloud.url` is set but `ULTIMATE_CLOUD_TOKEN` or the snapshot key is missing                                                  | the Secrets panel |
+| Cloud backup      | `cloud.url` is set but `ULTIMATE_CLOUD_TOKEN` or the snapshot key is missing; `info` while unset                              | Join              |
 | Tailscale         | never; `info` while not published                                                                                             |                   |
 | Lander checks     | never; `info` while `lander.checks` is empty                                                                                  |                   |
 | Worktree setup    | the project is isolatable, has a package manifest, and no worktree setup                                                      |                   |
@@ -27,7 +27,7 @@ explicitly never falls back: the features are off and the row warns.
 
 ## The agent's note
 
-The primary agent (@ultimate, @sync in the machine home) hears about setup through a hidden `setup.note` entry placed
+The primary agent (@ultimate; the machine home has none) hears about setup through a hidden `setup.note` entry placed
 before an input that starts its run, by the patched `beforeInput` hook, only when its set of warnings differs from the
 one it last heard (`setup.seen`, per conversation), and once more with "resolved" when they clear. No system-prompt
 section, so the prompt stays cached. The check is cached for 30 seconds.

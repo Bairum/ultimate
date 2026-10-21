@@ -53,18 +53,14 @@ Only the machine home (`~/.ultimate/machine`) pings, never on faux. Every 10 min
 
 A ping asks the provider's cheapest available model (lowest `cost.input + cost.output`) `ping` with `maxTokens: 16`, one provider after another, and records `lastChecked` plus a success or failure. That is at most 24 pings per provider per day of about 20 tokens each. A `claude-code` ping starts the Claude Code CLI on its subscription.
 
-## Cloud report
+## In backups
 
-With cloud sync configured (`cloud.url` and `ULTIMATE_CLOUD_TOKEN`, see `cloud/README.md`), the machine home posts `MachineHealth` (`cloud/protocol.ts`: `{ machine, at, providers }`) to `POST /sync/health` after a tick that pinged and at least once an hour. A failed report is retried on the next tick.
+Every cloud backup carries `providers()` as its `health`, so the cloud's register shows each machine's provider health as of its last backup (`extensions/cloud/README.md`).
 
 ## Actions
 
 `state` returns `{ machine, providers: ProviderHealth[] }` for this machine (machine from cloud settings, else the hostname). A faux server answers a fixed demo: `openai-codex` ok, `anthropic` failing with `invalid_grant` 3 hours ago, `claude-code` unknown.
 
-## Feedback
-
-The write that turns a provider failing (from ok or unknown) calls the `health.feedback` extension point (`api.ts`) once, in the home whose call or ping made it; later failures of a failing provider call nothing until it worked again. Sync implements it in project homes, waking the project's @sync with one `sync.health` input; in the machine home nothing provides it.
-
 ## Status line
 
-In every home the `setup` status-line item lists a failing provider with its error (`providers()`). A move's checks step also refuses a failing default provider (`cloud/login.ts`).
+In every home the `setup` status-line item lists a failing provider with its error (`providers()`).

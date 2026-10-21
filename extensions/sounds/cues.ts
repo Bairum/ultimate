@@ -12,7 +12,7 @@ export const sounds: { sound: Sound; label: string }[] = [
 /** What is due to sound: `key` names the event, so it sounds once. */
 export type Cue = { key: string; sound: Sound }
 
-/** What the cues read about the primary agent (@ultimate, or @sync in the machine home): only it talks to the user. */
+/** What the cues read about the primary agent (@ultimate): only it talks to the user. */
 export type Watched = {
   /** The primary agent's conversation id, once it exists. */
   agent?: number

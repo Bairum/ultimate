@@ -27,7 +27,7 @@ export const waitingOnUser = (board: BoardData) =>
  * Where a conversation stands, the one state every view shows:
  * - `paused`: the host is paused and its run is parked: no task of it executes until Play;
  * - `working`: it runs, or has input queued;
- * - `waits`: the primary agent (@ultimate, @sync in the machine home) has a question open with the user, the only
+ * - `waits`: the primary agent (@ultimate) has a question open with the user, the only
  *   state that asks the user to act;
  * - `awaiting`: a conversation that is no subagent asked the primary agent (a branch asking @ultimate) and waits for
  *   the answer; a subagent's questions go to its parent, which answers them in its own run;
@@ -96,13 +96,10 @@ type Conversation = {
   parentConversationId?: number
   ownerTaskId?: number
 }
-/**
- * The primary standing agent's conversation, which reads as a chat with the user: @ultimate's, or @sync's, which is
- * resident only in the machine home.
- */
+/** The primary standing agent's conversation, which reads as a chat with the user: @ultimate's. */
 export const ultimateChat = (conversation: Conversation) =>
   conversation.label === 'agent' &&
-  (conversation.title === '@ultimate' || conversation.title === '@sync') &&
+  conversation.title === '@ultimate' &&
   conversation.parentConversationId === undefined &&
   conversation.ownerTaskId === undefined
 

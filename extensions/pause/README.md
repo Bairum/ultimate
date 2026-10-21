@@ -14,7 +14,7 @@ Automation fires are scheduler tasks, so the hold stops them. Timers that start 
 
 - the provider heartbeat (`health`);
 - the updater's background fetch (`update`);
-- cloud backups and moves (`cloud`): `backup`, `moveHere` and a move started by @sync refuse with "Ultimate is paused; press Play first".
+- cloud backups (`cloud`): **Back up now** refuses with "Ultimate is paused; press Play first".
 
 ## UI
 

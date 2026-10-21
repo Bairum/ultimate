@@ -41,9 +41,10 @@ A project is a forest of conversation trees, like commit histories.
 
 `extensions/lineage/README.md` has the mechanics.
 
-**The machine home** (`~/.ultimate/machine`, port 4700) is one small Ultimate per machine whose only standing agent is
-@sync: it sees the fleet and drives moves between machines (`extensions/sync/README.md`). @sync (`resident: everywhere`)
-also stands in every project, next to @ultimate, where this project's backups, moves and provider health report to it.
+**The machine home** (`~/.ultimate/machine`, port 4700) is one small Ultimate per machine with no standing agent; it
+keeps the provider heartbeat. **Cloud backups** (`extensions/cloud/README.md`): a project backs up to the user's Worker
+(the private repo `HazAT/ultimate-fleet`) from the status line, and `pnpm restore <name>` installs a backup on another
+machine.
 
 ## Layers and how they reload
 

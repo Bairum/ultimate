@@ -1,6 +1,6 @@
 # Sounds
 
-Short, soft notification sounds when @ultimate talks to you (@sync in the machine home): a question (needs input), a
+Short, soft notification sounds when @ultimate talks to you: a question (needs input), a
 finished answer, or a failed run. "sounds" in the status bar opens a switch for all of them and a checkbox and a play
 button for each; the choices live in `ext.sounds.muted` and `ext.sounds.off`.
 

@@ -1,4 +1,4 @@
-import { BotIcon, GitMergeIcon, ScrollTextIcon, ArrowLeftRightIcon } from 'lucide-react'
+import { BotIcon, GitMergeIcon, ScrollTextIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { cn } from '@/sdk'
 
@@ -6,7 +6,6 @@ import { cn } from '@/sdk'
 const names: Record<string, string> = {
   ultimate: 'Ultimate',
   lander: 'Lander',
-  sync: 'Sync',
 }
 export const agentTitle = (name: string) =>
   names[name] ?? name.charAt(0).toUpperCase() + name.slice(1)
@@ -21,10 +20,6 @@ const tiles: Record<string, { tint: string; glyph: ReactNode }> = {
   lander: {
     tint: 'bg-success/10 text-success ring-success/25',
     glyph: <GitMergeIcon className="size-[60%]" strokeWidth={2.25} />,
-  },
-  sync: {
-    tint: 'bg-sky-500/10 text-sky-600 ring-sky-500/25 dark:text-sky-300',
-    glyph: <ArrowLeftRightIcon className="size-[60%]" strokeWidth={2.25} />,
   },
   root: {
     tint: 'bg-brand/8 text-brand/90 ring-brand/20',

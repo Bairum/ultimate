@@ -328,7 +328,7 @@ function JoinForm({ state, onJoined }: { state: JoinState; onJoined: () => void 
 }
 
 /**
- * Join your fleet: on a machine without cloud sync, the form; once joined, "Joined as <machine> · <host>" with a
+ * Join your fleet: on a machine without cloud backups, the form; once joined, "Joined as <machine> · <host>" with a
  * Change link that opens the form again.
  */
 export function JoinCard() {

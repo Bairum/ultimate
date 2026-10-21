@@ -30,11 +30,9 @@ an empty state. It deletes nothing: `state.sqlite`, `trace.sqlite`, parked `stat
   home's lock is held, and holds it while it moves files.
 - Kept: settings, secrets, logins, `project.json`, the lander checkout, worktrees and `ultimate/*` branches. It lists
   worktrees with uncommitted changes and branches not merged into the project's HEAD.
-- Cloud sync: a clean stop releases the lease after uploading a snapshot of the old state. The reset records the new
-  empty database as that snapshot in `cloud-lease.json`, so after starting, **Move here** once takes the project with
-  the fresh state, without a download. The old history then lives in the backup folder and in older cloud backups
-  until they are pruned. It refuses on standby behind another machine, while a move to this machine is in flight, and
-  when this machine still holds the lease (a stop that did not release): start and stop Ultimate cleanly first.
-- It checks all of this again under the lock, and journals its progress in `<home>/reset.json`: an interrupted reset
-  finishes into the same backup when run again, and `ultimate` refuses to start while the journal exists. The fresh database is recorded in `cloud-lease.json` before any file
-  moves, so a claim never installs the old snapshot over it.
+- It journals its progress in `<home>/reset.json`: an interrupted reset finishes into the same backup when run again,
+  and `ultimate` refuses to start while the journal exists.
+
+`pnpm restore [name|key]` is its counterpart for cloud backups: it moves the same files into
+`~/.ultimate/backups/restore-<time>/<home>/` and installs a backup in their place (see "Cloud backups" in
+`extensions/cloud/README.md`).

@@ -79,7 +79,7 @@ function shown(host: ExtensionHost, path: string) {
 }
 
 /**
- * For the primary agent (@ultimate, @sync in the machine home): re-apply its definition's instructions when they
+ * For the primary agent (@ultimate): re-apply its definition's instructions when they
  * differ from the conversation's, and name the instruction files that changed since its last run. Other agents keep
  * the instructions they started with.
  */

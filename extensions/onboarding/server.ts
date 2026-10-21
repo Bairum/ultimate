@@ -141,10 +141,10 @@ async function declared(path: string) {
   }
 }
 
-/** The machine home has no project to set up or read: @sync is its only standing agent. */
+/** The machine home has no project to set up or read, and no standing agent. */
 const refuseMachineHome = (host: { projectRoot: string; userHome: string }) => {
   if (isMachineHome(host.projectRoot, host.userHome))
-    throw new Error('The machine home has no onboarding; talk to @sync')
+    throw new Error('The machine home has no onboarding')
 }
 
 const marker = (userHome: string) => join(userHome, '.ultimate/onboarding.json')

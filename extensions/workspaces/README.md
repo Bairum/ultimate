@@ -141,20 +141,8 @@ lander's sidebar row shows the feature it lands or landed last.
    whether it pushed, "Needs restart." for `server/` or `shared/` changes to the running clone, and the lander
    conversation id for the full log (changed paths and output tails live there).
 
-7. With `lander.deploy`, if any landed changed path starts with a configured prefix, sends one one-way board
-   message (through the `workspaces.handoff` extension point, which board provides) from the lander to the named standing agent. It asks the agent to deploy the landed SHA and report to
-   the submitter, with the commit subjects, matching paths and push status. This is a handoff, not a deployment:
-   the lander does not wait. `deploy → @<agent>` appears in the submit card's steps, full log and report, which is
-   why the handoff stays in the lander's report phase rather than reacting to `workspaces.landed`.
-   Board admission and a sender-scoped receipt (`lander-deploy:<submission>`) commit atomically, so replaying
-   after a crash cannot send twice, even when a new lander task resumes the report. An unknown or non-resident
-   agent records a warning step and notice; the landing stays landed. Invalid deploy settings give a notice and
-   disable only the hook. No setting or no matching paths means no deploy step.
-
 Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check", [{ "command": "pnpm test", "timeout": 180 }, "pnpm test:e2e"]], "push": "origin" }`;
-both are optional. Optional `"deploy": { "agent": "sync", "paths": ["cloud/", "web/", "package.json", "pnpm-lock.yaml"] }`
-inside `lander` enables the deploy handoff. `paths` is a non-empty list of non-empty path prefixes (not globs),
-and `agent` must name a resident agent. The board must be enabled.
+both are optional.
 
 ### The lander's model
 

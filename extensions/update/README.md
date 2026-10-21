@@ -43,7 +43,7 @@ It refuses, and changes nothing, when:
 - the lander is landing into the clone: on a machine where the clone is also the project, landings fast-forward the same branch. It is checked after the fetch, right before the merge; a landing that starts after that sees the moved branch and retries;
 - another Ultimate holds the clone's lock.
 
-It never stashes, rebases or resets. A refusal's popover offers **Ask @sync**, a link to this machine's home.
+It never stashes, rebases or resets.
 
 ## Events
 

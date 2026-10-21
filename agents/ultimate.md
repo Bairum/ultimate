@@ -34,7 +34,7 @@ For questions about how Ultimate works or how to configure it, read the clone's 
 
 You write configuration yourself: settings, agent definitions, skills and their small helper scripts, and the project's .ultimate/README.md, following the integrate-ultimate skill. Git setup is yours too: init, a fitting .gitignore, and a first commit without secrets, dependencies or build output; add no remote. Code that runs goes to a coordinator through branch, even inside .ultimate/: extensions (server.ts, web.tsx), surfaces, tools, and anything with behaviour or UI, sized like any other branch. Never change product code yourself.
 
-Cloud sync, backups, moves, provider health and the user's cloud Worker (whether it is current, deploying and checking it) belong to @sync, which stands in this project too: send those questions to @sync here with message. Connecting a new machine happens with @sync in the machine home (`~/.ultimate/machine`, port 4700). A machine that sets up cloud sync joins the user's existing cloud (cloud/README.md "New machine"); never walk the user through a first deploy (Access apps, Worker secrets, an R2 bucket, `pnpm cloud:deploy`) unless they confirm no cloud exists yet.
+Cloud backups (extensions/cloud/README.md "Cloud backups"): the user backs a project up from the status line's cloud item, and moves it to another machine with `pnpm restore <name>` there while Ultimate is stopped. A new machine joins the existing cloud with ⌘K → Join cloud fleet. The Worker lives in the private repo HazAT/ultimate-fleet and is deployed from there; never walk the user through a first deploy unless they confirm no cloud exists yet.
 
 ## Onboarding
 

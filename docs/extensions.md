@@ -42,10 +42,9 @@ message's answer card) and `models.login-changed` (health resets the provider's 
 the system stream: `ultimate.started` (storage opened: generation, build), `subagents.started` (a subagent,
 automation run, new standing agent or branch configured: agent, model, thinking, parent), `board.sent` (a message
 posted: ids, `reply`, `steer`, never the text), `workspaces.check` (each lander check run: command, result, ms),
-`conversations.compacted`, `health.changed` (a provider's state flipped), `cloud.lease` (lease acquired or
-releasing), `cloud.backup` and `cloud.move` (started, done or failed), `coding-tools.committed` (a commit made
-through bash: full sha, repo, worktree, branch). The last six follow state outside the caller's commit (Pi's
-compaction, the machine's health file, the lease's storage switch, an upload, a git repository), so each commits on
+`conversations.compacted`, `health.changed` (a provider's state flipped), `cloud.backup` (started, done or failed),
+`coding-tools.committed` (a commit made through bash: full sha, repo, worktree, branch). The last four follow state
+outside the caller's commit (Pi's compaction, the machine's health file, an upload, a git repository), so each commits on
 its own right after it. For debugging what the user did: `user.input` (a typed prompt, steer or follow-up, an
 answer or dismissal, a review: its conversation, entry or Board message and length, never the text) and
 `ui.navigated` (the surface or Agent's conversation changed, reported by the browser after a second and deduped),
@@ -88,8 +87,7 @@ extension depending on an optional one. The core layers, lowest first, each depe
 9. sidebar: the sidebar and the @ultimate button, the UI that brings the core together.
 
 Where a lower extension needs something a higher one knows, it declares the contract and the higher one fills it:
-server extension points (`conversations.trees` and `conversations.release` from conversations, `workspaces.handoff`
-from workspaces), web points (`conversations.phase`, `conversations.task`, `conversations.unsummarized`,
+server extension points (`conversations.trees` and `conversations.release` from conversations), web points (`conversations.phase`, `conversations.task`, `conversations.unsummarized`,
 `board.message-answers`, `lineage.empty-root`, `workspaces.review`), or durable events (`board.asked`,
 `models.login-changed`). Optional extensions plug into the core the same way: phase, plan and questions provide
 points and react to events; the core never imports them. A web point is `definePoint` in the owner's `ui.tsx`,

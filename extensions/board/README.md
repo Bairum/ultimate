@@ -36,7 +36,7 @@ The note's delivery decision is saved in the task input for replay.
 
 ### Triage for the primary agent
 
-A one-way message or a reply from a conversation to the primary agent (@ultimate, or @sync in the machine home)
+A one-way message or a reply from a conversation to the primary agent (@ultimate)
 is triaged, so pure status updates cost no turn. The log records `triage: { verdict, reason? }` on the message:
 
 - **act at once, no model:** a reply-enabled message; text whose last line is a question or numbered options; text

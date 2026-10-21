@@ -1,6 +1,6 @@
 // Installs Ultimate and the machine home as services: on Linux systemd user units with linger, so they start at boot
 // without a login; on macOS launchd agents in ~/Library/LaunchAgents, which run while the user is logged in.
-// Usage: pnpm setup:machine [--project <dir>] [--machine <name>] [--dry-run]. See "New machine" in cloud/README.md.
+// Usage: pnpm setup:machine [--project <dir>] [--machine <name>] [--dry-run]. See "Cloud backups" in extensions/cloud/README.md.
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, hostname, userInfo } from 'node:os'

@@ -6,7 +6,7 @@ changed: <old> → <new> · generation N · changed: …". The note is decided i
 patched `beforeInput` hook), and the `prompt.build` document records the last build each conversation saw. A new
 conversation records its first build silently, and a fork starts from its parent's.
 
-The primary agent (@ultimate, @sync in the machine home) also follows its instructions there. When its definition's
+The primary agent (@ultimate) also follows its instructions there. When its definition's
 text differs from the conversation's, the hook re-applies it, so a typed input picks up an updated `agents/ultimate.md`
 as Board deliveries already did. The document keeps a hash of each project context file (`AGENTS.md`) and of the
 clone's `AGENTS.md`, `docs/*.md` and `agents/*.md`, and the note names the definition re-applied and the files changed

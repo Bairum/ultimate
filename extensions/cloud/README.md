@@ -1,92 +1,87 @@
-# Cloud sync
+# Cloud
 
-The machine side of the cloud: a project's writer lease and its moves between machines, inert until configured. Conversations stay on the machine that runs the project; the cloud only holds the lease, the move snapshots and the fleet directory. With a URL and token the host opens one outbound WebSocket per project and keeps it only for the lease: hello, the role the cloud names, and the lease and move messages below.
+Encrypted project backups in the user's cloud, inert until configured. A project runs on whichever machine the user
+starts it on; the cloud holds its backups and a register of which machine backed up what, and `pnpm restore` installs
+a backup on another machine.
 
-Configure once in **user** settings (`~/.ultimate/settings.json`):
+Configure once in **user** settings (`~/.ultimate/settings.json`), or with ⌘K → **Join cloud fleet**:
 
 ```json
 { "cloud": { "url": "wss://example.com", "machine": "my-machine" } }
 ```
 
-The sender connects to `/sync/v2` on that host; a path in the URL is ignored.
+Add `ULTIMATE_CLOUD_TOKEN` (the Worker's bearer token) and `ULTIMATE_CLOUD_SNAPSHOT_KEY` (encrypts backups; the same
+value on every machine) in the Secrets panel. `machine` defaults to the OS hostname. Project settings are never read: a
+repository cannot redirect the user's history to another server. Environment overrides take precedence, for
+process-scoped experiments: `ULTIMATE_CLOUD_URL`, `ULTIMATE_CLOUD_TOKEN`, `ULTIMATE_CLOUD_SNAPSHOT_KEY` and
+`ULTIMATE_CLOUD_MACHINE`. Faux hosts and preview instances stay silent unless `ULTIMATE_CLOUD_URL` is set explicitly;
+previews strip the cloud variables they inherit.
 
-Add `ULTIMATE_CLOUD_TOKEN`, the endpoint's bearer token, in the Secrets panel (⌘K → Secrets). `machine` is optional and defaults to the OS hostname. Project settings are never read: a repository cannot redirect the user's history to another server. Configuration is read when the extension loads; restart after changing it. One more user setting shapes the lease: `cloud.autoClaim` (a starting machine takes a free lease by itself, default true).
+A project is its GitHub repository (`lib/project-identity.ts`): the `origin` remote normalised to
+`github.com/<owner>/<repo>`, lowercased. A project without a GitHub origin cannot be backed up; its status line says
+`not backed up`.
 
-Environment overrides take precedence, for process-scoped experiments:
+## Cloud backups
 
-- `ULTIMATE_CLOUD_URL` overrides the user URL.
-- `ULTIMATE_CLOUD_TOKEN` overrides the secret.
-- `ULTIMATE_CLOUD_MACHINE` overrides the user machine name.
+The Worker lives in the private repository `HazAT/ultimate-fleet` and is deployed from there. Every `/sync/*` route
+needs `Authorization: Bearer <ULTIMATE_CLOUD_TOKEN>`; `<p>` is the SHA-256 hex of the project key:
 
-Faux hosts and preview instances stay silent and do not sync from user settings. An explicit `ULTIMATE_CLOUD_URL` enables them for local experiments (with a token from the environment or Secrets). Previews strip all three cloud environment variables inherited from their parent. A configured URL without a token produces one notice naming the missing secret, and no connection.
+- `PUT|GET /sync/snapshots/<p>/<id>/<name>`: the encrypted objects of one backup (`snapshot.ts`).
+- `POST /sync/backups/<p>/<id>` `{ key, name, machine, parent, force?, createdAt, bytes, uploaded, tailnet?, health? }`,
+  after the manifest is up: makes `<id>` the project's latest backup. `200 { latest }`, or `409 { error, latest }` when
+  `parent` is not the project's latest (`error` is a sentence for the user).
+- `GET /sync/register`: `{ projects: [{ hash, key, name, latest }], machines: [{ machine, at, health?, projects }] }`.
 
-A project is its GitHub repository (`lib/project-identity.ts`): the `origin` remote normalised to `github.com/<owner>/<repo>`, lowercased, plus the oldest root commit as a sanity check. Every checkout of it, on any machine, connects to the same replica with `/sync/v2?project=<key>`. Without a GitHub origin the host does not sync and notices once: `Cloud sync is off: <root> has no GitHub origin remote.`
+**Back up now** (`backup { force? }`, user-only) uploads an encrypted snapshot of the open database and the `ultimate/*`
+branches, then commits it with this home's **parent**: the backup it last uploaded or restored, kept in
+`<home>/cloud-backup.json` (`{ key, parent, last }`). The commit names the machine, the project's folder name, the key,
+the tailnet address (from `tailscale`, when published) and the provider health (from `health`). On 200 the new backup
+becomes the parent. On 409 another machine backed up after this home's parent: the parent stays, the uploaded chunks
+stay for the Worker's retention, and `state` reports `conflict { error, latest }`. One backup runs at a time, and none
+while paused.
 
-Hello carries the key, root commit, project root, machine name, HTTP port, the lease epoch from `<home>/cloud-lease.json` (absent when it holds none), whether local storage has history, and the names (never values) of the user's secrets. Every five seconds the sender compares the names in the user's store with the ones it last sent and, when they changed, sends `{ type: 'secrets', secrets, secretsComplete }`, as a writer and as a standby, so another machine's missing secrets refresh without a reconnect. The cloud answers `role`, again whenever the writer, its online state or the lease changes, on the same socket. As the writer the host rewrites `cloud-lease.json` with the epoch it is given; as a standby it does not. `syncState()` returns the last role, epoch, writer and lease state for other code in the process. A different root commit is refused with close code `4009`; the host reports it, suggesting `cloud.relink` for a renamed repository, and stops retrying. The cloud's front page lists each project with its writer machine, which the user opens directly over Tailscale.
+The parent rule keeps two machines from silently overwriting each other's history: whoever backs up from a stale parent
+is told. **Back up anyway** sends `force` and replaces the latest backup; the older one stays until retention prunes
+it.
 
-Every 30 seconds (`PING_EVERY`) the socket sends the text frame `ping`, which the replica answers with `pong` without waking from hibernation. A socket that heard no `pong` for two pings is half-open (a sleeping laptop, a changed network): the host raises one `Cloud sync: no answer for 60 s; reconnecting` notice and reconnects. A connection that had been open for 10 seconds and drops, as a deploy restarting the replica does, reconnects at once; backoff applies from the next failure on.
+`cloud.backup` (`BackupEvent`) records each backup for the System stream: `started` `{ project }`, then `done`
+`{ bytes, uploaded, ms }` or `failed` `{ ms, reason }`, where `reason` is classified (`conflict`, `HTTP 503`,
+`integrity check failed`, …, else `failed`) and a `conflict` adds the Worker's sentence as `error`. Each commits on its
+own right after the upload it records.
 
-`snapshot.ts` moves a project between machines through the cloud's private R2. `uploadSnapshot` copies the database consistently with a read-only `VACUUM INTO` (an open database's committed WAL included), bundles the `ultimate/*` branches when there are any, compresses both with zstd and uploads them in chunks of at most 16 MiB, then an encrypted manifest with each part's plaintext SHA-256, size and chunk count. Every object is AES-256-GCM with a random nonce, under a key derived per snapshot with HKDF-SHA256 from the `ULTIMATE_CLOUD_SNAPSHOT_KEY` secret (the same value on every machine), salted with the project key; the associated data names the snapshot, part, index and whether it is the last chunk, so altered, reordered, swapped or dropped chunks, another secret and another project all fail verification. `downloadSnapshot` verifies and writes `<dir>/snapshot-<id>.sqlite`, checks its integrity, and adds the branches without force: new ones are created, older ones fast-forwarded unless checked out in a worktree, ones already containing the incoming commit stay, and any other keeps the local branch and stores the incoming one as `refs/heads/ultimate-moved/<id>/<name>` (returned as `keptRefs`). On failure it removes only its own files. `databaseHash` is the SHA-256 of the same `VACUUM INTO` copy, so an unchanged database hashes to its snapshot's manifest. Requests retry twice after network errors and 5xx answers.
+The **status line** shows `backed up 3h ago` (`no backup yet`, `backing up…`). Its popover has the last backup with
+its machine and size, **Back up now** with the upload's progress, a refused backup's sentence with **Back up anyway**
+(and a confirm naming the backup it replaces), and the restore command for reference.
 
-`lease.ts` makes a machine run the project only while it holds the lease, driving core's standby switches (`host.deactivate`/`host.activate`) from the roles it hears. Roles are handled after a `setTimeout(0)`, one switch at a time, never inside a socket handler or tool run. Each switch opens a new connection with a fresh hello: `serving` once storage is open, `standby` otherwise.
+**Restore** on another machine, with Ultimate stopped in that checkout:
 
-- **Join.** A home whose `cloud-lease.json` does not name the project (new, or with a database the cloud never admitted) writes `standby.json` `{ reason: 'Waiting for the cloud', joining: true, cloud: true }` when the facet loads, before the server opens storage, and stays on standby until the cloud names its role, however long that takes: a machine the cloud did not admit never writes. As a standby it opens no database; as the first machine of a new project the cloud registers it as the writer and it opens its database, the existing one or a fresh one, in place. Only the last writer, whose lease file names the project, opens storage while the cloud is unreachable; a stale one is fenced off on reconnect and returns to standby.
-- **Standby.** A serving machine told it is a standby closes storage with standby info `{ reason, writer, free, cloud: true }`. Its database stays in place when it is the lease's last snapshot (`cloud-lease.json` names that snapshot and its epoch, and `databaseHash` matches the recorded `snapshotHash`); otherwise it is parked, with its `-wal` and `-shm`, as `state.stale-<ISO time>.sqlite`. No database is ever deleted.
-- **Release.** The writer releases only when a standby asks (a move) and on a clean stop. It closes storage, uploads a snapshot, records `{ key, epoch, snapshot, snapshotHash }` in `cloud-lease.json`, sends `release` from a standby connection and waits for the free lease. A clean stop leaves "Released when Ultimate stopped" with `released: true`, so its page offers **Resume here**. A release for a move writes "Moved to <machine>" with `explained: true`, so the standby page leaves out that subtitle and the facet's sentence ("The project moved to … Move here pulls it back …") says it once. A failure before `release` was sent keeps the lease and serves again; a release sent but unconfirmed waits for the cloud's next role. Asked by a standby, the writer holds the release, however long, while foreground tasks run and then while worktrees hold uncommitted changes; no agent decides when. It rechecks on every task graph change and every 30 seconds (`HOLD_RECHECK`), and reports each change of what it waits for with `release-waiting` and the notice "Move to <machine> waits for N running tasks" (or "… N worktrees with uncommitted changes") on both machines: the count and the conversations (`runs`, `#12 title`), then the dirty worktrees (`dirty` with `held: true`). @sync in the machine home runs in its own process, so its run never counts; a project's own @sync that asked from the writer counts like any run until its turn ends, which `move` lets happen at once. A move started with `force` skips both holds and releases at once. If that transition ends meanwhile (failed or cancelled), it stops waiting and keeps the project.
-- **Clean stop.** The process cleanup (not a facet reload) releases within the supervisor's ten-second shutdown: it closes storage if it is still open, takes the storage lock (failing that, a swapped-in core owns storage and nothing is released), writes `standby.json`, then uploads and releases within eight seconds. If nothing was released it removes `standby.json` again, so the next start opens normally and still holds the lease.
-- **Move.** A standby takes the lease on start when it is free (`cloud.autoClaim`, recorded as `by: 'auto'`), with `moveHere` (`by: 'local'`, or `'sync'` when @sync calls it), or when @sync's bearer route `/sync/move` has the cloud send `move-to` (`by: 'sync'`). Transitions recorded before the cloud UI went away may still say `by: 'cloud'`. It first prepares, and reports every step to the cloud as a `Transition` (`cloud/README.md`), at once on each step change and at most twice a second for download progress:
-  1. `fetch`: `git fetch origin`, then fast-forward the checkout's branch to `origin/<default branch>`. Refused when tracked files have changes, the checkout is on another branch or detached, or the branch has diverged. Its detail says `main fast-forwarded 2 commits, 3779f5b..34596c0` with the count in `commits`, or `main already up to date`.
-  2. `install`: `pnpm install --frozen-lockfile` (no shell, nothing streamed, the end of its output on failure) while one is owed: `cloud-install-pending` in the home is written before a fast-forward that changes `pnpm-lock.yaml` and removed only after an install succeeded, so a crash or a failure in between installs on the next try.
-  3. `checks`: the root guard (the writer's project root must be this checkout's), an online writer or a free lease with a snapshot, `ULTIMATE_CLOUD_SNAPSHOT_KEY`, a model login, and the writer's secret names this machine lacks, which fail the step unless the move was started with `force`. The model login (`login.ts`) is the default provider's (`defaultProvider` in Pi's settings), or without one any provider with an available model, as the root conversation picks: it must have configured credentials (stored, runtime or from the environment), as the login panel shows them; no provider is called, but a configured provider whose latest call on this machine failed (`~/.ultimate/health.json`, see `extensions/health`) does not count. Without it the step fails with `No model login: <provider> is not configured here; log in with ⌘K → Log in`, or for a failing provider `<provider> is failing here: <error>; log in again with ⌘K → Log in`, also with `force`.
-  4. `handover`: when the writer holds the lease, `request-release` (with `force` when the move was forced), then wait for the free lease; skipped when it is free. While runs drain the step's detail says `finishing 2 runs` and the transition keeps their conversations as `waiting`. Once they drained the writer lists the worktrees of its checkout, the main one included (`git worktree list --porcelain`), whose `git status --porcelain` is not empty (at most 20 paths of 500 characters), so edits the drained runs made count too. Unforced, it holds until they are clean: the detail says `waiting for 2 worktrees with uncommitted changes` and the transition keeps them as `left`, cleared once committed. Forced, they stay on that machine: `2 worktrees with uncommitted changes stay on haza-pc`. A check that fails (listing the worktrees, or the status of one that is not `prunable`) holds an unforced move too, with `unchecked` and the detail `could not check worktrees: <error>`, and is retried like a dirty one; a forced move releases anyway. A run that starts during the check sends the move back to waiting for runs, and any task graph change during it (a run that came and went) makes it check again before releasing.
-  5. `download`: the snapshot into the home, with bytes written and total (decompressed), unless the local database is that snapshot; once done its detail says the compressed megabytes downloaded.
-  6. `branches`: the `ultimate/*` branches `downloadSnapshot` restored, naming the refs it kept aside.
-  7. `claim`: send `claim`; on `writer`, open storage after parking any local database as stale and renaming the download to `state.sqlite`.
+```sh
+pnpm restore [name|key] [--snapshot <id>] [--dir <project dir>] [--yes] [--dry-run]
+```
 
-  A failure, or a cancel before the claim is sent, ends the transition with its `error`, deletes only the download, and leaves the holder and the local database as they are. A cancel during the handover makes a draining writer keep the project; one that already released leaves the lease free. So does the cloud ending the transition because a machine in it went away.
+It reads the checkout's key (`--dir`, else the current directory), finds the project in the register (by name or key,
+default the checkout's own), and refuses while Ultimate holds the home's lock. It downloads and verifies the backup
+(the latest unless `--snapshot`), moves the home's state into `~/.ultimate/backups/restore-<time>/<home>/`, installs
+the backup as `state.sqlite` and writes `cloud-backup.json` with it as the parent, so the next backup from here builds
+on it. It prints the backup folder and the `mv` that undoes it. `ULTIMATE_HOME` selects the home like `pnpm reset`.
 
-  Before sending `claim` the machine writes `cloud-claim.json` (`{ key, epoch, snapshot, download?, hash }`), and while it exists its hello names the claimed epoch + 1. On standby, every role is checked against an intent first: the writer at that epoch finishes the claim (the download installed if it hashes right, fetched again otherwise, unless the local database already is the snapshot), anything else drops the intent and its download. Once the claim won, a failure to open storage (parking the local database, renaming the download into place, opening) keeps the intent and the download for that recovery. A claim sent on a connection that dropped is answered by the next connection's first role, which follows a hello naming the claimed epoch + 1: the writer's role means won, any other lost. Snapshots use the replica's key from `role.project`, not this checkout's, so a relinked machine takes over too. Transition details and errors are bounded to 500 characters, keeping the end. Without an intent, `writer` on standby opens the local database only when it is the writer's state (the lease file's epoch, the last released snapshot, or no snapshot yet, as for a project this machine just registered); otherwise it installs the last snapshot first. A standby connection never rewrites `cloud-lease.json`; opening storage as the writer does. On start, `.snapshot-*` temp folders and downloads no intent owns are removed. See "Guarantees" in `cloud/README.md`.
+**Join** (⌘K → **Join cloud fleet**, or **Join** on the setup row) asks for the cloud URL, machine name and both
+secrets, checks `GET /sync/register` with the token (401: "The cloud refused the token"; anything else but 200:
+"Cannot reach <host>"), and only then stores the secrets and `cloud.url`/`cloud.machine`. It lists the projects the
+register knows. Backups read the configuration from the next start on.
 
-Actions: `state` returns `{ status, machine, role, free, writer, missing, blocked, progress, transition, ran, key, login, lastBackup, backup, lastError }` (`types.ts`), where `login` is `{ provider, ok, error? }`, the model login the checks step requires, where `ran` is the last move this machine ran itself (also once a newer one shows as `transition`), `key` the replica key the cloud admitted this machine under (after a relink, not its origin's), and `status` is `off` without cloud configuration, `local` for a project without a GitHub origin and `on` otherwise, `machine` is this machine's name, `missing` lists the writer's secret names this machine lacks, `blocked` says why "Move here" cannot work, `progress` is a release's upload and `transition` the move this machine runs or the latest the cloud reported. User-only `moveHere { force?, by? }` starts a move and returns its `{ id }` at once, recorded as this machine's page unless `by: 'sync'`; user-only `cancel` stops it until its claim is sent. User-only `relink { from }` asks the Worker (`POST /sync/relink`) to sync this checkout's key to the replica of `from` from now on, after a repository rename or a root-commit mismatch, forgets a lease epoch held under the current key, and reconnects. Relink every machine of a renamed project, or update its remote, before moving it: snapshots are keyed by the key each machine connects with.
+## Snapshots
 
-**Feedback.** The lease reports to the `cloud.feedback` extension point (`api.ts`), which sync implements in project homes so each event reaches the project's @sync once: `backup` when a backup finishes or fails, and `moved` when a move to this machine claimed the lease and opened storage. The claim intent carries the transition, so a claim that a crash interrupted reports `moved` once when the restart opens storage (the project's @sync keys it by the transition id). A failed delivery raises a notice and never fails the lease.
+`snapshot.ts` copies the database consistently with a read-only `VACUUM INTO` (an open database's committed WAL
+included), bundles the `ultimate/*` branches when there are any, compresses both with zstd and uploads them in chunks
+of at most 16 MiB, then an encrypted manifest with each part's plaintext SHA-256, size, chunk count and uploaded
+bytes. Every object is AES-256-GCM with a random nonce, under a key derived per snapshot with HKDF-SHA256 from
+`ULTIMATE_CLOUD_SNAPSHOT_KEY`, salted with the project key; the associated data names the snapshot, part, index and
+whether it is the last chunk, so altered, reordered, swapped or dropped chunks, another secret and another project all
+fail verification. Manifests written for the retired lease also carry an `epoch`, which is ignored.
 
-**Backups and releases never overlap.** A release first waits for a running backup to finish, so storage never closes under its upload. A move's handover waits inside its hold ("Move to <machine> waits for a backup to finish"), with its cancel and task watchers still active, and checks for a cancel, running tasks and dirty worktrees again once the backup ended, so a move cancelled meanwhile releases nothing and a run started meanwhile holds it again; a stop while a backup still uploads keeps the lease (`Kept the lease on stop: a backup was still uploading.`) and the next start opens normally.
-
-**Back up now.** User-only `backup` uploads a snapshot of the open database and the `ultimate/*` branches with `uploadSnapshot`, exactly as a release does (`VACUUM INTO` is consistent while agents write, so nothing stops), and resolves `{ id, at, bytes, uploaded }` once the manifest is up, `bytes` being the database and bundle before compression and `uploaded` the compressed, encrypted chunks that went over the wire (zstd shrinks the database about threefold). This machine keeps serving and keeps the lease: a backup never sends `release` or `claim`, never changes the epoch and never writes `cloud-lease.json`. It runs only on the serving writer with cloud sync on (`This machine does not run the project; back it up on its writer` elsewhere), one at a time (`a backup is already running`), and never while a move prepares, holds the writer, or a release uploads (`A move or release is in flight`). The last one is kept in `<home>/cloud-backup.json` (`{ key, id, at, bytes, uploaded }`) and named by `state` as `lastBackup`; `backup { done, total, uploaded }` is the running upload: bytes read of the total before compression, and compressed bytes uploaded so far (the upload's own total is known only at the end). The snapshot manifest records `uploaded` per part next to `bytes`. After it the writer sends `backup { at }`, and every hello names `lastBackupAt`, so the cloud's directory and @sync's fleet show when the writer last backed up. The Worker prunes backups with every other snapshot (the newest three complete ones per project stay, `cloud/README.md`), so nothing here deletes old ones.
-
-A release does not reuse the last backup, even when nothing changed since: "unchanged" is not cheap and certain here. Pi's storage gives no committed-entry counter (task and document writes change the database too), SQLite's `data_version` is per connection and `PRAGMA user_version` is unused, so the only certain test is `databaseHash`, which is a full `VACUUM INTO` plus a hash, as expensive as the upload's own copy. A release also has to name its own epoch's snapshot to the standby, and a writer rarely stays unchanged (heartbeats and automations write). The saving is one upload of a few megabytes, and a stale snapshot on a claim is the one outcome that must never happen.
-
-Lease transitions are durable events too: `cloud.lease` `{ epoch, writer, change }` (`LeaseChanged` in `refs.ts`),
-`acquired` right after opening storage as the writer (from standby or a claim) and `releasing` right before closing
-it to release, so the uploaded snapshot carries it to the next writer. A writer the cloud replaced records nothing: a
-write then would change the database it compares with the released snapshot before parking it.
-
-Backups and moves are events as well, for the System stream. Like `cloud.lease`, each commits on its own right after
-the change it records, because that change happens outside storage (an upload, a lease), and only while storage is
-open. A failure carries a classified `reason` (`classify` in `lease.ts`: `cancelled`, `git failed`, `HTTP 503`, …,
-else `failed`), never the raw error, so no provider text or secret reaches the log.
-
-- `cloud.backup` (`BackupEvent`): `started` `{ project }` as the upload begins, then `done` `{ bytes, uploaded, ms }` (database size, compressed upload) or
-  `failed` `{ ms, reason }`.
-- `cloud.move` (`MoveEvent`) `{ project, id, from, to }`: the writer records `started` when the target asks it to
-  release (the released snapshot carries it), and `failed` `{ step, reason }` with the target's failed step when the
-  move ends and it keeps the project, `handover` when its release failed, or `interrupted` when the facet closed
-  mid-hold. The target records `done` `{ ms }` once
-  it opened storage, also when a restart finishes a won claim. A standby has no storage, so a target's failure
-  before the claim, and a move from a free lease until its `done`, show only in the move card.
-
-As with `cloud.lease`, a crash between the change and its event's commit drops that event; nothing reconciles it on
-the next start (a move's `done` is not recorded twice, and a `started` may stay without an outcome). The log is a
-record for the System stream, not the source of truth: `cloud-lease.json`, the claim intent and the cloud's
-transition are.
-
-The web facet (`web.tsx`) shows where the project runs and moves it. It polls `state` (every second while a move runs or a release uploads) and acts with `moveHere` and `cancel`.
-
-- **The move's card** (`transition.tsx`): its title by phase ("Preparing rog", "Handing over: haza-pc finishing 2 runs", "Running on rog", or failed) with who started it ("· by @sync", "· from rog's page", "· automatically"), a line per step with its state and detail, an arrow with the commit count on a fetch that fast-forwarded, the conversations a handover waits for and the worktrees it waits for or leaves with uncommitted changes collapsed under the handover line, the download's megabytes with a thin bar, Cancel while it can be cancelled, and "Continue anyway" when the checks failed only on missing secrets (`force`). A failed move stays until dismissed or the next one starts; a finished one shows on the pages that watched it run.
-- **Standby page** (`standby` slot): who runs the project, the secrets this machine lacks, why it cannot move, **Open on <machine>** (the online writer's tailnet address, when it reported one), **Move here** (**Resume here** for a lease this machine released), and the card.
-- **Tailnet address.** Hello names this checkout's tailnet address from the `tailscale` service, and a `tailnet` message follows when it changes (checked with the secret names every 5 s). On standby, `<home>/cloud-writer.json` holds `{ machine, tailnet }` of a writer on another machine that has one, so `ultimate` in this checkout opens the writer directly when it answers within 2 s, else the local standby page. The file goes away once this checkout writes or the writer has no address. On the machine the project moved away from (its finished move left from here, or its standby reason `Moved to <machine>`), a note says what **Move here** does: "The project moved to haza-pc (by @sync · 13:51). Move here pulls it back to rog." The status-line popover shows the same note.
-- **Status line**: `on haza-pc`, `standby · runs on rog`, `free`, or `local only`; nothing without cloud configuration. Its popover lists the writer and this machine with **Move here**. On the writer it adds a Backup row: `Last backup: 3h ago · 380 MB uploaded (1.1 GB database)` or `No backup yet`, **Back up now**, and while it uploads `Backing up… 419 / 1160 MB read · 140 MB uploaded` with a thin bar on the bytes read; the status line's icon spins meanwhile.
-- **Banner** (`conversation.overlay`): the card on a serving writer while a move to another machine runs.
-
-The cloud implementation and shared wire contract live in `cloud/`. Closing the host closes the socket; failed connections, including a Worker that does not serve `/sync/v2` yet, retry with a 1–30 second backoff.
+`downloadSnapshot` verifies and writes `<dir>/snapshot-<id>.sqlite`, checks its integrity, and adds the branches
+without force: new ones are created, older ones fast-forwarded unless checked out in a worktree, ones already
+containing the incoming commit stay, and any other keeps the local branch and stores the incoming one as
+`refs/heads/ultimate-moved/<id>/<name>`. On failure it removes only its own files. Requests retry twice after network
+errors and 5xx answers.

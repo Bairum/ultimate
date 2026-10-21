@@ -26,7 +26,7 @@ import { cleanPreview, sweepPreviews } from './cleanup.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { ListAction } from './refs.ts'
 
-/** A preview keeps ordinary parent variables, but gets its own host identity and no inherited cloud sync. */
+/** A preview keeps ordinary parent variables, but gets its own host identity and no inherited cloud settings. */
 export function previewEnv(
   parent: NodeJS.ProcessEnv,
   options: { home: string; project: string; userHome: string; faux?: boolean; ownerPid: number },

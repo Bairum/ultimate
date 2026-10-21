@@ -73,7 +73,7 @@ Worker reports and submissions state divergence from the task as given (agreemen
   user is logged in to and named after what it checks (`reviewer-correctness.md`, `reviewer-simplicity.md`,
   `reviewer-architecture.md`). Details: "Review team" in
   `extensions/subagents/README.md`.
-- **Project tools or settings for a built-in agent** (@ultimate, @sync, the lander): never copy its definition. Add
+- **Project tools or settings for a built-in agent** (@ultimate, the lander): never copy its definition. Add
   an overlay, a file of the same name marked by `addTools: [tool]` (`[]` when it only changes settings). It may
   override any setting (`model`, `thinking`, `onFailure`, `description`, …) but never `tools`, and its optional body
   is appended to the built-in instructions as project additions; a copy stops following the built-in and the setup
