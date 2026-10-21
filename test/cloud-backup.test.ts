@@ -155,6 +155,42 @@ it('keeps a 409 naming another machine’s backup a conflict, without adopting i
   expect(await readBackup(a.home, other)).toBeUndefined()
 })
 
+it('keeps a 409 naming this machine’s backup on another parent a conflict', async () => {
+  const other = own()
+  const a = await machine(['x'])
+  await back(a, 'desk', { key: other })
+  // Another home of the same machine name replaced it without building on it.
+  const c = await machine(['z'])
+  await back(c, 'desk', { key: other, force: true })
+  const posts = stub.commits.length
+  await expect(back(a, 'desk', { key: other })).rejects.toBeInstanceOf(Conflict)
+  expect(stub.commits.length).toBe(posts + 1)
+})
+
+it('adopts at most once: a 409 on the retry is final', async () => {
+  const other = own()
+  const a = await machine(['x'])
+  const lost = async (input: string | URL | Request, init?: RequestInit) => {
+    const response = await stub.fetch(input, init)
+    return init?.method === 'POST' ? new Response('internal error', { status: 500 }) : response
+  }
+  await expect(back(a, 'desk', { key: other, fetch: lost })).rejects.toThrow('returned 500')
+  const first = stub.register.projects.find((project) => project.key === other)!.latest
+  // Another machine replaces the latest between the adoption and the retry.
+  const b = await machine(['y'])
+  let posts = 0
+  const racing = async (input: string | URL | Request, init?: RequestInit) => {
+    if (init?.method === 'POST' && ++posts === 2)
+      await back(b, 'laptop', { key: other, force: true })
+    return stub.fetch(input, init)
+  }
+  const before = stub.commits.length
+  await expect(back(a, 'desk', { key: other, fetch: racing })).rejects.toBeInstanceOf(Conflict)
+  // A's first commit, B's forced one, A's single retry.
+  expect(stub.commits.length - before).toBe(3)
+  expect((await readBackup(a.home, other))?.parent).toBe(first.id)
+})
+
 it('names an HTTP failure and keeps the parent', async () => {
   const a = await machine(['x'])
   const failing = cloudStub('other')
