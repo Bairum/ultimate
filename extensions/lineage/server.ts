@@ -75,6 +75,8 @@ export type TallyState = {
   abstracts: Record<string, OpenAbstract>
   /** Estimated tokens of the root's model-visible context. */
   tokens: number
+  /** Estimated tokens of the memory brief a branch starts from instead; absent while the root has no memories. */
+  briefTokens?: number
   /** The entry this root became a tally at; absent while a root is still an ordinary conversation. */
   since?: number
 }
@@ -307,8 +309,9 @@ async function liveTask(tx: Tx, id: ConversationId, kind: string) {
 }
 
 /**
- * Keep each tally's token count at its model-visible context. Every entry a tally gets (prompt nodes, abstracts, notes,
- * a compaction, a reset) changes it, so it is recounted from the context after each commit that appends one.
+ * Keep each tally's token counts at its model-visible context and its memory brief. Every entry a tally gets (prompt
+ * nodes, abstracts, notes, a compaction, a reset) changes the first, and a landing or memory change the brief, so both
+ * are recounted after each commit that appends an entry or changes the root's memory.
  */
 function watchTally(host: ExtensionHost, ctx: Context) {
   let roots = new Set<number>()
@@ -324,8 +327,12 @@ function watchTally(host: ExtensionHost, ctx: Context) {
           const { messages } = await (await host.harness().conversation(id, ctx))!.context(ctx)
           const tokens = messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0)
           await host.harness().commit(async (tx) => {
+            const brief = await memoryBrief(tx, id)
             const tally = await tx.doc(Tally, id)
             if (tally.tokens !== tokens) tally.tokens = tokens
+            const briefTokens = brief && estimateTextTokens(brief.text)
+            if (briefTokens === undefined) delete tally.briefTokens
+            else if (tally.briefTokens !== briefTokens) tally.briefTokens = briefTokens
           }, ctx)
         }
       })
@@ -344,6 +351,13 @@ function watchTally(host: ExtensionHost, ctx: Context) {
       for (const change of publication.changes)
         if (change.type === 'entry' && roots.has(change.value.conversationId))
           dirty.add(change.value.conversationId)
+        else if (
+          change.type === 'document' &&
+          change.record.kind === Memory.definition.kind &&
+          change.conversationId !== undefined &&
+          roots.has(change.conversationId)
+        )
+          dirty.add(change.conversationId)
       if (dirty.size > before) recount()
     })
     for (const id of roots) dirty.add(id as ConversationId)

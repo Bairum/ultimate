@@ -9,10 +9,13 @@ import type { RootEvent } from './types.ts'
 /** `{ roots }` on conversation 1: the project's roots, each the top of one conversation tree. */
 export const RootsDoc = docRef<{ roots: number[] }>('lineage.roots')
 /**
- * A root's tally bookkeeping on the root itself: `tokens`, the estimated size of its model-visible context, and
- * `since`, the entry it became a tally at (absent while it is an ordinary conversation).
+ * A root's tally bookkeeping on the root itself: `tokens`, the estimated size of its model-visible context,
+ * `briefTokens`, that of the memory brief a branch starts from (absent while it has no memories), and `since`, the
+ * entry it became a tally at (absent while it is an ordinary conversation).
  */
-export const TallyDoc = docRef<{ tokens: number; since?: number }>('lineage.tally')
+export const TallyDoc = docRef<{ tokens: number; briefTokens?: number; since?: number }>(
+  'lineage.tally',
+)
 
 /** One project memory: a durable decision, fact or lesson a future branch needs. */
 export type MemoryItem = {

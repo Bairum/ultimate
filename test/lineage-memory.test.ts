@@ -12,7 +12,8 @@ import {
   parseMemoryOps,
 } from '../extensions/lineage/memory.ts'
 import { Seen } from '../extensions/lineage/catchup.ts'
-import { abstract } from '../extensions/lineage/server.ts'
+import { abstract, Tally } from '../extensions/lineage/server.ts'
+import { estimateTextTokens } from '@earendil-works/pi-ai/utils/estimate'
 import { Standing } from '../extensions/subagents/api.ts'
 import { SubmissionLanded } from '../extensions/workspaces/api.ts'
 import type { LandedData } from '../extensions/workspaces/api.ts'
@@ -185,6 +186,12 @@ it.concurrent('starts a branch from the memory brief, and without memories from 
   expect(seen?.tally).toBeGreaterThanOrEqual(tip)
   // The brief records the root tip it covers, for forks of this branch.
   expect(view.entries[0]).toMatchObject({ data: { lineage: { brief: { tally: tip } } } })
+  // The root's footer counts the brief a branch receives, recounted when memory changes.
+  const briefTokens = async () =>
+    (await server.harness.snapshot(Tally, ROOT_CONVERSATION_ID, context))?.briefTokens
+  await until(async () => (await briefTokens()) === estimateTextTokens(textOf(said[0].content)))
+  await apply(server, [{ op: 'delete', slug: 'pnpm' }])
+  await until(async () => (await briefTokens()) === undefined)
   const lineage = server.host.registry.snapshot().extension('lineage')!.sections![0]
   expect(
     await lineage.render(

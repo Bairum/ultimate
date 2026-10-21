@@ -45,10 +45,12 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   `compact` `{ id, instructions? }` → `{ taskId }` starts the same compaction as `compact_tally`, for the root row's menu
   and the palette's Compact command on a root.
 - **Tally**: conversation-scoped doc `lineage.tally` (latest history) holds
-  `{ abstracts: Record<string, { anchor, at, text, title?, feature? }>, tokens: number, since?: number }`:
-  each conversation's open abstract, estimated model-visible context tokens, and the entry where the root became a tally. Forks start with an empty doc,
-  not the source's bookkeeping. Tokens are recounted from active context after commits that append root entries,
-  including resets and compaction. The root footer shows the estimate as "Context · … tokens".
+  `{ abstracts: Record<string, { anchor, at, text, title?, feature? }>, tokens: number, briefTokens?: number, since?: number }`:
+  each conversation's open abstract, estimated model-visible context tokens, estimated tokens of the memory brief
+  (absent without memories), and the entry where the root became a tally. Forks start with an empty doc,
+  not the source's bookkeeping. Both counts are recounted after commits that append root entries (including resets and
+  compaction) or change its memory. The root footer and sidebar row show what a new branch starts from: "Memory · …
+  tokens", the brief, or "Context · … tokens", the whole tally, while the root has no memories.
   `lineage.abstract` entries hold `{ conversation, at, text, title?, feature?, anchor? }`, with `at` pointing to the
   answer summarized. An abstract is liquid until its conversation lands, like an uncommitted working tree: the first
   one is model-visible and becomes the anchor; later ones are carriers without model messages (`anchor` set) whose
@@ -205,8 +207,9 @@ Once started, it shows only a quiet **@ultimate is setting up this project · op
 @ultimate reads the project and writes its first tally with `seed_tally` before starting work.
 
 Listed roots with a tally or existing history replace their composer through the SDK's `composer` renderer with a
-read-only footer: **Context**, "What every new branch starts from. @ultimate maintains it.", estimated
-tokens, and **Talk to @ultimate**. There is no text input. @ultimate maintains standing decisions in memory with
+read-only footer: **Memory** with the brief's estimated tokens, "What every new branch starts from. The context
+above is the browsable history; @ultimate maintains both.", the memory fold, and **Talk to @ultimate**. A root
+without memories shows **Context** with the tally's tokens instead, since its branches start from the tally. There is no text input. @ultimate maintains standing decisions in memory with
 `remember` and the memory review, and reshapes tallies with `compact_tally`; on a root the palette's Compact runs lineage `compact` and its composer-focus
 command is hidden. A root's transcript shows no summary or assessment lines.
 
