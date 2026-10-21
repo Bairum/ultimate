@@ -4,6 +4,8 @@ import { events } from './events.ts'
 import { errorMessage } from './format.ts'
 import type {
   ChatCallTest,
+  ChatQuietTest,
+  ChatSummaryProps,
   CommandContribution,
   ComposerRenderer,
   Contribution,
@@ -132,8 +134,10 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
       when: isFunction,
       tools: optional(arrayOf((tool) => isString(tool) || isFunction(tool))),
       docs: optional(arrayOf(isString)),
+      quiet: optional(isFunction),
+      summary: optional(isComponent),
     }),
-    'a { when, tools?, docs? } object',
+    'a { when, tools?, docs?, quiet?, summary? } object',
   ],
   intro: [
     fields({
@@ -547,12 +551,19 @@ export function chatTools(
   records: readonly ExtensionRecord[],
   conversation: ConversationSummary | undefined,
   report: (extension: string, error: unknown) => void,
-): { keeps: ChatCallTest; docs: readonly string[] } | undefined {
+):
+  | {
+      keeps: ChatCallTest
+      quiet: ChatQuietTest
+      summary?: { extension: string; version: number; component: ComponentType<ChatSummaryProps> }
+      docs: readonly string[]
+    }
+  | undefined {
   if (!conversation) return undefined
-  const matching = records.flatMap(({ name, extension }) => {
+  const matching = records.flatMap(({ name, version, extension }) => {
     if (!extension?.chat) return []
     try {
-      return extension.chat.when(conversation) ? [{ name, chat: extension.chat }] : []
+      return extension.chat.when(conversation) ? [{ name, version, chat: extension.chat }] : []
     } catch (error) {
       report(name, error)
       return []
@@ -577,6 +588,20 @@ export function chatTools(
           return false
         }
       }),
+    quiet: (row, docs) => {
+      const verdicts = matching.map(({ name, chat }) => {
+        try {
+          return chat.quiet?.(row, docs) ?? false
+        } catch (error) {
+          report(name, error)
+          return false
+        }
+      })
+      return verdicts.includes(true) || (verdicts.includes('hidden') ? 'hidden' : false)
+    },
+    summary: matching.flatMap(({ name, version, chat }) =>
+      chat.summary ? [{ extension: name, version, component: chat.summary }] : [],
+    )[0],
     docs: [...new Set(matching.flatMap(({ chat }) => chat.docs ?? []))].toSorted(),
   }
 }

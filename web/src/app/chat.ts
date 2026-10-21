@@ -87,6 +87,58 @@ export function chatRows(
   return rows
 }
 
+/** Background rows folded together: a stretch of quiet rows and the runs of work between them. */
+export interface QuietGroup {
+  quiet: readonly (ChatPart | WorkRun)[]
+  /** Steps in its runs of work. */
+  steps: number
+}
+
+/**
+ * `rows` with each stretch of quiet rows (`quiet` says which), and the runs of work and hidden rows between them, folded
+ * into one group, so background always reads the same. A run of work that ends a stretch stays out of it, so work in
+ * progress keeps its own line, and a stretch with no quiet row that shows stays as it is.
+ */
+export function groupQuiet(
+  rows: readonly (ChatPart | WorkRun)[],
+  quiet: (part: ChatPart) => boolean | 'hidden',
+): (ChatPart | WorkRun | QuietGroup)[] {
+  const grouped: (ChatPart | WorkRun | QuietGroup)[] = []
+  let stretch: (ChatPart | WorkRun)[] = []
+  let shown = new Set<ChatPart | WorkRun>()
+  const flush = () => {
+    const end = stretch.findLastIndex((row) => shown.has(row)) + 1
+    const group = stretch.slice(0, end)
+    if (group.some((row) => shown.has(row)))
+      grouped.push({
+        quiet: group,
+        steps: group.reduce((sum, row) => sum + ('work' in row ? row.steps : 0), 0),
+      })
+    else grouped.push(...group)
+    grouped.push(...stretch.slice(end))
+    stretch = []
+    shown = new Set()
+  }
+  for (const row of rows) {
+    const verdict = 'work' in row ? 'hidden' : quiet(row)
+    if (verdict) {
+      stretch.push(row)
+      if (verdict === true) shown.add(row)
+    } else {
+      flush()
+      grouped.push(row)
+    }
+  }
+  flush()
+  return grouped
+}
+
+/** The group where `entry` first shows, if it does in one: revealing the entry opens it. */
+export function quietOf(rows: readonly (ChatPart | WorkRun | QuietGroup)[], entry: number) {
+  const first = rows.find((row) => partsOf(row).some((part) => part.entry.id === entry))
+  return first && 'quiet' in first ? first : undefined
+}
+
 /**
  * What makes a streamed window fresh: its `older` and its head marker. Appends keep both; a resync after consecutive
  * compactions can keep `older` but brings a new head marker.
@@ -144,20 +196,22 @@ export function setAsideIds(entries: readonly EntryRecord[]): Set<number> {
 
 /** Rows set aside by a go-back, folded together: each consecutive stretch of them is one group. */
 export interface AsideGroup {
-  aside: readonly (ChatPart | WorkRun)[]
+  aside: readonly (ChatPart | WorkRun | QuietGroup)[]
   /** Its entries with messages other than system prompt changes, as the go-back counted them. */
   steps: number
 }
-const partsOf = (row: ChatPart | WorkRun) => ('work' in row ? row.work : [row])
+/** The parts a row shows, those of its runs and groups included. */
+export const partsOf = (row: ChatPart | WorkRun | QuietGroup): readonly ChatPart[] =>
+  'quiet' in row ? row.quiet.flatMap(partsOf) : 'work' in row ? row.work : [row]
 
 /** `rows` with each stretch of rows whose entries are all in `aside` folded into one group. */
 export function groupAside(
-  rows: readonly (ChatPart | WorkRun)[],
+  rows: readonly (ChatPart | WorkRun | QuietGroup)[],
   aside: ReadonlySet<number>,
-): (ChatPart | WorkRun | AsideGroup)[] {
+): (ChatPart | WorkRun | QuietGroup | AsideGroup)[] {
   if (!aside.size) return [...rows]
-  const grouped: (ChatPart | WorkRun | AsideGroup)[] = []
-  let group: (ChatPart | WorkRun)[] = []
+  const grouped: (ChatPart | WorkRun | QuietGroup | AsideGroup)[] = []
+  let group: (ChatPart | WorkRun | QuietGroup)[] = []
   const flush = () => {
     if (!group.length) return
     const entries = new Set(group.flatMap(partsOf).map((part) => part.entry))
@@ -179,9 +233,8 @@ export function groupAside(
 }
 
 /** The folded run where `entry` first shows, if it starts in one: revealing the entry opens it. */
-export function runOf(rows: readonly (ChatPart | WorkRun)[], entry: number) {
-  const first = rows.find((row) =>
-    ('work' in row ? row.work : [row]).some((part) => part.entry.id === entry),
-  )
+export function runOf(rows: readonly (ChatPart | WorkRun | QuietGroup)[], entry: number) {
+  const flat = rows.flatMap((row) => ('quiet' in row ? row.quiet : [row]))
+  const first = flat.find((row) => partsOf(row).some((part) => part.entry.id === entry))
   return first && 'work' in first ? first : undefined
 }

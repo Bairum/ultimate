@@ -1,3 +1,4 @@
+import type { EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it, vi } from 'vitest'
 import {
   commandApplies,
@@ -22,6 +23,8 @@ import type { WebExtension } from '../../web/src/sdk/types.ts'
 const path = (name: string) => `../../extensions/${name}/web.tsx`
 const component = (label: string) => Object.assign(() => null, { displayName: label })
 const module = (extension: WebExtension) => ({ default: extension })
+/** A chat row of an entry of `kind`. */
+const row = (kind: string) => ({ entry: { kind } as EntryRecord, calls: [] })
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (error: unknown) => void
@@ -349,10 +352,43 @@ describe('web extension registry', () => {
     expect(chatTools(records, { id: 3, busy: false }, report)).toBeUndefined()
     expect(chatTools(records, undefined, report)).toBeUndefined()
     expect(report).toHaveBeenCalledWith('c', new Error('broken'))
+    const shape = 'chat must be a { when, tools?, docs?, quiet?, summary? } object'
     registry.replace('b', { default: { chat: { tools: ['workspace'] } } })
-    expect(registry.getSnapshot()[1]?.error).toBe('chat must be a { when, tools?, docs? } object')
+    expect(registry.getSnapshot()[1]?.error).toBe(shape)
     registry.replace('b', { default: { chat: { when: () => true, docs: [1] } } })
-    expect(registry.getSnapshot()[1]?.error).toBe('chat must be a { when, tools?, docs? } object')
+    expect(registry.getSnapshot()[1]?.error).toBe(shape)
+    registry.replace('b', { default: { chat: { when: () => true, quiet: true } } })
+    expect(registry.getSnapshot()[1]?.error).toBe(shape)
+  })
+
+  it('calls a row quiet when any facet does, hidden only when none shows it, and a throwing test no', async () => {
+    const Summary = component('summary')
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('a')]: async () =>
+        module({
+          chat: { when: () => true, quiet: ({ entry }) => entry.kind === 'note' || 'hidden' },
+        }),
+      [path('b')]: async () =>
+        module({
+          chat: {
+            when: () => true,
+            quiet: ({ entry }) => {
+              if (entry.kind === 'boom') throw new Error('broken')
+              return entry.kind === 'reply'
+            },
+            summary: Summary,
+          },
+        }),
+    })
+    const report = vi.fn<(extension: string, error: unknown) => void>()
+    const { quiet, summary } = chatTools(registry.getSnapshot(), { id: 1, busy: false }, report)!
+    expect(quiet(row('note'), {})).toBe(true)
+    expect(quiet(row('reply'), {})).toBe(true)
+    expect(quiet(row('user'), {})).toBe('hidden')
+    expect(quiet(row('boom'), {})).toBe('hidden')
+    expect(report).toHaveBeenCalledWith('b', new Error('broken'))
+    expect(summary).toMatchObject({ extension: 'b', component: Summary })
   })
 
   it('keeps a call its test keeps from the root documents, and counts a throwing test as no', async () => {

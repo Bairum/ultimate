@@ -173,6 +173,28 @@ export interface ChatContribution {
   tools?: readonly (string | ChatCallTest)[]
   /** Kinds of the root conversation's documents the tests read; the transcript follows them and passes them in. */
   docs?: readonly string[]
+  /**
+   * Rows that are background to the chat, such as traffic between agents: two or more in a row, with the runs of work
+   * between them, fold into one line that expands to them. A row is a stored entry with the visible calls it shows.
+   */
+  quiet?: ChatQuietTest
+  /** The line a folded group of quiet rows shows; the first matching facet's wins, a step count otherwise. */
+  summary?: ComponentType<ChatSummaryProps>
+}
+/** A row of a chat: an entry, and the visible tool calls it shows when it shows only some of its blocks. */
+export interface ChatRow {
+  entry: EntryRecord
+  calls: readonly ToolCall[]
+}
+/** Whether a row is background; `hidden` for one that renders nothing, which joins a group without counting. */
+export type ChatQuietTest = (row: ChatRow, docs: ChatDocs) => boolean | 'hidden'
+export interface ChatSummaryProps {
+  /** The group's rows that are no runs of work. */
+  rows: readonly ChatRow[]
+  /** Steps in its runs of work. */
+  steps: number
+  /** Whether the agent still works in it. */
+  working: boolean
 }
 /** The root conversation's documents of the contributions' `docs` kinds, by kind, as `useDocOf(1, kind)` reads them. */
 export type ChatDocs = Readonly<Record<string, Readonly<JsonObject> | null | undefined>>

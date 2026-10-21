@@ -3,12 +3,15 @@ import { describe, expect, it } from 'vitest'
 import {
   chatRows,
   groupAside,
+  groupQuiet,
+  partsOf,
+  quietOf,
   runOf,
   setAsideIds,
   windowGaps,
   windowKey,
 } from '../../web/src/app/chat.ts'
-import type { ChatPart, WorkRun } from '../../web/src/app/chat.ts'
+import type { ChatPart, QuietGroup, WorkRun } from '../../web/src/app/chat.ts'
 
 let nextId = 1
 const entry = (kind: string, message?: object, data?: object) =>
@@ -214,5 +217,55 @@ describe('set-aside rows', () => {
           : String((row as ChatPart).entry.id),
       ),
     ).toEqual(['1', 'aside 3 ×2', '5', '6'])
+  })
+})
+
+/** Rows as ids, a quiet group as `{…} ×steps` around its rows. */
+const quietShape = (rows: (ChatPart | WorkRun | QuietGroup)[]): string[] =>
+  rows.map((row) =>
+    'quiet' in row ? `{${quietShape([...row.quiet]).join(' ')}} ×${row.steps}` : shape([row])[0],
+  )
+const verdict = ({ entry: { kind } }: ChatPart) =>
+  kind === 'note' ? true : kind === 'wake' ? ('hidden' as const) : false
+
+describe('quiet groups', () => {
+  it('folds a stretch of background with the work and hidden rows between it, but not work that ends it', () => {
+    nextId = 1
+    const rows = chatRows(
+      [
+        user('go'),
+        entry('note'),
+        assistant('toolUse', call('bash')),
+        entry('wake'),
+        entry('note'),
+        user('and now?'),
+        entry('note'),
+        assistant('toolUse', call('read')),
+      ],
+      visible,
+    )
+    expect(quietShape(groupQuiet(rows, verdict))).toEqual([
+      '1',
+      '{2 [3] ×1 4 5} ×1',
+      '6',
+      '{7} ×0',
+      '[8] ×1',
+    ])
+  })
+
+  it('leaves a stretch with nothing quiet that shows as it is, and opens a group to reveal its entries', () => {
+    nextId = 1
+    const rows = chatRows(
+      [user('go'), entry('wake'), assistant('toolUse', call('bash')), entry('note')],
+      visible,
+    )
+    const grouped = groupQuiet(rows, (row) => (row.entry.id === 4 ? true : verdict(row)))
+    expect(quietShape(grouped)).toEqual(['1', '{2 [3] ×1 4} ×1'])
+    expect(quietShape(groupQuiet(rows.slice(0, 3), verdict))).toEqual(['1', '2', '[3] ×1'])
+    expect(quietOf(grouped, 3)).toBe(grouped[1])
+    expect(quietOf(grouped, 1)).toBeUndefined()
+    // A run inside a group opens too.
+    expect(runOf(grouped, 3)).toBe(rows[2])
+    expect(partsOf(grouped[1]).map((inner) => inner.entry.id)).toEqual([2, 3, 4])
   })
 })
