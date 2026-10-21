@@ -11,7 +11,7 @@ A project is a forest of conversation trees, like commit histories.
 - **Roots** run no turns. Each keeps a project memory (decisions, facts, lessons by slug); a branch starts from the
   root's memory index and recent landings. The root's read-only tally stays the browsable project context: branch
   intents, latest conversation abstracts and landings with divergence and `#conversation/entry` breadcrumbs. The UI
-  calls a tally **context**; code, tools and model text call it "tally". The footer shows estimated tokens and **Talk to @ultimate**; the sidebar
+  calls a tally **context**; code, tools and model text call it "tally". The footer shows the memory's estimated tokens (what a branch starts from) and **Talk to @ultimate**; the sidebar
   shows each root heading its tree with its last three events (landings, notes, branches, compactions).
   Start a project with @ultimate: Continue on Get ready or **Set up with @ultimate** on Start here. It handles setup
   cards, reads the project and seeds the first tally; optional focus becomes instructions. It maintains memory

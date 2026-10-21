@@ -408,11 +408,24 @@ function TallyComposer({ id, dock }: { id: number; dock?: boolean }) {
         {(start) => start}
       </Provided>
     )
-  return <TallyFooter dock={dock} id={id} tokens={tally?.tokens} />
+  return <TallyFooter brief={tally?.briefTokens} dock={dock} id={id} tokens={tally?.tokens} />
 }
 
-/** In place of a tally's composer: what it is, its size, and the way to @ultimate, who keeps it. */
-function TallyFooter({ id, tokens, dock }: { id: number; tokens?: number; dock?: boolean }) {
+/**
+ * In place of a tally's composer: what a new branch starts from and its size (the memory brief, or the whole context
+ * while there are no memories), and the way to @ultimate, who keeps it.
+ */
+function TallyFooter({
+  id,
+  tokens,
+  brief,
+  dock,
+}: {
+  id: number
+  tokens?: number
+  brief?: number
+  dock?: boolean
+}) {
   const actions = useUltimate()
   return (
     <div className={cn(column(dock), 'pb-3')}>
@@ -422,10 +435,12 @@ function TallyFooter({ id, tokens, dock }: { id: number; tokens?: number; dock?:
       >
         <div className="flex min-w-0 items-center gap-2 font-mono text-[11px] text-muted-foreground">
           <ScrollTextIcon className="size-3.5 shrink-0 text-brand" />
-          <span className="shrink-0 text-foreground">Context</span>
-          {tokens !== undefined && (
-            <span className="shrink-0" data-lineage-tokens={tokens}>
-              · {formatTokens(tokens)} tokens
+          <span className="shrink-0 text-foreground">
+            {brief === undefined ? 'Context' : 'Memory'}
+          </span>
+          {(brief ?? tokens) !== undefined && (
+            <span className="shrink-0" data-lineage-tokens={brief ?? tokens}>
+              · {formatTokens((brief ?? tokens)!)} tokens
             </span>
           )}
           <button
@@ -437,7 +452,9 @@ function TallyFooter({ id, tokens, dock }: { id: number; tokens?: number; dock?:
           </button>
         </div>
         <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
-          What every new branch starts from. @ultimate maintains it.
+          {brief === undefined
+            ? 'What every new branch starts from until there are memories. @ultimate maintains it.'
+            : 'What every new branch starts from. The context above is the browsable history; @ultimate maintains both.'}
         </p>
         <Memory id={id} />
       </div>
@@ -509,7 +526,7 @@ function Memory({ id }: { id: number }) {
         }
         type="button"
       >
-        Memory · {slugs.length}
+        {slugs.length} {slugs.length === 1 ? 'memory' : 'memories'}
         <ChevronRightIcon className={cn('size-2.5 transition-transform', open && 'rotate-90')} />
       </button>
       {open && (

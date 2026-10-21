@@ -390,9 +390,13 @@ export function RootRow({
         {tokens !== undefined && tally?.since !== undefined && (
           <span
             className="shrink-0 font-mono text-[10px] text-muted-foreground/80"
-            title="Context every new branch starts from"
+            title={
+              tally.briefTokens === undefined
+                ? 'Context every new branch starts from'
+                : 'Memory every new branch starts from'
+            }
           >
-            {formatTokens(tokens)}
+            {formatTokens(tally.briefTokens ?? tokens)}
           </span>
         )}
       </button>
