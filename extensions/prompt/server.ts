@@ -15,7 +15,6 @@ import {
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
-import { primaryAgent } from '../../lib/machine.ts'
 import type { BuildNote } from './refs.ts'
 
 export const order = -100
@@ -90,8 +89,7 @@ async function instructionChanges(
   seen: { files?: Record<string, string> },
 ) {
   const standing = host.doc('ultimate.standing-agents')
-  const name = primaryAgent(host.projectRoot, host.userHome)
-  if (!name) return { instructions: [], docs: [] }
+  const name = 'ultimate'
   const index = standing
     ? ((await tx.doc(standing, ROOT_CONVERSATION_ID)) as Record<string, number>)
     : {}

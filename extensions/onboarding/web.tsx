@@ -135,11 +135,8 @@ function Undecided() {
   ) : null
 }
 function NoGit() {
-  const system = useSystem()
-  // The machine home is a plain folder on purpose (`lib/machine.ts`); it needs no Git.
-  const machine = !!system && system.project.root === `${system.machine.home}/.ultimate/machine`
   const reason = useIsolation()?.reason
-  return reason && !machine ? <SetupLink card="git">set up git</SetupLink> : null
+  return reason ? <SetupLink card="git">set up git</SetupLink> : null
 }
 
 type Choice = { card: string; summary: string; toolCallId: string }

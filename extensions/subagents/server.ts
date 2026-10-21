@@ -43,7 +43,6 @@ import {
 import { createChild, started } from './children.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { exec } from '../../lib/exec.ts'
-import { residentHere } from '../../lib/machine.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { Standing, Subagents, SubagentsApi } from './api.ts'
@@ -580,9 +579,7 @@ export default function subagents(
   const residentDefinitions = async () =>
     (
       await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
-    ).definitions.filter((definition) =>
-      residentHere(definition.resident, host.projectRoot, host.userHome),
-    )
+    ).definitions.filter((definition) => definition.resident === true)
   /** Drops standing agents whose definition is gone; their conversations become ordinary ones. Retirement waits
    * until every definition parses: an error names a file, not the agent it defines, so a typo retires nothing. */
   const pruneRetired = async (ctx: Context) => {
@@ -595,7 +592,7 @@ export default function subagents(
     if (errors.length > 0) return
     const kept = new Set(
       definitions
-        .filter((definition) => residentHere(definition.resident, host.projectRoot, host.userHome))
+        .filter((definition) => definition.resident === true)
         .map((definition) => definition.name),
     )
     await host.harness().commit(async (tx) => {

@@ -1,14 +1,12 @@
-// Installs Ultimate and the machine home as services: on Linux systemd user units with linger, so they start at boot
-// without a login; on macOS launchd agents in ~/Library/LaunchAgents, which run while the user is logged in.
-// Usage: pnpm setup:machine [--project <dir>] [--machine <name>] [--dry-run]. See "Cloud backups" in extensions/cloud/README.md.
+// Installs Ultimate as a service: on Linux a systemd user unit with linger, so it starts at boot without a login; on
+// macOS a launchd agent in ~/Library/LaunchAgents, which runs while the user is logged in.
+// Usage: pnpm setup:machine [--project <dir>] [--dry-run]. See "Cloud backups" in extensions/cloud/README.md.
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir, hostname, userInfo } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-
-export const machinePort = 4700
 
 export interface UnitOptions {
   /** The Ultimate clone that holds bin/ultimate.ts. */
@@ -17,7 +15,6 @@ export interface UnitOptions {
   project: string
   home: string
   node: string
-  machine: string
   /** The user's PATH (`loginPath`), kept after node so the agent finds the same tools as in a terminal. */
   path: string
 }
@@ -70,12 +67,9 @@ export function checkPaths(paths: Record<string, string>) {
       )
 }
 
-/** Both units run bin/ultimate.ts, so a supervised run may be inside either. */
-const ultimateUnits = ['ultimate.service', 'ultimate-machine.service']
-
 /**
  * The changed units this script runs inside, which it must not restart: the one whose InvocationID is the
- * process's INVOCATION_ID, and under Ultimate's supervisor both Ultimate units, since either may be the one.
+ * process's INVOCATION_ID, and under Ultimate's supervisor ultimate.service.
  */
 export function selfUnits(
   changed: string[],
@@ -84,7 +78,7 @@ export function selfUnits(
 ) {
   return changed.filter(
     (name) =>
-      (env.ULTIMATE_SUPERVISED === '1' && ultimateUnits.includes(name)) ||
+      (env.ULTIMATE_SUPERVISED === '1' && name === 'ultimate.service') ||
       (!!env.INVOCATION_ID && invocation(name) === env.INVOCATION_ID),
   )
 }
@@ -140,32 +134,15 @@ export function servicePath(node: string, path: string, misread?: RegExp) {
 }
 
 function services(options: UnitOptions, path: string): Service[] {
-  const { clone, project, home, node, machine } = options
-  const ultimate = join(clone, 'bin/ultimate.ts')
-  const env = { PATH: path, ULTIMATE_NO_OPEN: '1' }
+  const { clone, project, node } = options
   return [
     {
       unit: 'ultimate.service',
       label: 'com.ultimate.app',
       description: `Ultimate (${project})`,
       cwd: project,
-      env,
-      args: [node, ultimate],
-    },
-    {
-      unit: 'ultimate-machine.service',
-      label: 'com.ultimate.machine',
-      description: `Ultimate machine home (${machine})`,
-      cwd: clone,
-      env,
-      args: [
-        node,
-        ultimate,
-        '--port',
-        String(machinePort),
-        '--no-open',
-        join(home, '.ultimate/machine'),
-      ],
+      env: { PATH: path, ULTIMATE_NO_OPEN: '1' },
+      args: [node, join(clone, 'bin/ultimate.ts')],
     },
   ]
 }
@@ -258,9 +235,6 @@ export function renderAgents(options: UnitOptions): Agent[] {
   })
 }
 
-/** Both agents run bin/ultimate.ts, so a supervised run may be inside either. */
-const ultimateAgents = ['com.ultimate.app', 'com.ultimate.machine']
-
 export interface AgentState {
   label: string
   file: string
@@ -271,7 +245,7 @@ export interface AgentState {
  * Loads the agents into the user's GUI domain. A new or replaced agent is booted out and bootstrapped again, which
  * restarts it on the new plist; an unchanged one is bootstrapped only when not loaded. The replaced agent this
  * script runs inside is left alone: launchd sets XPC_SERVICE_NAME to the job's label, and under Ultimate's supervisor
- * either Ultimate agent may be the one. `launchctl` runs one command and returns its exit status.
+ * it is com.ultimate.app. `launchctl` runs one command and returns its exit status.
  */
 export function loadAgents(
   agents: AgentState[],
@@ -289,7 +263,7 @@ export function loadAgents(
     }
     const inside =
       state === 'replaced' &&
-      ((env.ULTIMATE_SUPERVISED === '1' && ultimateAgents.includes(label)) ||
+      ((env.ULTIMATE_SUPERVISED === '1' && label === 'com.ultimate.app') ||
         env.XPC_SERVICE_NAME === label)
     if (inside) {
       log(`${label} changed: restart it yourself.`)
@@ -312,26 +286,17 @@ function main() {
   const { values } = parseArgs({
     options: {
       project: { type: 'string' },
-      machine: { type: 'string' },
       'dry-run': { type: 'boolean' },
     },
   })
   const dry = values['dry-run'] === true
   const home = homedir()
   const clone = resolve(fileURLToPath(new URL('..', import.meta.url)))
-  const settingsFile = join(home, '.ultimate/settings.json')
-  const settings = existsSync(settingsFile)
-    ? (JSON.parse(readFileSync(settingsFile, 'utf8')) as {
-        cloud?: { machine?: string }
-      })
-    : {}
-  const machine = values.machine ?? settings.cloud?.machine ?? hostname()
   const options = {
     clone,
     project: resolve(values.project ?? clone),
     home,
     node: process.execPath,
-    machine,
     path: loginPath(process.env.PATH ?? ''),
   }
 
@@ -355,7 +320,6 @@ function main() {
       }
       return { name, file, state } as const
     })
-  mkdir(join(home, '.ultimate/machine'))
 
   if (process.platform === 'darwin') {
     const agents = renderAgents(options)
@@ -377,7 +341,7 @@ function main() {
       },
       console.log,
     )
-    console.log('The agents run while you are logged in.')
+    console.log('The agent runs while you are logged in.')
     if (dry) console.log('Dry run: nothing changed.')
     return
   }

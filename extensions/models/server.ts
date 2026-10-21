@@ -100,15 +100,15 @@ const json = <T>(value: T): Json<T> => JSON.parse(JSON.stringify(value))
 export const userActions = ['login', 'answer', 'cancel', 'logout']
 
 /**
- * Record that `provider`'s login changed: its recorded health is meaningless now, and health resets it to unknown. The
- * machine home sees `auth.json` change and pings the provider (`extensions/health`).
+ * Record that `provider`'s login changed: its recorded health is meaningless now, and health resets it to unknown
+ * (`extensions/health`).
  */
 const loginChanged = async (host: ActionContext['host'], provider: string) =>
   host
     .harness()
     .commit((tx) => host.emit(tx, LoginChanged, { provider }), context)
     .catch((error: unknown) => {
-      // Health is advisory: the login itself succeeded, and the next call or ping corrects the record.
+      // Health is advisory: the login itself succeeded, and the next call corrects the record.
       console.error('models: login change not recorded:', error)
     })
 

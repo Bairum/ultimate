@@ -25,6 +25,5 @@ export const ConversationTask = definePoint<
 export { ConversationRef, FeatureTag, useOverview } from './feature.tsx'
 export { AgentMark, agentTitle } from './marks.tsx'
 export type { Presence } from './marks.tsx'
-export { usePrimaryAgent } from './primary.tsx'
 export { hiddenConversationIds } from './visible.tsx'
 export { Compacted, ConcludeAction, OverviewDoc, RenameAction, ResumeAction } from './refs.ts'

@@ -15,7 +15,6 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { isolatable } from '../../lib/git.ts'
 import { writeJson } from '../../lib/json-file.ts'
-import { isMachineHome } from '../../lib/machine.ts'
 import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
@@ -141,12 +140,6 @@ async function declared(path: string) {
   }
 }
 
-/** The machine home has no project to set up or read, and no standing agent. */
-const refuseMachineHome = (host: { projectRoot: string; userHome: string }) => {
-  if (isMachineHome(host.projectRoot, host.userHome))
-    throw new Error('The machine home has no onboarding')
-}
-
 const marker = (userHome: string) => join(userHome, '.ultimate/onboarding.json')
 
 export const userActions = [
@@ -164,7 +157,6 @@ export const actions: Record<string, ExtensionAction> = {
   help: implementAction(HelpAction, async (args, { host }) => {
     const card = args && typeof args === 'object' && !Array.isArray(args) ? args.card : undefined
     if (card !== 'project' && card !== 'git') throw new Error('Expected project or git card')
-    refuseMachineHome(host)
     const id = await host.need(SubagentsApi).standing('ultimate', context)
     const conversation = (await host.harness().conversation(id, context))!
     await conversation.submit(
@@ -190,7 +182,6 @@ export const actions: Record<string, ExtensionAction> = {
         (input.instructions !== undefined && typeof input.instructions !== 'string'))
     )
       throw new Error('Expected root id and optional instructions')
-    refuseMachineHome(host)
     const lineage = host.need(LineageApi)
     const root =
       input?.root ??
@@ -336,9 +327,7 @@ export const actions: Record<string, ExtensionAction> = {
   status: implementAction(StatusAction, async (_args, { host }) => {
     const folders = await host.projectExtensions()
     return {
-      // The machine home shows no Get ready page: its first run starts no onboarding.
-      firstRun:
-        !existsSync(marker(host.userHome)) && !isMachineHome(host.projectRoot, host.userHome),
+      firstRun: !existsSync(marker(host.userHome)),
       project: await host.projectSetup(),
       // The user's own lists, for the first run's checkboxes.
       user: await declared(userSettingsPath(host.userHome)),

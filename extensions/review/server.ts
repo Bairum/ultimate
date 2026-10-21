@@ -5,7 +5,6 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import { git, isolatable } from '../../lib/git.ts'
-import { primaryAgent } from '../../lib/machine.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
@@ -158,9 +157,7 @@ async function recipient(host: ExtensionHost, spec: string): Promise<number> {
     () => undefined,
   )
   if (found !== undefined && known(host, found)) return found
-  const primary = primaryAgent(host.projectRoot, host.userHome)
-  if (!primary) throw new Error('The machine home has no standing agent to send a review to')
-  return host.need(SubagentsApi).standing(primary, context)
+  return host.need(SubagentsApi).standing('ultimate', context)
 }
 
 export const userActions = ['send']

@@ -19,7 +19,7 @@ export interface AgentDefinition {
   thinking?: ModelThinkingLevel
   tools?: string[]
   isolate?: 'none' | 'worktree'
-  /** A standing agent in project homes; the machine home has none (`lib/machine.ts`). */
+  /** A standing agent: one conversation per project, started on first use. */
   resident?: boolean
   /** What the lander does when a submission fails: explain it, or fix it and land. Only the lander reads it. */
   onFailure?: 'diagnose' | 'fix'

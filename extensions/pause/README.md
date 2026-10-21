@@ -12,7 +12,6 @@ Pause the whole Ultimate host and continue it with Play. This is a soft pause: r
 
 Automation fires are scheduler tasks, so the hold stops them. Timers that start work outside the scheduler `want` `PauseApi` (`api.ts`) and skip while `paused()`:
 
-- the provider heartbeat (`health`);
 - the updater's background fetch (`update`);
 - cloud backups (`cloud`): **Back up now** refuses with "Ultimate is paused; press Play first".
 

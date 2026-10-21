@@ -1,4 +1,4 @@
-Tracks whether each model provider works on this machine, from every real response and an hourly heartbeat in the machine home, and reports a failing one to the `setup` status-line item.
+Tracks whether each model provider works on this machine, from every real response, and reports a failing one to the `setup` status-line item.
 
 ## What is stored
 
@@ -11,14 +11,13 @@ One file per machine, `~/.ultimate/health.json`, written by every Ultimate home 
       "lastOk": 0,
       "lastFail": 0,
       "error": "invalid_grant",
-      "lastChecked": 0,
       "lastUsed": 0
     }
   }
 }
 ```
 
-Times are epoch milliseconds. `lastOk` and `lastFail` come from real calls and pings, `lastChecked` from pings only, `lastUsed` from real calls only. Two more fields count failures: `lastAuth`, and `transient`, the newest three transient failure times. They decide the state and are not reported. Only failures newer than `lastOk` count, so writes arriving out of order from two homes still give the same state.
+Times are epoch milliseconds. `lastOk`, `lastFail` and `lastUsed` come from real calls; nothing pings a provider. Two more fields count failures: `lastAuth`, and `transient`, the newest three transient failure times. They decide the state and are not reported. Only failures newer than `lastOk` count, so writes arriving out of order from two homes still give the same state.
 
 ## When a provider is failing
 
@@ -32,7 +31,7 @@ A success newer than the failures ends both. Otherwise a provider is `ok` once i
 
 ## Login changes
 
-A login says nothing about the one it replaced, so a change starts that provider over at `unknown` (`reset` in `store.ts` drops its entry). Ultimate's own login and logout (`extensions/models`) reset the provider when they finish. The machine home also watches Pi's `auth.json` (its directory, since Pi replaces the file) and resets each provider whose login appeared or disappeared there, as `pi` /login or /logout do; a provider without an entry is due at once, so the next tick pings it. A token refresh rewrites the file without changing its providers and resets nothing. Only the file's provider names are read, never its values. Health covers only providers with a login here: every tick first drops the entries of providers without one (a login removed while Ultimate was down, or a provider nothing logs in to any more), and a real call to such a provider records nothing, so a stale failure never warns.
+A login says nothing about the one it replaced, so a change starts that provider over at `unknown` (`reset` in `store.ts` drops its entry). Ultimate's own login and logout (`extensions/models`) reset the provider when they finish. A login made outside Ultimate (`pi` /login) resets nothing, but its first successful call ends any earlier failure. Health covers only providers with a login here: `providers()` leaves out entries of providers without one, and a real call to such a provider records nothing, so a stale failure never warns.
 
 A write that flips a provider's state (`ok`, `failing`, `unknown`) emits `health.changed` `{ provider, state, error? }`
 (`Changed` in `refs.ts`) with the sanitised error, in a commit of its own right after the file write (a login change's
@@ -44,22 +43,9 @@ Every machine keeps its own logins: never copy `auth.json` between machines. OAu
 
 A `GenerationTask` `afterResponse` hook records every terminal provider message at no cost: `stopReason: 'error'` records a failure with `errorMessage`, `aborted` nothing, anything else a success. The write never blocks or fails the generation. A faux server records nothing.
 
-## Heartbeat
-
-Only the machine home (`~/.ultimate/machine`) pings, never on faux. Every 10 minutes (and 30 s after start) a single-flight tick picks each provider with configured credentials and an available model, and pings those due:
-
-- the interval follows the machine's activity, the time since the last real call on any provider: under 4 h idle every hour, under 12 h every 4 hours, beyond (or never used) every 8 hours;
-- a provider is due when its last success or ping is older than the interval, or when it is failing and its last ping is older than 15 minutes, so a one-off error clears quickly.
-
-A ping asks the provider's cheapest available model (lowest `cost.input + cost.output`) `ping` with `maxTokens: 16`, one provider after another, and records `lastChecked` plus a success or failure. That is at most 24 pings per provider per day of about 20 tokens each. A `claude-code` ping starts the Claude Code CLI on its subscription.
-
 ## In backups
 
 Every cloud backup carries `providers()` as its `health`, so the cloud's register shows each machine's provider health as of its last backup (`extensions/cloud/README.md`).
-
-## Actions
-
-`state` returns `{ machine, providers: ProviderHealth[] }` for this machine (machine from cloud settings, else the hostname). A faux server answers a fixed demo: `openai-codex` ok, `anthropic` failing with `invalid_grant` 3 hours ago, `claude-code` unknown.
 
 ## Status line
 

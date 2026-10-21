@@ -5,7 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Switch } from '@/components/ui/switch'
 import { cn, defineWebExtension, useDocOf, useExtensionUiState } from '@/sdk'
 import { BoardDoc, emptyBoard } from '../board/ui.tsx'
-import { OverviewDoc, usePrimaryAgent } from '../conversations/ui.tsx'
+import { OverviewDoc } from '../conversations/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { listener, sounds } from './cues.ts'
 import type { Cue, Sound } from './cues.ts'
@@ -41,9 +41,7 @@ async function announce(cue: Cue) {
 function Player() {
   const overview = useDocOf(1, OverviewDoc)
   const board = useDocOf(1, BoardDoc)
-  const name = usePrimaryAgent()
-  const standing = useDocOf(1, StandingDoc)
-  const agent = name ? standing?.[name] : undefined
+  const agent = useDocOf(1, StandingDoc)?.ultimate
   const { muted, off } = useSettings()
   const [hear] = useState(listener)
   useEffect(() => {
@@ -66,7 +64,6 @@ const preview = (sound: Sound) =>
 /** The status-bar entry: a switch for all sounds and a checkbox and a preview for each. */
 function Control() {
   const { muted, setMuted, off, setOff } = useSettings()
-  const name = usePrimaryAgent()
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -118,7 +115,7 @@ function Control() {
           ))}
         </div>
         <div className="mt-1 border-t border-border/70 px-2 pt-1.5 pb-1 text-[11px] text-muted-foreground">
-          {name ? `For @${name} only` : 'No standing agent here'}
+          For @ultimate only
         </div>
       </PopoverContent>
     </Popover>

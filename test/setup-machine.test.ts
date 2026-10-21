@@ -13,7 +13,6 @@ const options = {
   project: '/home/u/work/app',
   home: '/home/u',
   node: '/opt/node/bin/node',
-  machine: 'rog',
   path: '/home/u/app/node_modules/.bin:/home/u/.local/share/pnpm/.tools/@pnpm+exe/11.8.0/bin:/opt/mise/shims:/home/u/.local/bin:/usr/bin',
 }
 
@@ -25,28 +24,19 @@ function line(content: string, key: string) {
   return content.split('\n').filter((entry) => entry.startsWith(`${key}=`))
 }
 
-it('renders ultimate and the machine home with absolute paths', () => {
-  const units = Object.fromEntries(renderUnits(options).map((unit) => [unit.name, unit.content]))
-  expect(Object.keys(units)).toEqual(['ultimate.service', 'ultimate-machine.service'])
-  const ultimate = units['ultimate.service']
+it("renders the project's ultimate unit with absolute paths", () => {
+  const units = renderUnits(options)
+  expect(units.map((unit) => unit.name)).toEqual(['ultimate.service'])
+  const ultimate = units[0].content
   expect(line(ultimate, 'WorkingDirectory')).toEqual(['WorkingDirectory=/home/u/work/app'])
   expect(line(ultimate, 'ExecStart')).toEqual([
     'ExecStart=/opt/node/bin/node /home/u/ultimate/bin/ultimate.ts',
   ])
   expect(line(ultimate, 'Environment')).toContain('Environment=ULTIMATE_NO_OPEN=1')
-
-  const machine = units['ultimate-machine.service']
-  expect(line(machine, 'WorkingDirectory')).toEqual(['WorkingDirectory=/home/u/ultimate'])
-  expect(line(machine, 'ExecStart')).toEqual([
-    'ExecStart=/opt/node/bin/node /home/u/ultimate/bin/ultimate.ts --port 4700 --no-open /home/u/.ultimate/machine',
+  expect(line(ultimate, 'Environment').filter((entry) => entry.includes('PATH='))).toEqual([
+    'Environment=PATH=/opt/node/bin:/opt/mise/shims:/home/u/.local/bin:/usr/bin:/usr/local/bin:/bin',
   ])
-
-  for (const content of Object.values(units)) {
-    expect(line(content, 'Environment').filter((entry) => entry.includes('PATH='))).toEqual([
-      'Environment=PATH=/opt/node/bin:/opt/mise/shims:/home/u/.local/bin:/usr/bin:/usr/local/bin:/bin',
-    ])
-    expect(line(content, 'WantedBy')).toEqual(['WantedBy=default.target'])
-  }
+  expect(line(ultimate, 'WantedBy')).toEqual(['WantedBy=default.target'])
 })
 
 it("puts the login shell's PATH first, so a bare service PATH still finds claude, gh and pnpm", () => {
@@ -109,38 +99,26 @@ function plist(content: string) {
 const strings = (xml: string) =>
   [...xml.matchAll(/<string>(.*?)<\/string>/g)].map(([, value]) => value)
 
-it('renders the darwin agents with the systemd arguments, PATH, logs and on-failure restarts', () => {
+it('renders the darwin agent with the systemd arguments, PATH, logs and on-failure restarts', () => {
   const agents = renderAgents({ ...options, home: '/Users/u' })
-  expect(agents.map(({ name }) => name)).toEqual([
-    'com.ultimate.app.plist',
-    'com.ultimate.machine.plist',
-  ])
-  const [app, machine] = agents.map(({ content }) => plist(content))
+  expect(agents.map(({ name }) => name)).toEqual(['com.ultimate.app.plist'])
+  const app = plist(agents[0].content)
+  expect(strings(app.Label)).toEqual(['com.ultimate.app'])
   expect(strings(app.ProgramArguments)).toEqual([
     '/opt/node/bin/node',
     '/home/u/ultimate/bin/ultimate.ts',
   ])
   expect(strings(app.WorkingDirectory)).toEqual(['/home/u/work/app'])
   expect(app.EnvironmentVariables).toContain('<key>ULTIMATE_NO_OPEN</key>\n    <string>1</string>')
-  expect(strings(machine.ProgramArguments)).toEqual([
-    '/opt/node/bin/node',
-    '/home/u/ultimate/bin/ultimate.ts',
-    '--port',
-    '4700',
-    '--no-open',
-    '/Users/u/.ultimate/machine',
+  expect(strings(app.EnvironmentVariables)[0]).toBe(
+    '/opt/node/bin:/opt/mise/shims:/home/u/.local/bin:/usr/bin:/usr/local/bin:/bin',
+  )
+  expect(app.RunAtLoad).toBe('<true/>')
+  expect(app.KeepAlive).toContain('<key>SuccessfulExit</key>\n    <false/>')
+  expect(strings(app.StandardOutPath)).toEqual([
+    '/Users/u/Library/Logs/ultimate/com.ultimate.app.log',
   ])
-  for (const [index, agent] of [app, machine].entries()) {
-    const label = agents[index].label
-    expect(strings(agent.Label)).toEqual([label])
-    expect(strings(agent.EnvironmentVariables)[0]).toBe(
-      '/opt/node/bin:/opt/mise/shims:/home/u/.local/bin:/usr/bin:/usr/local/bin:/bin',
-    )
-    expect(agent.RunAtLoad).toBe('<true/>')
-    expect(agent.KeepAlive).toContain('<key>SuccessfulExit</key>\n    <false/>')
-    expect(strings(agent.StandardOutPath)).toEqual([`/Users/u/Library/Logs/ultimate/${label}.log`])
-    expect(agent.StandardErrorPath).toBe(agent.StandardOutPath)
-  }
+  expect(app.StandardErrorPath).toBe(app.StandardOutPath)
 })
 
 it('escapes plist values instead of refusing paths', () => {
@@ -162,7 +140,7 @@ it('escapes plist values instead of refusing paths', () => {
 it('reloads new and changed agents, loads unloaded unchanged ones and never restarts itself', () => {
   const agents: AgentState[] = [
     { label: 'com.ultimate.app', file: '/L/app.plist', state: 'replaced' },
-    { label: 'com.ultimate.machine', file: '/L/machine.plist', state: 'unchanged' },
+    { label: 'com.example.kept', file: '/L/kept.plist', state: 'unchanged' },
     { label: 'com.example.other', file: '/L/other.plist', state: 'new' },
   ]
   const plan = (env: Record<string, string>, loaded: string[] = []) => {
@@ -185,25 +163,25 @@ it('reloads new and changed agents, loads unloaded unchanged ones and never rest
   expect(plan({}).calls).toEqual([
     'bootout gui/501/com.ultimate.app',
     'bootstrap gui/501 /L/app.plist',
-    'print gui/501/com.ultimate.machine',
-    'bootstrap gui/501 /L/machine.plist',
+    'print gui/501/com.example.kept',
+    'bootstrap gui/501 /L/kept.plist',
     'bootout gui/501/com.example.other',
     'bootstrap gui/501 /L/other.plist',
   ])
   // A loaded unchanged agent is left running.
-  expect(plan({}, ['gui/501/com.ultimate.machine']).calls).not.toContain(
-    'bootstrap gui/501 /L/machine.plist',
+  expect(plan({}, ['gui/501/com.example.kept']).calls).not.toContain(
+    'bootstrap gui/501 /L/kept.plist',
   )
   // Inside the changed app agent, found by the label launchd puts in XPC_SERVICE_NAME.
-  const self = plan({ XPC_SERVICE_NAME: 'com.ultimate.app' }, ['gui/501/com.ultimate.machine'])
+  const self = plan({ XPC_SERVICE_NAME: 'com.ultimate.app' }, ['gui/501/com.example.kept'])
   expect(self.calls).toEqual([
-    'print gui/501/com.ultimate.machine',
+    'print gui/501/com.example.kept',
     'bootout gui/501/com.example.other',
     'bootstrap gui/501 /L/other.plist',
   ])
   expect(self.log).toEqual(['com.ultimate.app changed: restart it yourself.'])
-  // Under Ultimate's supervisor both Ultimate agents are left alone; any other agent still reloads.
-  const supervised = plan({ ULTIMATE_SUPERVISED: '1' }, ['gui/501/com.ultimate.machine'])
+  // Under Ultimate's supervisor the Ultimate agent is left alone; any other agent still reloads.
+  const supervised = plan({ ULTIMATE_SUPERVISED: '1' }, ['gui/501/com.example.kept'])
   expect(supervised.calls).toEqual(self.calls)
   // A failing bootstrap stops the setup.
   expect(() =>
@@ -217,24 +195,19 @@ it('reloads new and changed agents, loads unloaded unchanged ones and never rest
   ).toThrow('launchctl bootstrap gui/501 /L/app.plist failed.')
 })
 
-it('never restarts the unit it runs inside: by InvocationID, and both Ultimate units when supervised', () => {
-  const changed = ['ultimate.service', 'ultimate-machine.service']
+it('never restarts the unit it runs inside: by InvocationID, and ultimate.service when supervised', () => {
+  const changed = ['ultimate.service', 'other.service']
   const ids: Record<string, string> = {
     'ultimate.service': 'aaa',
-    'ultimate-machine.service': 'bbb',
+    'other.service': 'bbb',
   }
   const invocation = (name: string) => ids[name] ?? ''
   // Run by hand outside any unit: everything restarts.
   expect(selfUnits(changed, {}, invocation)).toEqual([])
-  // Inside the machine home's unit, found by its InvocationID.
-  expect(selfUnits(changed, { INVOCATION_ID: 'bbb' }, invocation)).toEqual([
-    'ultimate-machine.service',
-  ])
-  // Under Ultimate's supervisor, either Ultimate unit may be the one: both are left alone.
-  expect(selfUnits(changed, { ULTIMATE_SUPERVISED: '1' }, invocation)).toEqual([
-    'ultimate.service',
-    'ultimate-machine.service',
-  ])
+  // Inside another unit, found by its InvocationID.
+  expect(selfUnits(changed, { INVOCATION_ID: 'bbb' }, invocation)).toEqual(['other.service'])
+  // Under Ultimate's supervisor, ultimate.service is left alone.
+  expect(selfUnits(changed, { ULTIMATE_SUPERVISED: '1' }, invocation)).toEqual(['ultimate.service'])
   // An unknown INVOCATION_ID matches nothing; an empty one never matches a unit without an id.
   expect(selfUnits(changed, { INVOCATION_ID: 'zzz' }, invocation)).toEqual([])
   expect(selfUnits(['other.service'], { INVOCATION_ID: '' }, () => '')).toEqual([])

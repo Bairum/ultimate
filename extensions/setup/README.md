@@ -27,7 +27,7 @@ explicitly never falls back: the features are off and the row warns.
 
 ## The agent's note
 
-The primary agent (@ultimate; the machine home has none) hears about setup through a hidden `setup.note` entry placed
+@ultimate hears about setup through a hidden `setup.note` entry placed
 before an input that starts its run, by the patched `beforeInput` hook, only when its set of warnings differs from the
 one it last heard (`setup.seen`, per conversation), and once more with "resolved" when they clear. No system-prompt
 section, so the prompt stays cached. The check is cached for 30 seconds.
