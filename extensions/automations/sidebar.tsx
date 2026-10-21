@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { cn, useAction, useNow, useUltimate } from '@/sdk'
+import { ChevronRightIcon } from 'lucide-react'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { cn, useAction, useExtensionUiState, useNow, useUltimate } from '@/sdk'
 import { useLive } from './panel.tsx'
 import { full, RunIcon, statusLabel, until } from './parts.tsx'
 import { ListAction } from './refs.ts'
@@ -28,21 +30,19 @@ export function ScheduledSection() {
     now,
   )
   const [all, setAll] = useState(false)
-  const { openPanel } = useUltimate()
+  const [expanded, setExpanded] = useExtensionUiState('sidebarOpen', true)
   if (enabled.length === 0) return null
   const failing = enabled.filter((automation) => automation.runs.at(-1)?.status === 'failed').length
   return (
-    <section
+    <Collapsible
       aria-label="Scheduled"
       className="mb-1 flex flex-col gap-px border-b border-border/60 pb-1"
       data-sidebar-section="automations"
+      onOpenChange={setExpanded}
+      open={expanded}
     >
-      <button
-        className="mx-2 flex h-6 cursor-pointer items-center gap-1.5 rounded-md px-2 font-mono text-[9.5px] tracking-wider text-muted-foreground/70 uppercase outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-        onClick={() => openPanel('automations')}
-        title="Open Automations"
-        type="button"
-      >
+      <CollapsibleTrigger className="group/scheduled mx-2 flex h-6 cursor-pointer items-center gap-1 rounded-md px-1 font-mono text-[9.5px] tracking-wider text-muted-foreground/70 uppercase outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
+        <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/scheduled:rotate-90" />
         Scheduled
         <span
           className={cn(
@@ -53,20 +53,22 @@ export function ScheduledSection() {
         >
           {enabled.length}
         </span>
-      </button>
-      {(all ? enabled : enabled.slice(0, FIRST)).map((automation) => (
-        <Row automation={automation} key={automation.id} now={now} />
-      ))}
-      {enabled.length > FIRST && (
-        <button
-          className="mx-2 h-5 cursor-pointer rounded-md pl-[26px] text-left font-mono text-[10px] text-muted-foreground/70 outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-          onClick={() => setAll(!all)}
-          type="button"
-        >
-          {all ? 'fewer' : `+${enabled.length - FIRST} more`}
-        </button>
-      )}
-    </section>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="flex flex-col gap-px">
+        {(all ? enabled : enabled.slice(0, FIRST)).map((automation) => (
+          <Row automation={automation} key={automation.id} now={now} />
+        ))}
+        {enabled.length > FIRST && (
+          <button
+            className="mx-2 h-5 cursor-pointer rounded-md pl-[26px] text-left font-mono text-[10px] text-muted-foreground/70 outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+            onClick={() => setAll(!all)}
+            type="button"
+          >
+            {all ? 'fewer' : `+${enabled.length - FIRST} more`}
+          </button>
+        )}
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 
