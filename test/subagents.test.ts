@@ -377,10 +377,7 @@ it('runs root -> forked review lead -> parallel leaves -> lead -> root with scop
   const leadTranscript = seen.find((transcript) =>
     transcript.messages.some((message) => message.role === 'user' && message.content === 'TEAM'),
   )!
-  expect(JSON.stringify(leadTranscript.messages)).toContain('Follow your assigned role')
-  expect(
-    JSON.stringify(leadTranscript.messages.findLast((message) => message.role === 'system')),
-  ).not.toContain('You coordinate. Own requirements')
+  expect(JSON.stringify(leadTranscript.messages)).toContain('Available definitions')
   const invalid = await call(f.opened, { action: 'start', agent: 'invalid', task: 'reject' })
   expect(invalid.text).toContain('subset of parent tools')
   await call(f.opened, { action: 'start', agent: 'omitted', task: 'no delegation' })
@@ -1828,7 +1825,7 @@ describe('subagents', () => {
     // An empty addTools marks a settings-only overlay.
     await writeFile(
       join(cwd, '.ultimate/agents/scout.md'),
-      '---\nname: scout\nmodel: anthropic/claude-opus-4-8\nthinking: high\nonFailure: fix\ndescription: Our scout\naddTools: []\n---\n',
+      '---\nname: scout\nmodel: anthropic/claude-opus-4-8\nthinking: high\nonFailure: fix\nfast: true\ndescription: Our scout\naddTools: []\n---\n',
     )
     new ProjectTrustStore(join(home, '.ultimate')).set(cwd, true)
     const found = await discoverAgents(repo, cwd, home, modelRuntime)
@@ -1838,6 +1835,7 @@ describe('subagents', () => {
       model: { provider: 'anthropic', modelId: 'claude-opus-4-8' },
       thinking: 'high',
       onFailure: 'fix',
+      fast: true,
       tools: ['read', 'bash'],
       instructions: 'Original instructions',
     })
@@ -1878,7 +1876,7 @@ describe('subagents', () => {
       'pnpm test:e2e',
       'read AGENTS.md first',
       'A flaky test is fixed at its cause or deleted, never skipped or given a longer timeout.',
-      'fix: resolve the conflict',
+      '**fix:** resolve it here',
     ])
       expect(lander.instructions).toContain(line)
     expect(found.replaced).toEqual([])

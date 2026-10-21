@@ -51,6 +51,16 @@ export const Standing = defineDoc<Record<string, ConversationId>>({
   initial: () => ({}),
 })
 
+/** The definition a conversation was configured from: children (including automation runs) and standing agents. */
+export const Profile = defineDoc<{ definition?: string }>({
+  kind: 'ultimate.agent-profile',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
+
 export type SubagentsService = {
   /** The standing agents that run in this home, by name and description; use it to list valid `@name` addresses. */
   residents(ctx: Context): Promise<{ name: string; description: string }[]>

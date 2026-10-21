@@ -11,6 +11,7 @@ import type { TaskId } from '@earendil-works/pi-durable'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
+import { Profile } from '../extensions/subagents/api.ts'
 import automations, { actions, Automations } from '../extensions/automations/server.ts'
 import type { Automation } from '../extensions/automations/server.ts'
 import type { ActionContext } from '../server/actions.ts'
@@ -183,6 +184,10 @@ it('pause keeps a running profile run alive, skips overlap, and abort cancels a 
   const agent = await child.agent(context)
   expect(agent.tools.map((t) => t.name)).toEqual(['hold'])
   expect(agent.instructions).toBe('Only write the report.')
+  // Labelled 'automation', the run still records the definition it runs, which fast mode reads.
+  expect(await f.opened.harness.snapshot(Profile, child.id, context)).toEqual({
+    definition: 'writer',
+  })
   await until(async () => (await f.records())[0].runs.some((r) => r.status === 'skipped'), 2500)
   await f.action('pause', { id: a.id })
   expect((await f.records())[0].runs[0].status).toBe('running')

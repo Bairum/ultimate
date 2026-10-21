@@ -2,7 +2,16 @@ import { lazyStream } from '@earendil-works/pi-ai'
 import type { ProviderStreams } from '@earendil-works/pi-ai'
 import { openAICodexResponsesApi } from '@earendil-works/pi-ai/api/openai-codex-responses.lazy'
 import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy'
+import {
+  AgentDoc,
+  defineExtension,
+  GenerationTask,
+  hook,
+  ProviderDoc,
+} from '@earendil-works/pi-durable'
 import type { JsonObject } from '@earendil-works/pi-durable'
+import { discoverAgents } from '../../lib/agents.ts'
+import { Profile } from '../subagents/api.ts'
 import { readSettings, updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
@@ -82,11 +91,19 @@ export const actions = {
   }),
 }
 
-/** Stream (Codex) Responses requests, asking for the priority (fast) service tier for the models `listed` names. */
-export function fastStream(listed: () => Promise<Set<string>>, api: ProviderStreams): Stream {
+/**
+ * Stream (Codex) Responses requests, asking for the priority (fast) service tier for the models `listed` names and for
+ * requests from the provider sessions in `sessions` (conversations running a definition with `fast: true`).
+ */
+export function fastStream(
+  listed: () => Promise<Set<string>>,
+  api: ProviderStreams,
+  sessions: ReadonlySet<string> = new Set(),
+): Stream {
   return (model, context, options) =>
     lazyStream(model, async () => {
-      if (!(await listed()).has(`${model.provider}/${model.id}`))
+      const session = options?.sessionId !== undefined && sessions.has(options.sessionId)
+      if (!session && !(await listed()).has(`${model.provider}/${model.id}`))
         return api.streamSimple(model, context, options)
       // Sign in with ChatGPT rejects the documented "fast"; "priority" is the same tier.
       // Pi upstream: @earendil-works/pi-ai@1.3.0 src/api/simple-options.ts — simple stream options drop serviceTier, so it goes into the payload. Drop when buildBaseOptions forwards serviceTier and Pi Durable stream settings accept it.
@@ -100,7 +117,7 @@ export function fastStream(listed: () => Promise<Set<string>>, api: ProviderStre
     })
 }
 
-export default function fast(host: ExtensionHost) {
+export default function fastExtension(host: ExtensionHost) {
   // A reload installs the new facet before the old one closes; unregister only when none remain.
   const facets = host.resource('fast.facets', () => new Set<symbol>())
   const facet = Symbol('fast')
@@ -111,13 +128,48 @@ export default function fast(host: ExtensionHost) {
       for (const provider of FAST_PROVIDERS) host.modelRuntime.unregisterProvider(provider)
   })
   const listed = () => fastModels(host)
+  // Provider sessions of conversations whose definition sets `fast: true`, shared across reloads like the overlay.
+  const sessions = host.resource('fast.sessions', () => new Set<string>())
   host.modelRuntime.registerProvider('openai-codex', {
     api: 'openai-codex-responses',
-    streamSimple: fastStream(listed, openAICodexResponsesApi()),
+    streamSimple: fastStream(listed, openAICodexResponsesApi(), sessions),
   })
   host.modelRuntime.registerProvider('openai', {
     api: 'openai-responses',
-    streamSimple: fastStream(listed, openAIResponsesApi()),
+    streamSimple: fastStream(listed, openAIResponsesApi(), sessions),
   })
-  return { name: 'fast' }
+  return defineExtension({
+    name: 'fast',
+    hooks: [
+      hook(GenerationTask, {
+        // Before each request on an OpenAI model: the definition the conversation runs (children, automation runs
+        // and standing agents record it; a branch or the lander is labelled with it) decides, as it is now.
+        beforeRequest: async (_request, api, context) => {
+          const provider = await api.snapshot(ProviderDoc, api.conversationId, context)
+          if (!provider) return
+          const model = (await api.snapshot(AgentDoc, api.conversationId, context))?.model
+          const name =
+            model && fastProvider(`${model.provider}/`)
+              ? ((await api.snapshot(Profile, api.conversationId, context))?.definition ??
+                (await api.snapshot(host.metadata, api.conversationId, context))?.label)
+              : undefined
+          const fast =
+            name !== undefined &&
+            (
+              await discoverAgents(
+                host.ultimateRoot,
+                host.projectRoot,
+                host.userHome,
+                host.modelRuntime,
+              )
+            ).definitions.some((definition) => definition.name === name && definition.fast)
+          if (!fast) sessions.delete(provider.sessionId)
+          else if (!sessions.has(provider.sessionId)) {
+            if (sessions.size >= 10_000) sessions.delete(sessions.values().next().value!)
+            sessions.add(provider.sessionId)
+          }
+        },
+      }),
+    ],
+  })
 }
