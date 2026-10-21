@@ -65,7 +65,7 @@ import { useFold } from './fold.tsx'
 import type { AsideGroup, ChatPart, WorkRun } from './chat.ts'
 import { readerLeft } from './follow.ts'
 import { column } from './layout.ts'
-import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
+import { callsStart, indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
 import type { ToolResult } from './model.ts'
 import { ToolCallBlock } from './tool-call.tsx'
 import { TranscriptSkeleton } from './transcript-skeleton.tsx'
@@ -726,12 +726,15 @@ function WorkRow({
 }
 
 /** The tool calls of a folded run, in order. */
-function runCalls(run: WorkRun): ToolCall[] {
+function runCalls(run: WorkRun): { block: ToolCall; startedAt: number }[] {
   return run.work.flatMap(({ entry, blocks }) => {
     const message = entry.model?.[0]
     if (message?.role !== 'assistant') return []
+    const startedAt = callsStart(message)
     return message.content.flatMap((block, index) =>
-      block.type === 'toolCall' && (!blocks || blocks.includes(index)) ? [block] : [],
+      block.type === 'toolCall' && (!blocks || blocks.includes(index))
+        ? [{ block, startedAt }]
+        : [],
     )
   })
 }
@@ -766,12 +769,13 @@ function StepLines({
       {calls.length > shown.length && (
         <span className="text-muted-foreground/60">+{calls.length - shown.length} earlier</span>
       )}
-      {shown.map((block) => {
+      {shown.map(({ block, startedAt }) => {
         const call = toolCallView(block, {
           result: results.get(block.id),
           slot: slots.get(block.id),
           streaming: false,
           busy,
+          startedAt,
         })
         const line = toolLine(extensions, call.name)
         return (
@@ -1085,6 +1089,7 @@ function AssistantView({
                   slot: slots.get(block.id),
                   streaming,
                   busy,
+                  startedAt: streaming ? undefined : callsStart(message),
                 })}
                 key={block.id}
               />

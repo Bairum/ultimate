@@ -66,7 +66,7 @@ export interface ToolCallView {
   diagnostics: readonly ToolDiagnostic[]
   /** What the output bounds dropped while running. */
   dropped?: { bytes: number; lines: number }
-  /** Epoch ms when the calling response started and when the result was written. */
+  /** Epoch ms when the call started (its answer ended) and when its result was written; absent when interrupted. */
   startedAt?: number
   endedAt?: number
   result?: ToolResultMessage
