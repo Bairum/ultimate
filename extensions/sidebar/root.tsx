@@ -80,7 +80,8 @@ function useBranchState(
   const board = useDocOf(1, BoardDoc) ?? emptyBoard
   const runState = useOverview()[conversation.id]?.runState
   const name = usePrimaryAgent()
-  const primary = useDocOf(1, StandingDoc)?.[name]
+  const standing = useDocOf(1, StandingDoc)
+  const primary = name ? standing?.[name] : undefined
   const queued = index.queue.find((item) => item.conversationId === conversation.id)
   if (queued?.state === 'landing') return { label: 'landing', tone: 'success' } as const
   if (queued) return { label: 'submitted', tone: 'success' } as const

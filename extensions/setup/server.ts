@@ -197,22 +197,23 @@ async function cloudArea(host: CheckHost): Promise<SetupIssue | undefined> {
   const cloud = settings.cloud as { url?: unknown } | undefined
   if (typeof cloud?.url !== 'string')
     return {
-      area: 'Cloud sync',
+      area: 'Cloud backup',
       status: 'info',
-      summary: 'off: this project lives on this machine only',
+      summary: 'off: this project is not backed up',
+      fix: { label: 'Join', command: 'cloud.join' },
     }
   const absent = []
   for (const name of ['ULTIMATE_CLOUD_TOKEN', 'ULTIMATE_CLOUD_SNAPSHOT_KEY'])
     if (!(await readSecret(host.userHome, name))) absent.push(name)
   if (absent.length)
     return {
-      area: 'Cloud sync',
+      area: 'Cloud backup',
       status: 'warn',
       summary: `half set up: ${absent.join(', ')} missing`,
-      impact: 'Moves and backups between machines fail.',
-      fix: { label: 'Add', secret: absent[0] },
+      impact: 'Backups and restores fail.',
+      fix: { label: 'Join', command: 'cloud.join' },
     }
-  return { area: 'Cloud sync', status: 'ok', summary: 'joined' }
+  return { area: 'Cloud backup', status: 'ok', summary: 'joined' }
 }
 
 function tailscaleArea(host: CheckHost): SetupIssue | undefined {
@@ -369,9 +370,10 @@ export default function setup(host: ExtensionHost) {
         // Only the primary agent hears about setup, and only when its warnings change: a per-input note, never a
         // system-prompt section, keeps the prompt cached.
         beforeInput: async (_input, { tx, conversationId }) => {
+          const primary = primaryAgent(host.projectRoot, host.userHome)
+          if (!primary) return undefined
           const standing = await tx.doc(Standing, ROOT_CONVERSATION_ID)
-          if (standing[primaryAgent(host.projectRoot, host.userHome)] !== conversationId)
-            return undefined
+          if (standing[primary] !== conversationId) return undefined
           // A check that fails here only skips the note; the status line still shows the setup.
           return noteFor(tx, conversationId, await current().catch(() => undefined), Date.now())
         },

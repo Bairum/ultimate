@@ -396,8 +396,9 @@ function TallyComposer({ id, dock }: { id: number; dock?: boolean }) {
   )
   const primary = usePrimaryAgent()
   if (tally === undefined || history === undefined) return null
-  // The machine home has no project to read: its root stays empty and points at @sync.
-  if (tally?.since === undefined && !history && primary === 'ultimate')
+  // The machine home has no project to read and no standing agent: its root stays empty.
+  if (!primary) return null
+  if (tally?.since === undefined && !history)
     return (
       <Provided input={{ id, dock }} point={EmptyRoot}>
         {(start) => start}

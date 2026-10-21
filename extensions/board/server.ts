@@ -27,7 +27,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { Handoff, WorkspacesApi } from '../workspaces/api.ts'
+import { WorkspacesApi } from '../workspaces/api.ts'
 import { isolatable } from '../../lib/git.ts'
 
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
@@ -224,8 +224,10 @@ async function assess(
 }
 /** The primary agent's conversation, whose incoming messages are triaged. */
 async function primaryConversation(host: ExtensionHost, ctx: Context) {
+  const primary = primaryAgent(host.projectRoot, host.userHome)
+  if (!primary) return undefined
   const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
-  return standing?.[primaryAgent(host.projectRoot, host.userHome)]
+  return standing?.[primary]
 }
 /**
  * The summary model a triage asks, chosen once per task. Without one, nothing is gated: the message wakes the agent as
@@ -775,10 +777,12 @@ async function send(
   }
   const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
   const primary = primaryAgent(host.projectRoot, host.userHome)
+  const primaryId = primary ? standing?.[primary] : undefined
   // The primary agent's messages to a busy conversation almost always steer it: new scope, a decision, a stop.
-  const steer = input.steer ?? (from !== 'user' && from === standing?.[primary])
+  const steer = input.steer ?? (from !== 'user' && from === primaryId)
   if (input.to === 'user') {
-    if (from !== standing?.[primary])
+    if (!primary) throw new Error('The machine home has no standing agent to message the user.')
+    if (from !== primaryId)
       throw new Error(
         `Only @${primary} messages the user; send this to @${primary} (reply: false) and it relays it.`,
       )
@@ -951,11 +955,6 @@ export default function board(host: ExtensionHost) {
     send: (from, input, requestId, ctx) =>
       send(host, from, input, ctx, undefined, undefined, requestId),
   })
-  // The lander's deploy handoff, through workspaces' extension point, so workspaces depends on no board.
-  host.implement(Handoff, {
-    send: (from, input, requestId, ctx) =>
-      send(host, from, input, ctx, undefined, undefined, requestId),
-  })
   return defineExtension({
     name: 'board',
     tasks: [delivery(host), route(host)],
@@ -996,7 +995,7 @@ export default function board(host: ExtensionHost) {
         if (parent !== undefined)
           return `Use message only to update #${parent}, the conversation that started you, while you work; your final answer reaches it anyway. One-way updates (reply: false) reach #${parent} as notes it reads with its next input; ask with reply: true when you need its answer to continue.`
         const agents = await host.need(SubagentsApi).residents(ctx)
-        const primary = primaryAgent(host.projectRoot, host.userHome)
+        const primary = primaryAgent(host.projectRoot, host.userHome) ?? 'ultimate'
         return `Use message to contact #id or @name. Only @${primary} messages user; send it updates with reply: false to relay. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
     ],

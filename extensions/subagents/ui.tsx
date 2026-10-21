@@ -15,6 +15,8 @@ export async function talkToUltimate(
 ) {
   const system = getState().system
   const name = system ? primaryAgent(system.project.root, system.machine.home) : 'ultimate'
+  // The machine home has no standing agent.
+  if (!name) return
   const id = await api.action(StandingAction, { name })
   actions.switchConversation(id)
   actions.showSurface('agent')

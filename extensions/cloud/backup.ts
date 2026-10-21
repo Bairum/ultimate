@@ -1,0 +1,130 @@
+// One cloud backup: upload the snapshot, then commit it to the Worker's register with the parent it builds on.
+import { basename, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { httpBase } from '../../lib/cloud.ts'
+import { readJson, writeJson } from '../../lib/json-file.ts'
+import { uploadSnapshot } from './snapshot.ts'
+import type { LastBackup } from './types.ts'
+
+/**
+ * `<home>/cloud-backup.json`: the project key, `parent` (the snapshot this home last uploaded or restored from, which
+ * the next backup builds on) and that backup's facts.
+ */
+export interface BackupFile {
+  key: string
+  parent: string
+  last: LastBackup
+}
+export const backupPath = (home: string) => join(home, 'cloud-backup.json')
+
+/** This home's backup record for project `key`; undefined without one, or for another project. */
+export async function readBackup(home: string, key: string) {
+  // An unreadable record counts as none: the next backup's parent check names what the cloud holds.
+  const file = await readJson<Partial<BackupFile> | undefined>(backupPath(home), undefined).catch(
+    () => undefined,
+  )
+  return file?.key === key && file.parent && file.last ? (file as BackupFile) : undefined
+}
+export const writeBackup = (home: string, file: BackupFile) => writeJson(backupPath(home), file)
+
+/** The Worker refused the commit: another machine backed up after `parent`. `message` is its sentence. */
+export class Conflict extends Error {
+  readonly latest: string | null
+  constructor(message: string, latest: string | null) {
+    super(message)
+    this.latest = latest
+  }
+}
+
+export interface BackupOptions {
+  url: string
+  token: string
+  /** `ULTIMATE_CLOUD_SNAPSHOT_KEY`. */
+  secret: string
+  machine: string
+  key: string
+  home: string
+  projectRoot: string
+  /** Replace the latest backup even when it is not this home's parent. */
+  force?: boolean
+  tailnet?: string
+  health?: unknown
+  signal?: AbortSignal
+  progress?: (done: number, total: number, uploaded: number) => void
+  fetch?: typeof fetch
+}
+
+/**
+ * Upload a snapshot of `<home>/state.sqlite` and the `ultimate/*` branches, then `POST /sync/backups/<p>/<id>` with the
+ * parent from `cloud-backup.json`. On 200 the record names the new backup as parent; on 409 it stays and `Conflict`
+ * carries the Worker's sentence. Uploaded chunks of a refused backup stay for the Worker's retention.
+ */
+export async function backUp(o: BackupOptions): Promise<LastBackup> {
+  const record = await readBackup(o.home, o.key)
+  const manifest = await uploadSnapshot({
+    url: o.url,
+    token: o.token,
+    secret: o.secret,
+    key: o.key,
+    machine: o.machine,
+    database: join(o.home, 'state.sqlite'),
+    repo: o.projectRoot,
+    signal: o.signal,
+    progress: o.progress,
+  })
+  const done: LastBackup = {
+    id: manifest.id,
+    at: manifest.createdAt,
+    machine: o.machine,
+    bytes: manifest.database.bytes + (manifest.bundle?.bytes ?? 0),
+    uploaded: (manifest.database.uploaded ?? 0) + (manifest.bundle?.uploaded ?? 0),
+  }
+  const project = createHash('sha256').update(o.key).digest('hex')
+  const response = await (o.fetch ?? fetch)(
+    new URL(`/sync/backups/${project}/${manifest.id}`, httpBase(o.url)),
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${o.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        key: o.key,
+        name: basename(o.projectRoot),
+        machine: o.machine,
+        parent: record?.parent ?? null,
+        ...(o.force ? { force: true } : {}),
+        createdAt: done.at,
+        bytes: done.bytes,
+        uploaded: done.uploaded,
+        ...(o.tailnet ? { tailnet: o.tailnet } : {}),
+        ...(o.health ? { health: o.health } : {}),
+      }),
+      signal: o.signal,
+    },
+  )
+  if (response.status === 409) {
+    const body = (await response.json().catch(() => ({}))) as { error?: unknown; latest?: unknown }
+    throw new Conflict(
+      typeof body.error === 'string' ? body.error : 'Another machine backed up this project first',
+      typeof body.latest === 'string' ? body.latest : null,
+    )
+  }
+  if (!response.ok)
+    throw new Error(`POST /sync/backups returned ${response.status}: ${await response.text()}`)
+  await writeBackup(o.home, { key: o.key, parent: done.id, last: done })
+  return done
+}
+
+/** Classified failure reasons, first match wins: an event names one of these, never the raw error. */
+const REASONS: [RegExp, string][] = [
+  [/^Missing ULTIMATE_CLOUD_SNAPSHOT_KEY/, 'missing snapshot key'],
+  [/integrity|verification|does not match/, 'integrity check failed'],
+  [/timeout|timed out|aborted/i, 'timed out'],
+]
+/** `reason` of a failed `cloud.backup`: `conflict`, a known cause, an HTTP status, or `failed`. */
+export function classify(error: unknown) {
+  if (error instanceof Conflict) return 'conflict'
+  const message = error instanceof Error ? error.message : String(error)
+  const known = REASONS.find(([pattern]) => pattern.test(message))
+  if (known) return known[1]
+  const status = /returned ([45]\d\d)\b/.exec(message)
+  return status ? `HTTP ${status[1]}` : 'failed'
+}

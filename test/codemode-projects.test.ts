@@ -1,37 +1,66 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { expect, it } from 'vitest'
-import type { Project } from '../cloud/directory.ts'
+import type { Register } from '../lib/cloud.ts'
 import { actions } from '../extensions/codemode/server.ts'
-import { readProject, resolveProject, STANDBY } from '../extensions/codemode/projects.ts'
+import { readProject, resolveProject } from '../extensions/codemode/projects.ts'
 import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 
-const now = Date.UTC(2026, 9, 19, 12)
 const here = { name: 'ultimate', root: '/p/ultimate', current: true }
-const project = (writer: Project['writer'], machines: Project['machines'] = []): Project => ({
-  key: 'github.com/hazat/poe2-rust',
-  name: 'poe2-rust',
-  slug: 'poe2-rust',
-  writer,
-  machines,
+const hash = 'ab'.repeat(32)
+/** A register naming poe2-rust's latest backup from haza-pc, with the tailnets each side recorded. */
+const register = (tailnet?: { latest?: string; machine?: string }): Register => ({
+  projects: [
+    {
+      hash,
+      key: 'github.com/hazat/poe2-rust',
+      name: 'poe2-rust',
+      latest: {
+        id: 'b1',
+        machine: 'haza-pc',
+        at: 0,
+        bytes: 1,
+        uploaded: 1,
+        parent: null,
+        ...(tailnet?.latest ? { tailnet: tailnet.latest } : {}),
+      },
+    },
+  ],
+  machines: [
+    {
+      machine: 'haza-pc',
+      at: 0,
+      projects: {
+        [hash]: {
+          name: 'poe2-rust',
+          at: 0,
+          ...(tailnet?.machine ? { tailnet: tailnet.machine } : {}),
+        },
+      },
+    },
+  ],
 })
 
-it("resolves this project, a running local one, and the writer's tailnet address", () => {
+it("resolves this project, a running local one, and the last backup's tailnet address", () => {
   expect(resolveProject('ultimate', [here], undefined)).toEqual({ current: true })
   const local = { name: 'poe2-rust', current: false, running: { url: 'http://127.0.0.1:4748' } }
-  expect(resolveProject('poe2-rust', [here, local], undefined)).toEqual({
-    url: 'http://127.0.0.1:4748',
-    label: 'poe2-rust on this machine',
-  })
+  // A local running project wins over the register.
+  expect(
+    resolveProject('poe2-rust', [here, local], register({ latest: 'https://elsewhere' })),
+  ).toEqual({ url: 'http://127.0.0.1:4748', label: 'poe2-rust on this machine' })
   const tailnet = 'https://haza-pc.tail.ts.net:4748'
-  const listed = [project({ machine: 'haza-pc', online: true, tailnet })]
-  // Directory names, keys and slugs match case-insensitively.
+  // Names and keys match case-insensitively.
   for (const name of ['poe2-rust', 'github.com/HazAT/poe2-rust'])
-    expect(resolveProject(name, [here], listed)).toEqual({
+    expect(resolveProject(name, [here], register({ latest: tailnet }))).toEqual({
       url: tailnet,
       label: 'poe2-rust on haza-pc',
     })
+  // Without one on the backup, the machine's own record of the project names it.
+  expect(resolveProject('poe2-rust', [here], register({ machine: tailnet }))).toEqual({
+    url: tailnet,
+    label: 'poe2-rust on haza-pc',
+  })
 })
 
 it('stops a remote read when its call is cancelled', async () => {
@@ -59,12 +88,12 @@ it('stops a remote read when its call is cancelled', async () => {
   }
 })
 
-it('asks the writer when the local instance is on standby, instead of reading nothing', async () => {
-  const answers: string[] = []
-  const listen = (body: (path: string) => [number, unknown]) => {
+it('reads a project on another machine through the register, with the cloud token', async () => {
+  const seen: string[] = []
+  const listen = (body: (path: string, auth?: string) => [number, unknown]) => {
     const server = createServer((request, response) => {
-      answers.push(request.headers.origin ?? '')
-      const [status, json] = body(request.url ?? '')
+      seen.push(`${request.url} ${request.headers.origin ?? ''}`)
+      const [status, json] = body(request.url ?? '', request.headers.authorization)
       response.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(json))
     })
     return new Promise<{ url: string; close: () => void }>((resolve) =>
@@ -76,37 +105,36 @@ it('asks the writer when the local instance is on standby, instead of reading no
       ),
     )
   }
-  const parked = await listen(() => [500, { error: STANDBY }])
-  const writer = await listen(() => [200, { result: ['from the writer'] }])
-  const directory = await listen(() => [
-    200,
-    [project({ machine: 'haza-pc', online: true, tailnet: writer.url })],
-  ])
+  const remote = await listen(() => [200, { result: ['from haza-pc'] }])
+  const cloud = await listen((path, auth) =>
+    path === '/sync/register' && auth === 'Bearer token'
+      ? [200, register({ latest: remote.url })]
+      : [401, { error: 'unauthorized' }],
+  )
   try {
     const host = {
       userHome: '/nonexistent',
       faux: false,
       notice: () => {},
-      projects: async () => [
-        { name: 'ultimate', current: true },
-        { name: 'poe2-rust', current: false, running: { url: parked.url } },
-      ],
+      projects: async () => [{ name: 'ultimate', current: true }],
     } as unknown as ExtensionHost
-    // Without cloud sync the standby instance's machine is unknown.
+    // Without cloud backups other machines are unknown.
     await expect(readProject(host, 'poe2-rust', 'trace', [])).rejects.toThrow(
-      'poe2-rust is on standby here and its writer is unknown',
+      'cloud backups are off',
     )
-    process.env.ULTIMATE_CLOUD_URL = directory.url.replace('http', 'ws')
+    process.env.ULTIMATE_CLOUD_URL = cloud.url.replace('http', 'ws')
     process.env.ULTIMATE_CLOUD_TOKEN = 'token'
-    expect(await readProject(host, 'poe2-rust', 'trace', [])).toEqual({
-      value: ['from the writer'],
-    })
-    // Each instance is asked with its own origin.
-    expect(answers).toContain(writer.url)
+    expect(await readProject(host, 'poe2-rust', 'trace', [])).toEqual({ value: ['from haza-pc'] })
+    // The remote instance is asked with its own origin.
+    expect(seen).toContain(`/api/extensions/codemode/actions/read ${remote.url}`)
+    process.env.ULTIMATE_CLOUD_TOKEN = 'wrong'
+    await expect(readProject(host, 'poe2-rust', 'trace', [])).rejects.toThrow(
+      'GET /sync/register returned 401',
+    )
   } finally {
     delete process.env.ULTIMATE_CLOUD_URL
     delete process.env.ULTIMATE_CLOUD_TOKEN
-    for (const server of [parked, writer, directory]) server.close()
+    for (const server of [remote, cloud]) server.close()
   }
 })
 
@@ -124,24 +152,17 @@ it('caps an answer at 1 MiB of encoded JSON, counting multibyte characters as by
 })
 
 it('names the machine when the project cannot be reached, and never offers a copy', () => {
-  const offline = project({ machine: 'haza-pc', online: false, lastSeen: now - 3 * 3600_000 })
-  expect(() => resolveProject('poe2-rust', [here], [offline], now)).toThrow(
-    'poe2-rust runs on haza-pc, which is offline (last seen 3 h ago); start Ultimate there to query it',
+  expect(() => resolveProject('poe2-rust', [here], register())).toThrow(
+    'poe2-rust was last backed up from haza-pc, which registered no tailnet address',
   )
-  const standby = project({ machine: null, online: false }, [
-    { machine: 'haza-pc', role: 'standby', connected: false, lastSeen: now - 20 * 60_000 },
-  ])
-  expect(() => resolveProject('poe2-rust', [here], [standby], now)).toThrow(
-    'poe2-rust is on standby (last on haza-pc, 20 min ago); start it there to query it',
-  )
-  const hidden = project({ machine: 'haza-pc', online: true })
-  expect(() => resolveProject('poe2-rust', [here], [hidden], now)).toThrow(
-    'which has published no tailnet address',
-  )
-  expect(() => resolveProject('blog', [here], [standby], now)).toThrow(
+  expect(() => resolveProject('blog', [here], register())).toThrow(
     'Unknown project blog. Known: ultimate, poe2-rust',
   )
-  expect(() => resolveProject('blog', [here], undefined, now)).toThrow('cloud sync is off')
+  expect(() => resolveProject('blog', [here], undefined)).toThrow('cloud backups are off')
+  const stopped = { name: 'blog', root: '/p/blog', current: false }
+  expect(() => resolveProject('blog', [here, stopped], register())).toThrow(
+    'blog is not running on this machine; start it to query it',
+  )
   const twice = [
     { name: 'poe2-rust', root: '/a/poe2-rust', current: false },
     { name: 'poe2-rust', root: '/b/poe2-rust', current: false },

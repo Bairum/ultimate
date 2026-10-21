@@ -1,7 +1,21 @@
 /** Health in the browser: this machine's model provider health, which the status line warns about. Browser-safe. */
 import { actionRef } from '../../shared/extension-api.ts'
 import { defineEvent } from '../../shared/events.ts'
-import type { ProviderHealth } from '../../cloud/protocol.ts'
+
+/** One provider's health on this machine. */
+export interface ProviderHealth {
+  provider: string
+  state: 'ok' | 'failing' | 'unknown'
+  /** The last successful call, real or heartbeat. */
+  lastOk?: number
+  /** The last failed call, real or heartbeat. */
+  lastFail?: number
+  error?: string
+  /** The last heartbeat ping. */
+  lastChecked?: number
+  /** The last real (non-heartbeat) call. */
+  lastUsed?: number
+}
 
 /** No arguments → `{ machine, providers }`: this machine's name and its providers' health; faux answers a demo. */
 export const StateAction = actionRef<null, { machine: string; providers: ProviderHealth[] }>(

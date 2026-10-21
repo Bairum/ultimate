@@ -511,13 +511,8 @@ export const actions = {
       throw new Error('isolate must be none or worktree')
     if (onFailure !== undefined && onFailure !== 'diagnose' && onFailure !== 'fix')
       throw new Error('onFailure must be diagnose or fix')
-    if (
-      resident !== undefined &&
-      typeof resident !== 'boolean' &&
-      resident !== 'machine' &&
-      resident !== 'everywhere'
-    )
-      throw new Error('resident must be a boolean, machine or everywhere')
+    if (resident !== undefined && typeof resident !== 'boolean')
+      throw new Error('resident must be a boolean')
     const { definitions } = await discoverAgents(
       host.ultimateRoot,
       host.projectRoot,

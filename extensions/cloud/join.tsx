@@ -16,7 +16,7 @@ import { JoinAction, JoinStateAction } from './refs.ts'
 import type { JoinResult, JoinState, JoinStep } from './refs.ts'
 
 /** The dialog id the "Join cloud fleet" command opens. */
-export const joinDialog = 'sync.join'
+export const joinDialog = 'cloud.join'
 
 const steps: { id: JoinStep | 'done'; label: string }[] = [
   { id: 'check', label: 'Check cloud' },
@@ -49,7 +49,7 @@ function StepIcon({ state }: { state: StepState }) {
 function Steps({ result }: { result: JoinResult | 'running' }) {
   const states = stepStates(result)
   return (
-    <ol className="space-y-0.5" data-sync-join-steps>
+    <ol className="space-y-0.5" data-cloud-join-steps>
       {steps.map((step, index) => (
         <li
           className={cn(
@@ -172,7 +172,7 @@ function Secret({
 function Next({ result }: { result: Extract<JoinResult, { ok: true }> }) {
   const restart = useRestart()
   return (
-    <div className="space-y-2 border-t border-border/60 px-3 py-2" data-sync-join-next>
+    <div className="space-y-2 border-t border-border/60 px-3 py-2" data-cloud-join-next>
       <div className="text-foreground/85">Next</div>
       <div className="space-y-1">
         <p className="font-sans text-[12px] text-muted-foreground">
@@ -182,12 +182,12 @@ function Next({ result }: { result: Extract<JoinResult, { ok: true }> }) {
       </div>
       <div className="flex items-start gap-3">
         <p className="flex-1 font-sans text-[12px] text-muted-foreground">
-          Cloud sync reads <code>cloud.url</code> and the secrets when it starts. Restart this
-          Ultimate now, and the other one (the machine home or a running project) from its own page.
+          Backups read <code>cloud.url</code> and the secrets from the next start on. Restart this
+          Ultimate now, and any other running project from its own page.
         </p>
         <Button
           className="h-7 shrink-0 text-[12px]"
-          data-sync-join-restart
+          data-cloud-join-restart
           disabled={restart.busy}
           onClick={restart.run}
           size="sm"
@@ -220,7 +220,7 @@ function Next({ result }: { result: Extract<JoinResult, { ok: true }> }) {
   )
 }
 
-/** The form: cloud URL, machine name and the two secrets; the values live only here and go to `sync.join`. */
+/** The form: cloud URL, machine name and the two secrets; the values live only here and go to `cloud.join`. */
 function JoinForm({ state, onJoined }: { state: JoinState; onJoined: () => void }) {
   const [url, setUrl] = useState(state.url ?? '')
   const [machine, setMachine] = useState(state.machine)
@@ -314,7 +314,7 @@ function JoinForm({ state, onJoined }: { state: JoinState; onJoined: () => void 
           {failed && (
             <p
               className="font-sans text-[12px] leading-relaxed break-words text-error/90"
-              data-sync-join-error
+              data-cloud-join-error
               role="alert"
             >
               {failed.error}
@@ -341,7 +341,7 @@ export function JoinCard() {
   return (
     <section
       className="min-w-0 rounded-md border border-l-2 border-border border-l-brand/60 bg-card text-left font-mono text-[11.5px] shadow-xs"
-      data-sync-join={joined && !form ? 'joined' : 'form'}
+      data-cloud-join={joined && !form ? 'joined' : 'form'}
     >
       <header className="flex min-w-0 items-center gap-2 py-1.5 pr-1.5 pl-3">
         <NetworkIcon className="size-3.5 shrink-0 text-brand" />
@@ -384,13 +384,6 @@ export function JoinCard() {
       )}
     </section>
   )
-}
-
-/** @sync's empty conversation: the Join card while this machine has not joined. */
-export function JoinIntro() {
-  const state = useAction(JoinStateAction)
-  if (!state.data || state.data.joined) return null
-  return <JoinCard />
 }
 
 /** The "Join cloud fleet" command's dialog. */

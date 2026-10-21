@@ -35,14 +35,15 @@ async function announce(cue: Cue) {
 }
 
 /**
- * Watches @ultimate (@sync in the machine home) and sounds what it newly tells the user: a question, a finished answer,
+ * Watches @ultimate and sounds what it newly tells the user: a question, a finished answer,
  * a failed run. Whatever it shows when this tab opens has been heard already.
  */
 function Player() {
   const overview = useDocOf(1, OverviewDoc)
   const board = useDocOf(1, BoardDoc)
   const name = usePrimaryAgent()
-  const agent = useDocOf(1, StandingDoc)?.[name]
+  const standing = useDocOf(1, StandingDoc)
+  const agent = name ? standing?.[name] : undefined
   const { muted, off } = useSettings()
   const [hear] = useState(listener)
   useEffect(() => {
@@ -117,7 +118,7 @@ function Control() {
           ))}
         </div>
         <div className="mt-1 border-t border-border/70 px-2 pt-1.5 pb-1 text-[11px] text-muted-foreground">
-          For @{name} only
+          {name ? `For @${name} only` : 'No standing agent here'}
         </div>
       </PopoverContent>
     </Popover>

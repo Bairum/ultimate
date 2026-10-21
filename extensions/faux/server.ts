@@ -20,7 +20,7 @@ import { seedLanes, stopCalling } from './lanes.ts'
 import { codemodeSteps } from './codemode.ts'
 import { SummaryDoc as CodemodeSummaries } from '../codemode/api.ts'
 import type { CallSummary } from '../codemode/refs.ts'
-import { BackupEvent, MoveEvent } from '../cloud/api.ts'
+import { BackupEvent } from '../cloud/api.ts'
 
 const messageText = (content: unknown) =>
   typeof content === 'string'
@@ -386,26 +386,9 @@ export default async function fauxExtension(host: ExtensionHost) {
           { stopReason: 'toolUse' },
         )
       }
-      if (last?.role === 'user' && last.content === 'fleet demo') return tool('fleet', {})
-      if (last?.role === 'user' && last.content === 'sync demo')
-        return tool('codemode', { code: "return await ultimate.action('faux', 'seedSync')" })
-      if (
-        last?.role === 'toolResult' &&
-        last.toolName === 'codemode' &&
-        transcript.messages[asked]?.content === 'sync demo'
-      )
-        return fauxAssistantMessage([fauxText('Backups and the move are in this conversation.')])
       // Answers with the given Markdown verbatim, to preview how answers render it (such as `#id` mentions).
       const say = /^say ([\s\S]+)$/.exec(messageText(last?.role === 'user' ? last.content : ''))
       if (say) return fauxAssistantMessage([fauxText(say[1])])
-      if (
-        last?.role === 'toolResult' &&
-        last.toolName === 'fleet' &&
-        transcript.messages[asked]?.content === 'fleet demo'
-      )
-        return fauxAssistantMessage([
-          fauxText('ultimate is moving from haza-pc to rog; blog runs here with one kept ref.'),
-        ])
       if (transcript.messages[asked]?.content === 'messages demo') {
         const steps = [
           fauxToolCall('message', {
@@ -754,85 +737,13 @@ function demoCards(from: number): { kind: string; data: JsonObject }[] {
         ...subject,
       },
     },
-    {
-      kind: 'sync.move',
-      data: {
-        project: { key: 'blog', name: 'blog', root: '/home/haza/Projects/blog' },
-        machine: 'rog',
-        transition: {
-          id: `faux-move:${from}`,
-          target: 'rog',
-          from: 'haza-pc',
-          by: 'sync',
-          step: 'claim',
-          steps: (['fetch', 'install', 'checks', 'handover', 'claim'] as const).map((name) => ({
-            name,
-            state: 'done',
-          })),
-          cancellable: false,
-          startedAt: Date.now() - 90000,
-        },
-      },
-    },
-  ]
-}
-
-/** What `seedSync` writes into @sync's conversation: a finished backup, a failed one, and a move here. */
-const syncCards = (root: string): { kind: string; data: JsonObject }[] => {
-  const project = { key: 'github.com/hazat/ultimate', name: 'ultimate' }
-  const at = Date.now()
-  return [
-    {
-      kind: 'sync.backup',
-      data: {
-        project,
-        report: {
-          ok: true,
-          id: 'faux-backup-1',
-          at: at - 3 * 3600_000,
-          bytes: 12_582_912,
-          uploaded: 4_194_304,
-          ms: 3200,
-        },
-      },
-    },
-    {
-      kind: 'sync.backup',
-      data: {
-        project,
-        report: {
-          ok: false,
-          at: at - 40 * 60_000,
-          error: 'PUT /sync/snapshots/github.com%2Fhazat%2Fultimate: 503 Service Unavailable',
-        },
-      },
-    },
-    {
-      kind: 'sync.move',
-      data: {
-        project: { ...project, root },
-        machine: 'rog',
-        transition: {
-          id: 'faux-sync-move',
-          target: 'rog',
-          from: 'haza-pc',
-          by: 'sync',
-          step: 'claim',
-          steps: (
-            ['fetch', 'install', 'checks', 'handover', 'download', 'branches', 'claim'] as const
-          ).map((name) => ({ name, state: 'done' })),
-          cancellable: false,
-          startedAt: at - 5 * 60_000,
-        },
-      },
-    },
   ]
 }
 
 export const actions = {
   /**
    * Faux only: writes one of each entry card (messages and a reply from `from`, a report, notes, a catch-up, finished,
-   * an abstract, landings, a @sync move) into the calling conversation, for `cards demo`. Display only: the
+   * an abstract, landings) into the calling conversation, for `cards demo`. Display only: the
    * entries carry no model messages.
    */
   async seedCards(args: JsonValue, { host, conversationId }: ActionContext) {
@@ -842,17 +753,6 @@ export const actions = {
     if (conversationId === undefined)
       throw new Error('seedCards writes into the calling conversation')
     const cards = demoCards(from)
-    await host.harness().commit(async (tx) => {
-      for (const card of cards) await tx.appendEntry(conversationId as ConversationId, card)
-    }, BACKGROUND_CONTEXT)
-    return { seeded: cards.length }
-  },
-  /** Faux only: writes @sync's cards (a finished and a failed backup, a move here) into the calling conversation. */
-  async seedSync(_args: JsonValue, { host, conversationId }: ActionContext) {
-    if (!host.faux) throw new Error('seedSync runs only under faux')
-    if (conversationId === undefined)
-      throw new Error('seedSync writes into the calling conversation')
-    const cards = syncCards(host.projectRoot)
     await host.harness().commit(async (tx) => {
       for (const card of cards) await tx.appendEntry(conversationId as ConversationId, card)
     }, BACKGROUND_CONTEXT)
@@ -946,7 +846,7 @@ export const actions = {
     const root = (await host.want(LineageApi)?.rootOf(from, BACKGROUND_CONTEXT)) ?? 1
     const notices = [
       ['tailscale', 'tailscale serve failed: tailscaled is not running on this machine'],
-      ['cloud', 'Sync paused: the lease is held by rog until 21:40'],
+      ['cloud', 'Backup failed: POST /sync/backups returned 503: Service Unavailable'],
     ] as const
     await host.harness().commit(async (tx) => {
       const latest = await tx.scanEntries(
@@ -992,18 +892,17 @@ export const actions = {
       })
       await host.emit(tx, BackupEvent, { phase: 'started', project })
       await host.emit(tx, BackupEvent, { phase: 'failed', project, ms: 4210, reason: 'HTTP 503' })
-      const move = { project, id: 'faux-move', from: 'rog', to: 'haza-pc' }
-      await host.emit(tx, MoveEvent, { phase: 'started', ...move })
-      await host.emit(tx, MoveEvent, {
+      await host.emit(tx, BackupEvent, { phase: 'started', project })
+      await host.emit(tx, BackupEvent, {
         phase: 'failed',
-        ...move,
-        step: 'handover',
-        reason: 'cancelled',
+        project,
+        ms: 3900,
+        reason: 'conflict',
+        error:
+          'rog backed up ultimate at 2026-10-21T09:12:00.000Z after the backup this one builds on. Restore it first (pnpm restore ultimate), or back up with force to replace it.',
       })
-      await host.emit(tx, MoveEvent, { phase: 'started', ...move, id: 'faux-move-2' })
-      await host.emit(tx, MoveEvent, { phase: 'done', ...move, id: 'faux-move-2', ms: 41_800 })
     }, BACKGROUND_CONTEXT)
-    return { seeded: 10 + demoLandings.length + notices.length }
+    return { seeded: 8 + demoLandings.length + notices.length }
   },
   /**
    * Faux only: a coordinator branch and two workers next to @ultimate and the lander, with half an hour of their tool

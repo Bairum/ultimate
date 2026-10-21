@@ -44,7 +44,8 @@ function useStates(parked: ReadonlySet<number>) {
   const overview = useOverview()
   const conversations = useConversations()
   const name = usePrimaryAgent()
-  const primary = useDocOf(1, StandingDoc)?.[name]
+  const standing = useDocOf(1, StandingDoc)
+  const primary = name ? standing?.[name] : undefined
   return (lane: Lane) => {
     const id = lane.conversation
     const own = conversations.find((item) => item.id === id)

@@ -146,7 +146,7 @@ export default defineConfig({
         rules: { 'ultimate/no-raw-stream': 'error' },
       },
       {
-        files: ['web/src/**', 'extensions/**/*.tsx', 'cloud/front/**'],
+        files: ['web/src/**', 'extensions/**/*.tsx'],
         plugins: ['react'],
         rules: {
           'react/rules-of-hooks': 'error',

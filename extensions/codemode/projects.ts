@@ -1,10 +1,11 @@
 /**
  * Reads of another project's stored history, for codemode's `{ project }` option: only from a running instance of it,
- * over that instance's own API (loopback here, its writer's tailnet address elsewhere). Nothing falls back to a copy.
+ * over that instance's own API (loopback here, the tailnet address its last backup registered elsewhere). Nothing
+ * falls back to a copy.
  */
 import type { JsonValue } from '@earendil-works/chord'
-import type { Project } from '../../cloud/directory.ts'
-import { cloudConfig, httpBase } from '../../lib/cloud.ts'
+import { cloudConfig, fetchRegister } from '../../lib/cloud.ts'
+import type { Register } from '../../lib/cloud.ts'
 import { projectIdentity } from '../../lib/project-identity.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
@@ -19,27 +20,18 @@ export const STANDBY = 'standby: this instance serves without storage'
 type LocalProject = { name: string; root?: string; current: boolean; running?: { url: string } }
 type Target = { current: true } | { url: string; label: string }
 
-const ago = (at: number | undefined, now: number) => {
-  if (!at) return 'at an unknown time'
-  const minutes = Math.round((now - at) / 60000)
-  if (minutes < 60) return `${minutes} min ago`
-  const hours = Math.round(minutes / 60)
-  return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`
-}
+const naming = (project: string) => (item: { name?: string; key?: string }) =>
+  [item.name, item.key].some((value) => value?.toLowerCase() === project.toLowerCase())
 
 /**
  * Where `project` (a name such as `poe2-rust` or a key such as `github.com/hazat/poe2-rust`) answers: this project, a
- * running project on this machine, or its writer on the tailnet. Throws a sentence that names the machine when the
- * project is not running anywhere it can be reached.
+ * running project on this machine, or the tailnet address of the machine that last backed it up. Throws a sentence
+ * naming that machine when it registered no address.
  */
-const naming = (project: string) => (item: { name?: string; key?: string; slug?: string }) =>
-  [item.name, item.key, item.slug].some((value) => value?.toLowerCase() === project.toLowerCase())
-
 export function resolveProject(
   project: string,
   local: (LocalProject & { key?: string })[],
-  directory: Project[] | undefined,
-  now = Date.now(),
+  register: Register | undefined,
 ): Target {
   const named = naming(project)
   const here = local.filter(named)
@@ -47,47 +39,30 @@ export function resolveProject(
     throw new Error(
       `${project} names ${here.length} projects on this machine: ${here.map((item) => item.root).join(', ')}; use its key`,
     )
-  const listed = directory?.filter(named) ?? []
   const [found] = here
   if (found?.current) return { current: true }
   if (found?.running) return { url: found.running.url, label: `${found.name} on this machine` }
-  const [entry] = listed
-  const writer = entry?.writer
-  if (writer?.machine && writer.online && writer.tailnet)
-    return { url: writer.tailnet, label: `${entry.name} on ${writer.machine}` }
-  if (writer?.machine && !writer.online)
-    throw new Error(
-      `${entry.name} runs on ${writer.machine}, which is offline (last seen ${ago(writer.lastSeen, now)}); start Ultimate there to query it`,
-    )
-  if (writer?.machine)
-    throw new Error(
-      `${entry.name} runs on ${writer.machine}, which has published no tailnet address; enable the tailscale extension there`,
-    )
+  const entry = register?.projects.find(named)
   if (entry) {
-    const last = entry.machines.toSorted((a, b) => b.lastSeen - a.lastSeen)[0]
+    const { machine } = entry.latest
+    const tailnet =
+      entry.latest.tailnet ??
+      register!.machines.find((item) => item.machine === machine)?.projects[entry.hash]?.tailnet
+    if (tailnet) return { url: tailnet, label: `${entry.name} on ${machine}` }
     throw new Error(
-      `${entry.name} is on standby${last ? ` (last on ${last.machine}, ${ago(last.lastSeen, now)})` : ''}; start it there to query it`,
+      `${entry.name} was last backed up from ${machine}, which registered no tailnet address`,
     )
   }
   if (found) throw new Error(`${found.name} is not running on this machine; start it to query it`)
   const known = [
-    ...new Set([...local.map((item) => item.name), ...(directory ?? []).map((item) => item.name)]),
+    ...new Set([
+      ...local.map((item) => item.name),
+      ...(register?.projects ?? []).map((item) => item.name),
+    ]),
   ]
   throw new Error(
-    `Unknown project ${project}${directory ? '' : ' on this machine (cloud sync is off, so other machines are not listed)'}. Known: ${known.join(', ') || 'none'}`,
+    `Unknown project ${project}${register ? '' : ' on this machine (cloud backups are off, so other machines are not listed)'}. Known: ${known.join(', ') || 'none'}`,
   )
-}
-
-/** The fleet directory, or undefined without cloud sync. A failing cloud is an error: it is the only map of the fleet. */
-async function fleetDirectory(host: ExtensionHost, signal?: AbortSignal) {
-  const cloud = await cloudConfig(host)
-  if (!cloud) return undefined
-  const response = await fetch(new URL('/sync/directory', httpBase(cloud.url)), {
-    headers: { Authorization: `Bearer ${cloud.token}` },
-    signal: AbortSignal.any([AbortSignal.timeout(15000), ...(signal ? [signal] : [])]),
-  })
-  if (!response.ok) throw new Error(`The fleet directory answered ${response.status}`)
-  return (await response.json()) as Project[]
 }
 
 /** Run read `op` in `project`: undefined when it is this project, so the caller reads its own storage. */
@@ -105,23 +80,16 @@ export async function readProject(
       key: project.includes('/') && item.root ? (await projectIdentity(item.root))?.key : undefined,
     })),
   )
-  // A project this machine runs needs no cloud; anything else asks the fleet where it runs.
-  const directory = local.some((item) => naming(project)(item) && (item.current || item.running))
+  // A project this machine runs needs no cloud; anything else asks the register where it was last backed up.
+  const cloud = local.some((item) => naming(project)(item) && (item.current || item.running))
     ? undefined
-    : await fleetDirectory(host, signal)
-  const target = resolveProject(project, local, directory)
+    : await cloudConfig(host)
+  // A failing cloud is an error: the register is the only map of the other machines.
+  const register = cloud ? await fetchRegister(cloud) : undefined
+  const target = resolveProject(project, local, register)
   if ('current' in target) return undefined
-  let answer = await post(target, op, args, signal)
-  const fleet = answer.standby && directory === undefined && (await fleetDirectory(host, signal))
-  if (fleet) {
-    // A local instance on standby serves no history: the fleet names the machine that writes the project.
-    const parked = local.map((item) =>
-      naming(project)(item) ? { ...item, running: undefined } : item,
-    )
-    const writer = resolveProject(project, parked, fleet)
-    if (!('current' in writer)) answer = await post(writer, op, args, signal)
-  }
-  if (answer.standby) throw new Error(`${project} is on standby here and its writer is unknown`)
+  const answer = await post(target, op, args, signal)
+  if (answer.standby) throw new Error(`${project} is on standby at ${target.url}`)
   return { value: answer.value }
 }
 

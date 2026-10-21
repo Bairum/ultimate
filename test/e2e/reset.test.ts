@@ -7,13 +7,12 @@ import { DatabaseSync } from 'node:sqlite'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
 import { projectHome } from '../../server/project.ts'
-import { acquireLock } from '../../server/lock.ts'
 import { cleanEnv, temp } from '../helpers.ts'
 
 const run = promisify(execFile)
 const script = resolve('scripts/reset.ts')
 
-/** A user home with one project's Ultimate home holding state, a parked state, a worktree and a lease file. */
+/** A user home with one project's Ultimate home holding state, a parked state and a worktree. */
 async function fixture() {
   const user = await temp('ultimate-reset-')
   const project = join(user, 'app')
@@ -65,10 +64,7 @@ it('moves the state into a backup folder and keeps worktrees and project.json', 
 
 it('keeps Ultimate from starting on a home an interrupted reset left half moved', async () => {
   const { user, project, home } = await fixture()
-  await writeFile(
-    join(home, 'reset.json'),
-    JSON.stringify({ backup: '/b', cloud: false, phase: 'moving' }),
-  )
+  await writeFile(join(home, 'reset.json'), JSON.stringify({ backup: '/b' }))
   const started = await run(process.execPath, [resolve('bin/ultimate.ts'), project, '--no-open'], {
     env: cleanEnv({ HOME: user }),
   }).catch((error: { code: number; stderr: string }) => error)
@@ -79,16 +75,7 @@ it('keeps Ultimate from starting on a home an interrupted reset left half moved'
   expect(existsSync(join(home, 'storage.lock'))).toBe(false)
 })
 
-it('refuses a home that still holds the cloud lease, released or not', async () => {
-  const { user, project, home } = await fixture()
-  await writeFile(join(home, 'cloud-lease.json'), JSON.stringify({ key: 'k', epoch: 3 }))
-  const refused = await reset(user, project, '--yes').catch((error: { stderr: string }) => error)
-  expect(refused).toMatchObject({ stderr: expect.stringContaining('still holds the cloud lease') })
-  expect(existsSync(join(home, 'state.sqlite'))).toBe(true)
-  expect(existsSync(join(user, '.ultimate', 'backups'))).toBe(false)
-})
-
-it('refuses while Ultimate runs in the home, and on standby behind another machine', async () => {
+it('refuses while Ultimate runs in the home', async () => {
   const { user, project, home } = await fixture()
   // Another process holds the lock, as a running supervisor does.
   const holder = spawn(
@@ -112,12 +99,4 @@ it('refuses while Ultimate runs in the home, and on standby behind another machi
     holder.kill()
     await exited
   }
-  // Released by its owner: the lock is free again, so only standby can refuse now.
-  await (await acquireLock(join(home, 'ultimate.lock'), { pid: process.pid })).close()
-  await writeFile(join(home, 'standby.json'), JSON.stringify({ writer: { machine: 'rog' } }))
-  const standby = await reset(user, project, '--yes').catch((error: { stderr: string }) => error)
-  expect(standby).toMatchObject({
-    stderr: expect.stringContaining('Another machine runs this project'),
-  })
-  expect(existsSync(join(home, 'state.sqlite'))).toBe(true)
 })

@@ -34,8 +34,13 @@ export function UltimateButton() {
 }
 
 function PrimaryButton({ parked }: { parked?: ReadonlySet<number> }) {
-  const actions = useUltimate()
   const name = usePrimaryAgent()
+  // The machine home has no standing agent to talk to.
+  return name ? <Primary name={name} parked={parked} /> : null
+}
+
+function Primary({ name, parked }: { name: string; parked?: ReadonlySet<number> }) {
+  const actions = useUltimate()
   const id = useDocOf(1, StandingDoc)?.[name]
   const tasks = useTasks()
   const runState = useOverview()[id ?? -1]?.runState

@@ -2,7 +2,6 @@
  * Workspaces: isolated Git worktrees for conversations and the lander that merges them into their target branch.
  * Other extensions create, look up, land and discard a conversation's worktree through this service.
  */
-import type { Context } from '@earendil-works/chord'
 import { defineApi } from '../../shared/extension-api.ts'
 import type { git } from '../../lib/git.ts'
 import type { Workspaces, workspaces } from './workspaces.ts'
@@ -32,18 +31,4 @@ export const WorkspacesApi = defineApi<WorkspaceService>()('workspaces')
 
 export { CheckRan, SubmissionLanded } from './refs.ts'
 export type { LandedData } from './refs.ts'
-export type HandoffService = {
-  /**
-   * Send a one-way message from conversation `from` to `input.to` (a standing agent's `@name`), once per `requestId`;
-   * returns its message id. The lander hands a landed commit to the deploy agent with it.
-   */
-  send(
-    from: number,
-    input: { to: string; text: string; reply: false },
-    requestId: string,
-    ctx: Context,
-  ): Promise<number>
-}
-/** The extension point through which the lander messages a standing agent; board provides it. `want` it. */
-export const Handoff = defineApi<HandoffService>()('workspaces.handoff')
 export const tier = 'core'

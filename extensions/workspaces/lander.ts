@@ -22,7 +22,7 @@ import type {
 import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
-import { CheckRan, Handoff, SubmissionLanded } from './api.ts'
+import { CheckRan, SubmissionLanded } from './api.ts'
 import { setup } from './setup.ts'
 import type {
   Landed,
@@ -157,7 +157,6 @@ type Check = { command: string; timeout?: number }
 type Settings = {
   checks: (Check | Check[])[]
   push?: string
-  deploy?: { agent: string; paths: string[] }
 }
 /** Bounded retries when the target moves while a submission is integrated. */
 const attempts = 3
@@ -251,7 +250,7 @@ export const landerSettings = async (
   host: Pick<Host, 'projectSettings' | 'notice'>,
 ): Promise<Settings> => {
   const lander = (await host.projectSettings()).lander as
-    | { checks?: unknown; push?: unknown; deploy?: unknown }
+    | { checks?: unknown; push?: unknown }
     | undefined
   const entries = lander?.checks ?? []
   const checks = Array.isArray(entries)
@@ -269,30 +268,9 @@ export const landerSettings = async (
     )
   if (lander?.push !== undefined && typeof lander.push !== 'string')
     throw new Error('lander.push must be a remote name')
-  let deploy: Settings['deploy']
-  if (lander?.deploy !== undefined) {
-    const value = lander.deploy
-    if (
-      value &&
-      typeof value === 'object' &&
-      'agent' in value &&
-      'paths' in value &&
-      typeof value.agent === 'string' &&
-      value.agent.trim() &&
-      Array.isArray(value.paths) &&
-      value.paths.length > 0 &&
-      value.paths.every((path) => typeof path === 'string' && path.length > 0)
-    )
-      deploy = { agent: value.agent, paths: value.paths }
-    else
-      host.notice(
-        'lander.deploy must name an agent and a non-empty array of path prefixes; deploy hook disabled',
-      )
-  }
   return {
     checks: checks as Settings['checks'],
     ...(lander?.push ? { push: lander.push } : {}),
-    ...(deploy ? { deploy } : {}),
   }
 }
 const contains = (cwd: string, ancestor: string, descendant: string) =>
@@ -1017,88 +995,13 @@ export function createLander(
         }, context)
       },
       report: async (task, runtime, context) => {
-        const { id, conversationId, text } = task.state.checkpoint
-        let { outcome } = task.state.checkpoint
-        let deployText = ''
-        if (outcome?.outcome === 'landed') {
-          const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
-          const result = index?.results[id]
-          const saved = result?.steps.find(
-            (row) => row.step.startsWith('deploy → ') || row.step.startsWith('deploy warning: '),
-          )
-          if (saved) deployText = saved.step
-          else {
-            const { deploy } = await landerSettings(host)
-            const paths = (result?.paths ?? []).filter((path) =>
-              deploy?.paths.some((prefix) => path.startsWith(prefix)),
-            )
-            if (deploy && result && paths.length) {
-              const board = host.want(Handoff)
-              const definitions = await discoverAgents(
-                host.ultimateRoot,
-                host.projectRoot,
-                host.userHome,
-                host.modelRuntime,
-              )
-              if (
-                !board ||
-                !definitions.definitions.some(
-                  (definition) => definition.name === deploy.agent && definition.resident,
-                )
-              ) {
-                deployText = `deploy warning: @${deploy.agent} is not a standing agent${board ? '' : ' (board unavailable)'}`
-                host.notice(deployText)
-              } else {
-                try {
-                  await board.send(
-                    runtime.conversationId,
-                    {
-                      to: `@${deploy.agent}`,
-                      reply: false,
-                      text: [
-                        `Please deploy landed commit ${result.sha}.`,
-                        `Commits:\n${(result.commits ?? []).join('\n')}`,
-                        `Matching paths:\n${paths.join('\n')}`,
-                        `Pushed: ${result.pushed ?? 'no'}.`,
-                        `Submitter: #${conversationId}. Report the deployment outcome to #${conversationId} with a one-way message.`,
-                      ].join('\n'),
-                    },
-                    `lander-deploy:${id}`,
-                    context,
-                  )
-                  deployText = `deploy → @${deploy.agent}`
-                } catch (error) {
-                  // The submission has landed; a failed handoff (no subagents service, a broken standing
-                  // conversation) is a warning on the report, never a stop. Cancellation still stops the phase.
-                  context.abortSignal?.throwIfAborted()
-                  deployText = `deploy warning: handoff to @${deploy.agent} failed: ${error instanceof Error ? error.message : String(error)}`
-                  host.notice(deployText)
-                }
-              }
-              await runtime.commit(async (tx) => {
-                const current = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).results[id]
-                await log(
-                  tx,
-                  runtime.conversationId,
-                  { ...current, id, conversationId },
-                  {
-                    step: deployText,
-                  },
-                )
-                return { status: 'running', checkpoint: task.state.checkpoint }
-              }, context)
-            }
-          }
-        }
-        if (deployText)
-          outcome = (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))
-            ?.results[id]
+        const { id, conversationId, text, outcome } = task.state.checkpoint
         await (
           await runtime.conversation(conversationId as ConversationId, context)
         )?.submit(
           {
             type: 'input',
-            content: [text, deployText].filter(Boolean).join('\n'),
+            content: text,
             ...(outcome
               ? { entry: { kind: 'workspaces.lander-report', data: { id, outcome } } }
               : {}),

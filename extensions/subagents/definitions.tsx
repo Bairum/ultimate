@@ -222,7 +222,7 @@ interface Draft {
   model: ModelRef | null
   thinking: string | null
   tools: string[] | null
-  resident: boolean | 'machine' | 'everywhere'
+  resident: boolean
   isolate: 'none' | 'worktree'
   onFailure: 'diagnose' | 'fix' | null
   instructions: string
@@ -453,10 +453,7 @@ function Form({
               value={draft.thinking ?? 'inherit'}
             />
           </Field>
-          <StandingField
-            value={draft.resident !== false}
-            onChange={(resident) => set({ resident })}
-          />
+          <StandingField value={draft.resident} onChange={(resident) => set({ resident })} />
           <Field
             hint={
               draft.isolate === 'worktree'

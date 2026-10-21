@@ -1,4 +1,4 @@
-// Encrypted, chunked project snapshots in the cloud's private R2: a consistent database copy plus a bundle of the
+// Encrypted, chunked project backups in the cloud's private R2: a consistent database copy plus a bundle of the
 // `ultimate/*` branches. Everything is compressed and sealed on the machine; the Worker stores only ciphertext.
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
@@ -9,13 +9,14 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { createZstdCompress, createZstdDecompress } from 'node:zlib'
-import { databaseHash, vacuum } from '../../lib/database-files.ts'
+import { vacuum } from '../../lib/database-files.ts'
 import { git as gitIn } from '../../lib/git.ts'
 
 export interface SnapshotManifest {
   id: string
   key: string
-  epoch: number
+  /** Set by snapshots uploaded for the retired lease; read and ignored. */
+  epoch?: number
   createdAt: number
   machine: string
   database: Part
@@ -58,7 +59,6 @@ export async function uploadSnapshot(o: {
   token: string
   secret: string
   key: string
-  epoch: number
   machine: string
   database: string
   repo: string
@@ -83,7 +83,6 @@ export async function uploadSnapshot(o: {
     const manifest: SnapshotManifest = {
       id,
       key: o.key,
-      epoch: o.epoch,
       createdAt: Date.now(),
       machine: o.machine,
       database: db,
@@ -148,8 +147,6 @@ export async function downloadSnapshot(o: {
     await rm(bundle, { force: true })
   }
 }
-
-export { databaseHash }
 
 const json = (value: unknown) => Buffer.from(JSON.stringify(value))
 

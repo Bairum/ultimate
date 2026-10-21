@@ -91,6 +91,7 @@ async function instructionChanges(
 ) {
   const standing = host.doc('ultimate.standing-agents')
   const name = primaryAgent(host.projectRoot, host.userHome)
+  if (!name) return { instructions: [], docs: [] }
   const index = standing
     ? ((await tx.doc(standing, ROOT_CONVERSATION_ID)) as Record<string, number>)
     : {}

@@ -12,10 +12,6 @@
         { "command": "pnpm test:e2e", "timeout": 180 }
       ]
     ],
-    "push": "origin",
-    "deploy": {
-      "agent": "sync",
-      "paths": ["cloud/"]
-    }
+    "push": "origin"
   }
 }

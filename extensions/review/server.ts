@@ -158,7 +158,9 @@ async function recipient(host: ExtensionHost, spec: string): Promise<number> {
     () => undefined,
   )
   if (found !== undefined && known(host, found)) return found
-  return host.need(SubagentsApi).standing(primaryAgent(host.projectRoot, host.userHome), context)
+  const primary = primaryAgent(host.projectRoot, host.userHome)
+  if (!primary) throw new Error('The machine home has no standing agent to send a review to')
+  return host.need(SubagentsApi).standing(primary, context)
 }
 
 export const userActions = ['send']

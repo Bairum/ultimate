@@ -10,7 +10,6 @@ import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api, cn, defineWebExtension, useAction, useRestart, useSystem } from '@/sdk'
-import { AskSync } from '../sync/ui.tsx'
 import { itemOf } from './item.ts'
 import { CheckAction, StateAction, UpdateAction } from './refs.ts'
 import type { Layers, UpdateResult, UpdateState } from './refs.ts'
@@ -246,13 +245,9 @@ function Popup({
       </div>
       <div className="flex items-center justify-between gap-2 border-t border-border/70 px-3 py-1.5">
         <span className="text-[10.5px] text-muted-foreground">
-          {state.refused && !updated ? (
-            <AskSync />
-          ) : state.fetchedAt !== undefined ? (
-            `checked ${ago(state.fetchedAt)}`
-          ) : (
-            ''
-          )}
+          {state.fetchedAt !== undefined && !(state.refused && !updated)
+            ? `checked ${ago(state.fetchedAt)}`
+            : ''}
         </span>
         <div className="flex items-center gap-1">
           {!updated && <CheckNow checking={checking} onClick={check} />}

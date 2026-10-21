@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import type { ProviderHealth } from '../../cloud/protocol.ts'
+import type { ProviderHealth } from './refs.ts'
 
 /** One provider's record in `health.json`; times are epoch milliseconds. */
 export interface HealthEntry {

@@ -5,14 +5,13 @@ import { basename, dirname, join } from 'node:path'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import type { Api, AssistantMessage, Model, Models } from '@earendil-works/pi-ai'
 import { defineExtension, GenerationTask, hook } from '@earendil-works/pi-durable'
-import type { MachineHealth, ProviderHealth } from '../../cloud/protocol.ts'
+import type { ProviderHealth } from './refs.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { cloudConfig, httpBase } from '../../lib/cloud.ts'
+import { cloudConfig } from '../../lib/cloud.ts'
 import { isMachineHome } from '../../lib/machine.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { readFileHealth, readHealth, record, reset, sanitize, toHealth } from './store.ts'
-import { HealthApi, HealthFeedback } from './api.ts'
-import type { HealthFeedbackService } from './api.ts'
+import { readFileHealth, readHealth, record, reset, toHealth } from './store.ts'
+import { HealthApi } from './api.ts'
 import { LoginChanged } from '../models/api.ts'
 import { PauseApi } from '../pause/api.ts'
 import type { Flip, HealthEntry } from './store.ts'
@@ -25,8 +24,6 @@ const HOUR = 60 * MINUTE
 export const TICK = 10 * MINUTE
 /** A failing provider is pinged again after this long, so a one-off error clears quickly. */
 export const CONFIRM = 15 * MINUTE
-/** The cloud hears from the machine at least this often. */
-export const REPORT = HOUR
 
 /** The entry a terminal provider message records: `error` → a failure, `aborted` → nothing, else a success. */
 export function responseEntry(message: AssistantMessage, now: number): HealthEntry | undefined {
@@ -154,37 +151,25 @@ export async function announce(host: Pick<ExtensionHost, 'harness' | 'emit'>, fl
     .catch((error: unknown) => console.error('health: announcing a change failed:', error))
 }
 
-/**
- * Record `entry` in this machine's health file, hand the flip to `flipped`, and tell `feedback` when it turned the
- * provider failing. The file is shared by every home, so only the home whose write turned it reports, once per turn.
- */
+/** Record `entry` in this machine's health file and hand the flip to `flipped`. */
 export async function recordHealth(
   userHome: string,
   provider: string,
   entry: HealthEntry,
-  feedback: HealthFeedbackService | undefined,
   flipped: (flips: Flip[]) => Promise<void> = async () => {},
 ) {
-  const flip = await record(userHome, provider, entry)
-  await flipped([flip])
-  if (flip.from === 'failing' || flip.to !== 'failing' || !feedback) return
-  await feedback.failing({
-    provider,
-    at: entry.lastFail ?? Date.now(),
-    ...(entry.error ? { error: sanitize(entry.error) } : {}),
-  })
+  await flipped([await record(userHome, provider, entry)])
 }
 
 /** Heartbeat dependencies on the host's model runtime and this machine's health file; `flipped` hears each write. */
 export const hostDeps = (
-  host: Pick<ExtensionHost, 'modelRuntime' | 'userHome' | 'want'>,
+  host: Pick<ExtensionHost, 'modelRuntime' | 'userHome'>,
   flipped: (flips: Flip[]) => Promise<void> = async () => {},
 ): HeartbeatDeps => ({
   now: Date.now,
   models: host.modelRuntime,
   read: async () => (await readFileHealth(host.userHome)).providers,
-  record: (provider, entry) =>
-    recordHealth(host.userHome, provider, entry, host.want(HealthFeedback), flipped),
+  record: (provider, entry) => recordHealth(host.userHome, provider, entry, flipped),
   forget: async (providers) => flipped(await reset(host.userHome, providers)),
 })
 
@@ -284,34 +269,8 @@ export const actions = {
   }),
 }
 
-/** When the cloud last accepted a report, and whether a newer one is still owed (a failed attempt). */
-export type Reports = { reported: number; pending?: boolean }
-
-/** Report after a tick that pinged, while an earlier report is still owed, or once `REPORT` has passed. */
-export const shouldReport = (reports: Reports, pinged: boolean, now: number) =>
-  pinged || !!reports.pending || now - reports.reported >= REPORT
-
-/** `POST /sync/health` with this machine's health; skipped while cloud sync is not configured. */
-async function report(host: ExtensionHost) {
-  const cloud = await cloudConfig(host)
-  if (!cloud) return
-  const body: MachineHealth = {
-    machine: cloud.machine,
-    at: Date.now(),
-    providers: toHealth(await readFileHealth(host.userHome)),
-  }
-  const response = await fetch(new URL('/sync/health', httpBase(cloud.url)), {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${cloud.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(15_000),
-  })
-  if (!response.ok) throw new Error(`POST /sync/health: ${response.status}`)
-}
-
 export default function health(host: ExtensionHost) {
   // Resolved where it is called; declared here so the catalogue lists it.
-  host.want(HealthFeedback)
   host.want(PauseApi)
   // A login added, replaced or removed through Ultimate makes the provider's record meaningless: start it over.
   // Each write that flips a provider's state is announced as `health.changed`.
@@ -334,16 +293,12 @@ export default function health(host: ExtensionHost) {
             // Only providers with a login here: a stray model reference to another fails, which is not its health.
             if (!entry || !host.modelRuntime.getProviderAuthStatus(message.provider).configured)
               return
-            recordHealth(
-              host.userHome,
-              message.provider,
-              entry,
-              host.want(HealthFeedback),
-              flipped,
-            ).catch((error: unknown) => {
-              // Health is advisory: a failed write must never fail or delay the agent's generation.
-              console.error('health: recording a response failed:', error)
-            })
+            recordHealth(host.userHome, message.provider, entry, flipped).catch(
+              (error: unknown) => {
+                // Health is advisory: a failed write must never fail or delay the agent's generation.
+                console.error('health: recording a response failed:', error)
+              },
+            )
           },
         }),
       ]
@@ -354,28 +309,13 @@ export default function health(host: ExtensionHost) {
   // A resource keeps its first shape across reloads: add fields only as optional ones.
   const shared = host.resource('health.heartbeat', () => ({
     ticking: undefined as Promise<void> | undefined,
-    reported: 0,
-    pending: false as boolean | undefined,
   }))
   const deps = hostDeps(host, flipped)
   const tick = () => {
     // Paused: no ping starts until Play; the next tick after it catches up.
     if (host.want(PauseApi)?.paused()) return
-    shared.ticking ??= (async () => {
-      const { pruned, pinged } = await heartbeat(deps)
-      if (!shouldReport(shared, pruned.length + pinged.length > 0, Date.now())) return
-      shared.pending = true
-      await report(host).then(
-        () => {
-          shared.reported = Date.now()
-          shared.pending = false
-        },
-        (error: unknown) => {
-          // The cloud may be down or not deployed yet; `pending` stays set, so the next tick reports again.
-          console.error('health: report failed:', error instanceof Error ? error.message : error)
-        },
-      )
-    })()
+    shared.ticking ??= heartbeat(deps)
+      .then(() => undefined)
       .catch((error: unknown) => host.notice(`Provider heartbeat: ${String(error)}`))
       .finally(() => {
         shared.ticking = undefined
@@ -383,19 +323,9 @@ export default function health(host: ExtensionHost) {
   }
   const start = setTimeout(tick, 30_000)
   const timer = setInterval(tick, TICK)
-  // A login change resets that provider (here, or in the models action that made it): the tick pings it as due and
-  // reports; a removed one has nothing to ping, so its report is owed explicitly.
+  // A login change resets that provider (here, or in the models action that made it): the tick pings it as due.
   const stopWatching = existsSync(dirname(authPath()))
-    ? watchLogins(
-        host.userHome,
-        (providers) => {
-          if (providers) shared.pending = true
-          tick()
-        },
-        authPath(),
-        1000,
-        flipped,
-      )
+    ? watchLogins(host.userHome, () => tick(), authPath(), 1000, flipped)
     : undefined
   host.onClose(async () => {
     clearTimeout(start)

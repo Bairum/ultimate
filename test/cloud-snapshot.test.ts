@@ -1,57 +1,27 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { R2Bucket } from '@cloudflare/workers-types'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
-import worker from '../cloud/worker.ts'
-import { MAX_SNAPSHOT_OBJECT } from '../cloud/snapshots.ts'
-import { databaseHash, downloadSnapshot, uploadSnapshot } from '../extensions/cloud/snapshot.ts'
+import { downloadSnapshot, uploadSnapshot } from '../extensions/cloud/snapshot.ts'
 import type { SnapshotManifest } from '../extensions/cloud/snapshot.ts'
+import { vacuum } from '../lib/database-files.ts'
 import { git } from '../lib/git.ts'
+import { cloudStub, hashKey as project } from './cloud-stub.ts'
 import { temp } from './helpers.ts'
 
-type Env = Parameters<typeof worker.fetch>[1]
 const key = 'github.com/o/project'
-const project = (value: string) => createHash('sha256').update(value).digest('hex')
-
-/** An in-memory R2 bucket listing two keys per page; `at` sets the upload time of the next puts. */
-function memoryBucket() {
-  const objects = new Map<string, { bytes: Uint8Array; uploaded: Date }>()
-  const r2 = {
-    objects,
-    at: undefined as number | undefined,
-    async put(name: string, value: Uint8Array) {
-      objects.set(name, {
-        bytes: new Uint8Array(value),
-        uploaded: new Date(r2.at ?? Date.now()),
-      })
-      if (r2.at !== undefined) r2.at++
-    },
-    async get(name: string) {
-      const object = objects.get(name)
-      return object ? { body: object.bytes } : null
-    },
-    async delete(names: string | string[]) {
-      for (const name of [names].flat()) objects.delete(name)
-    },
-    async list({ prefix, cursor }: { prefix: string; cursor?: string }) {
-      const names = [...objects.keys()].filter((name) => name.startsWith(prefix)).toSorted()
-      const start = cursor ? Number(cursor) : 0
-      return {
-        objects: names
-          .slice(start, start + 2)
-          .map((name) => ({ key: name, uploaded: objects.get(name)!.uploaded })),
-        truncated: start + 2 < names.length,
-        cursor: String(start + 2),
-      }
-    },
-  }
-  return r2
-}
-const bucket = memoryBucket()
-const env = { SYNC_TOKEN: 'dev', BUILDS: bucket as unknown as R2Bucket } as Env
+const stub = cloudStub()
+const stored = stub.objects
 const remote = { url: 'ws://127.0.0.1:8787', token: 'dev', secret: 'snapshot secret', key }
+/** sha256 of a `VACUUM INTO` copy: the plaintext a manifest hashes. */
+async function contentHash(path: string) {
+  const copy = join(await temp('ultimate-snapshot-hash-'), 'copy.sqlite')
+  vacuum(path, copy)
+  return createHash('sha256')
+    .update(await readFile(copy))
+    .digest('hex')
+}
 
 const commit = async (repo: string, branch: string, message: string) => {
   const parent = await git(repo, 'rev-parse', branch)
@@ -88,13 +58,7 @@ let progress: [number, number, number][]
 const before: Record<string, string> = {}
 
 beforeAll(async () => {
-  Object.defineProperty(crypto.subtle, 'timingSafeEqual', {
-    configurable: true,
-    value: timingSafeEqual,
-  })
-  vi.stubGlobal('fetch', (input: string | URL, init?: RequestInit) =>
-    worker.fetch(new Request(input, init), env),
-  )
+  vi.stubGlobal('fetch', stub.fetch)
   source = await temp('ultimate-snapshot-source-')
   target = join(await temp('ultimate-snapshot-target-'), 'checkout')
   worktree = join(await temp('ultimate-snapshot-worktree-'), 'checkout')
@@ -138,7 +102,6 @@ beforeAll(async () => {
   progress = []
   manifest = await uploadSnapshot({
     ...remote,
-    epoch: 4,
     machine: 'desk',
     database,
     repo: source,
@@ -148,25 +111,24 @@ beforeAll(async () => {
 afterAll(() => {
   writer?.close()
   vi.unstubAllGlobals()
-  Reflect.deleteProperty(crypto.subtle, 'timingSafeEqual')
 })
 
 it('round-trips the database and fetches branches without force, keeping conflicting ones aside', async () => {
-  expect(manifest).toMatchObject({ key, epoch: 4, machine: 'desk', database: { chunks: 2 } })
+  expect(manifest).toMatchObject({ key, machine: 'desk', database: { chunks: 2 } })
   expect(manifest.bundle?.chunks).toBe(1)
-  expect(await databaseHash(database)).toBe(manifest.database.sha256)
+  expect(await contentHash(database)).toBe(manifest.database.sha256)
   expect(progress.at(-1)).toEqual([
     manifest.database.bytes + manifest.bundle!.bytes,
     manifest.database.bytes + manifest.bundle!.bytes,
     manifest.database.uploaded! + manifest.bundle!.uploaded!,
   ])
   // `uploaded` is exactly what went to R2: every encrypted chunk of the part.
-  const stored = (kind: string) =>
-    [...bucket.objects]
+  const storedBytes = (kind: string) =>
+    [...stored]
       .filter(([name]) => name.includes(`/${manifest.id}/${kind}-`))
-      .reduce((sum, [, object]) => sum + object.bytes.length, 0)
-  expect(manifest.database.uploaded).toBe(stored('db'))
-  expect(manifest.bundle!.uploaded).toBe(stored('bundle'))
+      .reduce((sum, [, object]) => sum + object.length, 0)
+  expect(manifest.database.uploaded).toBe(storedBytes('db'))
+  expect(manifest.bundle!.uploaded).toBe(storedBytes('bundle'))
   // The temporary copies leave nothing next to the database.
   expect(await readdir(join(database, '..'))).toEqual(
     expect.not.arrayContaining([expect.stringMatching(/^\.snapshot-/)]),
@@ -197,18 +159,18 @@ it('round-trips the database and fetches branches without force, keeping conflic
   // A repeated download finds its kept refs in place.
   const again = await downloadSnapshot({ ...remote, id: manifest.id, dir, repo: target })
   expect(again.keptRefs.toSorted()).toEqual(result.keptRefs.toSorted())
-  expect(await databaseHash(database)).toBe(manifest.database.sha256)
+  expect(await contentHash(database)).toBe(manifest.database.sha256)
   writer.prepare('INSERT INTO notes (body) VALUES (?)').run('changed')
-  expect(await databaseHash(database)).not.toBe(manifest.database.sha256)
+  expect(await contentHash(database)).not.toBe(manifest.database.sha256)
 })
 
 it('stores only ciphertext in R2', () => {
-  const names = [...bucket.objects.keys()]
-  const prefix = `snapshots/${project(key)}/${manifest.id}/`
+  const names = [...stored.keys()]
+  const prefix = `${project(key)}/${manifest.id}/`
   expect(names.toSorted()).toEqual(
     ['bundle-0', 'db-0', 'db-1', 'manifest'].map((name) => prefix + name),
   )
-  for (const { bytes } of bucket.objects.values()) {
+  for (const bytes of stored.values()) {
     const text = Buffer.from(bytes)
     for (const plain of ['SQLite format 3', 'git bundle', key, manifest.id, 'desk'])
       expect(text.includes(plain)).toBe(false)
@@ -216,11 +178,11 @@ it('stores only ciphertext in R2', () => {
   }
 })
 
-it.each<[string, (objects: typeof bucket.objects, prefix: string) => void, RegExp]>([
+it.each<[string, (objects: Map<string, Uint8Array>, prefix: string) => void, RegExp]>([
   [
     'a tampered chunk',
     (objects, prefix) => {
-      objects.get(`${prefix}db-1`)!.bytes[100] ^= 1
+      objects.get(`${prefix}db-1`)![100] ^= 1
     },
     /failed verification \(db 1\)/,
   ],
@@ -243,8 +205,7 @@ it.each<[string, (objects: typeof bucket.objects, prefix: string) => void, RegEx
   [
     'a cut-off chunk',
     (objects, prefix) => {
-      const chunk = objects.get(`${prefix}db-1`)!
-      chunk.bytes = chunk.bytes.subarray(0, 1000)
+      objects.set(`${prefix}db-1`, objects.get(`${prefix}db-1`)!.subarray(0, 1000))
     },
     /failed verification \(db 1\)/,
   ],
@@ -256,10 +217,8 @@ it.each<[string, (objects: typeof bucket.objects, prefix: string) => void, RegEx
     /failed verification \(manifest 0\)/,
   ],
 ])('rejects %s and leaves nothing behind', async (_, alter, error) => {
-  const saved = new Map(
-    [...bucket.objects].map(([name, object]) => [name, { ...object, bytes: object.bytes.slice() }]),
-  )
-  alter(bucket.objects, `snapshots/${project(key)}/${manifest.id}/`)
+  const saved = new Map([...stored].map(([name, object]) => [name, object.slice()]))
+  alter(stored, `${project(key)}/${manifest.id}/`)
   const empty = await temp('ultimate-snapshot-rejected-')
   const refs = await git(target, 'for-each-ref')
   try {
@@ -269,8 +228,8 @@ it.each<[string, (objects: typeof bucket.objects, prefix: string) => void, RegEx
     expect(await readdir(empty)).toEqual([])
     expect(await git(target, 'for-each-ref')).toBe(refs)
   } finally {
-    bucket.objects.clear()
-    for (const [name, object] of saved) bucket.objects.set(name, object)
+    stored.clear()
+    for (const [name, object] of saved) stored.set(name, object)
   }
 })
 
@@ -281,8 +240,8 @@ it('rejects the wrong secret and the wrong project key', async () => {
   ).rejects.toThrow(/failed verification \(manifest 0\)/)
   // The same objects under another project's prefix: the key derivation, not the path, refuses them.
   const other = 'github.com/o/other'
-  for (const [name, object] of new Map(bucket.objects))
-    bucket.objects.set(name.replace(project(key), project(other)), object)
+  for (const [name, object] of new Map(stored))
+    stored.set(name.replace(project(key), project(other)), object)
   await expect(
     downloadSnapshot({ ...remote, key: other, id: manifest.id, dir: empty, repo: target }),
   ).rejects.toThrow(/failed verification \(manifest 0\)/)
@@ -298,7 +257,6 @@ it('skips the bundle when the repository has no ultimate branches', async () => 
   db.close()
   const small = await uploadSnapshot({
     ...remote,
-    epoch: 1,
     machine: 'laptop',
     database: path,
     repo,
@@ -328,7 +286,6 @@ it('never carries provider logins or secrets that sit next to the database', asy
   await git(repo, 'init', '-b', 'main')
   const uploaded = await uploadSnapshot({
     ...remote,
-    epoch: 1,
     machine: 'desk',
     database: path,
     repo,
@@ -365,7 +322,6 @@ it('carries a branch checked out in a source worktree, with commits of its own, 
   new DatabaseSync(path).close()
   const uploaded = await uploadSnapshot({
     ...remote,
-    epoch: 1,
     machine: 'desk',
     database: path,
     repo,
@@ -377,98 +333,4 @@ it('carries a branch checked out in a source worktree, with commits of its own, 
   expect(await git(clone, 'log', '--format=%s', 'ultimate/feature')).toBe(
     'more feature work\nfeature work\nroot',
   )
-})
-
-const call = (path: string, init: RequestInit = {}, token = 'dev') =>
-  worker.fetch(
-    new Request(`https://cloud.example/sync/snapshots/${path}`, {
-      ...init,
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    }),
-    env,
-  )
-
-it('authenticates before touching R2 and validates paths and sizes', async () => {
-  const touch = vi.fn<() => never>(() => {
-    throw new Error('binding touched')
-  })
-  const guarded = new Proxy(
-    { SYNC_TOKEN: 'dev' },
-    {
-      get: (held, name) => (name === 'BUILDS' ? touch() : Reflect.get(held, name)),
-    },
-  ) as unknown as Env
-  const path = `${project(key)}/abcdefgh/manifest`
-  for (const headers of [{}, { Authorization: 'Bearer wrong' }] as HeadersInit[])
-    expect(
-      (
-        await worker.fetch(
-          new Request(`https://cloud.example/sync/snapshots/${path}`, { headers }),
-          guarded,
-        )
-      ).status,
-    ).toBe(401)
-  expect(touch).not.toHaveBeenCalled()
-
-  const p = project('github.com/o/limits')
-  for (const bad of [
-    `${p}/short/db-0`,
-    `${p}/Upper-case-id/db-0`,
-    `${p}/${'a'.repeat(65)}/db-0`,
-    `${p}/abcdefgh/db-01`,
-    `${p}/abcdefgh/wal-0`,
-    `${p}/abcdefgh/manifest.json`,
-    `${p.slice(1)}/abcdefgh/db-0`,
-    `${p}/abcdefgh`,
-    `${p}/abcdefgh/db-0/extra`,
-  ])
-    expect((await call(bad, { method: 'PUT', body: 'x' })).status).toBe(400)
-  expect((await call(`${p}/abcdefgh/db-0`, { method: 'DELETE' })).status).toBe(400)
-  expect((await call(`${p}/abcdefgh/db-0`)).status).toBe(404)
-  expect(
-    (
-      await call(`${p}/abcdefgh/db-0`, {
-        method: 'PUT',
-        body: new Uint8Array(MAX_SNAPSHOT_OBJECT + 1),
-      })
-    ).status,
-  ).toBe(413)
-  expect(bucket.objects.has(`snapshots/${p}/abcdefgh/db-0`)).toBe(false)
-  expect(
-    (await call(`${p}/abcdefgh/db-0`, { method: 'PUT', body: new Uint8Array(MAX_SNAPSHOT_OBJECT) }))
-      .status,
-  ).toBe(204)
-  const read = await call(`${p}/abcdefgh/db-0`)
-  expect(read.headers.get('cache-control')).toBe('no-store')
-  expect((await read.arrayBuffer()).byteLength).toBe(MAX_SNAPSHOT_OBJECT)
-})
-
-it('keeps the newest three snapshots and fresh partial uploads after each manifest', async () => {
-  const p = project('github.com/o/retention')
-  const other = project('github.com/o/neighbour')
-  const put = (owner: string, id: string, name: string) =>
-    call(`${owner}/${id}/${name}`, { method: 'PUT', body: 'ciphertext' })
-  const held = () =>
-    new Set(
-      [...bucket.objects.keys()]
-        .filter((name) => name.startsWith(`snapshots/${p}/`))
-        .map((name) => name.split('/')[2]),
-    )
-  const hour = 60 * 60 * 1000
-  bucket.at = Date.now() - 2 * hour
-  await put(p, 'abandoned', 'db-0')
-  await put(other, 'neighbour', 'manifest')
-  bucket.at = Date.now() - 10 * 60 * 1000
-  for (const id of ['snap-001', 'snap-002', 'snap-003', 'snap-004']) {
-    await put(p, id, 'db-0')
-    await put(p, id, 'manifest')
-  }
-  await put(p, 'inflight', 'db-0')
-  expect(held()).toEqual(new Set(['snap-002', 'snap-003', 'snap-004', 'inflight']))
-  // The manifest just uploaded is kept even when R2's clock places it before the others.
-  bucket.at = Date.now() - 20 * 60 * 1000
-  await put(p, 'snap-000', 'manifest')
-  bucket.at = undefined
-  expect(held()).toEqual(new Set(['snap-000', 'snap-003', 'snap-004', 'inflight']))
-  expect(bucket.objects.has(`snapshots/${other}/neighbour/manifest`)).toBe(true)
 })

@@ -131,11 +131,11 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
   const topLevel = conversations.filter(
     (conversation) => conversation.parentConversationId === undefined,
   )
-  // The primary agent (@ultimate, or @sync in the machine home) first, then the lander and other standing agents:
+  // The primary agent (@ultimate; none in the machine home) first, then the lander and other standing agents:
   // pinned above the rest and never concluded.
   const primary = usePrimaryAgent()
   const standingIds = useDocOf(1, StandingDoc)
-  const ultimateId = standingIds?.[primary]
+  const ultimateId = primary ? standingIds?.[primary] : undefined
   const ultimate = topLevel.find((conversation) => conversation.id === ultimateId)
   const agents = topLevel
     .filter((conversation) => pinned(conversation) && conversation.id !== ultimateId)
@@ -163,10 +163,9 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
       .flatMap((branch) => [branch, ...branchesBelow(branch.id, concluded)])
   const latestIn = (root: ConversationSummary) =>
     Math.max(root.inputAt ?? 0, ...branchesBelow(root.id).map((branch) => branch.inputAt ?? 0))
-  // Trees by their newest input anywhere in them, newest first. The machine home has no project and no trees:
-  // its only conversation is @sync.
+  // Trees by their newest input anywhere in them, newest first. The machine home has no project and no trees.
   const rootRows = listed
-    .filter((conversation) => primary !== 'sync' && roots.has(conversation.id))
+    .filter((conversation) => !!primary && roots.has(conversation.id))
     .toSorted((a, b) => latestIn(b) - latestIn(a) || b.id - a.id)
 
   const [warning, setWarning] = useState<{
@@ -222,7 +221,7 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
     const name = lander
       ? 'lander'
       : isUltimate
-        ? primary
+        ? (primary ?? 'ultimate')
         : (Object.entries(standingIds ?? {}).find(([, id]) => id === conversation.id)?.[0] ??
           conversation.title?.replace(/^@/, '') ??
           `#${conversation.id}`)
@@ -514,9 +513,11 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
         )}
       </div>
       <nav aria-label="Conversations" className="flex flex-col gap-px">
-        <div className="mb-1 border-b border-border/60 pb-1">
-          {ultimate ? tree(ultimate) : standingRow(undefined)}
-        </div>
+        {primary && (
+          <div className="mb-1 border-b border-border/60 pb-1">
+            {ultimate ? tree(ultimate) : standingRow(undefined)}
+          </div>
+        )}
         {agents.length > 0 && (
           <div
             aria-label="Agents"

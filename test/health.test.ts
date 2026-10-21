@@ -4,17 +4,14 @@ import type { AssistantMessage } from '@earendil-works/pi-ai'
 import { afterEach, expect, it, vi } from 'vitest'
 import { machineRoot } from '../lib/machine.ts'
 import { PauseApi } from '../extensions/pause/api.ts'
-import { modelLogin, noLogin } from '../extensions/cloud/login.ts'
 import {
   announce,
   cheapest,
   due,
   heartbeat,
   hostDeps,
-  REPORT,
   TICK,
   responseEntry,
-  shouldReport,
 } from '../extensions/health/server.ts'
 import type { HeartbeatDeps } from '../extensions/health/server.ts'
 import healthExtension, { changedLogins, watchLogins } from '../extensions/health/server.ts'
@@ -236,17 +233,6 @@ const model = (provider: string, id: string, input: number, output = input) => (
   cost: { input, output, cacheRead: 0, cacheWrite: 0 },
 })
 
-it('reports after a ping, keeps retrying a failed report, and at least hourly', () => {
-  const fresh = { reported: NOW, pending: false }
-  expect(shouldReport(fresh, false, NOW + MINUTE)).toBe(false)
-  expect(shouldReport(fresh, true, NOW + MINUTE)).toBe(true)
-  // A report after a ping failed although an earlier one succeeded a minute ago: the next quiet tick retries.
-  expect(shouldReport({ reported: NOW, pending: true }, false, NOW + 10 * MINUTE)).toBe(true)
-  expect(shouldReport(fresh, false, NOW + REPORT)).toBe(true)
-  // A resource made by the previous facet has no `pending` yet: it reads as nothing owed.
-  expect(shouldReport({ reported: NOW }, false, NOW + MINUTE)).toBe(false)
-})
-
 it('skips the heartbeat tick while the host is paused and pings again after Play', async () => {
   const home = await temp('ultimate-health-pause-')
   const services = apis()
@@ -341,80 +327,8 @@ it('heartbeat forgets providers without a login here, so their old failures stop
   expect((await readHealth(home)).map((entry) => [entry.provider, entry.state])).toEqual([
     ['openai-codex', 'ok'],
   ])
-  // Nothing left to forget: the next tick changes nothing and owes no report.
+  // Nothing left to forget: the next tick changes nothing.
   expect(await heartbeat(deps)).toEqual({ pruned: [], pinged: [] })
-})
-
-/** A login host whose `want` finds the health extension installed on the same user home and models. */
-function withHealth<T extends Pick<ExtensionHost, 'userHome' | 'modelRuntime'>>(host: T) {
-  const services = apis()
-  // No login changes here, so its reactor is never started.
-  healthExtension({
-    ...host,
-    ...services,
-    faux: true,
-    react: () => {},
-  } as unknown as ExtensionHost)
-  return { ...host, want: services.want }
-}
-
-it('a failing default provider is no model login for a move', async () => {
-  const home = await temp()
-  const host = withHealth({
-    faux: undefined,
-    userHome: home,
-    settings: { getDefaultProvider: () => 'anthropic' } as unknown as ExtensionHost['settings'],
-    modelRuntime: {
-      getProviderAuthStatus: () => ({ configured: true }),
-      getAvailable: async () => [],
-    } as unknown as ExtensionHost['modelRuntime'],
-  })
-  const login = () => modelLogin(host)
-  expect(await login()).toEqual({ provider: 'anthropic', ok: true })
-  await record(home, 'anthropic', { lastOk: NOW, lastFail: NOW + 1, error: 'invalid_grant' })
-  const failing = await login()
-  expect(failing).toEqual({ provider: 'anthropic', ok: false, error: 'invalid_grant' })
-  expect(noLogin(failing.provider, failing.error)).toBe(
-    'anthropic is failing here: invalid_grant; log in again with ⌘K → Log in',
-  )
-  await record(home, 'anthropic', { lastOk: NOW + 2 })
-  expect(await login()).toEqual({ provider: 'anthropic', ok: true })
-})
-
-it('a move confirms a recorded failure with a ping, so a stale one never blocks it', async () => {
-  const home = await temp()
-  let answers: 'stop' | 'error' = 'stop'
-  const pinged: string[] = []
-  const host = withHealth({
-    faux: undefined,
-    userHome: home,
-    settings: { getDefaultProvider: () => 'anthropic' } as unknown as ExtensionHost['settings'],
-    modelRuntime: {
-      getProviderAuthStatus: () => ({ configured: true }),
-      getAvailable: async () => [model('anthropic', 'haiku', 1)],
-      completeSimple: async (pingedModel: { id: string }) => {
-        pinged.push(pingedModel.id)
-        return {
-          stopReason: answers,
-          errorMessage: answers === 'error' ? 'invalid_grant' : undefined,
-        }
-      },
-    } as unknown as ExtensionHost['modelRuntime'],
-  })
-  // A failure long ago, no heartbeat since: the move's ping finds the provider working and clears it.
-  await record(home, 'anthropic', { lastFail: NOW, error: 'invalid_grant' })
-  expect(await modelLogin(host)).toMatchObject({ ok: false, error: 'invalid_grant' })
-  expect(await modelLogin(host, { confirm: true })).toEqual({ provider: 'anthropic', ok: true })
-  expect(pinged).toEqual(['haiku'])
-  expect(await modelLogin(host)).toEqual({ provider: 'anthropic', ok: true })
-  // A real revocation: the confirming ping fails too and its error blocks the move.
-  answers = 'error'
-  await record(home, 'anthropic', { lastFail: Date.now() + HOUR, error: '401' })
-  expect(await modelLogin(host, { confirm: true })).toMatchObject({
-    ok: false,
-    error: expect.stringMatching(/invalid_grant|401/),
-  })
-  expect(pinged).toEqual(['haiku', 'haiku'])
 })
 
 it('resets a provider whose login changed to unknown, so the next heartbeat pings it', async () => {

@@ -1,4 +1,4 @@
-/** The user's cloud sync settings: the replica to sync with and whether a starting machine claims a free lease. */
+/** The user's cloud settings: the backup Worker's URL, its token and this machine's name. */
 import { hostname } from 'node:os'
 import { readSecret } from './secrets.ts'
 import { readSettings, userSettingsPath } from './settings.ts'
@@ -19,7 +19,7 @@ async function userCloudSettings(host: Pick<ExtensionHost, 'userHome'>) {
   return cloud && typeof cloud === 'object' && !Array.isArray(cloud) ? cloud : {}
 }
 
-/** Only user settings may select a replica: a repository must not redirect the user's history. */
+/** Only user settings may select the cloud: a repository must not redirect the user's history. */
 export async function cloudConfig(
   host: Pick<ExtensionHost, 'userHome' | 'faux' | 'notice'>,
   env: NodeJS.ProcessEnv = process.env,
@@ -39,10 +39,39 @@ export async function cloudConfig(
   return { url, token, machine }
 }
 
-/** Whether a starting machine takes a free lease by itself (`cloud.autoClaim`, default true). */
-export async function leaseSettings(
-  host: Pick<ExtensionHost, 'userHome'>,
-): Promise<{ autoClaim: boolean }> {
-  const config = await userCloudSettings(host)
-  return { autoClaim: config.autoClaim !== false }
+/** The Worker's `GET /sync/register`: every project's latest backup and every machine that backed up. */
+export interface Register {
+  projects: {
+    hash: string
+    key: string
+    name: string
+    latest: {
+      id: string
+      machine: string
+      at: number
+      bytes: number
+      uploaded: number
+      parent: string | null
+      tailnet?: string
+    }
+  }[]
+  machines: {
+    machine: string
+    at: number
+    health?: unknown
+    projects: Record<string, { name: string; at: number; tailnet?: string }>
+  }[]
+}
+
+/** `GET /sync/register` with the bearer token; throws with the status on anything but 200. */
+export async function fetchRegister(
+  cloud: { url: string; token: string },
+  fetcher: typeof fetch = fetch,
+): Promise<Register> {
+  const response = await fetcher(new URL('/sync/register', httpBase(cloud.url)), {
+    headers: { Authorization: `Bearer ${cloud.token}` },
+    signal: AbortSignal.timeout(15000),
+  })
+  if (!response.ok) throw new Error(`GET /sync/register returned ${response.status}`)
+  return (await response.json()) as Register
 }

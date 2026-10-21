@@ -1,4 +1,4 @@
-// The Join card's `sync.join`: a stub cloud on loopback answers `/sync/directory`; secrets and settings land in a
+// The Join card's `cloud.join`: a stub cloud on loopback answers `/sync/register`; secrets and settings land in a
 // temporary user home.
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -7,8 +7,8 @@ import { join as path, resolve } from 'node:path'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { writeSecret } from '../extensions/secrets/store.ts'
-import { cloudUrl, join, joinState, saveCloud } from '../extensions/sync/join.ts'
-import type { JoinDeps } from '../extensions/sync/join.ts'
+import { cloudUrl, join, joinState, saveCloud } from '../extensions/cloud/join.ts'
+import type { JoinDeps } from '../extensions/cloud/join.ts'
 import { readStore } from '../lib/secrets.ts'
 import { writeJson } from '../lib/json-file.ts'
 import { context } from '../server/harness.ts'
@@ -25,20 +25,23 @@ beforeAll(async () => {
       ...(request.url ? { path: request.url } : {}),
       ...(request.headers.authorization ? { authorization: request.headers.authorization } : {}),
     })
-    if (request.url !== '/sync/directory') response.writeHead(404).end()
+    if (request.url !== '/sync/register') response.writeHead(404).end()
     else if (request.headers.authorization !== `Bearer ${TOKEN}`)
       response.writeHead(401).end('unauthorized')
     else
-      response
-        .writeHead(200, { 'Content-Type': 'application/json' })
-        .end(JSON.stringify([{ key: 'github.com/hazat/ultimate', name: 'ultimate' }]))
+      response.writeHead(200, { 'Content-Type': 'application/json' }).end(
+        JSON.stringify({
+          projects: [{ hash: 'ab', key: 'github.com/hazat/ultimate', name: 'ultimate' }],
+          machines: [],
+        }),
+      )
   })
   await new Promise<void>((done) => cloud.listen(0, '127.0.0.1', done))
   base = `http://127.0.0.1:${(cloud.address() as AddressInfo).port}`
 })
 afterAll(() => new Promise<void>((done) => cloud.close(() => done())))
 
-/** A user home and the deps `sync.join` uses there: the real secret store and settings file. */
+/** A user home and the deps `cloud.join` uses there: the real secret store and settings file. */
 async function home() {
   const userHome = await temp('ultimate-join-')
   const deps: JoinDeps = {
@@ -82,7 +85,7 @@ it('stores both secrets and cloud.url/cloud.machine after the cloud answers 200,
   const { userHome, deps, settings, secrets } = await home()
   await writeJson(path(userHome, '.ultimate/settings.json'), {
     theme: 'dark',
-    cloud: { autoClaim: false },
+    cloud: { machine: 'old' },
   })
   expect((await joinState(userHome)).joined).toBeUndefined()
   const result = await join(deps, input())
@@ -94,7 +97,7 @@ it('stores both secrets and cloud.url/cloud.machine after the cloud answers 200,
     machine: 'rog',
     projects: ['ultimate'],
   })
-  expect(seen.at(-1)).toEqual({ path: '/sync/directory', authorization: `Bearer ${TOKEN}` })
+  expect(seen.at(-1)).toEqual({ path: '/sync/register', authorization: `Bearer ${TOKEN}` })
   expect(await secrets()).toEqual({
     ULTIMATE_CLOUD_TOKEN: TOKEN,
     ULTIMATE_CLOUD_SNAPSHOT_KEY: KEY,
@@ -103,7 +106,7 @@ it('stores both secrets and cloud.url/cloud.machine after the cloud answers 200,
   // Other settings stay.
   expect(await settings()).toEqual({
     theme: 'dark',
-    cloud: { autoClaim: false, url, machine: 'rog' },
+    cloud: { url, machine: 'rog' },
   })
   expect(await joinState(userHome)).toEqual({
     joined: { url, host: new URL(base).host, machine: 'rog' },
@@ -119,7 +122,7 @@ it('stores both secrets and cloud.url/cloud.machine after the cloud answers 200,
   })
   expect(await settings()).toEqual({
     theme: 'dark',
-    cloud: { autoClaim: false, url, machine: 'rog' },
+    cloud: { url, machine: 'rog' },
   })
 })
 
@@ -140,16 +143,18 @@ it('stores nothing when the cloud refuses the token or cannot be reached', async
     step: 'check',
     error: `Cannot reach 127.0.0.1:${port}`,
   })
-  // A server that answers, but not as the cloud.
-  const notCloud = await join(
-    { ...deps, fetch: async () => new Response('<html>', { status: 200 }) },
-    input(),
-  )
-  expect(notCloud).toEqual({
-    ok: false,
-    step: 'check',
-    error: `Cannot reach ${new URL(base).host}`,
-  })
+  // Servers that answer, but not as the cloud: HTML, or the old Worker's directory array.
+  for (const body of ['<html>', '[{"name":"ultimate"}]']) {
+    const notCloud = await join(
+      { ...deps, fetch: async () => new Response(body, { status: 200 }) },
+      input(),
+    )
+    expect(notCloud).toEqual({
+      ok: false,
+      step: 'check',
+      error: `Cannot reach ${new URL(base).host}`,
+    })
+  }
   expect(await secrets()).toEqual({})
   expect(await settings()).toEqual({})
   expect((await joinState(userHome)).missing).toEqual([
@@ -201,7 +206,7 @@ it('names the step that failed when the secrets cannot be saved, and keeps setti
   expect(await settings()).toEqual({})
 })
 
-it.concurrent('runs sync.join for the UI and refuses it to agents', async () => {
+it.concurrent('runs cloud.join for the UI and refuses it to agents', async () => {
   const userHome = await temp('ultimate-join-server-')
   await mkdir(path(userHome, 'project'))
   const server = await fauxServer({
@@ -212,11 +217,11 @@ it.concurrent('runs sync.join for the UI and refuses it to agents', async () => 
     localSetup: false,
   })
   try {
-    const ui = await post(server, '/api/extensions/sync/actions/join', { args: input() })
+    const ui = await post(server, '/api/extensions/cloud/actions/join', { args: input() })
     expect(ui.status).toBe(200)
     expect(ui.data.result).toMatchObject({ ok: true, machine: 'rog', projects: ['ultimate'] })
     expect((await readStore(userHome)).secrets.ULTIMATE_CLOUD_SNAPSHOT_KEY?.value).toBe(KEY)
-    const state = await post(server, '/api/extensions/sync/actions/joinState', {})
+    const state = await post(server, '/api/extensions/cloud/actions/joinState', {})
     expect(state.data.result.joined).toMatchObject({ machine: 'rog' })
     // The answer carries no secret values.
     expect(JSON.stringify([ui.data, state.data])).not.toMatch(new RegExp(`${TOKEN}|${KEY}`))
@@ -226,7 +231,7 @@ it.concurrent('runs sync.join for the UI and refuses it to agents', async () => 
       fauxAssistantMessage(
         [
           fauxToolCall('codemode', {
-            code: `return await ultimate.action('sync', 'join', ${args});`,
+            code: `return await ultimate.action('cloud', 'join', ${args});`,
           }),
         ],
         { stopReason: 'toolUse' },
@@ -237,7 +242,7 @@ it.concurrent('runs sync.join for the UI and refuses it to agents', async () => 
     await server.harness.waitForIdle(context)
     const view = await server.root.viewState(context)
     const result = view.value.entries.findLast((entry) => entry.kind === 'pi.tool-result')!
-    expect(JSON.stringify(result.model)).toContain('sync/join is a user-only action')
+    expect(JSON.stringify(result.model)).toContain('cloud/join is a user-only action')
     expect(
       JSON.parse(await readFile(path(userHome, '.ultimate/settings.json'), 'utf8')).cloud.machine,
     ).toBe('rog')

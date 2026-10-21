@@ -1,4 +1,4 @@
-/** Joining this machine to the user's cloud fleet: the Join card's `sync.join` and `sync.joinState` actions. */
+/** Joining this machine to the user's cloud fleet: the Join card's `cloud.join` and `cloud.joinState` actions. */
 import { hostname } from 'node:os'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { httpBase } from '../../lib/cloud.ts'
@@ -13,7 +13,7 @@ const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
 
 /**
  * `wss://<host>` for a `wss://` or `https://` cloud URL, whatever its path; a loopback `ws://` or `http://` URL stays
- * `ws://`, for a local cloud (`pnpm cloud:dev`). Undefined for anything else.
+ * `ws://`, for a local Worker (`wrangler dev`). Undefined for anything else.
  */
 export function cloudUrl(input: string) {
   let url: URL
@@ -38,7 +38,7 @@ export interface JoinDeps {
 }
 
 /**
- * Check the cloud's `GET /sync/directory` with `token`; only when it answers 200 store both secrets, then `cloud.url`
+ * Check the cloud's `GET /sync/register` with `token`; only when it answers 200 store both secrets, then `cloud.url`
  * and `cloud.machine`. Returns the cloud's project names, or the step that failed and why. Errors never carry the
  * token or the snapshot key.
  */
@@ -58,22 +58,22 @@ export async function join(
   if (!token) return check(`${TOKEN} is required`)
   if (!snapshotKey) return check(`${SNAPSHOT_KEY} is required`)
   const host = new URL(url).host
-  let answer: { status: number; listed?: unknown }
+  let answer: { status: number; register?: unknown }
   try {
-    const response = await deps.fetch(new URL('/sync/directory', httpBase(url)), {
+    const response = await deps.fetch(new URL('/sync/register', httpBase(url)), {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(15000),
     })
     answer = {
       status: response.status,
-      ...(response.status === 200 ? { listed: await response.json() } : {}),
+      ...(response.status === 200 ? { register: await response.json() } : {}),
     }
   } catch {
     // A network error, a timeout or a body that is not JSON: the cloud is not there as expected.
     return check(`Cannot reach ${host}`)
   }
   if (answer.status === 401) return check('The cloud refused the token')
-  const listed = answer.listed
+  const listed = (answer.register as { projects?: unknown } | undefined)?.projects
   if (answer.status !== 200 || !Array.isArray(listed)) return check(`Cannot reach ${host}`)
   const projects = listed.flatMap((project: unknown) =>
     project && typeof project === 'object' && typeof (project as JsonObject).name === 'string'

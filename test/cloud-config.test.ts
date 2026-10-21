@@ -4,8 +4,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../server/extensions.ts'
-import cloud from '../extensions/cloud/server.ts'
-import { cloudConfig, leaseSettings } from '../lib/cloud.ts'
+import { cloudConfig } from '../lib/cloud.ts'
 import { writeJson } from '../lib/json-file.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
 import { temp } from './helpers.ts'
@@ -84,53 +83,4 @@ it('defaults the machine name to the OS hostname', async () => {
   const { host, settings } = await fixture()
   await settings({ url: 'wss://user/sync' })
   expect((await cloudConfig(host, {}))?.machine).toBe(hostname())
-})
-
-it('reads autoClaim from user settings, true unless it is false', async () => {
-  const { host, settings } = await fixture()
-  expect(await leaseSettings(host)).toEqual({ autoClaim: true })
-  await settings({ autoClaim: false })
-  expect(await leaseSettings(host)).toEqual({ autoClaim: false })
-  await settings({ autoClaim: 'no' })
-  expect(await leaseSettings(host)).toEqual({ autoClaim: true })
-})
-
-it('reports a missing token once at host open and never opens a connection', async () => {
-  const userHome = await temp()
-  await writeJson(join(userHome, '.ultimate/settings.json'), { cloud: { url: 'wss://user/sync' } })
-  for (const key of [
-    'ULTIMATE_CLOUD_URL',
-    'ULTIMATE_CLOUD_TOKEN',
-    'ULTIMATE_CLOUD_MACHINE',
-    'ULTIMATE_INSTANCE_OWNER',
-  ])
-    vi.stubEnv(key, undefined)
-  const notice = vi.fn<ExtensionHost['notice']>()
-  let open: (() => Promise<void>) | undefined
-  let close: (() => Promise<void>) | undefined
-  vi.useFakeTimers()
-  try {
-    await cloud({
-      userHome,
-      faux: false,
-      notice,
-      onOpen: (callback: () => Promise<void>) => {
-        open = callback
-      },
-      onClose: (callback: () => Promise<void>) => {
-        close = callback
-      },
-      onRelease: () => {},
-      want: () => undefined,
-      resource: <T>(_key: string, create: () => T) => create(),
-    } as unknown as ExtensionHost)
-    await open!()
-    expect(notice.mock.calls).toEqual([
-      ['Missing ULTIMATE_CLOUD_TOKEN. Add it in the Secrets panel (⌘K → Secrets).'],
-    ])
-    expect(vi.getTimerCount()).toBe(0)
-    await close!()
-  } finally {
-    vi.useRealTimers()
-  }
 })

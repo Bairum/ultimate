@@ -22,7 +22,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { watchRoots } from '../../server/watch-roots.ts'
 import { ConversationsApi, Release } from '../conversations/api.ts'
 import { agentRoots } from '../../lib/agents.ts'
-import { Handoff, WorkspacesApi } from './api.ts'
+import { WorkspacesApi } from './api.ts'
 import {
   DiskAction,
   GithubAction,
@@ -163,8 +163,7 @@ function watchDefinitions(
   }
 }
 export default function workspaceExtension(host: ExtensionHost) {
-  // The handoff is an extension point, wanted where the lander calls it; conversations is core and always on.
-  host.want(Handoff)
+  // Conversations is core and always on.
   const conversations = host.need(ConversationsApi)
   const service = workspaces(host)
   host.implement(WorkspacesApi, {
