@@ -16,7 +16,7 @@ import {
   SquareArrowOutUpRightIcon,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { Message, MessageContent, MessageResponse } from '@/components/ai/message'
+import { MentionText, MessageResponse } from '@/components/ai/message'
 import { ToolImage } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
@@ -32,6 +32,7 @@ import {
   useNow,
   useTranscript,
   useUltimate,
+  UserView,
 } from '@/sdk'
 import type { ChatSummaryProps, ToolCallView } from '@/sdk'
 import { AgentMark, ConversationRef } from '../conversations/ui.tsx'
@@ -41,6 +42,7 @@ import { accentOf } from './accent.tsx'
 import {
   answerTo,
   answeredMessages,
+  callFailed,
   callerOf,
   chatQuiet,
   counterparts,
@@ -250,16 +252,20 @@ function AttachedAnswer({ answer, question }: { answer: BoardMessage; question: 
         </time>
       </div>
       {!dismissed && (
-        <div className="mt-1.5 rounded-md border border-border/70 bg-secondary/60 px-3 py-2 text-[13px] leading-relaxed">
-          <MessageResponse>{answer.text}</MessageResponse>
-        </div>
+        // Your words as you wrote them, as a typed turn shows them.
+        <p className="mt-1.5 rounded-md border border-border/70 bg-secondary/60 px-3 py-2 text-[13px] leading-relaxed break-words whitespace-pre-wrap">
+          <MentionText text={answer.text} />
+        </p>
       )}
     </div>
   )
 }
 
 /** What one background row is, in a few words that its counterpart follows. */
-function backgroundWord({ entry, calls }: ChatSummaryProps['rows'][number]) {
+function backgroundWord(
+  { entry, calls }: ChatSummaryProps['rows'][number],
+  failed: (call: string) => boolean,
+) {
   const words: Record<string, string> = {
     'board.message': 'Message from',
     'board.reply': 'Reply from',
@@ -272,24 +278,25 @@ function backgroundWord({ entry, calls }: ChatSummaryProps['rows'][number]) {
     'workspaces.lander-report': 'Landing report from',
   }
   if (words[entry.kind]) return words[entry.kind]
-  if (calls.length)
-    return calls.every((call) => call.name === 'branch')
-      ? calls.length === 1
-        ? 'Started branch'
-        : 'Started branches'
-      : 'Message to'
+  if (calls.length) {
+    const branches = calls.every((call) => call.name === 'branch')
+    // A failed call did not do what its name says.
+    if (calls.every((call) => failed(call.id))) return branches ? 'Branch failed' : 'Message failed'
+    return branches ? (calls.length === 1 ? 'Started branch' : 'Started branches') : 'Message to'
+  }
   return 'Answered'
 }
 
 /** A background group's line: who it was with, how many updates, and the work between them. */
 export function BackgroundSummary({ rows, steps, working }: ChatSummaryProps) {
   const board = useDocOf(1, BoardDoc) ?? emptyBoard
+  const transcript = useTranscript()
   const shown = rows.filter((row) => chatQuiet(row, board) === true)
   const who = [...new Set(shown.flatMap((row) => counterparts(row, board)))]
   const count = shown.length
   const what =
     count === 1
-      ? backgroundWord(shown[0])
+      ? backgroundWord(shown[0], (call) => callFailed(transcript, call))
       : `${count} updates ${who.length ? 'with' : 'between agents'}`
   return (
     <span className="flex min-w-0 items-center gap-1.5" data-chat-background>
@@ -664,7 +671,7 @@ function UserTurn({ entry, id, text }: { entry: EntryRecord; id: number; text: s
     message?.re === undefined ? undefined : board?.messages.find((m) => m.id === message.re)
   // The response that asked it, where the question shows with your answer under it.
   const asked = question?.call && callerOf(transcript, question.call.split('/')[0])
-  const timestamp = entry.model?.[0]?.role === 'user' ? entry.model[0].timestamp : 0
+  const input = entry.model?.[0]
   if (question && asked) {
     return (
       <button
@@ -684,20 +691,8 @@ function UserTurn({ entry, id, text }: { entry: EntryRecord; id: number; text: s
       </button>
     )
   }
-  return (
-    <Message className="group/message" from="user">
-      <MessageContent>
-        <MessageResponse>{text}</MessageResponse>
-        <InputImages entry={entry} />
-      </MessageContent>
-      <MessageActions
-        className="-mt-1 justify-end"
-        entry={entry}
-        text={text}
-        timestamp={timestamp}
-      />
-    </Message>
-  )
+  // Its input wraps your words for the agent; show them as you wrote them, with the images it carries.
+  return input?.role === 'user' ? <UserView entry={entry} message={input} text={text} /> : null
 }
 
 /** The loaded response that made tool call `call`. */

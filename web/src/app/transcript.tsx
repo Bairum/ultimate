@@ -1,11 +1,4 @@
-import type {
-  AssistantMessage,
-  ImageContent,
-  SystemMessage,
-  TextContent,
-  ToolCall,
-  UserMessage,
-} from '@earendil-works/pi-ai'
+import type { AssistantMessage, SystemMessage, ToolCall } from '@earendil-works/pi-ai'
 import type { EntryRecord, LiveState, ToolSlot } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
 import {
@@ -38,10 +31,10 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from '@/components/ai/conversation'
-import { MentionText, Message, MessageContent, MessageResponse } from '@/components/ai/message'
+import { Message, MessageResponse } from '@/components/ai/message'
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai/reasoning'
 import { Shimmer } from '@/components/ai/shimmer'
-import { ToolImage, ToolStatusIcon } from '@/components/ai/tool'
+import { ToolStatusIcon } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { elidePath, formatDuration, shortenPath } from '../sdk/format.ts'
 import {
@@ -62,10 +55,15 @@ import { ExtensionBoundary, Provided } from './boundary.tsx'
 import { ParkedRuns, RunStart } from '../sdk/types.ts'
 import type { ChatSummaryProps } from '../sdk/types.ts'
 import { MessageActions } from './message-actions.tsx'
+import { textOf, UserView } from './user-turn.tsx'
 import {
+  anchorSelector,
   chatRows,
   groupAside,
   groupQuiet,
+  isOpenIn,
+  openIn,
+  partKey,
   partsOf,
   quietOf,
   runOf,
@@ -323,15 +321,8 @@ function TranscriptEntries() {
   useEffect(() => () => request.current?.abort(), [])
   useLayoutEffect(() => {
     if (anchor.current && scrollRef.current) {
-      const { entryId, last, inner, toolCallId: callId, top } = anchor.current
-      // A folded run's row is found by its last entry: a page that reaches into the run gives it an earlier first one.
-      // A row inside an opened run is found below its run's row, which can carry the same id.
-      const entry =
-        last !== undefined
-          ? contentRef.current?.querySelector(`:scope > [data-run-last="${last}"]`)
-          : inner
-            ? contentRef.current?.querySelector(`[data-run-last] [data-entry-id="${entryId}"]`)
-            : contentRef.current?.querySelector(`[data-entry-id="${entryId}"]`)
+      const { toolCallId: callId, top } = anchor.current
+      const entry = contentRef.current?.querySelector(anchorSelector(anchor.current))
       const tool =
         callId === undefined
           ? undefined
@@ -515,6 +506,7 @@ function TranscriptEntries() {
   const quiet = background
     ? groupQuiet(rows, (part) => background.quiet({ entry: part.entry, calls: shownCalls(part) }))
     : rows
+  // Background groups the reader or a reveal opened, by the keys of all their parts, as folded runs are.
   const [shownQuiet, setShownQuiet] = useState<ReadonlySet<string>>(new Set())
   // What a go-back set aside folds into one quiet row; the rows themselves render as usual inside it.
   const aside = useMemo(() => setAsideIds(entries), [entries])
@@ -523,16 +515,8 @@ function TranscriptEntries() {
   // Folded runs the reader or a reveal opened, by the keys of all their parts: a run that gains earlier entries from a
   // page, or later ones live, stays open.
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set())
-  const isOpen = (run: WorkRun) => run.work.some((part) => opened.has(partKey(part)))
-  const open = (run: WorkRun, value: boolean) =>
-    setOpened((keys) => {
-      const next = new Set(keys)
-      for (const part of run.work) {
-        if (value) next.add(partKey(part))
-        else next.delete(partKey(part))
-      }
-      return next
-    })
+  const isOpen = (run: WorkRun) => isOpenIn(opened, run)
+  const open = (run: WorkRun, value: boolean) => setOpened((keys) => openIn(keys, run, value))
   // Reveal a stored row without the auto-follow animation overriding the jump; a row older than those loaded needs the
   // history down to it first, and one in a folded run needs the run open.
   const [reveal, setReveal] = useState<number>()
@@ -566,8 +550,8 @@ function TranscriptEntries() {
       return
     }
     const stretch = quietOf(group ? group.aside : quiet, reveal)
-    if (stretch && !shownQuiet.has(quietKey(stretch))) {
-      setShownQuiet((keys) => new Set(keys).add(quietKey(stretch)))
+    if (stretch && !isOpenIn(shownQuiet, stretch)) {
+      setShownQuiet((keys) => openIn(keys, stretch, true))
       return
     }
     const run = chat && runOf(rows, reveal)
@@ -598,15 +582,8 @@ function TranscriptEntries() {
         <QuietRow
           busy={busy && last}
           group={row}
-          onOpenChange={(value) =>
-            setShownQuiet((keys) => {
-              const next = new Set(keys)
-              if (value) next.add(quietKey(row))
-              else next.delete(quietKey(row))
-              return next
-            })
-          }
-          open={shownQuiet.has(quietKey(row))}
+          onOpenChange={(value) => setShownQuiet((keys) => openIn(keys, row, value))}
+          open={isOpenIn(shownQuiet, row)}
           summary={background?.summary}
         >
           {row.quiet.map((inner, index) => render(inner, last && index === row.quiet.length - 1))}
@@ -717,7 +694,7 @@ function TranscriptEntries() {
 /** A set-aside group is known by its first entry, so it stays open while later rows join it. */
 const asideKey = (group: AsideGroup) => partsOf(group.aside[0])[0].entry.id
 
-/** A quiet group is known by its first part, so it stays open while later rows join it. */
+/** A quiet group's React key: its first part. */
 const quietKey = (group: QuietGroup) => partKey(partsOf(group)[0])
 
 /** The tool calls a row shows: all of its entry's, or those of its blocks. */
@@ -787,9 +764,6 @@ function QuietRow({
     </Collapsible>
   )
 }
-
-const partKey = (part: ChatPart) =>
-  part.blocks ? `${part.entry.id}:${part.blocks[0]}` : String(part.entry.id)
 
 /** A run of work in a chat as one quiet row that expands to the usual rendering. */
 function WorkRow({
@@ -999,12 +973,6 @@ function toolCallId(entry: EntryRecord) {
   return message?.role === 'toolResult' ? message.toolCallId : undefined
 }
 
-function textOf(content: string | readonly (TextContent | ImageContent)[]) {
-  return typeof content === 'string'
-    ? content
-    : content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n')
-}
-
 interface RowProps {
   entry: EntryRecord
   /** The content blocks of an assistant message shown in this row; all when absent. */
@@ -1094,36 +1062,6 @@ function coreEntry(
     default:
       return <UnknownEntry entry={entry} />
   }
-}
-
-function UserView({ entry, message }: { entry: EntryRecord; message: UserMessage }) {
-  const images =
-    typeof message.content === 'string'
-      ? []
-      : message.content.filter((block) => block.type === 'image')
-  const text = textOf(message.content)
-  return (
-    <Message className="group/message mt-3 first:mt-0" from="user">
-      <MessageContent>
-        <p className="break-words whitespace-pre-wrap">
-          <MentionText text={text} />
-        </p>
-        {images.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {images.map((image, index) => (
-              <ToolImage alt={`Attached image ${index + 1}`} image={image} key={index} />
-            ))}
-          </div>
-        )}
-      </MessageContent>
-      <MessageActions
-        className="-mt-1 justify-end"
-        entry={entry}
-        text={text}
-        timestamp={message.timestamp}
-      />
-    </Message>
-  )
 }
 
 function AssistantView({

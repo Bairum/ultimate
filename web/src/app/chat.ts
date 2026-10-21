@@ -200,6 +200,42 @@ export interface AsideGroup {
   /** Its entries with messages other than system prompt changes, as the go-back counted them. */
   steps: number
 }
+/** A part's key: its entry, and its first block when it shows only some. */
+export const partKey = (part: ChatPart) =>
+  part.blocks ? `${part.entry.id}:${part.blocks[0]}` : String(part.entry.id)
+
+/**
+ * Whether a folded run or group is open, by the keys of all its parts: one that gains earlier parts from a page, or
+ * later ones live, stays open.
+ */
+export const isOpenIn = (keys: ReadonlySet<string>, row: WorkRun | QuietGroup) =>
+  partsOf(row).some((part) => keys.has(partKey(part)))
+
+/** `keys` with every part of `row` added when it opens, or removed when it closes. */
+export function openIn(keys: ReadonlySet<string>, row: WorkRun | QuietGroup, value: boolean) {
+  const next = new Set(keys)
+  for (const part of partsOf(row)) {
+    if (value) next.add(partKey(part))
+    else next.delete(partKey(part))
+  }
+  return next
+}
+
+/**
+ * Where a scroll anchor is found after a page loads: a folded run or group by its last entry (a page that reaches into
+ * it gives it an earlier first one), nested in an open group when it was; a row inside an open run or group below it,
+ * never a run nested there, which can carry the same id; any other row by its id.
+ */
+export function anchorSelector(anchor: { entryId: number; last?: number; inner?: boolean }) {
+  if (anchor.last !== undefined)
+    return anchor.inner
+      ? `[data-run-last] [data-run-last="${anchor.last}"]`
+      : `:scope > [data-run-last="${anchor.last}"]`
+  return anchor.inner
+    ? `[data-run-last] [data-entry-id="${anchor.entryId}"]:not([data-run-last])`
+    : `[data-entry-id="${anchor.entryId}"]`
+}
+
 /** The parts a row shows, those of its runs and groups included. */
 export const partsOf = (row: ChatPart | WorkRun | QuietGroup): readonly ChatPart[] =>
   'quiet' in row ? row.quiet.flatMap(partsOf) : 'work' in row ? row.work : [row]
