@@ -1,11 +1,16 @@
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterAll, beforeAll, expect, it } from 'vitest'
-import { applyMemoryOps, Memory, MEMORY_LIMIT } from '../extensions/lineage/memory.ts'
+import {
+  applyMemoryOps,
+  Memory,
+  MEMORY_LIMIT,
+  parseMemoryOps,
+} from '../extensions/lineage/memory.ts'
 import { Seen } from '../extensions/lineage/catchup.ts'
 import { abstract } from '../extensions/lineage/server.ts'
 import { SubmissionLanded } from '../extensions/workspaces/api.ts'
@@ -34,8 +39,12 @@ const textOf = (content: unknown) =>
         .join('')
 
 /** A faux server that echoes; memorize requests answer `state.memorize` and are counted. */
-async function fixture() {
+async function fixture(settings?: object) {
   const home = await temp('ultimate-memory-')
+  if (settings) {
+    await mkdir(join(home, '.ultimate'), { recursive: true })
+    await writeFile(join(home, '.ultimate/settings.json'), JSON.stringify(settings))
+  }
   const server = await fauxServer({ ultimateRoot, home, userHome: home })
   servers.push(server)
   const state = { memorize: '{"ops":[]}', asked: [] as string[] }
@@ -67,9 +76,9 @@ const add = (slug: string, line = `About ${slug}`) => ({
   line,
   body: `${line}, in full.`,
 })
-const branch = async (server: Server, prompt: string) => {
+const branch = async (server: Server, prompt: string, from = 1, at?: number) => {
   const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', {
-    args: { from: 1, prompt },
+    args: { from, prompt, ...(at === undefined ? {} : { at }) },
   })
   expect([status, data.error]).toEqual([200, undefined])
   const id = data.result.id as ConversationId
@@ -167,10 +176,12 @@ it.concurrent('starts a branch from the memory brief, and without memories from 
   expect(textOf(said[0].content)).toContain('ultimate.entries(1)')
   expect(textOf(said[1].content)).toBe('Briefed branch')
   expect(JSON.stringify(view.messages)).not.toContain(marker)
-  expect(view.entries[0]).toMatchObject({ kind: 'pi.reset', data: { lineage: { brief: true } } })
+  expect(view.entries[0]).toMatchObject({ kind: 'pi.reset' })
   // Catch-up starts after the root's tip at the fork, not from the tally's start.
   const seen = await server.harness.snapshot(Seen, briefed.id, context)
   expect(seen?.tally).toBeGreaterThanOrEqual(tip)
+  // The brief records the root tip it covers, for forks of this branch.
+  expect(view.entries[0]).toMatchObject({ data: { lineage: { brief: { tally: tip } } } })
   const lineage = server.host.registry.snapshot().extension('lineage')!.sections![0]
   expect(
     await lineage.render(
@@ -180,15 +191,74 @@ it.concurrent('starts a branch from the memory brief, and without memories from 
   ).toContain("starts with your project's memory index")
 })
 
-it.concurrent('reads memories with memory and writes them with remember', async () => {
+it('accepts only one whole {ops} object as a memorize answer', () => {
+  const ops = [{ op: 'delete', slug: 'pnpm' }]
+  expect(parseMemoryOps(JSON.stringify({ ops }))).toEqual(ops)
+  expect(parseMemoryOps(`\`\`\`json\n${JSON.stringify({ ops })}\n\`\`\``)).toEqual(ops)
+  for (const answer of [
+    JSON.stringify([{ ops }]),
+    JSON.stringify({ ops, note: 'extra' }),
+    'null',
+    `I would not answer ${JSON.stringify({ ops })} here: the landing changes nothing.`,
+    `I can't help with that.\n${JSON.stringify({ ops })}`,
+    `\`\`\`json\n${JSON.stringify({ ops })}\n\`\`\`\n\`\`\`json\n{"ops":[]}\n\`\`\``,
+  ])
+    expect(() => parseMemoryOps(answer)).toThrow('expected only {"ops": [...]}')
+})
+
+it.concurrent('forks of a briefed branch inherit the tally tip its brief covers', async () => {
+  const { server } = await fixture()
+  const older = (await server.harness.commit(
+    async (tx) => (await tx.scanEntries({ conversationId: ROOT_CONVERSATION_ID }, 1)).items[0].id,
+    context,
+  )) as number
+  await branch(server, 'Moves the root on')
+  await apply(server, [add('pnpm')])
+  const b = await branch(server, 'Briefed from an older entry', 1, older)
+  const [reset] = (await b.conversation.context(context)).entries
+  const briefTip = (reset.data as { lineage: { brief: { tally: number } } }).lineage.brief.tally
+  expect(briefTip).toBeGreaterThan(older)
+  // C's tally position is B's brief tip, so its catch-up does not report the branch the brief already covered.
+  const c = await branch(server, 'Fork of the briefed branch', b.id)
+  const notes = (
+    await server.harness.commit(
+      async (tx) =>
+        (await tx.scanEntries({ conversationId: c.id, minEntryId: reset.id }, 50)).items,
+      context,
+    )
+  ).filter((entry) => entry.kind === 'lineage.note')
+  expect(JSON.stringify(notes)).not.toContain('Moves the root on')
+  expect((await server.harness.snapshot(Seen, c.id, context))?.tally).toBeGreaterThan(briefTip)
+})
+
+it.concurrent('reads memories with memory; only @ultimate writes them with remember', async () => {
   const { server } = await fixture()
   const { id } = await branch(server, 'Reader')
   expect(await run(server, 'memory', {}, id)).toBe('#1 has no memories yet.')
+  // A branch finds the deferred tool with tool_search, so the call itself is refused.
+  await expect(run(server, 'remember', { ops: [add('pnpm')] }, id)).rejects.toThrow(
+    'Only @ultimate writes project memory',
+  )
+  expect(await memories(server)).toEqual({})
+  const standing = await post(server, '/api/extensions/subagents/actions/standing', {
+    args: { name: 'ultimate' },
+  })
+  const ultimate = standing.data.result as number
   expect(
-    await run(server, 'remember', { ops: [add('pnpm'), { ...add('lint'), source: '#2/3' }] }, id),
+    await run(
+      server,
+      'remember',
+      { root: 1, ops: [add('pnpm'), { ...add('lint'), source: '#2/3' }] },
+      ultimate,
+    ),
   ).toBe("Added pnpm, lint in #1's memory.")
   await expect(
-    run(server, 'remember', { ops: [add('new'), { op: 'delete', slug: 'gone' }] }, id),
+    run(
+      server,
+      'remember',
+      { root: 1, ops: [add('new'), { op: 'delete', slug: 'gone' }] },
+      ultimate,
+    ),
   ).rejects.toThrow('no memory gone')
   expect(Object.keys(await memories(server)).toSorted()).toEqual(['lint', 'pnpm'])
   expect(await run(server, 'memory', {}, id)).toMatch(
@@ -224,7 +294,7 @@ const landing = (submission: string, conversationId: number): LandedData => ({
 const memorizeTasks = (server: Server) =>
   server.harness.commit(
     async (tx) =>
-      (await tx.scanTasks({ conversationId: ROOT_CONVERSATION_ID, kind: 'lineage.memorize' }, 50))
+      (await tx.scanTasks({ conversationId: ROOT_CONVERSATION_ID, kind: 'lineage.memorize' }, 500))
         .items,
     context,
   )
@@ -298,4 +368,30 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
   await settledTasks(server, 3)
   expect(state.asked).toHaveLength(3)
   expect(await memories(server)).toEqual(before)
+
+  // Receipts are never evicted: after more than 100 further landings, the first again starts no task.
+  state.memorize = '{"ops":[]}'
+  await server.harness.commit(async (tx) => {
+    for (let index = 0; index < 101; index++)
+      await emit(tx, SubmissionLanded, landing(`bulk-${index}`, id))
+  }, context)
+  await settledTasks(server, 104)
+  const repeat = (await land(landing('s1', id))).id
+  await until(
+    async () =>
+      ((await server.harness.snapshot(EventLog, ROOT_CONVERSATION_ID, context))?.cursors[
+        'lineage/memorize'
+      ] ?? 0) >= repeat,
+  )
+  expect(await memorizeTasks(server)).toHaveLength(104)
+})
+
+it.concurrent('completes a landing task without asking when no summary model runs', async () => {
+  const { server, state } = await fixture({ summaryModel: 'not a model' })
+  const { id } = await branch(server, 'Land me')
+  state.memorize = JSON.stringify({ ops: [add('never')] })
+  await server.harness.commit((tx) => emit(tx, SubmissionLanded, landing('s1', id)), context)
+  await settledTasks(server, 1)
+  expect(state.asked).toEqual([])
+  expect(await memories(server)).toEqual({})
 })

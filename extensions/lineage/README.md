@@ -89,24 +89,27 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   the memory as the batch leaves it first (fields, add of an existing slug, update or delete of a missing one, the cap
   after the batch, a listed root) and throws before writing anything, so a batch is all or nothing; it returns a short
   summary. Deferred tool `remember {root?, ops}` (named in @ultimate's definition) writes one batch, defaulting to the
-  caller's tree root. Tool `memory {read?, root?}`, offered to every agent, returns the index, one
+  caller's tree root; it refuses any caller but the standing `ultimate` agent, since a branch can find a deferred tool
+  with `tool_search`. Tool `memory {read?, root?}`, offered to every agent, returns the index, one
   `slug [kind] — line (updated YYYY-MM-DD)` per memory, or with `read` one memory's body and source. User-only
   `forget {root, slug}` (`ForgetAction`) deletes one through the same path.
   **Brief**: a branch forked from a root that has memories does not start from the tally. Its fork gets a
-  `pi.reset` (`head: 'self'`, `data.lineage.brief`) right after the fork point, before its prompt, whose model text is
-  `<project_memory root="#R">` with the index, the root's last 10 landings (`<sha7> <feature: title> (#conv)`) and
+  `pi.reset` (`head: 'self'`, `data.lineage.brief: {tally}`, the root tip it covers) right after the fork point,
+  before its prompt, whose model text is `<project_memory root="#R">` with the index, the root's last 10 landings (`<sha7> <feature: title> (#conv)`) and
   where to read the full tally; the branch's model context starts there, the inherited tally stays in storage.
   `lineage.branch` records `brief: true`, the prompt section says so, and `lineage.seen.tally` starts at the root's tip
   at the fork, so catch-up reports only what came after. A root without memories branches as before, and a fork of
-  another branch keeps that branch's context.
+  another branch keeps that branch's context: its inherited tally position is the brief's `tally` when the fork point
+  lies after the brief reset.
   **Landings**: reactor `lineage/memorize` turns each `workspaces.landed` event of a tree (not from the root itself)
-  into one background `lineage.memorize` task in the root, when a summary model runs (`summaryModelStatus()`); the
-  root's `lineage.memorized` `{ submissions }` keeps it to one per submission. The task memoizes its input (the
+  into one background `lineage.memorize` task in the root; a `lineage.memorize-receipt` family member per submission
+  on the root, never evicted, keeps it to one per landing. The task resolves the summary model
+  (`summaryModelStatus()`) and memoizes it; without one it completes without asking. It memoizes its input (the
   landing note's text, the submitter's abstract, frozen into the landing or still open, and every memory in full) and
   the summary model's answer, then asks for JSON `{"ops": [...]}` under rules that default to no ops, prefer updating
-  to near-duplicates, delete or rewrite memories a landing removes or replaces, and merge at the cap. Code fences are
-  tolerated; adds and updates take the landing's `#<submitter>/<at>` as source. The ops commit with the task's
-  completion, so a resumed task applies them once; an unparsable answer or a refused batch writes nothing and leaves
+  to near-duplicates, delete or rewrite memories a landing removes or replaces, and merge at the cap. The whole answer
+  must be that object, at most inside one enclosing code fence: prose, an array or extra keys refuse it; adds and
+  updates take the landing's `#<submitter>/<at>` as source. The ops commit with the task's completion, so a resumed task applies them once; an unparsable answer or a refused batch writes nothing and leaves
   a notice. The landing itself never fails on it.
 - **Go back** (`rewind.ts`, `rewind.tsx`): the message action **Go back to here** on any stored message of a non-root
   conversation (standing agents included) opens a confirm dialog fed by `rewindPreview {conversation, at}`: steps set

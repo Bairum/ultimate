@@ -39,7 +39,7 @@ import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import type { LandedData } from '../workspaces/api.ts'
 import { Branch, Branched, LineageApi, Rooted, Roots } from './api.ts'
 import { ConversationsApi, Release, Trees } from '../conversations/api.ts'
-import { Started, Subagents } from '../subagents/api.ts'
+import { Standing, Started, Subagents } from '../subagents/api.ts'
 
 /** The fields of a Board message the landed-branch check reads. */
 type BoardRow = { from: unknown; reply: boolean; state: string }
@@ -285,7 +285,12 @@ async function inheritedTally(tx: Tx, from: ConversationId, at: EntryId, root: C
     const page = await tx.scanEntries({ conversationId: from, maxEntryId: at }, 100, cursor)
     for (const entry of page.items) {
       if (entry.conversationId === root) return entry.id as number
-      const data = entry.data as { source?: string; tally?: number } | undefined
+      const data = entry.data as
+        | { source?: string; tally?: number; lineage?: { brief?: { tally?: number | null } } }
+        | undefined
+      // A memory brief stands in for the tally up to the tip it covers.
+      if (entry.kind === 'pi.reset' && data?.lineage?.brief)
+        return data.lineage.brief.tally ?? undefined
       if (entry.kind === 'lineage.note' && data?.source === 'main' && data.tally !== undefined)
         return data.tally
     }
@@ -833,7 +838,8 @@ async function forkBranch(
     await tx.appendEntry(fork.id, {
       kind: 'pi.reset',
       head: 'self',
-      data: { lineage: { brief: true } },
+      // The tally tip the brief covers: a fork of this branch inherits it, not the root entry this branch forked at.
+      data: { lineage: { brief: { tally: brief.tip ?? null } } },
       model: [{ role: 'user', content: brief.text, timestamp: Date.now() }],
     })
   // Until the summary names it, a branch is called by its intent, not by the first message it inherited.
@@ -1348,21 +1354,16 @@ export default function lineageExtension(host: ExtensionHost) {
     host,
     async (tx, root, from) => (await tx.doc(Tally, root)).abstracts[String(from)]?.text,
   )
-  // Every landing in a tree distils its root's memory once, in a background task of the root; without a summary model
-  // the memory stays as @ultimate wrote it.
+  // Every landing in a tree distils its root's memory once, in a background task of the root that picks the summary
+  // model. A receipt per submission, kept for good, makes a repeated event a no-op.
   host.react('memorize', [SubmissionLanded], async (tx, { data: landing }) => {
     const from = landing.conversationId
     const roots = (await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots
     const root = await climb(tx, await tx.conversation(from as ConversationId), roots)
     if (root === undefined || root === from) return
-    // Read here, before the transaction's first write; a reactor retry reads it again.
-    const model = (await conversations.summaryModelStatus()).model
-    if (!model) return
-    const memorized = await tx.doc(Memorized, root)
-    if (memorized.submissions.includes(landing.submission)) return
-    memorized.submissions.push(landing.submission)
-    if (memorized.submissions.length > 100) memorized.submissions.splice(0, 1)
-    await tx.createTask(
+    const receipt = await tx.doc(Memorized, root, landing.submission, null)
+    if (receipt.task !== undefined) return
+    receipt.task = await tx.createTask(
       Memorize,
       {
         root,
@@ -1370,7 +1371,6 @@ export default function lineageExtension(host: ExtensionHost) {
         from,
         at: landing.at,
         note: landingNote(landing).text,
-        model,
       },
       { conversationId: root, ownership: { kind: 'conversation' }, background: true },
     )
@@ -1635,6 +1635,12 @@ export default function lineageExtension(host: ExtensionHost) {
         }),
         // Not replay-safe (the default): an interrupted call is never rerun, so a batch commits at most once.
         async execute({ root, ops }, api, ctx) {
+          // Deferred only hides it: a branch can still find it with tool_search, so the caller is checked here.
+          const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
+          if (standing?.ultimate !== api.conversationId)
+            throw new Error(
+              'Only @ultimate writes project memory; tell @ultimate what to remember (message, reply: false).',
+            )
           const id = await memoryRoot(api.conversationId, root, ctx)
           const summary = await api.commit((tx) => applyMemoryOps(tx, id, ops), ctx)
           return { output: [{ type: 'text', text: summary }] }
