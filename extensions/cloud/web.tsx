@@ -108,7 +108,7 @@ function BackupRow({ state }: { state: CloudState }) {
             {uploading && backup.total > 0
               ? `${mb(backup.done)} / ${mb(backup.total)} MB read · ${mb(backup.uploaded)} MB uploaded`
               : lastBackup
-                ? `${since(lastBackup.at)} from ${lastBackup.machine} · ${mb(lastBackup.uploaded)} MB (${formatBytes(lastBackup.bytes)} database)`
+                ? `${since(lastBackup.at)} from ${lastBackup.machine} · ${formatBytes(lastBackup.uploaded)} (${formatBytes(lastBackup.bytes)} database)`
                 : 'No backup from this machine yet'}
           </span>
         </span>
@@ -238,9 +238,11 @@ function CloudStatus() {
   const uploading = !!state.backup
   const label = uploading
     ? 'backing up…'
-    : state.lastBackup
-      ? `backed up ${since(state.lastBackup.at)}`
-      : 'no backup yet'
+    : state.conflict
+      ? 'backup refused'
+      : state.lastBackup
+        ? `backed up ${since(state.lastBackup.at)}`
+        : 'no backup yet'
   return (
     <Popover>
       <PopoverTrigger asChild>
