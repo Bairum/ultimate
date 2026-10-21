@@ -58,7 +58,7 @@ import {
 import { entryRenderers, messageItems, toolLine } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary, Provided } from './boundary.tsx'
-import { ParkedRuns } from '../sdk/types.ts'
+import { ParkedRuns, RunStart } from '../sdk/types.ts'
 import { MessageActions } from './message-actions.tsx'
 import { chatRows, groupAside, runOf, setAsideIds, windowGaps, windowKey } from './chat.ts'
 import { useFold } from './fold.tsx'
@@ -1243,9 +1243,6 @@ function shows(message: AssistantMessage | undefined) {
   )
 }
 
-/** When this page first saw each run, for the working indicator's clock. */
-const runSeen = new Map<number, number>()
-
 /** What the run is doing when the transcript alone does not show it; a run a pause parked says so instead. */
 function LiveStatus(props: {
   id: number | undefined
@@ -1256,7 +1253,15 @@ function LiveStatus(props: {
   return (
     <Provided input={null} point={ParkedRuns}>
       {(parked) => (
-        <LiveLines {...props} parked={props.id !== undefined && parked?.has(props.id) === true} />
+        <Provided input={props.live.run?.taskId} point={RunStart}>
+          {(since) => (
+            <LiveLines
+              {...props}
+              parked={props.id !== undefined && parked?.has(props.id) === true}
+              since={since}
+            />
+          )}
+        </Provided>
       )}
     </Provided>
   )
@@ -1267,11 +1272,14 @@ export function LiveLines({
   busy,
   partial,
   parked,
+  since,
 }: {
   live: LiveState
   busy: boolean
   partial: AssistantMessage | undefined
   parked: boolean
+  /** When the run started (its task first ran), for the working clock; none shows while unknown. */
+  since?: number
 }) {
   // Parked by a pause, nothing of the run executes, a retry's backoff and a deferred poll included: the paused line
   // replaces every other one and no clock ticks until Play.
@@ -1307,9 +1315,6 @@ export function LiveLines({
       </Shimmer>,
     )
   if (idle && lines.length === 0) {
-    const run = live.run?.taskId
-    if (run !== undefined && !runSeen.has(run)) runSeen.set(run, Date.now())
-    const since = run === undefined ? undefined : runSeen.get(run)
     const thinking = partial?.content.some((block) => block.type === 'thinking')
     lines.push(
       <span className="flex items-center gap-2" key="working">

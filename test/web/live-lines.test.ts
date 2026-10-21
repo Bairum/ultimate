@@ -43,6 +43,28 @@ it('shows the retry and ticks its clock while not paused', () => {
   expect(clock.ticking).toEqual([true])
 })
 
+it('counts the working clock from the run’s saved start, also for a run first seen mid-way', () => {
+  const working = { run: { taskId: 5, inputs: [9] } } as unknown as LiveState
+  const since = 1_000_000 - 95_000
+  const html = renderToStaticMarkup(
+    createElement(LiveLines, {
+      live: working,
+      busy: true,
+      partial: undefined,
+      parked: false,
+      since,
+    }),
+  )
+  expect(html).toContain('working…')
+  expect(html).toContain('1m 35s')
+  // Without a known start no clock shows, rather than one counting from now.
+  const unknown = renderToStaticMarkup(
+    createElement(LiveLines, { live: working, busy: true, partial: undefined, parked: false }),
+  )
+  expect(unknown).toContain('working…')
+  expect(unknown).not.toMatch(/\d+s</)
+})
+
 it('says paused on the @ultimate button for a parked run, before working or idle', () => {
   expect(primaryLabel({ paused: true, working: false, word: 'working', waiting: 0 })).toBe('paused')
   expect(primaryLabel({ paused: true, working: false, word: 'working', waiting: 2 })).toBe('paused')
