@@ -230,8 +230,8 @@ export async function loadExtensions(
         if (sharedResource) extensionHost.onClose(cleanup)
         else facetCleanups.get(facetHost)!.add(cleanup)
       },
-      react: (reactorName, tokens, handler) => {
-        const reactor = log.reactor(`${name}/${reactorName}`, tokens, handler)
+      react: (reactorName, tokens, handler, options) => {
+        const reactor = log.reactor(`${name}/${reactorName}`, tokens, handler, options)
         facetHost.onOpen(reactor.start)
         facetHost.onRelease(reactor.stop)
         stops.add(reactor.stop)
