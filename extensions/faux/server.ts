@@ -840,6 +840,9 @@ function demoCards(from: number): { kind: string; data: JsonObject }[] {
   ]
 }
 
+/** Seeding memory writes project memory without @ultimate's check: only the user (a preview's operator) may. */
+export const userActions = ['seedMemory']
+
 export const actions = {
   /**
    * Faux only: writes one of each entry card (messages and a reply from `from`, a report, notes, a catch-up, finished,

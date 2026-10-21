@@ -367,11 +367,12 @@ it('reserves trust and secret writes for the UI while allowing normal actions', 
   await cp(resolve('server/lock.ts'), join(options.ultimateRoot, 'server/lock.ts'))
   // Onboarding and secrets use the shared helpers in lib/.
   await cp(resolve('lib'), join(options.ultimateRoot, 'lib'), { recursive: true })
-  for (const name of ['onboarding', 'secrets']) {
+  const probes = { onboarding: 'decide', secrets: 'set', faux: 'seedMemory' } as const
+  for (const [name, probe] of Object.entries(probes)) {
     await cp(resolve(`extensions/${name}`), join(options.ultimateRoot, `extensions/${name}`), {
       recursive: true,
     })
-    await until(() => !!server.extensions.action(name, name === 'onboarding' ? 'decide' : 'set'))
+    await until(() => !!server.extensions.action(name, probe))
   }
   for (const [extension, action, args] of [
     ['onboarding', 'decide', { local: true }],
@@ -386,6 +387,10 @@ it('reserves trust and secret writes for the UI while allowing normal actions', 
     const response = await post(server, `/api/extensions/${extension}/actions/${action}`, { args })
     expect(response.status).toBe(200)
   }
+  // seedMemory writes memory past @ultimate's check; lineage isn't loaded here, so only the refusal is checked.
+  const seed = await run(server, `return await ultimate.action('faux', 'seedMemory', {});`)
+  expect(seed.data.isError).toBe(true)
+  expect(seed.text).toContain('faux/seedMemory is a user-only action')
   const normal = await run(server, `return await ultimate.action('secrets', 'list');`)
   expect(normal.data.isError).not.toBe(true)
   expect(normal.data.details.value).toEqual([
