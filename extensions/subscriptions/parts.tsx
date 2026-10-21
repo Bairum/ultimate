@@ -118,16 +118,17 @@ export function useSubscriptions(ms: number | false): Polled {
 
 /**
  * Leaving the Subscriptions surface shows again the conversation the user was on when they entered it, but only while
- * the shell still shows the agent the surface itself opened (`opened`): anywhere the user navigated meanwhile stays.
+ * the shell still shows an agent the surface itself opened this visit (`opened`; Back among them counts): anywhere
+ * else the user navigated meanwhile stays.
  * `keepAgent` skips it once, for "open conversation", which goes to the agent. `pick` is a subscription chosen outside
  * the surface (sidebar, chip, card) that the surface opens once it is on screen.
  */
 let keepAgent = false
-let opened: number | undefined
+const opened = new Set<number>()
 let pick: string | undefined
 /** Show agent conversation `id` on behalf of the surface, so leaving it may undo the switch. */
 export function showAgent(switchConversation: (id: number) => void, id: number) {
-  opened = id
+  opened.add(id)
   switchConversation(id)
 }
 /** The subscription picked from outside the surface, once: the surface consumes it. */
@@ -167,9 +168,10 @@ export function Restore() {
       const to = returnTo.current
       const now = requested()
       // Only undo what the surface did: a conversation picked on the way out (the @ultimate button) stays.
-      if (!keepAgent && now === opened && to !== undefined && to !== now) switchConversation(to)
+      if (!keepAgent && now !== undefined && opened.has(now) && to !== undefined && to !== now)
+        switchConversation(to)
       keepAgent = false
-      opened = undefined
+      opened.clear()
       returnTo.current = undefined
     }
     // Only a change of surface acts; the conversation is read at that moment.
