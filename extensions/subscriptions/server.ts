@@ -30,6 +30,7 @@ import {
   Fired,
   ListAction,
   LogAction,
+  ScriptAction,
   StartAction,
   Started,
   StopAction,
@@ -630,6 +631,21 @@ export const actions = {
     LogAction,
     (args, { host }) => backend(host).operate(input(args, 'log')) as Promise<{ text: string }>,
   ),
+  // Outside the reload-stable supervisor: a read needs no process state, and stays current on reload.
+  script: implementAction(ScriptAction, async (args, { host }) => {
+    const id = input(args, 'script').id
+    if (typeof id !== 'string' || !/^S[1-9]\d*$/.test(id)) throw new Error('id must be S<n>')
+    const state = await host.harness().snapshot(Subscriptions, BACKGROUND_CONTEXT)
+    if (!state?.subscriptions[id]) throw new Error(`Unknown subscription: ${id}`)
+    const path = join(host.userHome, '.ultimate/subscriptions', basename(host.home), id, 'run')
+    try {
+      const text = await readFile(path, 'utf8')
+      return { path, text: text.length > 65536 ? `${text.slice(0, 65536)}\n…` : text }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { path, text: '' }
+      throw error
+    }
+  }),
   escalate: implementAction(
     EscalateAction,
     (args, { host }) => backend(host).operate(input(args, 'escalate')) as Promise<Subscription>,
@@ -639,6 +655,8 @@ export const actions = {
     (args, { host }) => backend(host).operate(input(args, 'delete')) as Promise<{ id: string }>,
   ),
 }
+/** The Subscriptions surface polls these every 2 s while it is on screen. */
+export const pollActions = ['list', 'log', 'script']
 export default function subscriptions(host: ExtensionHost) {
   host.need(SubagentsApi)
   host.need(BoardApi)

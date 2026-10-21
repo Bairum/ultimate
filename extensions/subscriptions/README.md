@@ -16,4 +16,8 @@ The supervisor keeps process handles in a reload-stable resource and kills proce
 
 ## Browser API
 
-Actions in `refs.ts` match the tool: create → subscription; list → subscriptions with computed `alive`; subscribe/unsubscribe/start/stop/escalate → subscription; log → `{text}`; delete → `{id}`. Create and default subscriber operations require the caller's `conversationId`. Read the session state through `list`. This extension has no browser facet yet.
+Actions in `refs.ts` match the tool: create → subscription; list → subscriptions with computed `alive`; subscribe/unsubscribe/start/stop/escalate → subscription; log → `{text}`; delete → `{id}`. `script {id}` → `{path, text}` reads the executable for display (UI only, no tool operation). Create and default subscriber operations require the caller's `conversationId`. Read the session state through `list`. `list`, `log` and `script` are poll actions.
+
+## UI
+
+The Subscriptions surface (⌘K "Open Subscriptions") lists every subscription with a status dot: purple writing, green running, yellow investigating, red failed, grey stopped or done. Selecting one shows its agent's conversation on top, which you can talk to in order to refine it, and the script below: `run` path, pid, uptime, fires, the live output tail with `FIRE` lines marked, the script source, and Start/Stop. It polls every 2 s while on screen. A status-line chip counts subscriptions coloured by the worst state and opens the surface; it hides when there are none. Transcript cards render `subscriptions.fired`, `.failed`, `.escalated` and `.writing` inputs, and the `subscription` tool has its own card.

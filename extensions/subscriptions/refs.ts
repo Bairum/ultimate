@@ -26,6 +26,11 @@ export const LogAction = actionRef<{ id: string; lines?: number }, { text: strin
   'subscriptions',
   'log',
 )
+/** `{ id }` → the executable's `path` and its `text` (first 64 KiB; empty while not written yet). */
+export const ScriptAction = actionRef<{ id: string }, { path: string; text: string }>(
+  'subscriptions',
+  'script',
+)
 /** `{ id, reason }` → failed subscription; notifies @ultimate and subscribers. */
 export const EscalateAction = actionRef<{ id: string; reason: string }, Subscription>(
   'subscriptions',
