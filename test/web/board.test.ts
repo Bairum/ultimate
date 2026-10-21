@@ -2,9 +2,13 @@ import type { EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import { accentIndex, accentOf } from '../../extensions/board/accent.tsx'
 import {
+  answerTo,
   answeredMessages,
+  callFailed,
   callerOf,
+  chatQuiet,
   conversationState,
+  counterparts,
   stateWord,
   messageStatus,
   outgoingState,
@@ -159,6 +163,94 @@ describe('the @ultimate chat', () => {
     expect(ultimateChat({ ...ultimate, parentConversationId: 4 })).toBe(false)
     expect(ultimateChat({ ...ultimate, ownerTaskId: 9 })).toBe(false)
     expect(ultimateChat({ ...ultimate, label: 'coordinator' })).toBe(false)
+  })
+})
+
+/** A chat row of @ultimate (#7): an entry of `kind` with its data, model message and shown calls. */
+const row = (kind: string, data?: object, model?: object, calls: object[] = []) => ({
+  entry: {
+    id: 30,
+    conversationId: 7,
+    kind,
+    ...(data ? { data } : {}),
+    ...(model ? { model: [model] } : {}),
+  } as unknown as EntryRecord,
+  calls: calls as { id: string; name: string; arguments: unknown }[],
+})
+const result = (toolCallId: string, isError: boolean) =>
+  ({ model: [{ role: 'toolResult', toolCallId, isError }] }) as unknown as EntryRecord
+const said = (stopReason: string) => ({ role: 'assistant', stopReason, content: [] })
+
+describe("background in @ultimate's chat", () => {
+  const base = { text: 'Ship it?', at: 100, state: 'answered' as const }
+  const log: BoardMessage[] = [
+    { ...base, id: 1, from: 4, to: 7, reply: true, answer: 30 },
+    { ...base, id: 2, from: 7, to: 'user', reply: true, call: 'ask' },
+    { ...base, id: 3, from: 'user', to: 7, reply: false, re: 2 },
+    { ...base, id: 4, from: 7, to: 5, reply: true, call: 'tell' },
+  ]
+  const board = { messages: log, next: 5 }
+
+  it('is what agents say to each other, never what you and @ultimate say', () => {
+    expect(chatQuiet(row('board.message', { from: 4 }), board)).toBe(true)
+    expect(chatQuiet(row('board.reply', { from: 'remote' }), board)).toBe(true)
+    expect(chatQuiet(row('board.message', { from: 'user' }), board)).toBe(false)
+    expect(chatQuiet(row('lineage.note', { from: 4 }), board)).toBe(true)
+    expect(chatQuiet(row('pi.user'), board)).toBe(false)
+    expect(chatQuiet(row('some.new-kind'), board)).toBe(false)
+    expect(chatQuiet(row('board.wake'), board)).toBe('hidden')
+  })
+
+  it('keeps landings in the chat, and a report of a failed landing in the background', () => {
+    expect(chatQuiet(row('lineage.note', { from: 4, source: 'lander' }), board)).toBe(false)
+    expect(
+      chatQuiet(row('workspaces.lander-report', { outcome: { outcome: 'landed' } }), board),
+    ).toBe(false)
+    expect(
+      chatQuiet(row('workspaces.lander-report', { outcome: { outcome: 'failed' } }), board),
+    ).toBe(true)
+    expect(chatQuiet(row('lineage.note', { from: 4, source: 'main' }), board)).toBe(true)
+  })
+
+  it('takes in branches and messages to agents, but not a message to you or an answer to you', () => {
+    const branch = { id: 'b', name: 'branch', arguments: {} }
+    const toAgent = { id: 'tell', name: 'message', arguments: { to: '#5' } }
+    const toUser = { id: 'ask', name: 'message', arguments: { to: 'user' } }
+    expect(
+      chatQuiet(row('pi.assistant', undefined, said('toolUse'), [branch, toAgent]), board),
+    ).toBe(true)
+    expect(
+      chatQuiet(row('pi.assistant', undefined, said('toolUse'), [toAgent, toUser]), board),
+    ).toBe(false)
+    // The answer went back to #4, which asked.
+    expect(chatQuiet(row('pi.assistant', undefined, said('stop')), board)).toBe(true)
+    expect(chatQuiet(row('pi.assistant', undefined, said('stop')), { messages: [], next: 1 })).toBe(
+      false,
+    )
+  })
+
+  it('names who each row was with', () => {
+    const toAgent = { id: 'tell', name: 'message', arguments: { to: '#5' } }
+    expect(counterparts(row('board.reply', { from: 4 }), board)).toEqual([4])
+    expect(counterparts(row('lineage.note', { source: 'lander' }), board)).toEqual(['lander'])
+    expect(counterparts(row('workspaces.lander-report'), board)).toEqual(['lander'])
+    expect(counterparts(row('pi.assistant', undefined, said('toolUse'), [toAgent]), board)).toEqual(
+      [5],
+    )
+    expect(counterparts(row('pi.assistant', undefined, said('stop')), board)).toEqual([4])
+  })
+
+  it('tells a failed call from one that ran by its stored result', () => {
+    const entries = [result('branch-1', true), result('branch-2', false)]
+    expect(callFailed(entries, 'branch-1')).toBe(true)
+    expect(callFailed(entries, 'branch-2')).toBe(false)
+    // Still running: no result yet.
+    expect(callFailed(entries, 'branch-3')).toBe(false)
+  })
+
+  it('pairs a question with your answer', () => {
+    expect(answerTo(log, log[1])?.id).toBe(3)
+    expect(answerTo(log, log[3])).toBeUndefined()
   })
 })
 

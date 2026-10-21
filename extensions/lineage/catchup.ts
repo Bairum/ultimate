@@ -10,6 +10,7 @@ import type {
   Tx,
 } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
+import { shortTitle } from '../../lib/title.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import type { OpenAbstract } from './server.ts'
@@ -165,10 +166,14 @@ async function catchupText(
         .split('\n')
         .filter((path) => changed.has(path))
       const conversation = Number(trailer.trim())
-      const title = host.conversations().find((summary) => summary.id === conversation)?.title
+      // Subagents are never summary-titled; older ones carry their whole prompt as title, so one line each.
+      const made = host.conversations().find((summary) => summary.id === conversation)
+      const label =
+        made?.title &&
+        `${made.parentConversationId && made.label ? `${made.label}: ` : ''}${shortTitle(made.title)}`
       return {
         overlap,
-        row: `- ${overlap.length ? '**Overlap** ' : ''}\`${sha.slice(0, 7)}\` ${subject}${conversation ? ` · #${conversation}${title ? ` ${title}` : ''}` : ''}${overlap.length ? ` — ${overlap.map((path) => `\`${path}\``).join(', ')}` : ''}`,
+        row: `- ${overlap.length ? '**Overlap** ' : ''}\`${sha.slice(0, 7)}\` ${subject}${conversation ? ` · #${conversation}${label ? ` ${label}` : ''}` : ''}${overlap.length ? ` — ${overlap.map((path) => `\`${path}\``).join(', ')}` : ''}`,
       }
     })
     .toSorted((a, b) => Number(b.overlap.length > 0) - Number(a.overlap.length > 0))

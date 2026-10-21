@@ -40,12 +40,24 @@ export function resultText(result: ToolResult): string {
   return texts.join('')
 }
 
-/** When this page saw each call start and end; calls that finished before the page loaded have none. */
-const observed = new Map<string, { start?: number; end?: number }>()
+/** When the calls of an answer start: once its response ended (legacy answers without a duration: when it was asked). */
+export function callsStart(message: AssistantMessage): number {
+  return message.timestamp + (message.durationMs ?? 0)
+}
 
+/**
+ * A tool call's view, timed from durable timestamps so a call first seen mid-run shows how long it really ran:
+ * `startedAt` is `callsStart` of the call's answer, used while it runs and for results without their own duration.
+ */
 export function toolCallView(
   call: ToolCall,
-  context: { result?: ToolResult; slot?: ToolSlot; streaming: boolean; busy: boolean },
+  context: {
+    result?: ToolResult
+    slot?: ToolSlot
+    streaming: boolean
+    busy: boolean
+    startedAt?: number
+  },
 ): ToolCallView {
   const { result, slot, streaming, busy } = context
   let status: ToolCallView['status']
@@ -54,19 +66,15 @@ export function toolCallView(
   else if (streaming) status = 'streaming'
   else status = busy ? 'pending' : 'interrupted'
 
-  let timing = observed.get(call.id)
-  if (!timing) {
-    timing = {}
-    observed.set(call.id, timing)
-    // A call first seen finished has no observed start; one seen live gets its start now.
-    if (status === 'pending' || status === 'running') timing.start = Date.now()
-  } else if (timing.start === undefined && status === 'running') timing.start = Date.now()
-  if (
-    timing.start !== undefined &&
-    timing.end === undefined &&
-    (result || status === 'interrupted')
-  )
-    timing.end = Date.now()
+  // Finished: the result's own timestamp and duration. Live: since its answer ended. Interrupted: no times.
+  const endedAt = result?.message.timestamp
+  const startedAt = result
+    ? result.message.durationMs === undefined
+      ? context.startedAt
+      : result.message.timestamp - result.message.durationMs
+    : status === 'pending' || status === 'running'
+      ? context.startedAt
+      : undefined
 
   return {
     id: call.id,
@@ -80,8 +88,8 @@ export function toolCallView(
     ...(slot?.droppedBytes
       ? { dropped: { bytes: slot.droppedBytes, lines: slot.droppedLines ?? 0 } }
       : {}),
-    startedAt: timing.start,
-    endedAt: timing.end,
+    startedAt,
+    endedAt: startedAt === undefined ? undefined : endedAt,
     result: result?.message,
   }
 }

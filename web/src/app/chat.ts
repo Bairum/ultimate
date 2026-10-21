@@ -87,6 +87,58 @@ export function chatRows(
   return rows
 }
 
+/** Background rows folded together: a stretch of quiet rows and the runs of work between them. */
+export interface QuietGroup {
+  quiet: readonly (ChatPart | WorkRun)[]
+  /** Steps in its runs of work. */
+  steps: number
+}
+
+/**
+ * `rows` with each stretch of quiet rows (`quiet` says which), and the runs of work and hidden rows between them, folded
+ * into one group, so background always reads the same. A run of work that ends a stretch stays out of it, so work in
+ * progress keeps its own line, and a stretch with no quiet row that shows stays as it is.
+ */
+export function groupQuiet(
+  rows: readonly (ChatPart | WorkRun)[],
+  quiet: (part: ChatPart) => boolean | 'hidden',
+): (ChatPart | WorkRun | QuietGroup)[] {
+  const grouped: (ChatPart | WorkRun | QuietGroup)[] = []
+  let stretch: (ChatPart | WorkRun)[] = []
+  let shown = new Set<ChatPart | WorkRun>()
+  const flush = () => {
+    const end = stretch.findLastIndex((row) => shown.has(row)) + 1
+    const group = stretch.slice(0, end)
+    if (group.some((row) => shown.has(row)))
+      grouped.push({
+        quiet: group,
+        steps: group.reduce((sum, row) => sum + ('work' in row ? row.steps : 0), 0),
+      })
+    else grouped.push(...group)
+    grouped.push(...stretch.slice(end))
+    stretch = []
+    shown = new Set()
+  }
+  for (const row of rows) {
+    const verdict = 'work' in row ? 'hidden' : quiet(row)
+    if (verdict) {
+      stretch.push(row)
+      if (verdict === true) shown.add(row)
+    } else {
+      flush()
+      grouped.push(row)
+    }
+  }
+  flush()
+  return grouped
+}
+
+/** The group where `entry` first shows, if it does in one: revealing the entry opens it. */
+export function quietOf(rows: readonly (ChatPart | WorkRun | QuietGroup)[], entry: number) {
+  const first = rows.find((row) => partsOf(row).some((part) => part.entry.id === entry))
+  return first && 'quiet' in first ? first : undefined
+}
+
 /**
  * What makes a streamed window fresh: its `older` and its head marker. Appends keep both; a resync after consecutive
  * compactions can keep `older` but brings a new head marker.
@@ -144,20 +196,58 @@ export function setAsideIds(entries: readonly EntryRecord[]): Set<number> {
 
 /** Rows set aside by a go-back, folded together: each consecutive stretch of them is one group. */
 export interface AsideGroup {
-  aside: readonly (ChatPart | WorkRun)[]
+  aside: readonly (ChatPart | WorkRun | QuietGroup)[]
   /** Its entries with messages other than system prompt changes, as the go-back counted them. */
   steps: number
 }
-const partsOf = (row: ChatPart | WorkRun) => ('work' in row ? row.work : [row])
+/** A part's key: its entry, and its first block when it shows only some. */
+export const partKey = (part: ChatPart) =>
+  part.blocks ? `${part.entry.id}:${part.blocks[0]}` : String(part.entry.id)
+
+/**
+ * Whether a folded run or group is open, by the keys of all its parts: one that gains earlier parts from a page, or
+ * later ones live, stays open.
+ */
+export const isOpenIn = (keys: ReadonlySet<string>, row: WorkRun | QuietGroup) =>
+  partsOf(row).some((part) => keys.has(partKey(part)))
+
+/** `keys` with every part of `row` added when it opens, or removed when it closes. */
+export function openIn(keys: ReadonlySet<string>, row: WorkRun | QuietGroup, value: boolean) {
+  const next = new Set(keys)
+  for (const part of partsOf(row)) {
+    if (value) next.add(partKey(part))
+    else next.delete(partKey(part))
+  }
+  return next
+}
+
+/**
+ * Where a scroll anchor is found after a page loads: a folded run or group by its last entry (a page that reaches into
+ * it gives it an earlier first one), nested in an open group when it was; a row inside an open run or group below it,
+ * never a run nested there, which can carry the same id; any other row by its id.
+ */
+export function anchorSelector(anchor: { entryId: number; last?: number; inner?: boolean }) {
+  if (anchor.last !== undefined)
+    return anchor.inner
+      ? `[data-run-last] [data-run-last="${anchor.last}"]`
+      : `:scope > [data-run-last="${anchor.last}"]`
+  return anchor.inner
+    ? `[data-run-last] [data-entry-id="${anchor.entryId}"]:not([data-run-last])`
+    : `[data-entry-id="${anchor.entryId}"]`
+}
+
+/** The parts a row shows, those of its runs and groups included. */
+export const partsOf = (row: ChatPart | WorkRun | QuietGroup): readonly ChatPart[] =>
+  'quiet' in row ? row.quiet.flatMap(partsOf) : 'work' in row ? row.work : [row]
 
 /** `rows` with each stretch of rows whose entries are all in `aside` folded into one group. */
 export function groupAside(
-  rows: readonly (ChatPart | WorkRun)[],
+  rows: readonly (ChatPart | WorkRun | QuietGroup)[],
   aside: ReadonlySet<number>,
-): (ChatPart | WorkRun | AsideGroup)[] {
+): (ChatPart | WorkRun | QuietGroup | AsideGroup)[] {
   if (!aside.size) return [...rows]
-  const grouped: (ChatPart | WorkRun | AsideGroup)[] = []
-  let group: (ChatPart | WorkRun)[] = []
+  const grouped: (ChatPart | WorkRun | QuietGroup | AsideGroup)[] = []
+  let group: (ChatPart | WorkRun | QuietGroup)[] = []
   const flush = () => {
     if (!group.length) return
     const entries = new Set(group.flatMap(partsOf).map((part) => part.entry))
@@ -179,9 +269,8 @@ export function groupAside(
 }
 
 /** The folded run where `entry` first shows, if it starts in one: revealing the entry opens it. */
-export function runOf(rows: readonly (ChatPart | WorkRun)[], entry: number) {
-  const first = rows.find((row) =>
-    ('work' in row ? row.work : [row]).some((part) => part.entry.id === entry),
-  )
+export function runOf(rows: readonly (ChatPart | WorkRun | QuietGroup)[], entry: number) {
+  const flat = rows.flatMap((row) => ('quiet' in row ? row.quiet : [row]))
+  const first = flat.find((row) => partsOf(row).some((part) => part.entry.id === entry))
   return first && 'work' in first ? first : undefined
 }

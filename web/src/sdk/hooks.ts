@@ -31,7 +31,7 @@ import { api, registry, store, uiState } from './client.ts'
 import { HOME, chatTools, documentItems, introOf } from './registry.ts'
 import type { State } from './store.ts'
 import { errorMessage, formatDuration } from './format.ts'
-import type { ToolCallView, UltimateContext } from './types.ts'
+import type { ChatRow, ToolCallView, UltimateContext } from './types.ts'
 import { useViewport } from './viewport.ts'
 
 /** Page readiness is sticky; failed facet names remain available even before ready. */
@@ -290,6 +290,21 @@ const noDocs = {}
  * follows the root documents the contributions' tests read.
  */
 export function useChat(): ((call: ToolCall) => boolean) | undefined {
+  const { chat, docs } = useChatConfig()
+  return useMemo(() => chat && ((call: ToolCall) => chat.keeps(call, docs)), [chat, docs])
+}
+/**
+ * Which rows of the shown chat are background that folds into groups, and the line a group shows (`chat` contributions'
+ * `quiet` and `summary`), else `undefined`.
+ */
+export function useChatQuiet() {
+  const { chat, docs } = useChatConfig()
+  return useMemo(
+    () => chat && { quiet: (row: ChatRow) => chat.quiet(row, docs), summary: chat.summary },
+    [chat, docs],
+  )
+}
+function useChatConfig() {
   const records = useExtensions()
   const conversation = useStore((state) =>
     state.conversations.find((summary) => summary.id === state.view?.conversation.id),
@@ -301,7 +316,7 @@ export function useChat(): ((call: ToolCall) => boolean) | undefined {
     return () => releases.forEach((release) => release())
   }, [kinds])
   const docs = useStore((state) => (kinds ? state.docsOf[1] : undefined)) ?? noDocs
-  return useMemo(() => chat && ((call: ToolCall) => chat.keeps(call, docs)), [chat, docs])
+  return { chat, docs }
 }
 const introFailures = new Set<string>()
 function reportIntro(extension: string, error: unknown) {
@@ -498,10 +513,11 @@ export function useNow(intervalMs = 1000, active = true): number {
   return now
 }
 
-/** Wall time of a tool call this page saw running, ticking while it runs; undefined for calls finished before load. */
+/** Wall time of a tool call from its durable start, ticking while it runs; undefined when it has no times. */
 export function useToolDuration(call: ToolCallView): string | undefined {
   const running = call.startedAt !== undefined && call.endedAt === undefined
   const now = useNow(100, running)
   if (call.startedAt === undefined) return undefined
-  return formatDuration((call.endedAt ?? now) - call.startedAt)
+  // The start is the server's clock; a browser clock behind it must not show a negative time.
+  return formatDuration(Math.max(0, (call.endedAt ?? now) - call.startedAt))
 }

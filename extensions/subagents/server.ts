@@ -43,6 +43,7 @@ import {
 import { createChild, started } from './children.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { exec } from '../../lib/exec.ts'
+import { shortTitle } from '../../lib/title.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { Profile, Standing, Subagents, SubagentsApi } from './api.ts'
@@ -980,7 +981,7 @@ export default function subagents(
                   modelRuntime: host.modelRuntime,
                   metadata: host.metadata,
                   label: definition.name,
-                  title: text,
+                  title: shortTitle(text),
                   excludeTools: definition.tools?.includes('subagent') ? [] : ['subagent'],
                   excludeExtensions: definition.tools?.includes('subagent') ? [] : ['subagents'],
                   ...(forkAt === undefined

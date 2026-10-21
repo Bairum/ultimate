@@ -6,6 +6,8 @@ import {
   cn,
   defineWebExtension,
   formatDuration,
+  provide,
+  RunStart,
   useAction,
   useConversation,
   useNow,
@@ -280,7 +282,20 @@ function TasksPanel() {
   )
 }
 
+/** When run task `id` first ran, asked once per run, for the transcript's working clock. */
+function useRunStart(id: number | undefined): number | undefined {
+  const { data } = useAction(
+    StartedAction,
+    { ids: id === undefined ? [] : [id] },
+    {
+      enabled: id !== undefined,
+    },
+  )
+  return id === undefined ? undefined : data?.[id]
+}
+
 export default defineWebExtension({
+  provides: [provide(RunStart, useRunStart)],
   panels: [{ id: 'tasks', title: 'Tasks', icon: ListTreeIcon, component: TasksPanel, order: -5 }],
   commands: [
     {

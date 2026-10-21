@@ -1,14 +1,20 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import {
+  anchorSelector,
   chatRows,
   groupAside,
+  groupQuiet,
+  isOpenIn,
+  openIn,
+  partsOf,
+  quietOf,
   runOf,
   setAsideIds,
   windowGaps,
   windowKey,
 } from '../../web/src/app/chat.ts'
-import type { ChatPart, WorkRun } from '../../web/src/app/chat.ts'
+import type { ChatPart, QuietGroup, WorkRun } from '../../web/src/app/chat.ts'
 
 let nextId = 1
 const entry = (kind: string, message?: object, data?: object) =>
@@ -214,5 +220,93 @@ describe('set-aside rows', () => {
           : String((row as ChatPart).entry.id),
       ),
     ).toEqual(['1', 'aside 3 ×2', '5', '6'])
+  })
+})
+
+/** Rows as ids, a quiet group as `{…} ×steps` around its rows. */
+const quietShape = (rows: (ChatPart | WorkRun | QuietGroup)[]): string[] =>
+  rows.map((row) =>
+    'quiet' in row ? `{${quietShape([...row.quiet]).join(' ')}} ×${row.steps}` : shape([row])[0],
+  )
+const verdict = ({ entry: { kind } }: ChatPart) =>
+  kind === 'note' ? true : kind === 'wake' ? ('hidden' as const) : false
+
+describe('quiet groups', () => {
+  it('folds a stretch of background with the work and hidden rows between it, but not work that ends it', () => {
+    nextId = 1
+    const rows = chatRows(
+      [
+        user('go'),
+        entry('note'),
+        assistant('toolUse', call('bash')),
+        entry('wake'),
+        entry('note'),
+        user('and now?'),
+        entry('note'),
+        assistant('toolUse', call('read')),
+      ],
+      visible,
+    )
+    expect(quietShape(groupQuiet(rows, verdict))).toEqual([
+      '1',
+      '{2 [3] ×1 4 5} ×1',
+      '6',
+      '{7} ×0',
+      '[8] ×1',
+    ])
+  })
+
+  it('leaves a stretch with nothing quiet that shows as it is, and opens a group to reveal its entries', () => {
+    nextId = 1
+    const rows = chatRows(
+      [user('go'), entry('wake'), assistant('toolUse', call('bash')), entry('note')],
+      visible,
+    )
+    const grouped = groupQuiet(rows, (row) => (row.entry.id === 4 ? true : verdict(row)))
+    expect(quietShape(grouped)).toEqual(['1', '{2 [3] ×1 4} ×1'])
+    expect(quietShape(groupQuiet(rows.slice(0, 3), verdict))).toEqual(['1', '2', '[3] ×1'])
+    expect(quietOf(grouped, 3)).toBe(grouped[1])
+    expect(quietOf(grouped, 1)).toBeUndefined()
+    // A run inside a group opens too.
+    expect(runOf(grouped, 3)).toBe(rows[2])
+  })
+
+  it('keeps an open group open when a page of earlier history extends it', () => {
+    nextId = 1
+    const earlier = entry('note')
+    const later = [entry('note'), assistant('toolUse', call('bash')), entry('note'), user('next')]
+    const before = groupQuiet(chatRows(later, visible), verdict)[0] as QuietGroup
+    const opened = openIn(new Set(), before, true)
+    const after = groupQuiet(chatRows([earlier, ...later], visible), verdict)[0] as QuietGroup
+    // Its first part, and so the key a group was known by, changed.
+    expect(partsOf(after)[0].entry).toBe(earlier)
+    expect(isOpenIn(opened, after)).toBe(true)
+    expect(isOpenIn(openIn(opened, after, false), after)).toBe(false)
+  })
+
+  it('finds a scroll anchor by its last entry, nested in an open group or not', () => {
+    expect(anchorSelector({ entryId: 3, last: 5, inner: false })).toBe(
+      ':scope > [data-run-last="5"]',
+    )
+    // A work run inside an open background group.
+    expect(anchorSelector({ entryId: 3, last: 5, inner: true })).toBe(
+      '[data-run-last] [data-run-last="5"]',
+    )
+    // A row inside an open run or group, never the run that may carry the same id.
+    expect(anchorSelector({ entryId: 3, inner: true })).toBe(
+      '[data-run-last] [data-entry-id="3"]:not([data-run-last])',
+    )
+    expect(anchorSelector({ entryId: 3, inner: false })).toBe('[data-entry-id="3"]')
+  })
+
+  it('opens the run that holds an entry inside a group', () => {
+    nextId = 1
+    const rows = chatRows(
+      [user('go'), entry('wake'), assistant('toolUse', call('bash')), entry('note')],
+      visible,
+    )
+    const grouped = groupQuiet(rows, (row) => (row.entry.id === 4 ? true : verdict(row)))
+    expect(runOf(grouped, 3)).toBe(rows[2])
+    expect(partsOf(grouped[1]).map((inner) => inner.entry.id)).toEqual([2, 3, 4])
   })
 })

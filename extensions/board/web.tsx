@@ -1,8 +1,15 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { useEffect, useState } from 'react'
 import { defineWebExtension, events, useConversation, useDocOf, useEvent, useUltimate } from '@/sdk'
-import { Address, BoardInput, BranchCall, ChatAnswer, MessageCall } from './cards.tsx'
-import { emptyBoard, answeredMessages, scriptMessaged, ultimateChat } from './data.tsx'
+import {
+  Address,
+  BackgroundSummary,
+  BoardInput,
+  BranchCall,
+  ChatAnswer,
+  MessageCall,
+} from './cards.tsx'
+import { chatQuiet, emptyBoard, answeredMessages, scriptMessaged, ultimateChat } from './data.tsx'
 import { BoardDoc } from './refs.ts'
 import type { BoardData } from './refs.ts'
 
@@ -62,6 +69,9 @@ export default defineWebExtension({
       (call, docs) => scriptMessaged(call, docs.board as BoardData | null | undefined),
     ],
     docs: ['board'],
+    // Traffic between agents is background to your chat with @ultimate: each stretch of it folds into one line.
+    quiet: (row, docs) => chatQuiet(row, docs.board as BoardData | null | undefined),
+    summary: BackgroundSummary,
   },
   answerLabels: [BoardAnswerLabel],
 })

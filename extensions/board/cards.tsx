@@ -1,7 +1,10 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
+  ArrowLeftRightIcon,
   BellRingIcon,
   CheckIcon,
+  CornerDownRightIcon,
+  CornerLeftUpIcon,
   GlobeIcon,
   ChevronRightIcon,
   GitBranchIcon,
@@ -29,15 +32,21 @@ import {
   useNow,
   useTranscript,
   useUltimate,
+  UserText,
+  UserView,
 } from '@/sdk'
-import type { ToolCallView } from '@/sdk'
+import type { ChatSummaryProps, ToolCallView } from '@/sdk'
 import { AgentMark, ConversationRef } from '../conversations/ui.tsx'
 import { openAgentSource, StandingDoc } from '../subagents/ui.tsx'
 import { useWorkspaceIndex } from '../workspaces/ui.tsx'
 import { accentOf } from './accent.tsx'
 import {
+  answerTo,
   answeredMessages,
+  callFailed,
   callerOf,
+  chatQuiet,
+  counterparts,
   emptyBoard,
   messageStatus,
   outgoingState,
@@ -159,9 +168,14 @@ export function ChatBubble({
   children?: ReactNode
 }) {
   const now = useNow(60000)
+  const board = useDocOf(1, BoardDoc)
   const accent = accentOf(from)
   const status = sentStatus(message, running)
   const stored = entry?.model?.[0]
+  const answer = message && board ? answerTo(board.messages, message) : undefined
+  // In the chat, how a message was sent is no news: only what asks something of you, or went wrong, says so.
+  const shown =
+    status === 'yours' || status === 'sending' || status === 'failed' || status === 'dismissed'
   return (
     <section
       data-board-outgoing={message?.id}
@@ -172,41 +186,136 @@ export function ChatBubble({
         accent.fill,
       )}
     >
-      <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+      <header className="flex min-h-8 flex-wrap items-center gap-2 px-3 pt-2.5 font-mono text-[11px] text-muted-foreground">
         <span className={cn('flex min-w-0 font-semibold', accent.name)}>
           <Address id={from} mark />
         </span>
-        {at !== undefined && !entry && (
-          <time
+        {entry ? (
+          <MessageActions
+            bubble
             className="ml-auto"
-            dateTime={new Date(at).toISOString()}
-            title={new Date(at).toLocaleString()}
-          >
-            {relativeTime(at, now)}
-          </time>
+            entry={entry}
+            text={text}
+            timestamp={at ?? (stored && 'timestamp' in stored ? stored.timestamp : 0)}
+          />
+        ) : (
+          at !== undefined && (
+            <time
+              className="ml-auto"
+              dateTime={new Date(at).toISOString()}
+              title={new Date(at).toLocaleString()}
+            >
+              {relativeTime(at, now)}
+            </time>
+          )
         )}
       </header>
       <Body text={text} />
       {children}
-      {(status || entry) && (
+      {answer && <AttachedAnswer answer={answer} question={message!} />}
+      {(shown || message?.error) && (
         <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
-          {status &&
-            (message ? <Status message={message} perspective="user" /> : <span>{status}</span>)}
+          {shown && message ? (
+            <Status message={message} perspective="user" />
+          ) : (
+            shown && <span>{status}</span>
+          )}
           {message?.error && (
             <span className="min-w-0 break-words text-destructive">{message.error}</span>
-          )}
-          {entry && (
-            <MessageActions
-              bubble
-              className="ml-auto"
-              entry={entry}
-              text={text}
-              timestamp={at ?? (stored && 'timestamp' in stored ? stored.timestamp : 0)}
-            />
           )}
         </footer>
       )}
     </section>
+  )
+}
+
+/**
+ * Your answer to a question, attached under it as your side of the pair: in your colour, with when you said it. Its
+ * arrow jumps to where the answer reached @ultimate.
+ */
+function AttachedAnswer({ answer, question }: { answer: BoardMessage; question: BoardMessage }) {
+  const now = useNow(60000)
+  const accent = accentOf('user')
+  const dismissed = question.state === 'dismissed'
+  return (
+    <div className="border-t border-border/60 px-3 py-2.5" data-chat-answer={answer.id}>
+      <div className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
+        <CornerDownRightIcon className={cn('size-3.5 shrink-0', accent.name)} />
+        <span className={cn('font-semibold', accent.name)}>
+          {dismissed ? 'You dismissed it' : 'You answered'}
+        </span>
+        <time
+          className="ml-auto"
+          dateTime={new Date(answer.at).toISOString()}
+          title={new Date(answer.at).toLocaleString()}
+        >
+          {relativeTime(answer.at, now)}
+        </time>
+      </div>
+      {!dismissed && (
+        <UserText
+          className="mt-1.5 rounded-md border border-border/70 bg-secondary/60 px-3 py-2 text-[13px] leading-relaxed"
+          text={answer.text}
+        />
+      )}
+    </div>
+  )
+}
+
+/** What one background row is, in a few words that its counterpart follows. */
+function backgroundWord(
+  { entry, calls }: ChatSummaryProps['rows'][number],
+  failed: (call: string) => boolean,
+) {
+  const words: Record<string, string> = {
+    'board.message': 'Message from',
+    'board.reply': 'Reply from',
+    'lineage.note': 'Note from',
+    'lineage.finished': 'Finished:',
+    'lineage.abstract': 'Summary of',
+    'lineage.woken': 'Woke up after compaction',
+    'subagents.report': 'Report from',
+    'subagents.instruction': 'Instruction from',
+    'workspaces.lander-report': 'Landing report from',
+  }
+  if (words[entry.kind]) return words[entry.kind]
+  if (calls.length) {
+    const branches = calls.every((call) => call.name === 'branch')
+    // A failed call did not do what its name says.
+    if (calls.every((call) => failed(call.id))) return branches ? 'Branch failed' : 'Message failed'
+    return branches ? (calls.length === 1 ? 'Started branch' : 'Started branches') : 'Message to'
+  }
+  return 'Answered'
+}
+
+/** A background group's line: who it was with, how many updates, and the work between them. */
+export function BackgroundSummary({ rows, steps, working }: ChatSummaryProps) {
+  const board = useDocOf(1, BoardDoc) ?? emptyBoard
+  const transcript = useTranscript()
+  const shown = rows.filter((row) => chatQuiet(row, board) === true)
+  const who = [...new Set(shown.flatMap((row) => counterparts(row, board)))]
+  const count = shown.length
+  const what =
+    count === 1
+      ? backgroundWord(shown[0], (call) => callFailed(transcript, call))
+      : `${count} updates ${who.length ? 'with' : 'between agents'}`
+  return (
+    <span className="flex min-w-0 items-center gap-1.5" data-chat-background>
+      <ArrowLeftRightIcon className="size-3 shrink-0 text-brand/80" />
+      <span className="shrink-0">{what}</span>
+      {who.slice(0, 2).map((id) => (
+        <span className="flex min-w-0 text-foreground/80" key={id}>
+          {id === 'lander' ? '@lander' : <Address id={id} />}
+        </span>
+      ))}
+      {who.length > 2 && <span className="shrink-0">+{who.length - 2}</span>}
+      {steps > 0 && (
+        <span className="shrink-0 max-sm:hidden">
+          · {steps} step{steps === 1 ? '' : 's'}
+        </span>
+      )}
+      {working && <span className="shrink-0 text-brand">· working</span>}
+    </span>
   )
 }
 
@@ -468,8 +577,11 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
   }
   const receiver = useConversation((conversation) => conversation.id)
   const { switchConversation } = useUltimate()
+  const chat = useChat()
   const reply = entry.kind === 'board.reply'
   const accent = accentOf(origin.from)
+  if (chat && origin.from === 'user')
+    return <UserTurn entry={entry} id={origin.id} text={origin.text} />
   return (
     <Fold
       card={entry.id}
@@ -546,6 +658,42 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
       </section>
     </Fold>
   )
+}
+
+/**
+ * What you said through the board, in a chat: a turn of yours like a typed one. An answer to a question that shows it
+ * already is a one-line reference to that question instead.
+ */
+function UserTurn({ entry, id, text }: { entry: EntryRecord; id: number; text: string }) {
+  const board = useDocOf(1, BoardDoc)
+  const transcript = useTranscript()
+  const message = board?.messages.find((m) => m.id === id)
+  const question =
+    message?.re === undefined ? undefined : board?.messages.find((m) => m.id === message.re)
+  // The response that asked it, where the question shows with your answer under it.
+  const asked = question?.call && callerOf(transcript, question.call.split('/')[0])
+  const input = entry.model?.[0]
+  if (question && asked) {
+    return (
+      <button
+        className="ml-auto flex cursor-pointer items-center gap-1.5 font-mono text-[11px] text-muted-foreground/70 hover:text-muted-foreground"
+        data-chat-answer-ref={id}
+        onClick={() =>
+          events.emit('ultimate:reveal-entry', {
+            conversationId: asked.conversationId,
+            entryId: asked.id,
+          })
+        }
+        title="Show the question and your answer"
+        type="button"
+      >
+        <CornerLeftUpIcon className="size-3" />
+        {question.state === 'dismissed' ? 'you dismissed a question' : 'you answered a question'}
+      </button>
+    )
+  }
+  // Its input wraps your words for the agent; show them as you wrote them, with the images it carries.
+  return input?.role === 'user' ? <UserView entry={entry} message={input} text={text} /> : null
 }
 
 /** The loaded response that made tool call `call`. */

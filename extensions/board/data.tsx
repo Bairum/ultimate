@@ -15,6 +15,13 @@ export const callerOf = (entries: readonly EntryRecord[], call: string) =>
     )
   })
 
+/** Whether tool call `call` ended in an error, from its stored result. */
+export const callFailed = (entries: readonly EntryRecord[], call: string) =>
+  entries.some((entry) => {
+    const message = entry.model?.[0]
+    return message?.role === 'toolResult' && message.toolCallId === call && message.isError
+  })
+
 /** Only incoming requests belong to an answer, never the outgoing reply log item. */
 export function answeredMessages(messages: BoardMessage[], conversation: number, entry: number) {
   return messages.filter((message) => message.to === conversation && message.answer === entry)
@@ -124,6 +131,115 @@ export const scriptMessaged = (
   call: { id: string; name: string },
   board: Readonly<BoardData> | null | undefined,
 ) => call.name === 'codemode' && sentBy(board?.messages ?? [], call.id).length > 0
+
+/** Entries that render nothing in a chat: they join a background group without counting in it. */
+const hiddenKinds = new Set([
+  'board.wake',
+  'board.open',
+  'setup.note',
+  'questions.asked',
+  'questions.answers',
+])
+/** Entries between agents that are background to the user's chat with @ultimate. */
+const backgroundKinds = new Set([
+  'lineage.note',
+  'lineage.finished',
+  'lineage.abstract',
+  'lineage.woken',
+  'subagents.report',
+  'subagents.instruction',
+  'workspaces.lander-report',
+])
+
+/**
+ * Whether a row of @ultimate's chat is background, the traffic between agents that folds into groups: messages and
+ * replies from other conversations, notes, reports and landings, branches it starts, messages it sends them, and the
+ * answers that went back to them. What the user says and what @ultimate says to the user is the chat itself; so is any
+ * kind not named here, so nothing new hides by default.
+ */
+export function chatQuiet(
+  {
+    entry,
+    calls,
+  }: { entry: EntryRecord; calls: readonly { id: string; name: string; arguments: unknown }[] },
+  board: Readonly<BoardData> | null | undefined,
+): boolean | 'hidden' {
+  if (hiddenKinds.has(entry.kind)) return 'hidden'
+  if (landed(entry)) return false
+  if (backgroundKinds.has(entry.kind)) return true
+  if (entry.kind === 'board.message' || entry.kind === 'board.reply')
+    return (entry.data as { from?: unknown } | undefined)?.from !== 'user'
+  const message = entry.model?.[0]
+  if (entry.kind !== 'pi.assistant' || message?.role !== 'assistant') return false
+  if (calls.length)
+    return calls.every(
+      (call) =>
+        call.name === 'branch' ||
+        (call.name === 'message' &&
+          (call.arguments as { to?: unknown } | undefined)?.to !== 'user'),
+    )
+  if (message.stopReason !== 'stop') return false
+  const answered = answeredMessages(board?.messages ?? [], entry.conversationId, entry.id)
+  return answered.length > 0 && answered.every((m) => m.reply && m.from !== 'user')
+}
+
+const idOf = (value: unknown): (number | 'remote')[] =>
+  typeof value === 'number' || value === 'remote' ? [value] : []
+
+/**
+ * Whether an entry says work landed: the lander's landing note, or its report of a landing. Landings are news you wait
+ * for, so they stay in the chat and split background around them; a failed report stays background.
+ */
+function landed(entry: EntryRecord) {
+  const data = entry.data as { source?: unknown; outcome?: { outcome?: unknown } } | undefined
+  if (entry.kind === 'lineage.note') return data?.source === 'lander'
+  return entry.kind === 'workspaces.lander-report' && data?.outcome?.outcome === 'landed'
+}
+
+/** Who a background row is with: the conversations it came from or went to, `lander` for the lander. */
+export function counterparts(
+  {
+    entry,
+    calls,
+  }: { entry: EntryRecord; calls: readonly { id: string; name: string; arguments: unknown }[] },
+  board: Readonly<BoardData>,
+): (number | 'remote' | 'lander')[] {
+  const data = (entry.data ?? {}) as {
+    from?: unknown
+    sender?: unknown
+    conversation?: unknown
+    source?: unknown
+  }
+  switch (entry.kind) {
+    case 'board.message':
+    case 'board.reply':
+    case 'lineage.finished':
+      return idOf(data.from)
+    case 'lineage.note':
+      return data.source === 'lander' ? ['lander'] : idOf(data.from)
+    case 'lineage.abstract':
+      return idOf(data.conversation)
+    case 'subagents.report':
+    case 'subagents.instruction':
+      return idOf(data.sender)
+    case 'workspaces.lander-report':
+      return ['lander']
+  }
+  if (calls.length)
+    return calls.flatMap((call) => {
+      const sent = board.messages.find((m) => m.call === call.id)
+      if (sent) return idOf(sent.to)
+      const to = /^#(\d+)$/.exec(String((call.arguments as { to?: unknown } | undefined)?.to))
+      return to ? [Number(to[1])] : []
+    })
+  return answeredMessages(board.messages, entry.conversationId, entry.id).flatMap((m) =>
+    idOf(m.from),
+  )
+}
+
+/** The user's answer to a question they were asked, once it has one. */
+export const answerTo = (messages: readonly BoardMessage[], question: BoardMessage) =>
+  messages.find((m) => m.from === 'user' && m.re === question.id)
 
 /** A reply-enabled message still waiting for its answer. */
 export const isOpen = (message: BoardMessage) =>

@@ -1,11 +1,4 @@
-import type {
-  AssistantMessage,
-  ImageContent,
-  SystemMessage,
-  TextContent,
-  ToolCall,
-  UserMessage,
-} from '@earendil-works/pi-ai'
+import type { AssistantMessage, SystemMessage, ToolCall } from '@earendil-works/pi-ai'
 import type { EntryRecord, LiveState, ToolSlot } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
 import {
@@ -26,7 +19,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { ReactNode } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
 import type { StickToBottomContext } from 'use-stick-to-bottom'
 import { useEvent } from '../sdk/events.ts'
@@ -38,15 +31,16 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from '@/components/ai/conversation'
-import { MentionText, Message, MessageContent, MessageResponse } from '@/components/ai/message'
+import { Message, MessageResponse } from '@/components/ai/message'
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai/reasoning'
 import { Shimmer } from '@/components/ai/shimmer'
-import { ToolImage, ToolStatusIcon } from '@/components/ai/tool'
+import { ToolStatusIcon } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { elidePath, formatDuration, shortenPath } from '../sdk/format.ts'
 import {
   TranscriptContext,
   useChat,
+  useChatQuiet,
   useConversation,
   useExtensions,
   useIntro,
@@ -58,14 +52,30 @@ import {
 import { entryRenderers, messageItems, toolLine } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary, Provided } from './boundary.tsx'
-import { ParkedRuns } from '../sdk/types.ts'
+import { ParkedRuns, RunStart } from '../sdk/types.ts'
+import type { ChatSummaryProps } from '../sdk/types.ts'
 import { MessageActions } from './message-actions.tsx'
-import { chatRows, groupAside, runOf, setAsideIds, windowGaps, windowKey } from './chat.ts'
+import { textOf, UserView } from './user-turn.tsx'
+import {
+  anchorSelector,
+  chatRows,
+  groupAside,
+  groupQuiet,
+  isOpenIn,
+  openIn,
+  partKey,
+  partsOf,
+  quietOf,
+  runOf,
+  setAsideIds,
+  windowGaps,
+  windowKey,
+} from './chat.ts'
 import { useFold } from './fold.tsx'
-import type { AsideGroup, ChatPart, WorkRun } from './chat.ts'
+import type { AsideGroup, ChatPart, QuietGroup, WorkRun } from './chat.ts'
 import { readerLeft } from './follow.ts'
 import { column } from './layout.ts'
-import { indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
+import { callsStart, indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
 import type { ToolResult } from './model.ts'
 import { ToolCallBlock } from './tool-call.tsx'
 import { TranscriptSkeleton } from './transcript-skeleton.tsx'
@@ -311,15 +321,8 @@ function TranscriptEntries() {
   useEffect(() => () => request.current?.abort(), [])
   useLayoutEffect(() => {
     if (anchor.current && scrollRef.current) {
-      const { entryId, last, inner, toolCallId: callId, top } = anchor.current
-      // A folded run's row is found by its last entry: a page that reaches into the run gives it an earlier first one.
-      // A row inside an opened run is found below its run's row, which can carry the same id.
-      const entry =
-        last !== undefined
-          ? contentRef.current?.querySelector(`:scope > [data-run-last="${last}"]`)
-          : inner
-            ? contentRef.current?.querySelector(`[data-run-last] [data-entry-id="${entryId}"]`)
-            : contentRef.current?.querySelector(`[data-entry-id="${entryId}"]`)
+      const { toolCallId: callId, top } = anchor.current
+      const entry = contentRef.current?.querySelector(anchorSelector(anchor.current))
       const tool =
         callId === undefined
           ? undefined
@@ -498,23 +501,22 @@ function TranscriptEntries() {
   const rows: (ChatPart | WorkRun)[] = chat
     ? chatRows(visible, keeps)
     : visible.map((entry) => ({ entry }))
+  // Background rows, such as traffic between agents, fold into one line per stretch.
+  const background = useChatQuiet()
+  const quiet = background
+    ? groupQuiet(rows, (part) => background.quiet({ entry: part.entry, calls: shownCalls(part) }))
+    : rows
+  // Background groups the reader or a reveal opened, by the keys of all their parts, as folded runs are.
+  const [shownQuiet, setShownQuiet] = useState<ReadonlySet<string>>(new Set())
   // What a go-back set aside folds into one quiet row; the rows themselves render as usual inside it.
   const aside = useMemo(() => setAsideIds(entries), [entries])
-  const grouped = groupAside(rows, aside)
+  const grouped = groupAside(quiet, aside)
   const [shownAside, setShownAside] = useState<ReadonlySet<number>>(new Set())
   // Folded runs the reader or a reveal opened, by the keys of all their parts: a run that gains earlier entries from a
   // page, or later ones live, stays open.
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set())
-  const isOpen = (run: WorkRun) => run.work.some((part) => opened.has(partKey(part)))
-  const open = (run: WorkRun, value: boolean) =>
-    setOpened((keys) => {
-      const next = new Set(keys)
-      for (const part of run.work) {
-        if (value) next.add(partKey(part))
-        else next.delete(partKey(part))
-      }
-      return next
-    })
+  const isOpen = (run: WorkRun) => isOpenIn(opened, run)
+  const open = (run: WorkRun, value: boolean) => setOpened((keys) => openIn(keys, run, value))
   // Reveal a stored row without the auto-follow animation overriding the jump; a row older than those loaded needs the
   // history down to it first, and one in a folded run needs the run open.
   const [reveal, setReveal] = useState<number>()
@@ -547,6 +549,11 @@ function TranscriptEntries() {
       setShownAside((keys) => new Set(keys).add(first))
       return
     }
+    const stretch = quietOf(group ? group.aside : quiet, reveal)
+    if (stretch && !isOpenIn(shownQuiet, stretch)) {
+      setShownQuiet((keys) => openIn(keys, stretch, true))
+      return
+    }
     const run = chat && runOf(rows, reveal)
     if (run && !isOpen(run)) {
       open(run, true)
@@ -561,10 +568,28 @@ function TranscriptEntries() {
   })
   useLayoutEffect(
     () => revealStep(),
-    [reveal, loading, pending, error, history, opened, filling, shownAside],
+    [reveal, loading, pending, error, history, opened, filling, shownAside, shownQuiet],
   )
-  const render = (row: ChatPart | WorkRun, last: boolean) =>
-    'work' in row ? (
+  const render = (row: ChatPart | WorkRun | QuietGroup, last: boolean): ReactNode =>
+    'quiet' in row ? (
+      // Found like a folded run: by its first entry, or its last when a page reaches into it.
+      <div
+        data-conversation-id={id}
+        data-entry-id={partsOf(row)[0].entry.id}
+        data-run-last={partsOf(row).at(-1)!.entry.id}
+        key={`quiet:${quietKey(row)}`}
+      >
+        <QuietRow
+          busy={busy && last}
+          group={row}
+          onOpenChange={(value) => setShownQuiet((keys) => openIn(keys, row, value))}
+          open={isOpenIn(shownQuiet, row)}
+          summary={background?.summary}
+        >
+          {row.quiet.map((inner, index) => render(inner, last && index === row.quiet.length - 1))}
+        </QuietRow>
+      </div>
+    ) : 'work' in row ? (
       <div
         className="empty:hidden"
         data-conversation-id={id}
@@ -667,13 +692,78 @@ function TranscriptEntries() {
 }
 
 /** A set-aside group is known by its first entry, so it stays open while later rows join it. */
-const asideKey = (group: AsideGroup) => {
-  const first = group.aside[0]
-  return ('work' in first ? first.work[0] : first).entry.id
+const asideKey = (group: AsideGroup) => partsOf(group.aside[0])[0].entry.id
+
+/** A quiet group's React key: its first part. */
+const quietKey = (group: QuietGroup) => partKey(partsOf(group)[0])
+
+/** The tool calls a row shows: all of its entry's, or those of its blocks. */
+function shownCalls({ entry, blocks }: ChatPart): ToolCall[] {
+  const message = entry.model?.[0]
+  if (message?.role !== 'assistant') return []
+  return message.content.flatMap((block, index) =>
+    block.type === 'toolCall' && (!blocks || blocks.includes(index)) ? [block] : [],
+  )
 }
 
-const partKey = (part: ChatPart) =>
-  part.blocks ? `${part.entry.id}:${part.blocks[0]}` : String(part.entry.id)
+/**
+ * Background rows folded into one quiet line, which an extension's `summary` words (a step count otherwise); open, the
+ * rows render as usual beneath it.
+ */
+function QuietRow({
+  group,
+  open,
+  onOpenChange,
+  busy,
+  summary: Summary,
+  children,
+}: {
+  group: QuietGroup
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  busy: boolean
+  summary:
+    | { extension: string; version: number; component: ComponentType<ChatSummaryProps> }
+    | undefined
+  children: ReactNode
+}) {
+  const rows = group.quiet.flatMap((row) =>
+    'work' in row ? [] : [{ entry: row.entry, calls: shownCalls(row) }],
+  )
+  const fallback = (
+    <>
+      {rows.length} updates
+      {group.steps > 0 && ` · ${group.steps} step${group.steps === 1 ? '' : 's'}`}
+    </>
+  )
+  return (
+    <Collapsible
+      className="group/quiet"
+      data-chat-quiet={rows.length}
+      onOpenChange={onOpenChange}
+      open={open}
+    >
+      <CollapsibleTrigger className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 text-left font-mono text-[11px] text-muted-foreground/70 hover:text-muted-foreground">
+        {Summary ? (
+          <ExtensionBoundary
+            extension={Summary.extension}
+            fallback={fallback}
+            variant="inline"
+            version={Summary.version}
+          >
+            <Summary.component rows={rows} steps={group.steps} working={busy} />
+          </ExtensionBoundary>
+        ) : (
+          fallback
+        )}
+        <ChevronRightIcon className="size-3 shrink-0 transition-transform group-data-[state=open]/quiet:rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-3 flex flex-col gap-3 border-l border-border/70 pl-3">
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
 
 /** A run of work in a chat as one quiet row that expands to the usual rendering. */
 function WorkRow({
@@ -726,12 +816,15 @@ function WorkRow({
 }
 
 /** The tool calls of a folded run, in order. */
-function runCalls(run: WorkRun): ToolCall[] {
+function runCalls(run: WorkRun): { block: ToolCall; startedAt: number }[] {
   return run.work.flatMap(({ entry, blocks }) => {
     const message = entry.model?.[0]
     if (message?.role !== 'assistant') return []
+    const startedAt = callsStart(message)
     return message.content.flatMap((block, index) =>
-      block.type === 'toolCall' && (!blocks || blocks.includes(index)) ? [block] : [],
+      block.type === 'toolCall' && (!blocks || blocks.includes(index))
+        ? [{ block, startedAt }]
+        : [],
     )
   })
 }
@@ -766,12 +859,13 @@ function StepLines({
       {calls.length > shown.length && (
         <span className="text-muted-foreground/60">+{calls.length - shown.length} earlier</span>
       )}
-      {shown.map((block) => {
+      {shown.map(({ block, startedAt }) => {
         const call = toolCallView(block, {
           result: results.get(block.id),
           slot: slots.get(block.id),
           streaming: false,
           busy,
+          startedAt,
         })
         const line = toolLine(extensions, call.name)
         return (
@@ -879,12 +973,6 @@ function toolCallId(entry: EntryRecord) {
   return message?.role === 'toolResult' ? message.toolCallId : undefined
 }
 
-function textOf(content: string | readonly (TextContent | ImageContent)[]) {
-  return typeof content === 'string'
-    ? content
-    : content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n')
-}
-
 interface RowProps {
   entry: EntryRecord
   /** The content blocks of an assistant message shown in this row; all when absent. */
@@ -976,36 +1064,6 @@ function coreEntry(
   }
 }
 
-function UserView({ entry, message }: { entry: EntryRecord; message: UserMessage }) {
-  const images =
-    typeof message.content === 'string'
-      ? []
-      : message.content.filter((block) => block.type === 'image')
-  const text = textOf(message.content)
-  return (
-    <Message className="group/message mt-3 first:mt-0" from="user">
-      <MessageContent>
-        <p className="break-words whitespace-pre-wrap">
-          <MentionText text={text} />
-        </p>
-        {images.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {images.map((image, index) => (
-              <ToolImage alt={`Attached image ${index + 1}`} image={image} key={index} />
-            ))}
-          </div>
-        )}
-      </MessageContent>
-      <MessageActions
-        className="-mt-1 justify-end"
-        entry={entry}
-        text={text}
-        timestamp={message.timestamp}
-      />
-    </Message>
-  )
-}
-
 function AssistantView({
   entry,
   message,
@@ -1085,6 +1143,7 @@ function AssistantView({
                   slot: slots.get(block.id),
                   streaming,
                   busy,
+                  startedAt: streaming ? undefined : callsStart(message),
                 })}
                 key={block.id}
               />
@@ -1238,9 +1297,6 @@ function shows(message: AssistantMessage | undefined) {
   )
 }
 
-/** When this page first saw each run, for the working indicator's clock. */
-const runSeen = new Map<number, number>()
-
 /** What the run is doing when the transcript alone does not show it; a run a pause parked says so instead. */
 function LiveStatus(props: {
   id: number | undefined
@@ -1251,7 +1307,15 @@ function LiveStatus(props: {
   return (
     <Provided input={null} point={ParkedRuns}>
       {(parked) => (
-        <LiveLines {...props} parked={props.id !== undefined && parked?.has(props.id) === true} />
+        <Provided input={props.live.run?.taskId} point={RunStart}>
+          {(since) => (
+            <LiveLines
+              {...props}
+              parked={props.id !== undefined && parked?.has(props.id) === true}
+              since={since}
+            />
+          )}
+        </Provided>
       )}
     </Provided>
   )
@@ -1262,11 +1326,14 @@ export function LiveLines({
   busy,
   partial,
   parked,
+  since,
 }: {
   live: LiveState
   busy: boolean
   partial: AssistantMessage | undefined
   parked: boolean
+  /** When the run started (its task first ran), for the working clock; none shows while unknown. */
+  since?: number
 }) {
   // Parked by a pause, nothing of the run executes, a retry's backoff and a deferred poll included: the paused line
   // replaces every other one and no clock ticks until Play.
@@ -1302,9 +1369,6 @@ export function LiveLines({
       </Shimmer>,
     )
   if (idle && lines.length === 0) {
-    const run = live.run?.taskId
-    if (run !== undefined && !runSeen.has(run)) runSeen.set(run, Date.now())
-    const since = run === undefined ? undefined : runSeen.get(run)
     const thinking = partial?.content.some((block) => block.type === 'thinking')
     lines.push(
       <span className="flex items-center gap-2" key="working">

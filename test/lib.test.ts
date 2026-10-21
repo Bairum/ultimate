@@ -4,7 +4,17 @@ import { expect, it } from 'vitest'
 import { git, isolatable, noCommit, noRepository } from '../lib/git.ts'
 import { readJson, updateJson, writeJson } from '../lib/json-file.ts'
 import { readSettings, updateSettings } from '../lib/settings.ts'
+import { shortTitle } from '../lib/title.ts'
 import { temp } from './helpers.ts'
+
+it('titles a long Markdown prompt by its first meaningful line, cut short', () => {
+  const prompt = `## Goal\nDesign a redesign of @ultimate's conversation view (the "chat" mode of the transcript) so it reads as one conversation.\n\n${'More detail. '.repeat(500)}`
+  const title = shortTitle(prompt)
+  expect(title).toBe('Design a redesign of @ultimate\'s conversation view (the "ch…')
+  expect(title.length).toBeLessThanOrEqual(60)
+  expect(shortTitle('**Task:** find the callers')).toBe('Task: find the callers')
+  expect(shortTitle('fork task')).toBe('fork task')
+})
 
 it('reads a missing JSON file as the fallback and rejects unreadable JSON', async () => {
   const dir = await temp('ultimate-lib-')
