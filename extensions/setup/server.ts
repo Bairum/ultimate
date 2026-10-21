@@ -13,7 +13,6 @@ import { isolatable } from '../../lib/git.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { readSecret, secretMetadata } from '../../lib/secrets.ts'
-import { primaryAgent } from '../../lib/machine.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { HealthApi } from '../health/api.ts'
@@ -370,10 +369,8 @@ export default function setup(host: ExtensionHost) {
         // Only the primary agent hears about setup, and only when its warnings change: a per-input note, never a
         // system-prompt section, keeps the prompt cached.
         beforeInput: async (_input, { tx, conversationId }) => {
-          const primary = primaryAgent(host.projectRoot, host.userHome)
-          if (!primary) return undefined
           const standing = await tx.doc(Standing, ROOT_CONVERSATION_ID)
-          if (standing[primary] !== conversationId) return undefined
+          if (standing.ultimate !== conversationId) return undefined
           // A check that fails here only skips the note; the status line still shows the setup.
           return noteFor(tx, conversationId, await current().catch(() => undefined), Date.now())
         },

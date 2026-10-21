@@ -24,13 +24,7 @@ import { CompactAction, RecentAction, TallyDoc } from '../lineage/ui.tsx'
 import type { RootEvent } from '../lineage/types.ts'
 import { CommitCount, ProgressAction, Review, useWorkspaceIndex } from '../workspaces/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
-import {
-  AgentMark,
-  ConversationPhase,
-  FeatureTag,
-  useOverview,
-  usePrimaryAgent,
-} from '../conversations/ui.tsx'
+import { AgentMark, ConversationPhase, FeatureTag, useOverview } from '../conversations/ui.tsx'
 import { ago } from './lander.tsx'
 import { useSidebarState } from './state.tsx'
 import { workOf } from './work.ts'
@@ -79,9 +73,7 @@ function useBranchState(
   const index = useWorkspaceIndex()
   const board = useDocOf(1, BoardDoc) ?? emptyBoard
   const runState = useOverview()[conversation.id]?.runState
-  const name = usePrimaryAgent()
-  const standing = useDocOf(1, StandingDoc)
-  const primary = name ? standing?.[name] : undefined
+  const primary = useDocOf(1, StandingDoc)?.ultimate
   const queued = index.queue.find((item) => item.conversationId === conversation.id)
   if (queued?.state === 'landing') return { label: 'landing', tone: 'success' } as const
   if (queued) return { label: 'submitted', tone: 'success' } as const

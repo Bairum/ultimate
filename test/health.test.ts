@@ -1,20 +1,8 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readFile } from 'node:fs/promises'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
-import { afterEach, expect, it, vi } from 'vitest'
-import { machineRoot } from '../lib/machine.ts'
-import { PauseApi } from '../extensions/pause/api.ts'
-import {
-  announce,
-  cheapest,
-  due,
-  heartbeat,
-  hostDeps,
-  TICK,
-  responseEntry,
-} from '../extensions/health/server.ts'
-import type { HeartbeatDeps } from '../extensions/health/server.ts'
-import healthExtension, { changedLogins, watchLogins } from '../extensions/health/server.ts'
+import { afterEach, expect, it } from 'vitest'
+import healthExtension, { announce, responseEntry } from '../extensions/health/server.ts'
+import { HealthApi } from '../extensions/health/api.ts'
 import { actions as models } from '../extensions/models/server.ts'
 import type { ActionContext } from '../server/actions.ts'
 import {
@@ -23,11 +11,9 @@ import {
   merge,
   readHealth,
   record,
-  reset,
   sanitize,
   state,
 } from '../extensions/health/store.ts'
-import type { HealthEntry } from '../extensions/health/store.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { prepareHarness } from '../server/harness.ts'
 import { LoginChanged } from '../extensions/models/api.ts'
@@ -126,9 +112,9 @@ it('merges each timestamp by its maximum and keeps the newest failure’s error'
   expect(
     merge(
       { lastOk: 10, lastFail: 3, error: 'old', lastUsed: 10 },
-      { lastOk: 4, lastFail: 8, error: 'new', lastChecked: 8 },
+      { lastOk: 4, lastFail: 8, error: 'new' },
     ),
-  ).toEqual({ lastOk: 10, lastFail: 8, error: 'new', lastChecked: 8, lastUsed: 10 })
+  ).toEqual({ lastOk: 10, lastFail: 8, error: 'new', lastUsed: 10 })
   // An older failure arriving late does not replace the newer error.
   expect(merge({ lastFail: 8, error: 'new' }, { lastFail: 3, error: 'old' })).toEqual({
     lastFail: 8,
@@ -201,189 +187,22 @@ it('records real responses in the machine’s health file, merging concurrent wr
   expect(await readFile(healthPath(home), 'utf8')).not.toContain('sk-live')
 })
 
-it('pings by activity: hourly while used, 4 h after 4 h idle, 8 h after 12 h, failures after 15 min', () => {
-  const used = (idle: number, entry: HealthEntry = {}) => ({
-    a: { lastUsed: NOW - idle, ...entry },
-  })
-  // Active machine: hourly.
-  expect(due(used(MINUTE, { lastOk: NOW - 59 * MINUTE }), NOW, ['a'])).toEqual([])
-  expect(due(used(MINUTE, { lastOk: NOW - HOUR }), NOW, ['a'])).toEqual(['a'])
-  // A recent ping counts like a success.
-  expect(
-    due(used(MINUTE, { lastOk: NOW - 5 * HOUR, lastChecked: NOW - MINUTE }), NOW, ['a']),
-  ).toEqual([])
-  // Idle 4–12 h: every 4 h.
-  expect(due(used(5 * HOUR, { lastOk: NOW - 3 * HOUR }), NOW, ['a'])).toEqual([])
-  expect(due(used(5 * HOUR, { lastOk: NOW - 4 * HOUR }), NOW, ['a'])).toEqual(['a'])
-  // Idle beyond 12 h, or never used: every 8 h.
-  expect(due(used(13 * HOUR, { lastOk: NOW - 7 * HOUR }), NOW, ['a'])).toEqual([])
-  expect(due(used(13 * HOUR, { lastOk: NOW - 8 * HOUR }), NOW, ['a'])).toEqual(['a'])
-  expect(due({ a: { lastChecked: NOW - 7 * HOUR } }, NOW, ['a'])).toEqual([])
-  // Never seen: due at once.
-  expect(due({}, NOW, ['a', 'b'])).toEqual(['a', 'b'])
-  // Failing: confirmed 15 min after the last ping, regardless of the interval.
-  const failing = { lastOk: NOW - 2 * HOUR, lastFail: NOW - MINUTE, lastUsed: NOW - MINUTE }
-  expect(due({ a: { ...failing, lastChecked: NOW - 14 * MINUTE } }, NOW, ['a'])).toEqual([])
-  expect(due({ a: { ...failing, lastChecked: NOW - 15 * MINUTE } }, NOW, ['a'])).toEqual(['a'])
-})
-
-const model = (provider: string, id: string, input: number, output = input) => ({
-  provider,
-  id,
-  cost: { input, output, cacheRead: 0, cacheWrite: 0 },
-})
-
-it('skips the heartbeat tick while the host is paused and pings again after Play', async () => {
-  const home = await temp('ultimate-health-pause-')
-  const services = apis()
-  let paused = true
-  services.implement(PauseApi, { paused: () => paused })
-  const getAvailable = vi.fn<() => Promise<never[]>>(async () => [])
-  const cleanups: (() => Promise<void>)[] = []
-  vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] })
-  try {
-    healthExtension({
-      ...services,
-      faux: undefined,
-      userHome: home,
-      projectRoot: machineRoot(home),
-      modelRuntime: { getAvailable, getProviderAuthStatus: () => ({ configured: false }) },
-      react: () => {},
-      resource: <T>(_key: string, create: () => T) => create(),
-      onClose: (cleanup: () => Promise<void>) => void cleanups.push(cleanup),
-      notice: () => {},
-    } as unknown as ExtensionHost)
-    await vi.advanceTimersByTimeAsync(30_000)
-    expect(getAvailable).not.toHaveBeenCalled()
-    paused = false
-    await vi.advanceTimersByTimeAsync(TICK)
-    expect(getAvailable).toHaveBeenCalledTimes(1)
-  } finally {
-    for (const cleanup of cleanups) await cleanup()
-    vi.useRealTimers()
-  }
-})
-
-it('picks the cheapest model by input plus output cost, the first on a tie', () => {
-  expect(
-    cheapest([model('a', 'big', 15, 75), model('a', 'mini', 0.2, 0.8), model('a', 'flash', 0.6)])
-      ?.id,
-  ).toBe('mini')
-  expect(cheapest([model('a', 'first', 1), model('a', 'second', 1)])?.id).toBe('first')
-  expect(cheapest([])).toBeUndefined()
-})
-
-it('heartbeat pings each configured, due provider once with its cheapest model', async () => {
-  const calls: string[] = []
-  const recorded: [string, HealthEntry][] = []
-  const deps = {
-    now: () => NOW,
-    models: {
-      getAvailable: async () => [
-        model('anthropic', 'opus', 15),
-        model('anthropic', 'haiku', 1),
-        model('openai', 'mini', 1),
-        model('unconfigured', 'x', 0),
-      ],
-      getProviderAuthStatus: (provider: string) => ({ configured: provider !== 'unconfigured' }),
-      completeSimple: async (pinged: { provider: string; id: string }) => {
-        calls.push(`${pinged.provider}/${pinged.id}`)
-        if (pinged.provider === 'openai') throw new Error('401 Bearer abc.def')
-        return { stopReason: 'stop' }
-      },
-    },
-    // Active machine (hourly); anthropic's last success is 2 h old, openai was never seen.
-    read: async () => ({ anthropic: { lastOk: NOW - 2 * HOUR, lastUsed: NOW - 2 * HOUR } }),
-    record: async (provider: string, entry: HealthEntry) => recorded.push([provider, entry]),
-    forget: async () => {},
-  } as unknown as HeartbeatDeps
-  expect(await heartbeat(deps)).toEqual({ pruned: [], pinged: ['anthropic', 'openai'] })
-  expect(calls).toEqual(['anthropic/haiku', 'openai/mini'])
-  expect(recorded).toEqual([
-    ['anthropic', { lastChecked: NOW, lastOk: NOW }],
-    ['openai', { lastChecked: NOW, lastFail: NOW, error: '401 Bearer abc.def' }],
-  ])
-})
-
-it('heartbeat forgets providers without a login here, so their old failures stop warning', async () => {
-  const home = await temp()
-  await record(home, 'openai', { lastFail: NOW, lastChecked: NOW, error: 'invalid_grant' })
-  await record(home, 'openai-codex', { lastOk: NOW, lastUsed: NOW })
-  const pinged: string[] = []
-  const deps: HeartbeatDeps = {
-    ...hostDeps({ userHome: home } as unknown as ExtensionHost),
-    now: () => NOW,
-    models: {
-      getAvailable: async () => [model('openai', 'mini', 1), model('openai-codex', 'mini', 1)],
-      getProviderAuthStatus: (provider: string) => ({ configured: provider === 'openai-codex' }),
-      completeSimple: async (used: { provider: string }) => {
-        pinged.push(used.provider)
-        return { stopReason: 'stop' }
-      },
-    } as unknown as HeartbeatDeps['models'],
-  }
-  expect(await heartbeat(deps)).toEqual({ pruned: ['openai'], pinged: [] })
-  expect(pinged).toEqual([])
-  expect((await readHealth(home)).map((entry) => [entry.provider, entry.state])).toEqual([
-    ['openai-codex', 'ok'],
-  ])
-  // Nothing left to forget: the next tick changes nothing.
-  expect(await heartbeat(deps)).toEqual({ pruned: [], pinged: [] })
-})
-
-it('resets a provider whose login changed to unknown, so the next heartbeat pings it', async () => {
-  const home = await temp('ultimate-health-reset-')
-  await record(home, 'anthropic', { lastOk: NOW - MINUTE, lastFail: NOW, error: 'invalid_grant' })
+it('reads only providers with a login here, so a removed login leaves no stale failure', async () => {
+  const home = await temp('ultimate-health-logins-')
+  await record(home, 'openai', { lastFail: NOW, error: 'invalid_grant' })
   await record(home, 'openai-codex', { lastOk: NOW })
-  await reset(home, ['anthropic'])
-  const health = await readHealth(home)
-  expect(health.map((entry) => [entry.provider, entry.state])).toEqual([['openai-codex', 'ok']])
-  // With no entry, the provider is due at once even though the machine's interval has not passed.
-  expect(due({ 'openai-codex': { lastOk: NOW } }, NOW, ['anthropic', 'openai-codex'])).toEqual([
-    'anthropic',
-  ])
-})
-
-it('names the providers whose login appeared or disappeared, not a refreshed one', () => {
-  expect(changedLogins(new Set(['anthropic', 'openai']), new Set(['anthropic', 'claude']))).toEqual(
-    ['claude', 'openai'],
-  )
-  expect(changedLogins(new Set(['anthropic']), new Set(['anthropic']))).toEqual([])
-})
-
-it('watches auth.json: a login added or removed in pi resets its health, a token refresh does not', async () => {
-  const home = await temp('ultimate-health-watch-')
-  const agent = join(home, '.pi/agent')
-  await mkdir(agent, { recursive: true })
-  const auth = join(agent, 'auth.json')
-  await writeFile(auth, JSON.stringify({ anthropic: { refresh: 'a' } }))
-  await record(home, 'anthropic', { lastFail: NOW, error: 'invalid_grant' })
-  await record(home, 'openai-codex', { lastFail: NOW, error: 'invalid_grant' })
-  const calls: boolean[] = []
-  const stop = watchLogins(home, (providers) => calls.push(providers), auth, 0)
-  try {
-    // A refresh: same providers, new tokens, written by replacing the file as Pi does.
-    await writeFile(`${auth}.tmp`, JSON.stringify({ anthropic: { refresh: 'b' } }))
-    await rename(`${auth}.tmp`, auth)
-    await until(() => calls.length > 0)
-    expect(calls.at(-1)).toBe(false)
-    expect((await readHealth(home)).map((entry) => entry.provider)).toEqual([
-      'anthropic',
-      'openai-codex',
-    ])
-    // A new login: that provider starts over; the other keeps its record.
-    calls.length = 0
-    await writeFile(auth, JSON.stringify({ anthropic: { refresh: 'b' }, 'openai-codex': {} }))
-    await until(() => calls.includes(true))
-    expect((await readHealth(home)).map((entry) => entry.provider)).toEqual(['anthropic'])
-    // A logout.
-    calls.length = 0
-    await writeFile(auth, JSON.stringify({ 'openai-codex': {} }))
-    await until(() => calls.includes(true))
-    expect(await readHealth(home)).toEqual([])
-  } finally {
-    stop()
-  }
+  const services = apis()
+  healthExtension({
+    ...services,
+    faux: true,
+    userHome: home,
+    modelRuntime: {
+      getProviderAuthStatus: (provider: string) => ({ configured: provider === 'openai-codex' }),
+    },
+    react: () => {},
+  } as unknown as ExtensionHost)
+  const providers = await services.need(HealthApi).providers()
+  expect(providers.map((entry) => [entry.provider, entry.state])).toEqual([['openai-codex', 'ok']])
 })
 
 it("Ultimate's logout resets the provider's health through models.login-changed", async () => {

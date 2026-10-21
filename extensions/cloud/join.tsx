@@ -176,7 +176,7 @@ function Next({ result }: { result: Extract<JoinResult, { ok: true }> }) {
       <div className="text-foreground/85">Next</div>
       <div className="space-y-1">
         <p className="font-sans text-[12px] text-muted-foreground">
-          In the Ultimate clone, so Ultimate and the machine home start at login:
+          In the Ultimate clone, so Ultimate starts at login:
         </p>
         <Command value="pnpm setup:machine" />
       </div>

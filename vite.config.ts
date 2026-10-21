@@ -96,24 +96,6 @@ export default defineConfig({
         },
       },
       {
-        // The browser shares it (`tsconfig.web.json`), so it repeats the lib/ restriction and adds Node.
-        files: ['lib/machine.ts'],
-        rules: {
-          'no-restricted-imports': [
-            'error',
-            {
-              patterns: [
-                {
-                  group: ['node:*', '**/server/**', '**/extensions/**', '**/web/**', '**/bin/**'],
-                  message:
-                    'lib/machine.ts runs in the browser too; keep it free of Node and other layers.',
-                },
-              ],
-            },
-          ],
-        },
-      },
-      {
         files: ['extensions/**'],
         rules: {
           'no-restricted-imports': [

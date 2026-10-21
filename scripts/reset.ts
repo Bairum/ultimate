@@ -1,5 +1,5 @@
 // Start a project's Ultimate from a fresh state: its conversation state moves into a backup folder, nothing is deleted.
-// Usage: pnpm reset [dir] [--machine] [--dry-run] [--yes]. See "Starting fresh" in docs/running.md.
+// Usage: pnpm reset [dir] [--dry-run] [--yes]. See "Starting fresh" in docs/running.md.
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -8,7 +8,6 @@ import { createInterface } from 'node:readline/promises'
 import { parseArgs } from 'node:util'
 import { git } from '../lib/git.ts'
 import { readJson, writeJson } from '../lib/json-file.ts'
-import { machineRoot } from '../lib/machine.ts'
 import { acquireLock, readOwner } from '../server/lock.ts'
 import { projectHome } from '../server/project.ts'
 import type { BackupFile } from '../extensions/cloud/backup.ts'
@@ -95,7 +94,7 @@ export async function holder(home: string) {
 export const refusal = (owner: { pid: number; port?: number }, command = 'pnpm reset') =>
   new Error(
     `Ultimate is running here (pid ${owner.pid}${owner.port ? `, http://127.0.0.1:${owner.port}` : ''}). Stop it first:\n` +
-      `  systemctl --user stop ultimate        # the project service (ultimate-machine for --machine)\n` +
+      `  systemctl --user stop ultimate        # the project service\n` +
       `  launchctl bootout gui/$(id -u)/com.ultimate.app   # on macOS\n` +
       `or Ctrl+C the terminal running it, then run ${command} again.`,
   )
@@ -155,7 +154,7 @@ export async function apply(p: Plan) {
 }
 
 /** Worktrees with uncommitted changes and `ultimate/*` branches not merged into HEAD: work the reset leaves in place. */
-async function unlanded(home: string, project: string | undefined) {
+async function unlanded(home: string, project: string) {
   const dirty: string[] = []
   const worktrees = join(home, 'worktrees')
   if (existsSync(worktrees))
@@ -164,20 +163,18 @@ async function unlanded(home: string, project: string | undefined) {
       const status = await git(path, 'status', '--porcelain').catch(() => '')
       if (status) dirty.push(path)
     }
-  const branches = project
-    ? (
-        await git(
-          project,
-          'branch',
-          '--no-merged',
-          'HEAD',
-          '--format=%(refname:short)',
-          'ultimate/*',
-        ).catch(() => '')
-      )
-        .split('\n')
-        .filter(Boolean)
-    : []
+  const branches = (
+    await git(
+      project,
+      'branch',
+      '--no-merged',
+      'HEAD',
+      '--format=%(refname:short)',
+      'ultimate/*',
+    ).catch(() => '')
+  )
+    .split('\n')
+    .filter(Boolean)
   return { dirty, branches }
 }
 
@@ -191,21 +188,17 @@ export async function size(path: string) {
 async function main() {
   const { values, positionals } = parseArgs({
     options: {
-      machine: { type: 'boolean' },
       'dry-run': { type: 'boolean' },
       yes: { type: 'boolean' },
     },
     allowPositionals: true,
   })
-  if (positionals.length > 1 || (values.machine && positionals.length))
-    throw new Error('Usage: pnpm reset [dir] [--machine] [--dry-run] [--yes]')
+  if (positionals.length > 1) throw new Error('Usage: pnpm reset [dir] [--dry-run] [--yes]')
   const user = homedir()
-  const project = values.machine
-    ? machineRoot(user)
-    : await realpath(positionals[0] ?? process.env.INIT_CWD ?? process.cwd())
-  const home = (!values.machine && process.env.ULTIMATE_HOME) || projectHome(project, user)
+  const project = await realpath(positionals[0] ?? process.env.INIT_CWD ?? process.cwd())
+  const home = process.env.ULTIMATE_HOME || projectHome(project, user)
   const p = await plan(home, join(user, '.ultimate', 'backups'))
-  const work = await unlanded(home, values.machine ? undefined : project)
+  const work = await unlanded(home, project)
 
   console.log(`Reset ${project}\n  home   ${home}\n  backup ${p.backup}\n`)
   if (p.resumes) console.log('Finishing an interrupted reset into the same backup.')

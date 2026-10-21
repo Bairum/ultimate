@@ -31,7 +31,6 @@ import { WorkspacesApi } from '../workspaces/api.ts'
 import { isolatable } from '../../lib/git.ts'
 
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
-import { primaryAgent } from '../../lib/machine.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { parseDecisions } from '../../lib/decisions.ts'
 import { LineageApi, Roots } from '../lineage/api.ts'
@@ -224,10 +223,8 @@ async function assess(
 }
 /** The primary agent's conversation, whose incoming messages are triaged. */
 async function primaryConversation(host: ExtensionHost, ctx: Context) {
-  const primary = primaryAgent(host.projectRoot, host.userHome)
-  if (!primary) return undefined
   const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
-  return standing?.[primary]
+  return standing?.ultimate
 }
 /**
  * The summary model a triage asks, chosen once per task. Without one, nothing is gated: the message wakes the agent as
@@ -776,15 +773,13 @@ async function send(
     if (callId !== undefined && sent?.ids[callId] !== undefined) return sent.ids[callId]
   }
   const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
-  const primary = primaryAgent(host.projectRoot, host.userHome)
-  const primaryId = primary ? standing?.[primary] : undefined
+  const primaryId = standing?.ultimate
   // The primary agent's messages to a busy conversation almost always steer it: new scope, a decision, a stop.
   const steer = input.steer ?? (from !== 'user' && from === primaryId)
   if (input.to === 'user') {
-    if (!primary) throw new Error('The machine home has no standing agent to message the user.')
     if (from !== primaryId)
       throw new Error(
-        `Only @${primary} messages the user; send this to @${primary} (reply: false) and it relays it.`,
+        'Only @ultimate messages the user; send this to @ultimate (reply: false) and it relays it.',
       )
   }
   if (!input.text.trim()) throw new Error('Message text must not be empty')
@@ -995,8 +990,7 @@ export default function board(host: ExtensionHost) {
         if (parent !== undefined)
           return `Use message only to update #${parent}, the conversation that started you, while you work; your final answer reaches it anyway. One-way updates (reply: false) reach #${parent} as notes it reads with its next input; ask with reply: true when you need its answer to continue.`
         const agents = await host.need(SubagentsApi).residents(ctx)
-        const primary = primaryAgent(host.projectRoot, host.userHome) ?? 'ultimate'
-        return `Use message to contact #id or @name. Only @${primary} messages user; send it updates with reply: false to relay. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
+        return `Use message to contact #id or @name. Only @ultimate messages user; send it updates with reply: false to relay. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
     ],
     tools: [

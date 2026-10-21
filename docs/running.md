@@ -21,12 +21,11 @@
 
 ## Starting fresh
 
-`pnpm reset [dir] [--machine] [--dry-run] [--yes]` starts a project's Ultimate (or with `--machine` the machine home) from
-an empty state. It deletes nothing: `state.sqlite`, `trace.sqlite`, parked `state.stale-*` databases (each with its
+`pnpm reset [dir] [--dry-run] [--yes]` starts a project's Ultimate from an empty state. It deletes nothing: `state.sqlite`, `trace.sqlite`, parked `state.stale-*` databases (each with its
 `-wal`/`-shm`), `conversations.json`, `previews.json` and `supervisor.log` move to
 `~/.ultimate/backups/reset-<time>/<home>/`, and it prints that folder and the `mv` that restores it.
 
-- Stop Ultimate first (`systemctl --user stop ultimate`, or `ultimate-machine` for `--machine`); it refuses while the
+- Stop Ultimate first (`systemctl --user stop ultimate`); it refuses while the
   home's `ultimate.lock` or `storage.lock` is held, and holds both while it moves files.
 - Kept: settings, secrets, logins, `project.json`, the lander checkout, worktrees and `ultimate/*` branches. It lists
   worktrees with uncommitted changes and branches not merged into the project's HEAD.

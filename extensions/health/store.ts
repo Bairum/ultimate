@@ -10,7 +10,6 @@ export interface HealthEntry {
   lastFail?: number
   /** The newest failure's sanitised message. */
   error?: string
-  lastChecked?: number
   lastUsed?: number
   /** The newest auth failure: it alone turns the provider failing. */
   lastAuth?: number
@@ -23,7 +22,7 @@ export type HealthFile = { providers: Record<string, HealthEntry> }
 /** The machine's health file, shared by every Ultimate home of the user. */
 export const healthPath = (userHome: string) => join(userHome, '.ultimate/health.json')
 
-const STAMPS = ['lastOk', 'lastFail', 'lastChecked', 'lastUsed', 'lastAuth'] as const
+const STAMPS = ['lastOk', 'lastFail', 'lastUsed', 'lastAuth'] as const
 
 /** Transient failures in a row that turn a provider failing. */
 export const STREAK = 3
@@ -192,7 +191,7 @@ export async function readFileHealth(userHome: string): Promise<HealthFile> {
   try {
     parsed = JSON.parse(text)
   } catch {
-    // A torn or hand-edited file starts over: the next real call or ping rewrites it.
+    // A torn or hand-edited file starts over: the next real call rewrites it.
     parsed = {}
   }
   const providers: Record<string, HealthEntry> = {}
@@ -268,7 +267,7 @@ export type Flip = {
 }
 
 /**
- * Forget `providers`' entries, so each reads `unknown` until its next call or ping: its login was added, replaced or
+ * Forget `providers`' entries, so each reads `unknown` until its next call: its login was added, replaced or
  * removed, and what the old login did says nothing about the new one.
  */
 export async function reset(userHome: string, providers: string[]): Promise<Flip[]> {

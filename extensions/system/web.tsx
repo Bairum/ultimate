@@ -16,7 +16,7 @@ import {
   useUltimate,
 } from '@/sdk'
 import { BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
-import { useOverview, usePrimaryAgent } from '../conversations/ui.tsx'
+import { useOverview } from '../conversations/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { LaneTree } from './hierarchy.tsx'
 import { Axis, laneState } from './lanes.tsx'
@@ -43,9 +43,7 @@ function useStates(parked: ReadonlySet<number>) {
   const board = useDocOf(1, BoardDoc) ?? emptyBoard
   const overview = useOverview()
   const conversations = useConversations()
-  const name = usePrimaryAgent()
-  const standing = useDocOf(1, StandingDoc)
-  const primary = name ? standing?.[name] : undefined
+  const primary = useDocOf(1, StandingDoc)?.ultimate
   return (lane: Lane) => {
     const id = lane.conversation
     const own = conversations.find((item) => item.id === id)

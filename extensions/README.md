@@ -936,7 +936,7 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
   both.
 - Shared pure helpers live in the top-level `lib/`, not in another extension: `exec.ts` (run a program), `git.ts`
   (git and isolation checks), `json-file.ts` (read, atomic write, serialised update), `settings.ts`, `secrets.ts`
-  (read-only), `machine.ts` (machine-home checks, browser-safe), `cloud.ts` (the user's cloud settings),
+  (read-only), `cloud.ts` (the user's cloud settings),
   `project-identity.ts` (a project's GitHub key), `entries.ts` (`isInput`) and `agents.ts` (agent definitions and
   their discovery). Import them freely; they hot reload with the extensions that import them. `lib/` holds no state
   and imports no extension or `web/` code; only `agents.ts` reads the core project trust decision at runtime.

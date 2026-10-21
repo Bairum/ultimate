@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn, ParkedRuns, Provided, useDocOf, useStore, useTasks, useUltimate } from '@/sdk'
 import { BoardDoc, emptyBoard, waitingOnUser } from '../board/ui.tsx'
-import { AgentMark, ConversationPhase, useOverview, usePrimaryAgent } from '../conversations/ui.tsx'
+import { AgentMark, ConversationPhase, useOverview } from '../conversations/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import { primaryLabel } from './label.ts'
 
@@ -28,18 +28,14 @@ export function StandingPhase({ id }: { id: number }) {
 export function UltimateButton() {
   return (
     <Provided input={null} point={ParkedRuns}>
-      {(parked) => <PrimaryButton parked={parked} />}
+      {(parked) => <Primary parked={parked} />}
     </Provided>
   )
 }
 
-function PrimaryButton({ parked }: { parked?: ReadonlySet<number> }) {
-  const name = usePrimaryAgent()
-  // The machine home has no standing agent to talk to.
-  return name ? <Primary name={name} parked={parked} /> : null
-}
+const name = 'ultimate'
 
-function Primary({ name, parked }: { name: string; parked?: ReadonlySet<number> }) {
+function Primary({ parked }: { parked?: ReadonlySet<number> }) {
   const actions = useUltimate()
   const id = useDocOf(1, StandingDoc)?.[name]
   const tasks = useTasks()

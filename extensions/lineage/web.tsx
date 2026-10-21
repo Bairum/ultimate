@@ -24,7 +24,7 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
-import { ConversationRef, Unsummarized, usePrimaryAgent } from '../conversations/ui.tsx'
+import { ConversationRef, Unsummarized } from '../conversations/ui.tsx'
 import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open } from '../workspaces/ui.tsx'
 import { TallyDoc } from './refs.ts'
@@ -394,31 +394,18 @@ function TallyComposer({ id, dock }: { id: number; dock?: boolean }) {
   const history = useConversation((conversation) =>
     conversation.loading ? undefined : conversation.entries.length > 0,
   )
-  const primary = usePrimaryAgent()
   if (tally === undefined || history === undefined) return null
-  // The machine home has no project to read and no standing agent: its root stays empty.
-  if (!primary) return null
   if (tally?.since === undefined && !history)
     return (
       <Provided input={{ id, dock }} point={EmptyRoot}>
         {(start) => start}
       </Provided>
     )
-  return <TallyFooter dock={dock} id={id} primary={primary} tokens={tally?.tokens} />
+  return <TallyFooter dock={dock} id={id} tokens={tally?.tokens} />
 }
 
 /** In place of a tally's composer: what it is, its size, and the way to @ultimate, who keeps it. */
-function TallyFooter({
-  id,
-  tokens,
-  dock,
-  primary,
-}: {
-  id: number
-  tokens?: number
-  dock?: boolean
-  primary: string
-}) {
+function TallyFooter({ id, tokens, dock }: { id: number; tokens?: number; dock?: boolean }) {
   const actions = useUltimate()
   return (
     <div className={cn(column(dock), 'pb-3')}>
@@ -439,11 +426,11 @@ function TallyFooter({
             onClick={() => void talkToUltimate(actions)}
             type="button"
           >
-            Talk to @{primary}
+            Talk to @ultimate
           </button>
         </div>
         <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
-          What every new branch starts from. @{primary} maintains it.
+          What every new branch starts from. @ultimate maintains it.
         </p>
       </div>
     </div>

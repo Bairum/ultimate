@@ -9,7 +9,7 @@ import type { ExtensionInfo } from '../../shared/protocol.ts'
 export type ProjectSetup = { config: boolean; decision: boolean | null; readme?: string }
 /** What the first run and the setup cards need. */
 export type OnboardingStatus = {
-  /** True until the user finished or skipped the first run; never in the machine home. */
+  /** True until the user finished or skipped the first run. */
   firstRun: boolean
   project: ProjectSetup
   /** What `~/.ultimate/settings.json` enables and disables. */
