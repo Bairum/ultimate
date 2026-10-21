@@ -107,6 +107,20 @@ it('commits backups with their parent, refuses a stale one with the Worker’s s
   expect((await readBackup(a.home, key))?.parent).toBe(forced.id)
 })
 
+it('takes a 409 naming this very backup as latest for success: a retried commit the Worker already made', async () => {
+  const other = own()
+  const a = await machine(['x'])
+  // The commit registers, then its answer is lost and the retry gets the Worker's 409 for it.
+  const retried = async (input: string | URL | Request, init?: RequestInit) => {
+    if (init?.method !== 'POST') return stub.fetch(input, init)
+    await stub.fetch(input, init)
+    return stub.fetch(input, init)
+  }
+  const done = await backUp({ ...cloud, key: other, machine: 'desk', ...a, fetch: retried })
+  expect(stub.register.projects.find((project) => project.key === other)?.latest.id).toBe(done.id)
+  expect(await readBackup(a.home, other)).toEqual({ key: other, parent: done.id, last: done })
+})
+
 it('names an HTTP failure and keeps the parent', async () => {
   const a = await machine(['x'])
   const failing = cloudStub('other')

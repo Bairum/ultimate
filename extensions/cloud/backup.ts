@@ -110,6 +110,11 @@ export async function backUp(o: BackupOptions): Promise<LastBackup> {
       latest?: Partial<Latest> | null
     }
     const { id, machine, at } = body.latest ?? {}
+    // A retry after the Worker registered this backup but failed to answer: the latest is ours.
+    if (id === done.id) {
+      await writeBackup(o.home, { key: o.key, parent: done.id, last: done })
+      return done
+    }
     throw new Conflict(
       typeof body.error === 'string' ? body.error : 'Another machine backed up this project first',
       typeof id === 'string' && typeof machine === 'string' && typeof at === 'number'
