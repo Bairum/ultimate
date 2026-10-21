@@ -15,7 +15,6 @@ import { readSecret } from '../lib/secrets.ts'
 
 const root = resolve(import.meta.dirname, '..')
 const SNAPSHOT_KEY = 'ULTIMATE_CLOUD_SNAPSHOT_KEY'
-const MACHINES = ['e2e-a', 'e2e-b']
 
 function check(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`FAILED: ${message}`)
@@ -105,11 +104,14 @@ async function main() {
   }
   const base = httpBase(configured.url)
   const scratch = await mkdtemp(join(tmpdir(), 'ultimate-fleet-e2e-'))
-  const name = `ultimate-fleet-e2e-${randomBytes(4).toString('hex')}`
+  const run = randomBytes(4).toString('hex')
+  const name = `ultimate-fleet-e2e-${run}`
   const key = `github.com/hazat/${name}`
   const hash = createHash('sha256').update(key).digest('hex')
   console.log(`Cloud ${new URL(base).host}, project ${key}, scratch ${scratch}`)
   const children: ChildProcess[] = []
+  /** This run's machine names that sent a backup, so the Worker may have registered them: cleanup deletes only these. */
+  const registered = new Set<string>()
   try {
     // One user home per machine, one checkout of the project each; the origin is never pushed.
     const machine = async (id: string) => {
@@ -130,12 +132,12 @@ async function main() {
         '-m',
         'root',
       )
-      return { user, project, home: join(user, 'home'), machine: `e2e-${id}` }
+      return { user, project, home: join(user, 'home'), machine: `e2e-${id}-${run}` }
     }
     const a = await machine('a')
     const b = await machine('b')
 
-    step('A: a conversation with known entries, backed up as e2e-a')
+    step(`A: a conversation with known entries, backed up as ${a.machine}`)
     let running = await start(a, cloud)
     children.push(running.child)
     const created = await call(running.url, '/api/conversations', { title: 'fleet e2e' })
@@ -144,12 +146,13 @@ async function main() {
     const seeded = await action(running.url, 'faux', 'seedHistory', { conversation: id, count: 8 })
     check(seeded.status === 200, `seeding entries: ${JSON.stringify(seeded.data)}`)
     const known = await entries(running.url, id)
+    registered.add(a.machine)
     const first = await action(running.url, 'cloud', 'backup')
     check(first.status === 200, `backup from A: ${JSON.stringify(first.data)}`)
     const firstId = (first.data.result as { id: string }).id
     console.log(`  backup ${firstId}`)
 
-    step('register lists the project and e2e-a')
+    step(`register lists the project and ${a.machine}`)
     const register = await fetchRegister(configured)
     const listed = register.projects.find((project) => project.hash === hash)
     check(
@@ -157,8 +160,8 @@ async function main() {
       'project missing from the register',
     )
     check(
-      register.machines.some((item) => item.machine === 'e2e-a' && item.projects[hash]),
-      'e2e-a missing from the register',
+      register.machines.some((item) => item.machine === a.machine && item.projects[hash]),
+      `${a.machine} missing from the register`,
     )
     await stop(running.child)
 
@@ -182,6 +185,7 @@ async function main() {
     running = await start(b, cloud)
     children.push(running.child)
     check((await entries(running.url, id)) === known, 'restored entries differ from A’s')
+    registered.add(b.machine)
     const second = await action(running.url, 'cloud', 'backup')
     check(second.status === 200, `backup from B: ${JSON.stringify(second.data)}`)
     const secondId = (second.data.result as { id: string }).id
@@ -227,7 +231,7 @@ async function main() {
       )
     }
     await remove(`/sync/projects/${hash}`)
-    for (const machine of MACHINES) await remove(`/sync/machines/${machine}`)
+    for (const machine of registered) await remove(`/sync/machines/${machine}`)
     await rm(scratch, { recursive: true, force: true })
     console.log(`  removed ${scratch}`)
   }
