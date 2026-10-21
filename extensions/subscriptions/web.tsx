@@ -12,15 +12,16 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn, defineWebExtension, Fold, useToolDuration, useUltimate } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
-import { Dot, states, useOpenSubscription, useSubscriptions, worst } from './parts.tsx'
+import { Dot, Restore, states, useOpenSubscription, useSubscriptions, worst } from './parts.tsx'
 import type { State } from './parts.tsx'
+import { WatchingSection } from './sidebar.tsx'
 import { Subscriptions } from './surface.tsx'
 
 /** The status-line chip: how many subscriptions, coloured by the worst; gone while there are none. */
 function Chip() {
   const { showSurface, surface } = useUltimate()
   // Slow outside the surface: the chip only needs to notice a failure within a few seconds.
-  const { data } = useSubscriptions(true, surface === 'subscriptions' ? 2000 : 5000)
+  const { data } = useSubscriptions(surface === 'subscriptions' ? 2000 : 5000)
   const list = data ?? []
   const state = worst(list)
   if (!state) return null
@@ -103,7 +104,7 @@ const card = (kind: Kind) =>
             <span className="flex min-w-0 items-center gap-1.5">{name}</span>
             <button
               className="ml-auto shrink-0 cursor-pointer text-muted-foreground hover:text-foreground hover:underline"
-              onClick={() => void open(id)}
+              onClick={() => open(id)}
               title={`Show ${id} in Subscriptions`}
               type="button"
             >
@@ -172,7 +173,7 @@ function SubscriptionCall({ call }: { call: ToolCallView }) {
         />
         <Button
           className="mr-1 h-6 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
-          onClick={() => (id ? void open(id) : showSurface('subscriptions'))}
+          onClick={() => (id ? open(id) : showSurface('subscriptions'))}
           size="sm"
           title={id ? `Show ${id} in Subscriptions` : 'Show Subscriptions'}
           variant="ghost"
@@ -222,7 +223,11 @@ export default defineWebExtension({
       run: (context) => context.showSurface('subscriptions'),
     },
   ],
-  slots: { 'statusline.right': [{ component: Chip, order: -2 }] },
+  slots: {
+    'statusline.right': [{ component: Chip, order: -2 }],
+    'sidebar.top': [{ component: WatchingSection, order: -20 }],
+    overlay: [Restore],
+  },
   tools: { subscription: SubscriptionCall },
   entries: {
     'subscriptions.fired': card('fired'),

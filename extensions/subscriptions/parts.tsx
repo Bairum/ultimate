@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { api, cn, useExtensionUiState, useUltimate } from '@/sdk'
 import { ListAction } from './refs.ts'
 import type { Subscription, SubscriptionListItem } from './types.ts'
@@ -61,41 +61,112 @@ export function stateLine(sub: SubscriptionListItem, now: number) {
   return parts.join(' · ')
 }
 
-/** The subscriptions, fetched again every `ms` while `live` and whenever `key` changes. */
-export function useSubscriptions(live: boolean, ms: number, key?: unknown) {
-  const [state, setState] = useState<{ data?: SubscriptionListItem[]; error?: unknown }>({})
+type Polled = { data?: SubscriptionListItem[]; error?: unknown }
+/**
+ * One list poll for the whole page: the chip, the sidebar and the surface share it, and it runs at the fastest rate
+ * any of them asks for.
+ */
+const poll = {
+  state: {} as Polled,
+  listeners: new Set<() => void>(),
+  rates: new Map<symbol, number>(),
+  timer: undefined as ReturnType<typeof setInterval> | undefined,
+  rate: 0,
+  loading: undefined as Promise<void> | undefined,
+}
+function publish(state: Polled) {
+  poll.state = state
+  for (const listener of poll.listeners) listener()
+}
+/** Fetch the list now; a fetch in flight is reused. Call it after an action changes a subscription. */
+export function refreshSubscriptions() {
+  poll.loading ??= api
+    .action(ListAction)
+    .then((data) => publish({ data }))
+    .catch((error: unknown) => publish({ ...poll.state, error }))
+    .finally(() => (poll.loading = undefined))
+  return poll.loading
+}
+function reschedule() {
+  const rate = Math.min(...poll.rates.values())
+  if (rate === poll.rate) return
+  clearInterval(poll.timer)
+  poll.rate = rate
+  poll.timer = Number.isFinite(rate)
+    ? setInterval(() => void refreshSubscriptions(), rate)
+    : undefined
+}
+const listen = (listener: () => void) => {
+  poll.listeners.add(listener)
+  return () => void poll.listeners.delete(listener)
+}
+
+/** The subscriptions, fetched again every `ms` while this component is mounted (`false`: once). */
+export function useSubscriptions(ms: number | false): Polled {
   useEffect(() => {
-    const controller = new AbortController()
-    const load = () =>
-      api
-        .action(ListAction, null, { signal: controller.signal })
-        .then((data) => setState({ data }))
-        .catch((error: unknown) => {
-          // Aborted when the surface hides or the key changes; the next fetch owns the state.
-          if (!controller.signal.aborted) setState((previous) => ({ ...previous, error }))
-        })
-    void load()
-    const timer = live ? setInterval(() => void load(), ms) : undefined
+    const key = Symbol()
+    poll.rates.set(key, ms === false ? Infinity : ms)
+    reschedule()
+    void refreshSubscriptions()
     return () => {
-      clearInterval(timer)
-      controller.abort()
+      poll.rates.delete(key)
+      reschedule()
     }
-  }, [live, ms, key])
-  return state
+  }, [ms])
+  return useSyncExternalStore(listen, () => poll.state)
 }
 
 /**
- * Opens subscription `id` in the surface: selects it and shows its agent's conversation there, so the transcript on
- * top is the agent that wrote it.
+ * Leaving the Subscriptions surface shows again the conversation the user was on when they entered it, before it
+ * showed a subscription's agent; `keepAgent` skips that once, for "open conversation", which goes to the agent.
+ */
+let keepAgent = false
+/** Leave the surface for the Agent surface and stay on the subscription's agent rather than restore. */
+export function useOpenAgent() {
+  const { showSurface } = useUltimate()
+  return () => {
+    keepAgent = true
+    showSurface('agent')
+  }
+}
+
+/** Mounted on every surface: remembers the conversation on entering Subscriptions and restores it on leaving. */
+export function Restore() {
+  const { surface, conversationId, switchConversation } = useUltimate()
+  // The conversation the other surfaces show, followed only while they are on screen, and the surface last seen.
+  const shown = useRef<number | undefined>(undefined)
+  const was = useRef<string | undefined>(undefined)
+  const returnTo = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (surface !== 'subscriptions') shown.current = conversationId
+  }, [surface, conversationId])
+  useEffect(() => {
+    const before = was.current
+    was.current = surface
+    // The first render of a page has no previous surface: nothing was entered or left.
+    if (before === undefined || before === surface) return
+    if (surface === 'subscriptions') returnTo.current = shown.current
+    else if (before === 'subscriptions') {
+      const to = returnTo.current
+      if (!keepAgent && to !== undefined && to !== conversationId) switchConversation(to)
+      keepAgent = false
+      returnTo.current = undefined
+    }
+    // Only a change of surface acts; the conversation is read at that moment.
+    // oxlint-disable-next-line react/exhaustive-deps -- conversationId is read, not followed
+  }, [surface])
+  return null
+}
+
+/**
+ * Opens subscription `id` in the surface; the surface then shows its agent's conversation on top. The shown
+ * conversation stays put until then, so leaving the surface returns to it.
  */
 export function useOpenSubscription() {
   const [, setSelected] = useExtensionUiState<string | null>('selected', null)
-  const { showSurface, switchConversation } = useUltimate()
-  return async (id: string, conversation?: number) => {
+  const { showSurface } = useUltimate()
+  return (id: string) => {
     setSelected(id)
     showSurface('subscriptions')
-    const agent =
-      conversation ?? (await api.action(ListAction)).find((sub) => sub.id === id)?.conversationId
-    if (agent !== undefined) switchConversation(agent)
   }
 }

@@ -61,7 +61,7 @@ import type { Automation, Run, Schedule } from './refs.ts'
  * not streamed, so this is how fires show up live. A next run left in the past means a fire went unseen, such as a
  * skipped one, so it refetches every two seconds until the time moves on.
  */
-function useLive(refetch: () => unknown, overdue: boolean, now: number) {
+export function useLive(refetch: () => unknown, overdue: boolean, now: number) {
   const graph = useTasks()
   const conversations = useConversations()
   const signature = [

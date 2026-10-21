@@ -25,7 +25,15 @@ import {
   useUltimate,
   useViewport,
 } from '@/sdk'
-import { Dot, since, stateLine, states, useSubscriptions } from './parts.tsx'
+import {
+  Dot,
+  refreshSubscriptions,
+  since,
+  stateLine,
+  states,
+  useOpenAgent,
+  useSubscriptions,
+} from './parts.tsx'
 import { LogAction, ScriptAction, StartAction, StopAction } from './refs.ts'
 import type { SubscriptionListItem } from './types.ts'
 
@@ -45,8 +53,7 @@ const heading = 'font-mono text-[10.5px] tracking-wider text-muted-foreground up
 export function Subscriptions() {
   const live = useLive()
   const now = useNow(1000, live)
-  const [action, setAction] = useState(0)
-  const { data, error } = useSubscriptions(live, 2000, action)
+  const { data, error } = useSubscriptions(live ? 2000 : false)
   const [stored, setSelected] = useExtensionUiState<string | null>('selected', null)
   const { conversationId, switchConversation } = useUltimate()
   const phone = useViewport() === 'phone'
@@ -162,7 +169,7 @@ export function Subscriptions() {
             <Script
               live={live}
               now={now}
-              onChange={() => setAction((value) => value + 1)}
+              onChange={() => void refreshSubscriptions()}
               sub={selected}
             />
           </main>
@@ -181,7 +188,7 @@ export function Subscriptions() {
 /** The agent that writes and repairs the script: its conversation, with a composer to refine it. */
 function Agent({ sub }: { sub: SubscriptionListItem }) {
   const shown = useConversation((conversation) => conversation.id) === sub.conversationId
-  const { showSurface } = useUltimate()
+  const openAgent = useOpenAgent()
   return (
     <section className="flex min-h-0 flex-1 flex-col" data-subscription-agent={sub.conversationId}>
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/70 pr-1.5 pl-3">
@@ -192,7 +199,7 @@ function Agent({ sub }: { sub: SubscriptionListItem }) {
         </span>
         <Button
           className="ml-auto h-6 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
-          onClick={() => showSurface('agent')}
+          onClick={openAgent}
           size="xs"
           title={`Open #${sub.conversationId} in the Agent surface`}
           variant="ghost"

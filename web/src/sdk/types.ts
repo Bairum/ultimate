@@ -6,6 +6,7 @@ import type { ConversationSummary } from '../../../shared/protocol.ts'
 /** Named places in the shell that extensions fill with components. */
 export type SlotName =
   | 'sidebar'
+  | 'sidebar.top'
   | 'titlebar.left'
   | 'titlebar.right'
   | 'header.right'

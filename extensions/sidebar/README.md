@@ -23,6 +23,11 @@ compacts the context; they are never renamed, cleared or concluded.
 The title bar's `@ultimate` button (`titlebar.left`, beside the surfaces, also on phones) opens @ultimate the same way
 from every surface. Its mark's dot pulses while @ultimate works and is amber while questions wait on you, with their count.
 
+Between the Agents group and the roots, the `sidebar.top` slot shows background work that optional extensions
+contribute without the sidebar importing them: subscriptions' Watching section and automations' Scheduled section,
+each a small heading with a count bubble, up to five compact rows with `+N more`, and its own bottom rule. Each
+section hides while it has nothing active.
+
 The sidebar lists the roots below the agents (lineage's `useRoots()`); trees sort by their newest input anywhere in
 them. A root's row (`RootRow`, `root.tsx`) is a small dashboard of its tree, not one of its conversations: a scroll
 mark (with a pulsing dot while it compacts), the fixed name `Project context` with `#id` small (its summary title only
