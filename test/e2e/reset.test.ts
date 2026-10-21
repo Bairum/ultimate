@@ -56,9 +56,10 @@ it('moves the state into a backup folder and keeps worktrees and project.json', 
     'state.stale-2026-10-18T11:01:59.676Z.sqlite',
     'trace.sqlite',
   ])
-  expect(
-    (await readdir(home)).filter((name) => !name.startsWith('ultimate.lock')).toSorted(),
-  ).toEqual(['project.json', 'worktrees'])
+  expect((await readdir(home)).filter((name) => !name.includes('.lock')).toSorted()).toEqual([
+    'project.json',
+    'worktrees',
+  ])
   expect(await readFile(join(home, 'worktrees', '7', 'keep.txt'), 'utf8')).toBe('work')
 })
 
@@ -70,7 +71,7 @@ it('keeps Ultimate from starting on a home an interrupted reset left half moved'
   }).catch((error: { code: number; stderr: string }) => error)
   expect(started).toMatchObject({
     code: 1,
-    stderr: expect.stringContaining(`A reset of ${home} was interrupted`),
+    stderr: expect.stringContaining(`A reset or restore of ${home} was interrupted`),
   })
   expect(existsSync(join(home, 'storage.lock'))).toBe(false)
 })

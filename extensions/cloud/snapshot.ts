@@ -3,7 +3,7 @@
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdtemp, rename, rm, stat } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -19,6 +19,8 @@ export interface SnapshotManifest {
   epoch?: number
   createdAt: number
   machine: string
+  /** The project checkout it was taken from; conversations and worktrees name absolute paths in it. Older lack it. */
+  root?: string
   database: Part
   bundle?: Part
 }
@@ -62,6 +64,8 @@ export async function uploadSnapshot(o: {
   machine: string
   database: string
   repo: string
+  /** The project checkout, recorded in the manifest. */
+  root?: string
   signal?: AbortSignal
   progress?: (done: number, total: number, uploaded: number) => void
 }): Promise<SnapshotManifest> {
@@ -85,6 +89,7 @@ export async function uploadSnapshot(o: {
       key: o.key,
       createdAt: Date.now(),
       machine: o.machine,
+      ...(o.root ? { root: o.root } : {}),
       database: db,
       bundle: bundle
         ? await seal(o, id, 'bundle', bundle, report(sizes[0], db.uploaded!))
@@ -107,6 +112,8 @@ export async function downloadSnapshot(o: {
   id: string
   dir: string
   repo: string
+  /** Refuse, before writing anything, a snapshot taken of a checkout at another path. */
+  root?: string
   signal?: AbortSignal
   progress?: (done: number, total: number) => void
 }): Promise<{ database: string; manifest: SnapshotManifest; keptRefs: string[] }> {
@@ -115,6 +122,10 @@ export async function downloadSnapshot(o: {
   ) as SnapshotManifest
   if (manifest.id !== o.id || manifest.key !== o.key)
     throw new Error(`Snapshot ${o.id} belongs to another project`)
+  if (o.root && manifest.root && manifest.root !== o.root)
+    throw new Error(
+      `${basename(manifest.root)} was backed up from ${manifest.root}; restore it into a checkout at that path (paths in conversations and worktrees are absolute)`,
+    )
   const total = manifest.database.bytes + (manifest.bundle?.bytes ?? 0)
   const database = join(o.dir, `snapshot-${o.id}.sqlite`)
   const bundle = join(o.dir, `snapshot-${o.id}.bundle`)

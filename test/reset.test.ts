@@ -36,7 +36,7 @@ it('finishes an interrupted reset into the same backup', async () => {
     'state.sqlite',
     'state.sqlite-wal',
   ])
-  expect((await readdir(path)).filter((name) => !name.startsWith('ultimate.lock'))).toEqual([])
+  expect((await readdir(path)).filter((name) => !name.includes('.lock'))).toEqual([])
 })
 
 it('keeps every path from opening storage on a home an interrupted reset left', async () => {
@@ -48,7 +48,7 @@ it('keeps every path from opening storage on a home an interrupted reset left', 
     home: path,
     faux: true,
   })
-  await expect(prepared.open(false)).rejects.toThrow('A reset of')
+  await expect(prepared.open(false)).rejects.toThrow('A reset or restore of')
   expect(existsSync(join(path, 'state.sqlite'))).toBe(false)
   // The refusal released storage's lock: once the reset finishes, the home opens.
   await rm(join(path, 'reset.json'))

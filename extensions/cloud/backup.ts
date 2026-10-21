@@ -72,6 +72,7 @@ export async function backUp(o: BackupOptions): Promise<LastBackup> {
     machine: o.machine,
     database: join(o.home, 'state.sqlite'),
     repo: o.projectRoot,
+    root: o.projectRoot,
     signal: o.signal,
     progress: o.progress,
   })

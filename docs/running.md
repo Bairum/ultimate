@@ -27,11 +27,12 @@ an empty state. It deletes nothing: `state.sqlite`, `trace.sqlite`, parked `stat
 `~/.ultimate/backups/reset-<time>/<home>/`, and it prints that folder and the `mv` that restores it.
 
 - Stop Ultimate first (`systemctl --user stop ultimate`, or `ultimate-machine` for `--machine`); it refuses while the
-  home's lock is held, and holds it while it moves files.
+  home's `ultimate.lock` or `storage.lock` is held, and holds both while it moves files.
 - Kept: settings, secrets, logins, `project.json`, the lander checkout, worktrees and `ultimate/*` branches. It lists
   worktrees with uncommitted changes and branches not merged into the project's HEAD.
 - It journals its progress in `<home>/reset.json`: an interrupted reset finishes into the same backup when run again,
-  and `ultimate` refuses to start while the journal exists.
+  and `ultimate` refuses to start while the journal exists. `pnpm restore` uses the same journal
+  (`extensions/cloud/README.md`).
 
 `pnpm restore [name|key]` is its counterpart for cloud backups: it moves the same files into
 `~/.ultimate/backups/restore-<time>/<home>/` and installs a backup in their place (see "Cloud backups" in

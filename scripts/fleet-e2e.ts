@@ -135,7 +135,9 @@ async function main() {
       return { user, project, home: join(user, 'home'), machine: `e2e-${id}-${run}` }
     }
     const a = await machine('a')
-    const b = await machine('b')
+    const other = await machine('b')
+    // B checks out the project at A's path, as a restore requires: conversations and worktrees name absolute paths.
+    const b = { ...other, project: a.project }
 
     step(`A: a conversation with known entries, backed up as ${a.machine}`)
     let running = await start(a, cloud)
@@ -165,16 +167,28 @@ async function main() {
     )
     await stop(running.child)
 
+    const restore = async (project: string) => {
+      const child = spawn(process.execPath, [join(root, 'scripts/restore.ts'), name, '--yes'], {
+        cwd: project,
+        env: childEnv({ ...cloud, HOME: b.user, ULTIMATE_HOME: b.home, INIT_CWD: project }),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let output = ''
+      child.stdout.on('data', (chunk) => (output += chunk))
+      child.stderr.on('data', (chunk) => (output += chunk))
+      const [code] = (await once(child, 'exit')) as [number]
+      return { code, output }
+    }
+
+    step('B: pnpm restore refuses a checkout at another path')
+    const elsewhere = await restore(other.project)
+    check(
+      elsewhere.code !== 0 && elsewhere.output.includes(`was backed up from ${a.project}`),
+      `restore into another path:\n${elsewhere.output}`,
+    )
+
     step('B: pnpm restore into a fresh home')
-    const restore = spawn(process.execPath, [join(root, 'scripts/restore.ts'), name, '--yes'], {
-      cwd: b.project,
-      env: childEnv({ ...cloud, HOME: b.user, ULTIMATE_HOME: b.home, INIT_CWD: b.project }),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let restoreOutput = ''
-    restore.stdout.on('data', (chunk) => (restoreOutput += chunk))
-    restore.stderr.on('data', (chunk) => (restoreOutput += chunk))
-    const [code] = (await once(restore, 'exit')) as [number]
+    const { code, output: restoreOutput } = await restore(b.project)
     check(code === 0, `pnpm restore failed:\n${restoreOutput}`)
     check(
       restoreOutput.includes(`Installed backup ${firstId}`),

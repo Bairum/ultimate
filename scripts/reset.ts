@@ -11,6 +11,7 @@ import { readJson, writeJson } from '../lib/json-file.ts'
 import { machineRoot } from '../lib/machine.ts'
 import { acquireLock, readOwner } from '../server/lock.ts'
 import { projectHome } from '../server/project.ts'
+import type { BackupFile } from '../extensions/cloud/backup.ts'
 
 /**
  * Files that go: the state, the call trace and states parked by earlier versions, each with its `-wal` and `-shm` (also
@@ -19,12 +20,23 @@ import { projectHome } from '../server/project.ts'
  */
 export const MOVES =
   /^((state|trace|state\.stale-.+)\.sqlite(-wal|-shm)?|conversations\.json|previews\.json|supervisor\.log)$/
-/** The reset in progress, written before the first file moves: a rerun finishes it into the same backup. */
-const JOURNAL = 'reset.json'
+/**
+ * The reset or restore in progress, written before the first file moves: a rerun finishes it into the same backup.
+ * While it exists no Ultimate opens the home (`server/harness.ts`).
+ */
+export const JOURNAL = 'reset.json'
 
-interface Journal {
+export interface Journal {
   backup: string
+  /** A restore's: the downloaded database in the home, installed last, and the `cloud-backup.json` it gets. */
+  restore?: { database: string; record: BackupFile }
 }
+
+export const readJournal = (home: string) =>
+  readJson<Journal | undefined>(join(home, JOURNAL), undefined)
+
+/** The locks a running Ultimate holds: the supervisor's, and storage's, which a standalone `server/main.ts` takes. */
+const LOCKS = ['ultimate.lock', 'storage.lock']
 
 export interface Plan {
   home: string
@@ -39,7 +51,9 @@ export interface Plan {
 
 /** What a reset of `home` moves now. `apply` asks again under the home's lock. */
 async function inventory(home: string) {
-  const journal = await readJson<Journal | undefined>(join(home, JOURNAL), undefined)
+  const journal = await readJournal(home)
+  if (journal?.restore)
+    throw new Error(`A restore into ${home} was interrupted; finish it with pnpm restore first`)
   return { journal, moves: await movable(home) }
 }
 
@@ -64,15 +78,17 @@ export async function plan(home: string, backups: string, now = new Date()): Pro
   }
 }
 
-/** The Ultimate that holds `home`'s lock; a sidecar a crashed process left is no owner. */
+/** The Ultimate that holds one of `home`'s locks; a sidecar a crashed process left is no owner. */
 export async function holder(home: string) {
-  const lock = join(home, 'ultimate.lock')
-  const running = await readOwner(lock)
-  if (!running) return {}
-  // Taking the lock fails only while its owner lives: that is the answer, not an error.
-  const probe = await acquireLock(lock, { pid: process.pid }).catch(() => undefined)
-  if (!probe) return { running }
-  await probe.close()
+  for (const name of LOCKS) {
+    const lock = join(home, name)
+    const running = await readOwner(lock)
+    if (!running) continue
+    // Taking the lock fails only while its owner lives: that is the answer, not an error.
+    const probe = await acquireLock(lock, { pid: process.pid }).catch(() => undefined)
+    if (!probe) return { running }
+    await probe.close()
+  }
   return {}
 }
 
@@ -84,12 +100,29 @@ export const refusal = (owner: { pid: number; port?: number }, command = 'pnpm r
       `or Ctrl+C the terminal running it, then run ${command} again.`,
   )
 
-/** Hold `home`'s lock, so Ultimate cannot start meanwhile; refuses while it runs. Close the returned lock. */
+/**
+ * Hold `home`'s locks, the supervisor's and storage's, so no Ultimate starts or opens the state meanwhile; refuses
+ * while one runs. Close the returned lock.
+ */
 export async function lockHome(home: string, command?: string) {
-  const path = join(home, 'ultimate.lock')
-  return acquireLock(path, { pid: process.pid }).catch(async () => {
-    throw refusal((await readOwner(path)) ?? { pid: 0 }, command)
-  })
+  const held: Awaited<ReturnType<typeof acquireLock>>[] = []
+  const close = async () => {
+    for (const lock of held.toReversed()) await lock.close()
+  }
+  try {
+    for (const name of LOCKS) {
+      const path = join(home, name)
+      held.push(
+        await acquireLock(path, { pid: process.pid }).catch(async () => {
+          throw refusal((await readOwner(path)) ?? { pid: 0 }, command)
+        }),
+      )
+    }
+  } catch (error) {
+    await close()
+    throw error
+  }
+  return { close }
 }
 
 /** Move `names` from `home` into `backup`, never overwriting a file already there. */

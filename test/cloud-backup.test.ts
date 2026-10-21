@@ -1,15 +1,17 @@
 // Cloud backups and `pnpm restore` against an in-memory Worker (`cloud-stub.ts`): the parent rule, force, and the
 // restore that installs a backup as a home's state.
 import { existsSync } from 'node:fs'
-import { readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import { backUp, backupPath, classify, Conflict, readBackup } from '../extensions/cloud/backup.ts'
 import { BackupEvent } from '../extensions/cloud/refs.ts'
+import { uploadSnapshot } from '../extensions/cloud/snapshot.ts'
 import { git } from '../lib/git.ts'
+import { prepareHarness } from '../server/harness.ts'
 import { acquireLock } from '../server/lock.ts'
-import { findProject, restore } from '../scripts/restore.ts'
+import { findProject, main, restore } from '../scripts/restore.ts'
 import { cloudStub } from './cloud-stub.ts'
 import { eventHost, fauxServer, post, temp } from './helpers.ts'
 
@@ -73,7 +75,7 @@ it('commits backups with their parent, refuses a stale one with the Worker’s s
     key,
     id: first.id,
     home: b.home,
-    projectRoot: b.projectRoot,
+    projectRoot: a.projectRoot,
     backups: await temp(),
   })
   expect(notes(b.home)).toEqual(['from a'])
@@ -131,7 +133,7 @@ it('restores into a home: moves the old state aside, installs the backup and rec
     key: other,
     id: done.id,
     home: target.home,
-    projectRoot: target.projectRoot,
+    projectRoot: source.projectRoot,
     backups,
     now: new Date('2026-10-21T10:00:00Z'),
   })
@@ -142,36 +144,180 @@ it('restores into a home: moves the old state aside, installs the backup and rec
   expect(notes(target.home)).toEqual(['kept history'])
   expect(notes(result.backup)).toEqual(['old state'])
   // Settings like project.json stay; the download leaves nothing behind.
-  expect(
-    (await readdir(target.home)).filter((name) => !name.startsWith('ultimate.lock')).toSorted(),
-  ).toEqual(['cloud-backup.json', 'project.json', 'state.sqlite'])
+  expect((await readdir(target.home)).filter((name) => !name.includes('.lock')).toSorted()).toEqual(
+    ['cloud-backup.json', 'project.json', 'state.sqlite'],
+  )
   expect(await readBackup(target.home, other)).toEqual({ key: other, parent: done.id, last: done })
 })
 
-it('refuses to restore while Ultimate holds the home, and moves nothing', async () => {
+it.each(['ultimate.lock', 'storage.lock'])(
+  'refuses to restore while Ultimate holds the home’s %s, and moves nothing',
+  async (name) => {
+    const source = await machine(['a'])
+    const other = own()
+    const done = await back(source, 'desk', { key: other })
+    const target = await machine(['running'])
+    // A supervisor holds ultimate.lock; a standalone server/main.ts holds only storage.lock.
+    const lock = await acquireLock(join(target.home, name), { pid: process.pid, port: 4747 })
+    try {
+      await expect(
+        restore({
+          ...cloud,
+          key: other,
+          id: done.id,
+          home: target.home,
+          projectRoot: source.projectRoot,
+          backups: await temp(),
+        }),
+      ).rejects.toThrow(`Ultimate is running here (pid ${process.pid}`)
+      expect(notes(target.home)).toEqual(['running'])
+      expect((await readdir(target.home)).filter((file) => file.startsWith('snapshot-'))).toEqual(
+        [],
+      )
+    } finally {
+      await lock.close()
+    }
+  },
+)
+
+it('refuses a backup taken of a checkout at another path, before writing anything', async () => {
   const source = await machine(['a'])
   const other = own()
   const done = await back(source, 'desk', { key: other })
-  const target = await machine(['running'])
-  const lock = await acquireLock(join(target.home, 'ultimate.lock'), {
-    pid: process.pid,
-    port: 4747,
-  })
+  const target = await machine(['mine'])
+  await expect(
+    restore({
+      ...cloud,
+      key: other,
+      id: done.id,
+      home: target.home,
+      projectRoot: target.projectRoot,
+      backups: await temp(),
+    }),
+  ).rejects.toThrow(
+    `app was backed up from ${source.projectRoot}; restore it into a checkout at that path (paths in conversations and worktrees are absolute)`,
+  )
+  expect(notes(target.home)).toEqual(['mine'])
+  expect((await readdir(target.home)).filter((file) => !file.includes('.lock'))).toEqual([
+    'state.sqlite',
+  ])
+})
+
+/** A checkout of `project` with a commit, as `pnpm restore` needs to read its identity. */
+async function checkout(project: string) {
+  const at = await machine([])
+  await git(at.projectRoot, 'remote', 'add', 'origin', `https://${project}.git`)
+  await git(
+    at.projectRoot,
+    '-c',
+    'user.name=T',
+    '-c',
+    'user.email=t@example.com',
+    'commit',
+    '-q',
+    '--allow-empty',
+    '-m',
+    'root',
+  )
+  return at
+}
+/** Run `pnpm restore args` as user `user` against the stub, returning what it printed. */
+async function cli(user: string, home: string, ...args: string[]) {
+  const printed: string[] = []
+  const log = vi.spyOn(console, 'log').mockImplementation((line: string) => printed.push(line))
+  vi.stubEnv('HOME', user)
+  vi.stubEnv('ULTIMATE_HOME', home)
+  vi.stubEnv('ULTIMATE_CLOUD_URL', cloud.url)
+  vi.stubEnv('ULTIMATE_CLOUD_TOKEN', cloud.token)
+  vi.stubEnv('ULTIMATE_CLOUD_SNAPSHOT_KEY', cloud.secret)
   try {
-    await expect(
-      restore({
-        ...cloud,
-        key: other,
-        id: done.id,
-        home: target.home,
-        projectRoot: target.projectRoot,
-        backups: await temp(),
-      }),
-    ).rejects.toThrow('Ultimate is running here (pid')
-    expect(notes(target.home)).toEqual(['running'])
+    await main(args)
+    return printed.join('\n')
   } finally {
-    await lock.close()
+    log.mockRestore()
+    vi.unstubAllEnvs()
   }
+}
+
+it('restores a named snapshot the register never listed, and warns that it lacks its path', async () => {
+  const other = own()
+  const source = await machine(['before the register'])
+  // Uploaded before the register and before manifests recorded the checkout's path.
+  const old = await uploadSnapshot({
+    ...cloud,
+    key: other,
+    machine: 'desk',
+    database: join(source.home, 'state.sqlite'),
+    repo: source.projectRoot,
+  })
+  expect(stub.register.projects.some((project) => project.key === other)).toBe(false)
+  const target = await checkout(other)
+  const printed = await cli(
+    await temp(),
+    target.home,
+    '--snapshot',
+    old.id,
+    '--dir',
+    target.projectRoot,
+    '--yes',
+  )
+  expect(printed).toContain(`Installed backup ${old.id}`)
+  expect(printed).toContain('Warning: this backup predates recorded paths')
+  expect(notes(target.home)).toEqual(['before the register'])
+  expect((await readBackup(target.home, other))?.parent).toBe(old.id)
+})
+
+it('leaves an interrupted restore journaled, keeps Ultimate out, and finishes it on a rerun', async () => {
+  const other = own()
+  const source = await checkout(other)
+  const done = await back(source, 'desk', { key: other })
+  // The target is the source checkout itself, with its own state, as on a machine restoring at the same path.
+  const home = await temp('ultimate-restore-home-')
+  const db = new DatabaseSync(join(home, 'state.sqlite'))
+  db.exec("CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('local')")
+  db.close()
+  await writeFile(join(home, 'conversations.json'), '[]')
+  const backups = await temp('ultimate-restore-backups-')
+  const now = new Date('2026-10-21T11:00:00Z')
+  const backup = join(backups, 'restore-2026-10-21T11-00-00-000Z', home.split('/').at(-1)!)
+  // A file already in the backup fails the second move, after conversations.json went.
+  await mkdir(backup, { recursive: true })
+  await writeFile(join(backup, 'state.sqlite'), 'in the way')
+  const options = {
+    ...cloud,
+    key: other,
+    id: done.id,
+    home,
+    projectRoot: source.projectRoot,
+    backups,
+    now,
+  }
+  await expect(restore(options)).rejects.toThrow('refusing to overwrite the backup')
+  expect(existsSync(join(home, 'reset.json'))).toBe(true)
+  expect(existsSync(join(backup, 'conversations.json'))).toBe(true)
+  expect(existsSync(join(home, `snapshot-${done.id}.sqlite`))).toBe(true)
+
+  // Nothing opens the half-moved home, and neither a fresh restore nor a reset starts over it.
+  const prepared = await prepareHarness({ ultimateRoot: home, userHome: home, home, faux: true })
+  await expect(prepared.open(false)).rejects.toThrow(
+    `A reset or restore of ${home} was interrupted; rerun pnpm reset or pnpm restore`,
+  )
+  await expect(restore(options)).rejects.toThrow('run pnpm restore again to finish it')
+
+  // The rerun finishes into the same backup, without the cloud.
+  await rm(join(backup, 'state.sqlite'))
+  const printed = await cli(await temp(), home, '--dir', source.projectRoot, '--yes')
+  expect(printed).toContain(`Installed backup ${done.id}`)
+  expect(printed).toContain(`The previous state is in ${backup}`)
+  expect(existsSync(join(home, 'reset.json'))).toBe(false)
+  expect(notes(home)).toEqual([])
+  expect(notes(backup)).toEqual(['local'])
+  expect((await readdir(home)).filter((file) => !file.includes('.lock')).toSorted()).toEqual([
+    'cloud-backup.json',
+    'state.sqlite',
+  ])
+  expect(await readBackup(home, other)).toEqual({ key: other, parent: done.id, last: done })
+  await (await prepared.open(false)).close()
 })
 
 it('finds a project in the register by name or key, and names the ones it knows otherwise', () => {

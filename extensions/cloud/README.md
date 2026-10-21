@@ -60,11 +60,18 @@ its machine and size, **Back up now** with the upload's progress, a refused back
 pnpm restore [name|key] [--snapshot <id>] [--dir <project dir>] [--yes] [--dry-run]
 ```
 
-It reads the checkout's key (`--dir`, else the current directory), finds the project in the register (by name or key,
-default the checkout's own), and refuses while Ultimate holds the home's lock. It downloads and verifies the backup
-(the latest unless `--snapshot`), moves the home's state into `~/.ultimate/backups/restore-<time>/<home>/`, installs
-the backup as `state.sqlite` and writes `cloud-backup.json` with it as the parent, so the next backup from here builds
-on it. It prints the backup folder and the `mv` that undoes it. `ULTIMATE_HOME` selects the home like `pnpm reset`.
+It reads the checkout's key (`--dir`, else the current directory) and finds the project in the register (by name or
+key, default the checkout's own); `--snapshot <id>` skips the register and restores that backup of the checkout's own
+project, so backups the register never listed still restore. It refuses while an Ultimate holds the home's
+`ultimate.lock` (the supervisor) or `storage.lock` (a standalone server), naming its pid, and holds both until done.
+It downloads and verifies the backup (the latest unless `--snapshot`); a backup records its checkout's path as the
+manifest's `root`, and one taken at another path is refused before anything is written, since conversations and
+worktrees name absolute paths (backups without `root` restore with a warning). Then it journals the restore in
+`<home>/reset.json`, moves the home's state into `~/.ultimate/backups/restore-<time>/<home>/`, installs the backup as
+`state.sqlite`, writes `cloud-backup.json` with it as the parent, so the next backup from here builds on it, and removes
+the journal. While the journal exists no Ultimate opens the home; `pnpm restore` again finishes the interrupted restore
+into the same backup folder from the download it kept. It prints the backup folder and the `mv` that undoes it.
+`ULTIMATE_HOME` selects the home like `pnpm reset`.
 
 **Join** (⌘K → **Join cloud fleet**, or **Join** on the setup row) asks for the cloud URL, machine name and both
 secrets, checks `GET /sync/register` with the token (401: "The cloud refused the token"; anything else but 200:
