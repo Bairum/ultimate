@@ -57,7 +57,10 @@ The incoming row shows it after its kind: a spinner and `assessing…`, then `ac
 `FYI · no action`, with the reason on hover and in the open card. `board.wake` renders nothing.
 
 Sending to `user` writes a message
-shown in @ultimate's transcript; it starts no run.
+shown in @ultimate's transcript; it starts no run. The message is @ultimate's answer: a direct `message` call to
+`user` returns `terminate`, so the run ends without a final answer that would restate it, when every call of that
+tool round does so. It does not while a reply-enabled message to @ultimate is still open, so that reply is still
+answered; codemode's nested calls never end the run.
 A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers that
 message: a user Reply with `re` (an answer card, or a typed Reply) marks only that message answered, in the reply's
 commit. Plain input, new posts and answers to other questions leave it open. The service's `dismiss` closes it as
@@ -108,7 +111,7 @@ The tool records the caller in the branch's `board.started` document, so later a
 by a subagent, a notify, a lander report or steering, ends with a final answer nobody receives. After each such run, a
 background `board.route` task (one per generation, from an `onYield` hook) sends that answer to the starter as a one-way
 board message from the branch, with the usual outgoing and incoming cards. It skips the answer when the run answered the
-starter's reply-enabled message (board.delivery replies to it), when the run itself called `message` to the starter, and when the answer is empty, failed or aborted. An answer whose last line is a question or a
+starter's reply-enabled message (board.delivery replies to it), when the run itself called `message` to the starter, when only the starter's own replies woke it (the starter already knows what it answered), and when the answer is empty, failed or aborted. An answer whose last line is a question or a
 numbered option asks for a decision and wakes the starter as a follow-up; any other answer is a note, which wakes nothing.
 An answer to the starter's one-way message is routed like any other: it gets no reply, and may carry a decision.
 This cannot loop: routing goes only from a branch to its starter, which existed before it, and a routed message is
