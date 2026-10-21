@@ -27,6 +27,8 @@ export function cloudStub(token = 'dev') {
       return json(401, { error: 'unauthorized' })
     const snapshot = /^\/sync\/snapshots\/([0-9a-f]{64}\/[^/]+\/[^/]+)$/.exec(url.pathname)
     if (snapshot && request.method === 'PUT') {
+      // Write-once, like the Worker.
+      if (objects.has(snapshot[1])) return json(409, { error: 'Snapshot object already exists' })
       objects.set(snapshot[1], new Uint8Array(await request.arrayBuffer()))
       return new Response(null, { status: 204 })
     }

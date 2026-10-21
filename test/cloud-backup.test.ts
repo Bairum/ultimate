@@ -191,6 +191,31 @@ it('adopts at most once: a 409 on the retry is final', async () => {
   expect((await readBackup(a.home, other))?.parent).toBe(first.id)
 })
 
+it('takes a 409 on a retried chunk upload as stored: objects are write-once', async () => {
+  const other = own()
+  const a = await machine(['x'])
+  // The first chunk PUT is stored, but its answer is lost as a 503; the retry finds it stored.
+  let lost = false
+  vi.useFakeTimers({ toFake: ['setTimeout'] })
+  const flaky = async (input: string | URL | Request, init?: RequestInit) => {
+    const response = await stub.fetch(input, init)
+    if (init?.method === 'PUT' && !lost) {
+      lost = true
+      return new Response('unavailable', { status: 503 })
+    }
+    return response
+  }
+  vi.stubGlobal('fetch', flaky)
+  try {
+    const done = back(a, 'desk', { key: other })
+    await vi.runAllTimersAsync()
+    expect((await done).id).toBe(stub.register.projects.find((p) => p.key === other)!.latest.id)
+  } finally {
+    vi.useRealTimers()
+    vi.stubGlobal('fetch', stub.fetch)
+  }
+})
+
 it('names an HTTP failure and keeps the parent', async () => {
   const a = await machine(['x'])
   const failing = cloudStub('other')

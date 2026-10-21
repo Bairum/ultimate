@@ -305,6 +305,8 @@ async function request(o: Remote, id: string, name: string, init: RequestInit) {
       return undefined
     })
     if (response?.ok) return response
+    // Objects are write-once: a retried PUT that finds its object stored means the first attempt landed.
+    if (response?.status === 409 && init.method === 'PUT' && attempt > 1) return response
     if (response && (response.status < 500 || attempt === 3))
       throw new Error(`Snapshot ${name} returned ${response.status}`)
     await response?.body?.cancel()
