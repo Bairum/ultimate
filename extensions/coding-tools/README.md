@@ -12,10 +12,10 @@ how to request a longer explicit timeout. Explicit timeouts retain Pi's ordinary
 
 A bash call with `interruptible: true` (waits and polls: CI checks, deploys, a file appearing) ends early when a steer
 is queued in its conversation: the tool watches the conversation's `pi.inbox` and cancels the command, which kills its
-process, then returns "Interrupted by a steering message after Ns. Last output: …" as an ordinary result, so the run
-goes on and the steer is placed at the next boundary instead of after the wait. Follow-ups never interrupt. A marked
-command that changes things (`git push|commit|merge`, `install`, `migrate`) is refused with a hint to split it, so a
-steer can never cut it mid-way.
+process, then returns the output so far followed by "[Interrupted by a steering message after Ns; …]" (last, so
+tail truncation keeps it) as an ordinary result, so the run goes on and the steer is placed at the next boundary
+instead of after the wait. Follow-ups never interrupt. A marked command that changes things (`git push|commit|merge`,
+an `install` or `migrate` word) is refused with a hint to split it, so a steer can never cut it mid-way.
 
 Pi's `prepare` hook only changes the command, cwd, and environment, not the timeout, so one wrapper injects the
 default and formats execution timeout errors.

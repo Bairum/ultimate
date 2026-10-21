@@ -27,12 +27,12 @@ afterAll(async () => {
 })
 
 /**
- * Run one bash call; once it has started, queue `input` (a steer or a follow-up) when given. Returns the call's
+ * Run one bash call; once its command has touched `$READY`, queue `input` (a steer or a follow-up) when given. Returns the call's
  * result text, the user messages in order, and how long the run took.
  */
 async function run(args: Record<string, unknown>, input?: 'steer' | 'followUp') {
   const started = join(directory, `started-${Math.random()}`)
-  const command = `touch '${started}'; ${String(args.command)}`
+  const command = `READY='${started}'; ${String(args.command)}`
   // Answer by the transcript, not a fixed list, so other model calls (titles, summaries) cannot shift it.
   const route: FauxResponseFactory = (transcript) => {
     server.host.faux!.appendResponses([route])
@@ -75,27 +75,37 @@ async function run(args: Record<string, unknown>, input?: 'steer' | 'followUp') 
 it('ends an interruptible call when a steer arrives, kills it, and lets the run go on', async () => {
   const pid = join(directory, 'pid')
   const { result, isError, users, ms } = await run(
-    { command: `echo $$ > '${pid}'; echo polling; sleep 30`, interruptible: true },
+    {
+      command: `echo $$ > '${pid}'; echo polling; touch "$READY"; sleep 30`,
+      interruptible: true,
+    },
     'steer',
   )
   expect(ms).toBeLessThan(15000)
   expect(isError).toBe(false)
-  expect(result).toContain('Interrupted by a steering message after')
-  expect(result).toContain('polling')
+  expect(result).toMatch(/polling(\\n)+\[Interrupted by a steering message after \d+s/)
   expect(users.at(-1)).toBe('a steer')
   const shell = Number(await readFile(pid, 'utf8'))
   expect(() => process.kill(shell, 0)).toThrow('ESRCH')
 })
 
+it('keeps the notice when the output fills the retained window', async () => {
+  const { result } = await run(
+    { command: 'seq 1 5000; touch "$READY"; sleep 30', interruptible: true },
+    'steer',
+  )
+  expect(result).toMatch(/5000(\\n)+\[Interrupted by a steering message after/)
+})
+
 it('lets an unmarked call finish when a steer arrives', async () => {
-  const { result } = await run({ command: 'sleep 1; echo finished' }, 'steer')
+  const { result } = await run({ command: 'touch "$READY"; sleep 1; echo finished' }, 'steer')
   expect(result).toContain('finished')
   expect(result).not.toContain('Interrupted')
 })
 
 it('lets an interruptible call finish when a follow-up arrives', async () => {
   const { result } = await run(
-    { command: 'sleep 1; echo finished', interruptible: true },
+    { command: 'touch "$READY"; sleep 1; echo finished', interruptible: true },
     'followUp',
   )
   expect(result).toContain('finished')
@@ -109,9 +119,22 @@ it('refuses an interruptible call that changes things', async () => {
     interruptible: true,
   })
   expect(isError).toBe(true)
-  expect(result).toContain('changes things (git push)')
+  expect(result).toContain('changes things (push)')
   expect(existsSync(marker)).toBe(false)
-  expect(changes('for i in 1 2; do gh pr checks 28; sleep 30; done')).toBeUndefined()
-  for (const command of ['git commit -m x', 'pnpm install', 'php artisan migrate', 'git merge x'])
+  for (const poll of [
+    'for i in 1 2; do gh pr checks 28; sleep 30; done',
+    'until git merge-base --is-ancestor abc origin/main; do sleep 20; git fetch; done',
+    'until [ -f /tmp/install-done ] || [ -f install.done ]; do sleep 10; done',
+    'git log --grep=commit; sleep 5',
+  ])
+    expect(changes(poll)).toBeUndefined()
+  for (const command of [
+    'git commit -m x',
+    'git \\\npush origin main',
+    'git -C repo push',
+    'pnpm install',
+    'php artisan migrate:fresh',
+    'sleep 5 && git merge x',
+  ])
     expect(changes(command)).toBeDefined()
 })

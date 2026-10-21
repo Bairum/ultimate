@@ -73,9 +73,15 @@ export function prepareBash(
 
 /** Why a command marked `interruptible` must not be cut mid-way, if it changes something; `undefined` when it only waits. */
 export function changes(command: string) {
+  // Bash joins backslash-newline continuations before it runs a line.
+  const joined = command.replaceAll('\\\n', ' ')
+  const end = '(?=$|[\\s;&|)])'
   return (
-    /\bgit\b[^;&|\n]*?\b(push|commit|merge)\b/.exec(command)?.[0] ??
-    /\b(install|migrate)\b/.exec(command)?.[0]
+    new RegExp(`\\bgit\\s+(?:-C\\s+\\S+\\s+|-\\S+\\s+)*(push|commit|merge)${end}`).exec(
+      joined,
+    )?.[1] ??
+    // A word of its own (npm install, composer install, artisan migrate:fresh), not part of a path or file name.
+    new RegExp(`(?:^|[\\s;&|(])(install|migrate)(?=$|[\\s;&|):])`).exec(joined)?.[1]
   )
 }
 
@@ -107,11 +113,12 @@ async function untilSteered(
     if (!steered || context.abortSignal?.aborted) throw error
     const retained = api.retainedOutput()
     const seconds = Math.round((performance.now() - started) / 1000)
+    // The notice goes last: long output keeps its tail, so a leading notice would be cut.
     return {
       output: [
         {
           type: 'text',
-          text: `Interrupted by a steering message after ${seconds}s. Last output:\n${retained.text || '(none)'}`,
+          text: `${retained.text || '(no output)'}\n[Interrupted by a steering message after ${seconds}s; the output above is the last the command printed.]`,
         },
       ],
       structuredOutput: { output: retained.text, truncated: retained.truncated, exitCode: 130 },
