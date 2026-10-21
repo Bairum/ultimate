@@ -14,6 +14,26 @@ export const RootsDoc = docRef<{ roots: number[] }>('lineage.roots')
  */
 export const TallyDoc = docRef<{ tokens: number; since?: number }>('lineage.tally')
 
+/** One project memory: a durable decision, fact or lesson a future branch needs. */
+export type MemoryItem = {
+  kind: 'decision' | 'fact' | 'lesson'
+  /** One line, at most 120 characters: what the index shows. */
+  line: string
+  /** The full memory, at most 2000 characters. */
+  body: string
+  /** Where it was learned, `#<conversation>/<entry>`. */
+  source?: string
+  /** When it was last written, epoch ms. */
+  updated: number
+}
+/** `{ memories }` on a root: its project memory by slug (`^[a-z0-9][a-z0-9-]{0,47}$`), at most 150. */
+export const MemoryDoc = docRef<{ memories: Record<string, MemoryItem> }>('lineage.memory')
+/** `{ root, slug }` → `{ summary }`: delete memory `slug` of root `root`. User-only. */
+export const ForgetAction = actionRef<{ root: number; slug: string }, { summary: string }>(
+  'lineage',
+  'forget',
+)
+
 /**
  * `{ id, limit?, types? }` → the newest events of root `id` (landings, notes, branches, compactions), newest first:
  * `limit` defaults to 3, at most 20, only of `types` when given. Landings on a GitHub `origin` carry a compare link.

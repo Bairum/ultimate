@@ -5,8 +5,8 @@ document, tools and model-facing text, where agents and stored entries already u
 
 - **Branch** (action `branch`
   `{ from, at?, prompt, images?, isolated?, model?, thinkingLevel? }` → `{ id }`). It forks the source at `at` (default: its latest entry) as an
-  ownerless conversation in the project root, optionally isolated in its own worktree. There is no brief or reset:
-  it inherits the source context, then the durable `lineage.prompt` task submits the prompt and images as its first
+  ownerless conversation in the project root, optionally isolated in its own worktree. It inherits the source context
+  (or, from a root with memories, starts at a memory brief: see Project memory), then the durable `lineage.prompt` task submits the prompt and images as its first
   input. Doc `lineage.branch` holds `{ from, at, intent }`; `inputAt` is when the branch was asked for, not inherited
   activity. The fork happens before the tree root receives a model-visible `lineage.branched` node
   `{ branch, at, intent, images?, from? }`, so the branch does not inherit its own node. The node's model text is one
@@ -80,6 +80,34 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   anchor after the landing. Every lander note in a tally is placed in one transaction that checks for an open
   abstract and freezes it if there is one, with request-id deduplication, so no abstract can open between the check
   and the landing.
+- **Project memory** (`memory.ts`): doc `lineage.memory` on a root (`MemoryDoc` in `refs.ts`; forks start empty)
+  holds `{ memories: Record<slug, { kind: 'decision' | 'fact' | 'lesson', line, body, source?, updated }> }`: slugs
+  match `^[a-z0-9][a-z0-9-]{0,47}$`, `line` is one line of at most 120 characters, `body` at most 2000, `source` a
+  `#<conversation>/<entry>` breadcrumb, at most 150 memories (`MEMORY_LIMIT`). Every write goes through
+  `applyMemoryOps(tx, root, ops)` with ops `{op:'add', slug, kind, line, body, source?}`,
+  `{op:'update', slug, kind?, line?, body?, source?}` and `{op:'delete', slug}`: it validates the whole batch against
+  the memory as the batch leaves it first (fields, add of an existing slug, update or delete of a missing one, the cap
+  after the batch, a listed root) and throws before writing anything, so a batch is all or nothing; it returns a short
+  summary. Deferred tool `remember {root?, ops}` (named in @ultimate's definition) writes one batch, defaulting to the
+  caller's tree root. Tool `memory {read?, root?}`, offered to every agent, returns the index, one
+  `slug [kind] — line (updated YYYY-MM-DD)` per memory, or with `read` one memory's body and source. User-only
+  `forget {root, slug}` (`ForgetAction`) deletes one through the same path.
+  **Brief**: a branch forked from a root that has memories does not start from the tally. Its fork gets a
+  `pi.reset` (`head: 'self'`, `data.lineage.brief`) right after the fork point, before its prompt, whose model text is
+  `<project_memory root="#R">` with the index, the root's last 10 landings (`<sha7> <feature: title> (#conv)`) and
+  where to read the full tally; the branch's model context starts there, the inherited tally stays in storage.
+  `lineage.branch` records `brief: true`, the prompt section says so, and `lineage.seen.tally` starts at the root's tip
+  at the fork, so catch-up reports only what came after. A root without memories branches as before, and a fork of
+  another branch keeps that branch's context.
+  **Landings**: reactor `lineage/memorize` turns each `workspaces.landed` event of a tree (not from the root itself)
+  into one background `lineage.memorize` task in the root, when a summary model runs (`summaryModelStatus()`); the
+  root's `lineage.memorized` `{ submissions }` keeps it to one per submission. The task memoizes its input (the
+  landing note's text, the submitter's abstract, frozen into the landing or still open, and every memory in full) and
+  the summary model's answer, then asks for JSON `{"ops": [...]}` under rules that default to no ops, prefer updating
+  to near-duplicates, delete or rewrite memories a landing removes or replaces, and merge at the cap. Code fences are
+  tolerated; adds and updates take the landing's `#<submitter>/<at>` as source. The ops commit with the task's
+  completion, so a resumed task applies them once; an unparsable answer or a refused batch writes nothing and leaves
+  a notice. The landing itself never fails on it.
 - **Go back** (`rewind.ts`, `rewind.tsx`): the message action **Go back to here** on any stored message of a non-root
   conversation (standing agents included) opens a confirm dialog fed by `rewindPreview {conversation, at}`: steps set
   aside; the files the set-aside path touched (files of its commits, a merge's against its first parent, and paths
@@ -125,7 +153,7 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   commits the `lineage.note` (`source: 'main'`), seen baselines and input atomically, with the note before the input
   in transcript and context. Tallies take no inputs and get no resume catch-up.
 - **Prompt**: roots and subagents get no lineage section. Branches are told their origin and intent, tree root and
-  inherited tally contents, and how to follow `#conversation/entry` breadcrumbs with `ultimate.entries(id)` and
+  inherited tally contents (or, with a brief, the memory index and where the full tally is), and how to follow `#conversation/entry` breadcrumbs with `ultimate.entries(id)` and
   `ultimate.search()`. Other top-level conversations get their own id and lookup guidance. No list of roots changes
   the prompt cache.
 - **Compaction**: deferred tool `compact_tally` `{ root, instructions? }` → `{ taskId }` starts the harness's

@@ -43,7 +43,16 @@ import { Started, Subagents } from '../subagents/api.ts'
 
 /** The fields of a Board message the landed-branch check reads. */
 type BoardRow = { from: unknown; reply: boolean; state: string }
-import { CompactAction, RecentAction, TallyDoc } from './refs.ts'
+import { CompactAction, ForgetAction, RecentAction, TallyDoc } from './refs.ts'
+import {
+  applyMemoryOps,
+  Memorized,
+  Memory,
+  memoryBrief,
+  memoryIndex,
+  memorizeTask,
+  memoryText,
+} from './memory.ts'
 import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
 import { rewindActions, rewindTask } from './rewind.ts'
 import type { Tree } from './catchup.ts'
@@ -82,9 +91,9 @@ export const Tally = defineDoc<TallyState>({
   initial: () => ({ abstracts: {}, tokens: 0 }),
 })
 
-export const docs = [Roots, Branch, Tally, Seen]
-/** Going back sets a conversation's path aside: only the user decides that. */
-export const userActions = ['rewind']
+export const docs = [Roots, Branch, Tally, Seen, Memory]
+/** Going back sets a conversation's path aside, and forgetting drops a memory: only the user decides those. */
+export const userActions = ['rewind', 'forget']
 
 const ASK_TOKENS = 8192
 
@@ -782,7 +791,14 @@ async function forkBranch(
     throw new Error(`Entry ${at} is not in conversation #${from}`)
   // Table reads precede the transaction's first table write, the fork.
   const root = await climb(tx, await tx.conversation(from), roots)
-  const tally = root === undefined ? undefined : await inheritedTally(tx, from, at, root)
+  // A branch of a root with memories starts from their brief instead of the tally; a fork of another branch keeps that
+  // branch's context.
+  const brief = root !== undefined && root === from ? await memoryBrief(tx, root) : undefined
+  const tally = brief
+    ? brief.tip
+    : root === undefined
+      ? undefined
+      : await inheritedTally(tx, from, at, root)
   let caller: string | undefined
   if (input.by !== undefined) {
     const standing = host.doc('ultimate.standing-agents')
@@ -806,7 +822,20 @@ async function forkBranch(
   if (main) await seedSeen(tx, fork.id, main, Date.now())
   // The branch knows its tally as far as its context reaches; its own prompt node, appended below, is no news to it.
   if (tally !== undefined) (await tx.doc(Seen, fork.id)).tally = tally
-  ;(await tx.doc(Branch, fork.id)).branch = { from, at, intent: prompt }
+  ;(await tx.doc(Branch, fork.id)).branch = {
+    from,
+    at,
+    intent: prompt,
+    ...(brief ? { brief: true } : {}),
+  }
+  // The reset starts the branch's model context here, before its prompt: the tally it forked stays in storage.
+  if (brief)
+    await tx.appendEntry(fork.id, {
+      kind: 'pi.reset',
+      head: 'self',
+      data: { lineage: { brief: true } },
+      model: [{ role: 'user', content: brief.text, timestamp: Date.now() }],
+    })
   // Until the summary names it, a branch is called by its intent, not by the first message it inherited.
   const intent = intentLine(prompt)
   const metadata = await tx.doc(host.metadata, fork.id)
@@ -990,6 +1019,8 @@ export async function lineageSection(
   const rooted = root === undefined ? '' : `\nRoot: #${root}.`
   const state = (await host.harness().snapshot(Branch, id, ctx))?.branch
   if (!state) return `You are #${id}.${rooted}\n${ZOOM}`
+  if (state.brief)
+    return `You are #${id}, branched from #${state.from} at entry ${state.at} for: ${state.intent}${rooted}\nYour context starts with your project's memory index and recent landings, kept in root #${root}: read a memory in full with \`memory {read: slug}\`, and the full tally (every branch, abstract and landing, with #<conversation>/<entry> breadcrumbs) with codemode \`ultimate.entries(${root})\`.\n${ZOOM}`
   return `You are #${id}, branched from #${state.from} at entry ${state.at} for: ${state.intent}${rooted}\nYour context starts with the tally of your tree, kept in its root: one intent line per branch, the latest abstract of each, and every landing, with #<conversation>/<entry> breadcrumbs to read in full with codemode \`ultimate.entries(id)\`.\n${ZOOM}`
 }
 
@@ -1222,6 +1253,16 @@ export const actions = {
     }, context)
     return { roots }
   },
+  /** `{root, slug}`: delete one memory of root `root`. User-only. */
+  forget: implementAction(ForgetAction, async (args, { host }) => {
+    const { root, slug } = (args ?? {}) as { root?: unknown; slug?: unknown }
+    if (typeof root !== 'number' || !Number.isSafeInteger(root) || root < 1)
+      throw new Error('root must be a positive integer')
+    const summary = await host
+      .harness()
+      .commit((tx) => applyMemoryOps(tx, root, [{ op: 'delete', slug }]), context)
+    return { summary }
+  }),
 }
 
 /** The tally `id` catches up on: its tree root's, once that root is a tally. */
@@ -1241,6 +1282,14 @@ async function refuseTally(tx: Tx, id: ConversationId) {
 }
 
 export default function lineageExtension(host: ExtensionHost) {
+  /** The listed root whose memory a tool call reads or writes: `root` when given, else the caller's tree root. */
+  const memoryRoot = async (caller: ConversationId, root: number | undefined, ctx: Context) => {
+    const id = root ?? (await rootOf(host, caller, ctx))
+    if (id === undefined) throw new Error(`#${caller} is in no tree; name a root`)
+    if (!(await rootsOf(host, ctx)).includes(id as ConversationId))
+      throw new Error(`#${id} is not a listed root`)
+    return id
+  }
   // Core, always on; resolved where it is called, declared here so the catalogue lists it.
   host.need(WorkspacesApi)
   host.implement(LineageApi, {
@@ -1295,11 +1344,42 @@ export default function lineageExtension(host: ExtensionHost) {
       { conversationId: root, ownership: { kind: 'conversation' }, background: true },
     )
   })
+  const Memorize = memorizeTask(
+    host,
+    async (tx, root, from) => (await tx.doc(Tally, root)).abstracts[String(from)]?.text,
+  )
+  // Every landing in a tree distils its root's memory once, in a background task of the root; without a summary model
+  // the memory stays as @ultimate wrote it.
+  host.react('memorize', [SubmissionLanded], async (tx, { data: landing }) => {
+    const from = landing.conversationId
+    const roots = (await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots
+    const root = await climb(tx, await tx.conversation(from as ConversationId), roots)
+    if (root === undefined || root === from) return
+    // Read here, before the transaction's first write; a reactor retry reads it again.
+    const model = (await conversations.summaryModelStatus()).model
+    if (!model) return
+    const memorized = await tx.doc(Memorized, root)
+    if (memorized.submissions.includes(landing.submission)) return
+    memorized.submissions.push(landing.submission)
+    if (memorized.submissions.length > 100) memorized.submissions.splice(0, 1)
+    await tx.createTask(
+      Memorize,
+      {
+        root,
+        submission: landing.submission,
+        from,
+        at: landing.at,
+        note: landingNote(landing).text,
+        model,
+      },
+      { conversationId: root, ownership: { kind: 'conversation' }, background: true },
+    )
+  })
   watchSeen(host, context)
   watchTally(host, context)
   return defineExtension({
     name: 'lineage',
-    tasks: [Notify, Prompt, LandingNote, ConcludeLanded, rewindTask(host)],
+    tasks: [Notify, Prompt, LandingNote, ConcludeLanded, Memorize, rewindTask(host)],
     sections: [section('lineage', (input, ctx) => lineageSection(host, input.conversationId, ctx))],
     hooks: [
       hook(GenerationTask, {
@@ -1511,6 +1591,53 @@ export default function lineageExtension(host: ExtensionHost) {
             tally.since = entry.id
           }, ctx)
           return { output: [{ type: 'text', text: `Seeded the tally in #${root}.` }] }
+        },
+      }),
+      defineTool({
+        name: 'memory',
+        description:
+          "Read your project's memory, kept in your tree's root: without `read`, the index (one line per memory); with `read: slug`, that memory in full with its source. `root` reads another root's.",
+        parameters: Type.Object({
+          read: Type.Optional(Type.String({ minLength: 1 })),
+          root: Type.Optional(Type.Integer({ minimum: 1 })),
+        }),
+        async execute({ read, root }, api, ctx) {
+          const id = await memoryRoot(api.conversationId, root, ctx)
+          const { memories } = (await host
+            .harness()
+            .snapshot(Memory, id as ConversationId, ctx)) ?? { memories: {} }
+          if (read !== undefined) {
+            const item = Object.hasOwn(memories, read) ? memories[read] : undefined
+            if (!item) throw new Error(`#${id} has no memory ${read}`)
+            return { output: [{ type: 'text', text: memoryText(read, item) }] }
+          }
+          const index = memoryIndex(memories)
+          return {
+            output: [
+              {
+                type: 'text',
+                text: index.length
+                  ? `#${id}'s memory (${index.length}):\n${index.join('\n')}`
+                  : `#${id} has no memories yet.`,
+              },
+            ],
+          }
+        },
+      }),
+      defineTool({
+        name: 'remember',
+        deferred: true,
+        description:
+          "Change a root's project memory in one atomic batch: ops are {op:'add', slug, kind: 'decision'|'fact'|'lesson', line, body, source?}, {op:'update', slug, kind?, line?, body?, source?} and {op:'delete', slug}. Slugs are kebab-case, lines one line of at most 120 characters, bodies at most 2000, source `#<conversation>/<entry>`; at most 150 memories. Any invalid op refuses the whole batch. `root` defaults to your tree's root.",
+        parameters: Type.Object({
+          root: Type.Optional(Type.Integer({ minimum: 1 })),
+          ops: Type.Array(Type.Object({}, { additionalProperties: true }), { minItems: 1 }),
+        }),
+        // Not replay-safe (the default): an interrupted call is never rerun, so a batch commits at most once.
+        async execute({ root, ops }, api, ctx) {
+          const id = await memoryRoot(api.conversationId, root, ctx)
+          const summary = await api.commit((tx) => applyMemoryOps(tx, id, ops), ctx)
+          return { output: [{ type: 'text', text: summary }] }
         },
       }),
     ],

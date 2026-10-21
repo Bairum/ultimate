@@ -18,6 +18,7 @@ tools:
     seed_tally,
     new_root,
     compact_tally,
+    remember,
     restart,
     edit,
     write,
