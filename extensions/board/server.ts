@@ -699,15 +699,18 @@ function route(host: ExtensionHost) {
               : [],
           )
           let since = Number.POSITIVE_INFINITY
+          let replies = 0
           for (const entryId of answered) {
             const entry = await tx.entry(entryId)
             // board.delivery returns the answer to the starter's reply-enabled message; a one-way one gets none.
             const data = entry?.data as { from?: unknown; reply?: unknown } | undefined
             if (entry?.kind === 'board.message' && data?.from === by && data.reply === true)
               return undefined
+            if (entry?.kind === 'board.reply' && data?.from === by) replies++
             since = Math.min(since, entry?.model?.[0]?.timestamp ?? since)
           }
-          if (!answered.length) return undefined
+          // A run woken only by the starter's own replies reacts to what the starter already knows.
+          if (!answered.length || replies === answered.length) return undefined
           const message = (await tx.entry(answer))?.model?.[0]
           if (
             message?.role !== 'assistant' ||
@@ -1361,7 +1364,25 @@ export default function board(host: ExtensionHost) {
               await send(host, api.conversationId, input, ctx, api.taskId, api.callId),
               ctx,
             ))
-          return { output: [{ type: 'text', text: `Message ${id} sent.` }] }
+          if (input.to !== 'user')
+            return { output: [{ type: 'text', text: `Message ${id} sent.` }] }
+          // The message is @ultimate's answer: the run ends here instead of restating it, unless a reply is owed.
+          const owed = await host
+            .harness()
+            .commit(
+              async (tx) =>
+                (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.some(
+                  (m) =>
+                    m.to === api.conversationId &&
+                    m.reply &&
+                    (m.state === 'sent' || m.state === 'delivered'),
+                ),
+              ctx,
+            )
+          return {
+            output: [{ type: 'text', text: `Message ${id} sent.` }],
+            ...(owed ? {} : { control: { terminate: true as const } }),
+          }
         },
       }),
     ],

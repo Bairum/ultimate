@@ -114,8 +114,8 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   the summary model's answer, then asks for JSON `{"ops": [...]}` under rules that default to no ops, prefer updating
   to near-duplicates, delete or rewrite memories a landing removes or replaces, and merge at the cap. The whole answer
   must be that object, at most inside one enclosing code fence: prose, an array or extra keys refuse it; adds and
-  updates take the landing's `#<submitter>/<at>` as source. The ops commit with the task's completion, so a resumed task applies them once; an unparsable answer or a refused batch writes nothing and leaves
-  a notice. The landing itself never fails on it.
+  updates take the landing's `#<submitter>/<at>` as source. The ops commit with the task's completion, so a resumed task applies them once. An unparsable answer or a refused batch writes nothing and is asked once
+  more with the refused answer and the reason appended (a memo of its own); when that is refused too, it leaves a notice. The landing itself never fails on it.
 - **Go back** (`rewind.ts`, `rewind.tsx`): the message action **Go back to here** on any stored message of a non-root
   conversation (standing agents included) opens a confirm dialog fed by `rewindPreview {conversation, at}`: steps set
   aside; the files the set-aside path touched (files of its commits, a merge's against its first parent, and paths

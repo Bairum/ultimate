@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { defineWebExtension, useToolDuration, useUltimate } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import { AutomationsPanel } from './panel.tsx'
+import { ScheduledSection } from './sidebar.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 
@@ -73,6 +74,7 @@ function AutomationCall({ call }: { call: ToolCallView }) {
 
 export default defineWebExtension({
   tools: { automation: AutomationCall },
+  slots: { 'sidebar.top': [{ component: ScheduledSection, order: -10 }] },
   panels: [
     {
       id: 'automations',

@@ -10,6 +10,7 @@ import {
   errorMessage,
   ParkedRuns,
   Provided,
+  Slot,
   useDocOf,
   useNow,
   useStore,
@@ -522,6 +523,8 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
             {agents.map((conversation) => tree(conversation))}
           </div>
         )}
+        {/* What watches or runs in the background, from optional extensions; each section brings its own rule. */}
+        <Slot name="sidebar.top" />
         {rootRows.map((root) => tree(root))}
         {listed
           .filter(

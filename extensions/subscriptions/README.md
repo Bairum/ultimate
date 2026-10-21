@@ -1,0 +1,23 @@
+Supervised background scripts that wake subscribed conversations when they print `FIRE`. An agent writes and repairs each script; model tokens are used for setup and recovery, not for waiting. Enabled by default as an optional extension; requires core `subagents` and `board`.
+
+## Agent and tool
+
+`subscription create {ask, title?, once?, secrets?, subscribers?}` creates `S<n>` and a normal, ownerless child using `agents/subscription.md`. The caller is subscribed automatically. The child writes and briefly tests its executable, then calls `subscription start {id}`. `once` defaults to true.
+
+Other operations: `list`; `subscribe` / `unsubscribe {id, to?}` (`#id` or `@name`, default caller); `start`, `stop`, `delete {id}`; `log {id, lines?}` (default 50, maximum 2000); `escalate {id, reason}`. Delete stops the process and removes the record, keeping files and the conversation. Tool memo and transactional receipts deduplicate mutations on replay.
+
+## Files and lifecycle
+
+Files live in `~/.ultimate/subscriptions/<project>/S<n>/`: executable `run`, persistent `state/` (passed as `$SUBSCRIPTION_STATE`), and append-only `output.log`, trimmed to about 2000 lines / 256 KiB. `<project>` is `basename(host.home)`, the stable state-home name, not the caller's worktree. Named secrets are read from the Secrets store only for `secrets` names and passed in the process environment; values are never included in the subscription record.
+
+Stdout `FIRE <text>` wakes each subscriber with a `subscriptions.fired` input; text can be JSON. Stderr and other stdout are progress. A one-shot becomes done in its first FIRE transaction, then stops; a crash before termination cannot re-arm it. Its pid remains available to stop/delete until the group is gone, and its eventual exit records metadata and an event without reporting a failure. A one-shot exiting without a fire, or any recurring-script exit, becomes investigating and wakes only its own agent with `subscriptions.failed` and the last 50 log lines. The agent repairs and restarts, or escalates after two unsuccessful recovery attempts. Escalation sets failed, messages @ultimate from that agent, and wakes subscribers with `subscriptions.escalated`. There is no idle watchdog.
+
+The supervisor keeps process handles in a reload-stable resource. Every spawn starts a shell waiting for a go line on stdin. The supervisor synchronously writes `pid` before sending go and closing stdin; EOF before go exits without running the script. The shell uses exec to preserve the pid and process group. Stop, restart, delete, facet reload/disable, release, and shutdown share process-group cleanup: SIGTERM, up to three seconds of grace, then SIGKILL. The pid file is removed only after the group is gone. On open it sweeps every `S<n>/pid`, including deleted subscriptions, then restarts enabled running subscriptions. Script state must tolerate restart. The session document `ultimate.subscriptions` stores explicit lifecycle states and lifetime fire counts. Lifecycle events (`subscriptions.started`, `.fired`, `.exited`, `.escalated`) and state changes commit together. Root-owned durable delivery tasks are created in those same transactions; Pi's atomic `submit` request-id dedupe prevents duplicate inputs per subscriber/event.
+
+## Browser API
+
+Actions in `refs.ts` match the tool: create → subscription; list → subscriptions with computed `alive`; subscribe/unsubscribe/start/stop/escalate → subscription; log → `{text}`; delete → `{id}`. `script {id}` → `{path, text}` reads the executable for display (UI only, no tool operation). Create and default subscriber operations require the caller's `conversationId`. Read the session state through `list`. `list`, `log` and `script` are poll actions.
+
+## UI
+
+The Subscriptions surface (⌘K "Open Subscriptions") lists every subscription with a status dot: purple writing, green running, yellow investigating, red failed, grey stopped or done. Selecting one shows its agent's conversation on top, which you can talk to in order to refine it, and the script below: `run` path, pid, uptime, fires, the live output tail with `FIRE` lines marked, the script source, and Start/Stop. It polls every 2 s while on screen. A status-line chip counts subscriptions coloured by the worst state and opens the surface; it hides when there are none. Transcript cards render `subscriptions.fired`, `.failed`, `.escalated` and `.writing` inputs, and the `subscription` tool has its own card.

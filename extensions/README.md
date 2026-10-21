@@ -288,6 +288,7 @@ title bar the host shows above every surface.
 | Slot                   | Where                                                                                          |
 | ---------------------- | ---------------------------------------------------------------------------------------------- |
 | `sidebar`              | Left column (`<Sidebar />`); it disappears while nothing is in it                              |
+| `sidebar.top`          | Agent sidebar, after the Agents group and before the roots: background work such as watches    |
 | `titlebar.left`        | Title bar above every surface, after the project name; monospace, one line                     |
 | `titlebar.right`       | Title bar, right, before the palette button                                                    |
 | `header.right`         | Right side of the header, before the panel toggle (`<Header>`)                                 |
