@@ -94,11 +94,13 @@ it('sends the questions demo to the Board and extracts the two decisions', async
     'Which layout should we use?',
   ])
   const view = await ultimate.viewState(context)
+  // Messaging the user ends the turn without a final answer restating the message.
+  expect(view.value.entries.at(-1)?.kind).toBe('pi.tool-result')
   expect(
     view.value.entries.findLast((entry) => entry.model?.[0]?.role === 'assistant')?.model?.[0],
   ).toMatchObject({
     role: 'assistant',
-    content: [{ type: 'text', text: 'Sent.' }],
+    content: [{ type: 'toolCall', name: 'message' }],
   })
   view.dispose()
   const reply = await post(server, '/api/extensions/questions/actions/answer', {
