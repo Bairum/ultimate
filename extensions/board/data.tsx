@@ -158,6 +158,7 @@ export function chatQuiet(
   board: Readonly<BoardData> | null | undefined,
 ): boolean | 'hidden' {
   if (hiddenKinds.has(entry.kind)) return 'hidden'
+  if (landed(entry)) return false
   if (backgroundKinds.has(entry.kind)) return true
   if (entry.kind === 'board.message' || entry.kind === 'board.reply')
     return (entry.data as { from?: unknown } | undefined)?.from !== 'user'
@@ -177,6 +178,16 @@ export function chatQuiet(
 
 const idOf = (value: unknown): (number | 'remote')[] =>
   typeof value === 'number' || value === 'remote' ? [value] : []
+
+/**
+ * Whether an entry says work landed: the lander's landing note, or its report of a landing. Landings are news you wait
+ * for, so they stay in the chat and split background around them; a failed report stays background.
+ */
+function landed(entry: EntryRecord) {
+  const data = entry.data as { source?: unknown; outcome?: { outcome?: unknown } } | undefined
+  if (entry.kind === 'lineage.note') return data?.source === 'lander'
+  return entry.kind === 'workspaces.lander-report' && data?.outcome?.outcome === 'landed'
+}
 
 /** Who a background row is with: the conversations it came from or went to, `lander` for the lander. */
 export function counterparts(

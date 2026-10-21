@@ -198,6 +198,17 @@ describe("background in @ultimate's chat", () => {
     expect(chatQuiet(row('board.wake'), board)).toBe('hidden')
   })
 
+  it('keeps landings in the chat, and a report of a failed landing in the background', () => {
+    expect(chatQuiet(row('lineage.note', { from: 4, source: 'lander' }), board)).toBe(false)
+    expect(
+      chatQuiet(row('workspaces.lander-report', { outcome: { outcome: 'landed' } }), board),
+    ).toBe(false)
+    expect(
+      chatQuiet(row('workspaces.lander-report', { outcome: { outcome: 'failed' } }), board),
+    ).toBe(true)
+    expect(chatQuiet(row('lineage.note', { from: 4, source: 'main' }), board)).toBe(true)
+  })
+
   it('takes in branches and messages to agents, but not a message to you or an answer to you', () => {
     const branch = { id: 'b', name: 'branch', arguments: {} }
     const toAgent = { id: 'tell', name: 'message', arguments: { to: '#5' } }
