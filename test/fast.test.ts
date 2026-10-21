@@ -4,10 +4,12 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
 import type { Api, Model, ProviderStreams, SimpleStreamOptions } from '@earendil-works/pi-ai'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
-import type { JsonObject } from '@earendil-works/pi-durable'
+import type { GenerationHooks, HookApi, JsonObject } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
 import type { ActionContext } from '../server/actions.ts'
-import { actions, fastModels, fastStream } from '../extensions/fast/server.ts'
+import fastExtension, { actions, fastModels, fastStream } from '../extensions/fast/server.ts'
+import { Metadata } from '../server/metadata.ts'
+import { context as hookContext } from '../server/harness.ts'
 import { temp } from './helpers.ts'
 
 /** An OpenAI Responses stand-in that records the payload each request would send. */
@@ -100,4 +102,68 @@ it('toggles a model in the user settings and refuses while the project decides',
     'project settings',
   )
   expect(await actions.status(null, ctx)).toEqual({ models: [], project: true })
+})
+
+it('runs a definition with fast: true on the priority tier, and only on OpenAI models', async () => {
+  const userHome = await temp()
+  const repo = await temp()
+  await mkdir(join(repo, 'agents'), { recursive: true })
+  const agent = (name: string, extra = '') =>
+    writeFile(
+      join(repo, 'agents', `${name}.md`),
+      `---\nname: ${name}\ndescription: ${name}\n${extra}---\n\nWork.\n`,
+    )
+  await agent('worker', 'fast: true\n')
+  await agent('lander')
+  const providers = new Map<string, { streamSimple: ReturnType<typeof fastStream> }>()
+  const resources = new Map<string, unknown>()
+  const labels: Record<number, string> = { 1: 'worker', 2: 'lander', 3: 'worker' }
+  const extension = fastExtension({
+    userHome,
+    ultimateRoot: repo,
+    projectRoot: repo,
+    projectSettings: async () => ({}),
+    notice: () => {},
+    onClose: () => {},
+    resource: (key: string, create: () => unknown) => {
+      if (!resources.has(key)) resources.set(key, create())
+      return resources.get(key)
+    },
+    metadata: Metadata,
+    modelRuntime: {
+      registerProvider: (name: string, overlay: { streamSimple: ReturnType<typeof fastStream> }) =>
+        providers.set(name, overlay),
+      registry: { getAll: () => [] },
+    },
+  } as unknown as Parameters<typeof fastExtension>[0])
+  const hooks = extension.hooks![0].handlers as GenerationHooks
+  const request = async (conversationId: number) => {
+    const api = {
+      conversationId,
+      snapshot: async (token: unknown) =>
+        token === Metadata
+          ? { label: labels[conversationId] }
+          : { sessionId: `s${conversationId}` },
+    } as unknown as HookApi
+    await hooks.beforeRequest({ messages: [] }, api, hookContext)
+  }
+  for (const id of [1, 2, 3]) await request(id)
+  // The overlay's stream decides by session; swap in a recorder for the real Responses API.
+  const { payloads, api } = recordingApi()
+  const sessions = resources.get('fast.sessions') as Set<string>
+  const stream = fastStream(async () => new Set(), api, sessions)
+  await stream(model('gpt-6.1-sol'), context, { sessionId: 's1' }).result()
+  await stream(model('gpt-6.1-sol'), context, { sessionId: 's2' }).result()
+  await stream(model('gpt-6.1-sol', 'openai'), context, { sessionId: 's3' }).result()
+  expect(payloads).toEqual([
+    { model: 'gpt-6.1-sol', service_tier: 'priority' },
+    { model: 'gpt-6.1-sol' },
+    { model: 'gpt-6.1-sol', service_tier: 'priority' },
+  ])
+  // Only the OpenAI providers carry the overlay: a worker on another provider never reaches fastStream.
+  expect([...providers.keys()].toSorted()).toEqual(['openai', 'openai-codex'])
+  // A definition that drops fast takes its sessions off the priority tier at the next request.
+  await agent('worker')
+  await request(1)
+  expect(sessions.has('s1')).toBe(false)
 })

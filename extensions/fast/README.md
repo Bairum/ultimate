@@ -12,6 +12,12 @@ selected. It adds that model to the user's `fastModels` or removes it (the `set`
 request to the model, not just the shown conversation. While a project's settings set the list, the toggle is disabled
 and the project file decides.
 
+A definition can ask for it instead: `fast: true` in its frontmatter (the shipped `worker` sets it) puts the requests
+of conversations running that definition on the priority tier, whatever `fastModels` says, so the lander on the same
+model stays standard. It applies only on `openai-codex/` and `openai/` models; on any other provider it is ignored. A
+`beforeRequest` hook reads the conversation's label (its definition's name) and the definition's current `fast`, and
+marks the request's provider session for the overlay; an overlay file may set `fast` too.
+
 Every request to a listed model goes fast: conversations, subagents whose definition names it (workers, the lander,
 reviewers), and summaries. The list is read at each request, so a change applies to the next one. Only `openai-codex/`
 and `openai/` models are accepted; any other entry turns fast mode off with a notice.

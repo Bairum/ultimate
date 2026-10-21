@@ -225,6 +225,7 @@ interface Draft {
   resident: boolean
   isolate: 'none' | 'worktree'
   onFailure: 'diagnose' | 'fix' | null
+  fast: boolean
   instructions: string
 }
 const draftOf = (definition?: Shown['definition'], name = ''): Draft => ({
@@ -236,6 +237,7 @@ const draftOf = (definition?: Shown['definition'], name = ''): Draft => ({
   resident: definition?.resident ?? false,
   isolate: definition?.isolate ?? 'none',
   onFailure: definition?.onFailure ?? null,
+  fast: definition?.fast ?? false,
   instructions: definition?.instructions ?? '',
 })
 
@@ -315,6 +317,7 @@ function Form({
           resident: draft.resident,
           ...(draft.isolate === 'worktree' ? { isolate: 'worktree' } : {}),
           ...(draft.onFailure ? { onFailure: draft.onFailure } : {}),
+          ...(draft.fast ? { fast: true } : {}),
         },
         instructions: draft.instructions,
       })

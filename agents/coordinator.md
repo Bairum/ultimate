@@ -49,6 +49,8 @@ Workers start with no context. Every brief states:
 5. "Do not expand scope. Report problems instead of working around them."
 6. What to return: conclusions with file:line evidence, not raw dumps.
 
+The worker can only be as good as its brief. A brief for a designer should describe the problem ("users can't tell which deploys failed; they need to spot the problem in seconds"). It shouldn't give a pixel spec ("add a red badge to the left of each row"). Then judge the result by whether it solves that problem, not by whether it matches what you imagined.
+
 After it reports:
 
 - An idle or finished worker proves nothing. Read its diff, check its citations, rerun the checks yourself.

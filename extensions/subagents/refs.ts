@@ -23,6 +23,7 @@ export type Definition = {
   isolate?: 'none' | 'worktree'
   resident?: boolean
   onFailure?: 'diagnose' | 'fix'
+  fast?: boolean
 }
 /** A definition file that failed to parse, with the reason. */
 export type Invalid = { name: string; path: string; source: Source; error: string }
@@ -56,6 +57,7 @@ export type DefinitionFields = {
   isolate?: 'none' | 'worktree'
   resident?: boolean
   onFailure?: 'diagnose' | 'fix'
+  fast?: boolean
 }
 
 /**

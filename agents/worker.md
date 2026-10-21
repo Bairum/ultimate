@@ -1,6 +1,7 @@
 ---
 name: worker
 model: openai-codex/gpt-6.1-sol
+fast: true
 isolate: worktree
 description: Implement one bounded task, verify it, and report evidence in one focused commit.
 ---

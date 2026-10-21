@@ -23,6 +23,8 @@ export interface AgentDefinition {
   resident?: boolean
   /** What the lander does when a submission fails: explain it, or fix it and land. Only the lander reads it. */
   onFailure?: 'diagnose' | 'fix'
+  /** Requests on an `openai-codex/` or `openai/` model go on the priority (fast) tier; the fast extension reads it. */
+  fast?: boolean
   /** Overlay files whose settings, `addTools` and body discovery merged into this definition, in order. */
   overlays?: string[]
 }
@@ -91,15 +93,16 @@ const fields = new Set([
   'isolate',
   'resident',
   'onFailure',
+  'fast',
 ])
 
 /** The settings a definition or overlay may set: every field but `name`, `tools` and `addTools`. */
 function parseSettings(frontmatter: Record<string, unknown>): Partial<
-  Pick<AgentDefinition, 'description' | 'thinking' | 'isolate' | 'resident' | 'onFailure'>
+  Pick<AgentDefinition, 'description' | 'thinking' | 'isolate' | 'resident' | 'onFailure' | 'fast'>
 > & {
   model?: string
 } {
-  const { description, model, thinking, isolate, resident, onFailure } = frontmatter
+  const { description, model, thinking, isolate, resident, onFailure, fast } = frontmatter
   if (description !== undefined && (typeof description !== 'string' || !description.trim()))
     throw new Error('description is required')
   if (thinking !== undefined && (typeof thinking !== 'string' || !Object.hasOwn(levels, thinking)))
@@ -112,6 +115,7 @@ function parseSettings(frontmatter: Record<string, unknown>): Partial<
     throw new Error('onFailure must be diagnose or fix')
   if (resident !== undefined && typeof resident !== 'boolean')
     throw new Error('resident must be a boolean')
+  if (fast !== undefined && typeof fast !== 'boolean') throw new Error('fast must be a boolean')
   return {
     ...(description !== undefined ? { description: description.trim() } : {}),
     ...(model !== undefined ? { model } : {}),
@@ -119,6 +123,7 @@ function parseSettings(frontmatter: Record<string, unknown>): Partial<
     ...(isolate ? { isolate: isolate } : {}),
     ...(resident !== undefined ? { resident: resident } : {}),
     ...(onFailure ? { onFailure: onFailure } : {}),
+    ...(fast !== undefined ? { fast } : {}),
   }
 }
 
@@ -291,6 +296,7 @@ export interface DefinitionFields {
   isolate?: 'none' | 'worktree'
   resident?: boolean
   onFailure?: 'diagnose' | 'fix'
+  fast?: boolean
 }
 
 /** A YAML scalar: plain when it reads back as the same string, else JSON, which YAML reads as a quoted string. */
@@ -323,6 +329,7 @@ export function serializeDefinition(
     ...(frontmatter.isolate === 'worktree' ? ['isolate: worktree'] : []),
     ...(frontmatter.resident !== undefined ? [`resident: ${frontmatter.resident}`] : []),
     ...(frontmatter.onFailure ? [`onFailure: ${frontmatter.onFailure}`] : []),
+    ...(frontmatter.fast ? ['fast: true'] : []),
   ]
   return `---\n${lines.join('\n')}\n---\n\n${instructions.trim()}\n`
 }

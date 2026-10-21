@@ -1825,7 +1825,7 @@ describe('subagents', () => {
     // An empty addTools marks a settings-only overlay.
     await writeFile(
       join(cwd, '.ultimate/agents/scout.md'),
-      '---\nname: scout\nmodel: anthropic/claude-opus-4-8\nthinking: high\nonFailure: fix\ndescription: Our scout\naddTools: []\n---\n',
+      '---\nname: scout\nmodel: anthropic/claude-opus-4-8\nthinking: high\nonFailure: fix\nfast: true\ndescription: Our scout\naddTools: []\n---\n',
     )
     new ProjectTrustStore(join(home, '.ultimate')).set(cwd, true)
     const found = await discoverAgents(repo, cwd, home, modelRuntime)
@@ -1835,6 +1835,7 @@ describe('subagents', () => {
       model: { provider: 'anthropic', modelId: 'claude-opus-4-8' },
       thinking: 'high',
       onFailure: 'fix',
+      fast: true,
       tools: ['read', 'bash'],
       instructions: 'Original instructions',
     })
