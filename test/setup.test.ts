@@ -57,15 +57,12 @@ it('never falls back from a summary model the settings name', async () => {
   })
 })
 
-it('falls back to the cheapest real model when no known-good one is available', () => {
-  expect(
-    fallbackModel([
-      model('faux', 'free', 0),
-      model('a', 'big', 9),
-      model('b', 'small', 1),
-    ] as never),
-  ).toMatchObject({ provider: 'b', id: 'small' })
-  expect(fallbackModel([model('faux', 'free', 0)] as never)).toBeUndefined()
+it('falls back to the cheapest model when no known-good one is available', () => {
+  expect(fallbackModel([model('a', 'big', 9), model('b', 'small', 1)] as never)).toMatchObject({
+    provider: 'b',
+    id: 'small',
+  })
+  expect(fallbackModel([])).toBeUndefined()
 })
 
 async function checkHost(options: { logins: string[]; secrets?: string[] }) {

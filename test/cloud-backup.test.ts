@@ -1,3 +1,4 @@
+import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 // Cloud backups and `pnpm restore` against an in-memory Worker (`cloud-stub.ts`): the parent rule, force, and the
 // restore that installs a backup as a home's state.
 import { existsSync } from 'node:fs'
@@ -419,7 +420,12 @@ it('leaves an interrupted restore journaled, keeps Ultimate out, and finishes it
   expect(existsSync(join(home, `snapshot-${done.id}.sqlite`))).toBe(true)
 
   // Nothing opens the half-moved home, and neither a fresh restore nor a reset starts over it.
-  const prepared = await prepareHarness({ ultimateRoot: home, userHome: home, home, faux: true })
+  const prepared = await prepareHarness({
+    ultimateRoot: home,
+    userHome: home,
+    home,
+    faux: fauxProvider(),
+  })
   await expect(prepared.open(false)).rejects.toThrow(
     `A reset or restore of ${home} was interrupted; rerun pnpm reset or pnpm restore`,
   )

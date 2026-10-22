@@ -14,7 +14,7 @@ Add `ULTIMATE_CLOUD_TOKEN` (the Worker's bearer token) and `ULTIMATE_CLOUD_SNAPS
 value on every machine) in the Secrets panel. `machine` defaults to the OS hostname. Project settings are never read: a
 repository cannot redirect the user's history to another server. Environment overrides take precedence, for
 process-scoped experiments: `ULTIMATE_CLOUD_URL`, `ULTIMATE_CLOUD_TOKEN`, `ULTIMATE_CLOUD_SNAPSHOT_KEY` and
-`ULTIMATE_CLOUD_MACHINE`. Faux hosts and preview instances stay silent unless `ULTIMATE_CLOUD_URL` is set explicitly;
+`ULTIMATE_CLOUD_MACHINE`. Preview instances stay silent unless `ULTIMATE_CLOUD_URL` is set explicitly;
 previews strip the cloud variables they inherit.
 
 A project is its GitHub repository (`lib/project-identity.ts`): the `origin` remote normalised to

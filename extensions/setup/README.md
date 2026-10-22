@@ -36,4 +36,4 @@ section, so the prompt stays cached. The check is cached for 30 seconds.
 ## Actions
 
 `check` returns every area as `{ area, status: 'warn' | 'info' | 'ok', summary, impact?, fix? }`, warnings first (a
-poll action). Faux only: `demo { issues }` shows a fixed set instead of the real check, `null` for the real one.
+poll action).

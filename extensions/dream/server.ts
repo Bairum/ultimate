@@ -7,8 +7,13 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { defineDoc, defineExtension, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { Tx } from '@earendil-works/pi-durable'
+import {
+  defineDoc,
+  defineExtension,
+  defineTask,
+  ROOT_CONVERSATION_ID,
+} from '@earendil-works/pi-durable'
+import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ConversationSummary } from '../../shared/protocol.ts'
@@ -63,12 +68,17 @@ const positive = (value: unknown, name: string) => {
   return value as number
 }
 
-/** The open session `id`; an ended one refuses further changes. */
-async function open(tx: Tx, id: unknown) {
+async function find(tx: Tx, id: unknown) {
   const found = (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions.find(
     (item) => item.id === id,
   )
   if (!found) throw new Error(`No dream session ${String(id)}`)
+  return found
+}
+
+/** The open session `id`; an ended one refuses further changes. */
+async function open(tx: Tx, id: unknown) {
+  const found = await find(tx, id)
   if (found.endedAt !== undefined) throw new Error(`Dream session ${found.id} has ended`)
   return found
 }
@@ -124,11 +134,15 @@ export async function reportPass(tx: Tx, args: unknown, caller: number | undefin
   return found
 }
 
-/** File the journal of `session` once; a repeated call returns the journal already filed, unchanged. */
+/**
+ * File the journal of `session` once; `filed` says this call filed it. A repeated call, even after the session ended,
+ * returns the journal already filed, unchanged.
+ */
 export async function fileJournal(tx: Tx, args: unknown, now: number) {
   const input = fields(args)
-  const found = await open(tx, input.session)
-  if (found.journal) return found
+  const found = await find(tx, input.session)
+  if (found.journal) return { found, filed: false }
+  if (found.endedAt !== undefined) throw new Error(`Dream session ${found.id} has ended`)
   if (!Array.isArray(input.learned) || input.learned.length !== LEARNED_LINES)
     throw new Error(`learned must be ${LEARNED_LINES} lines`)
   const learned = input.learned.map((line, index) => text(line, `learned[${index}]`, LINE_CHARS))
@@ -159,7 +173,7 @@ export async function fileJournal(tx: Tx, args: unknown, now: number) {
   found.journal = { learned, text: body, at: now }
   found.proposals = proposals
   settle(found, now)
-  return found
+  return { found, filed: true }
 }
 
 /** @ultimate records the user's decision on one proposal; an approved one names its branch. */
@@ -241,6 +255,65 @@ export function toolStats(database: string, enabled: readonly string[]): ToolSta
   }
 }
 
+type Delivery = {
+  to: number
+  type: 'input' | 'write'
+  session: number
+  kind: 'dream.started' | 'dream.journal'
+  content: string
+}
+
+/**
+ * Submits one dream entry to @ultimate; created in the commit that records it, so a crash cannot lose it. The host's
+ * conversation handle, not the task runtime's, admits a passive write.
+ */
+const deliverTask = (host: Pick<ExtensionHost, 'harness'>) =>
+  defineTask<Delivery, { phase: 'submit' }, null>({
+    name: 'dream.deliver',
+    version: 1,
+    initial: () => ({ phase: 'submit' }),
+    phases: {
+      submit: async (task, runtime, ctx) => {
+        const { to, type, session, kind, content } = task.input
+        const requestId = `${kind}:${session}`
+        const data = { session }
+        const target = (await host.harness().conversation(to as ConversationId, ctx))!
+        if (type === 'input')
+          await target.submit(
+            { type: 'input', requestId, content, entry: { kind, data }, whenBusy: 'followUp' },
+            ctx,
+          )
+        else
+          await target.submit(
+            {
+              type: 'write',
+              requestId,
+              entry: { kind, data, model: [{ role: 'user', content, timestamp: Date.now() }] },
+            },
+            ctx,
+          )
+        await runtime.commit(
+          () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
+          ctx,
+        )
+      },
+    },
+    abort: (_task, runtime, ctx) =>
+      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+  })
+
+const deliver = (
+  host: Pick<ExtensionHost, 'harness'>,
+  tx: Tx,
+  to: number,
+  delivery: Omit<Delivery, 'to'>,
+) =>
+  tx.createTask(
+    deliverTask(host),
+    { to, ...delivery },
+    { conversationId: to as ConversationId, ownership: { kind: 'conversation' }, background: true },
+  )
+
 const ultimateOf = async (tx: Tx) => (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
 
 export const actions = {
@@ -266,17 +339,17 @@ export const actions = {
       throw new Error(
         `Wait for these to finish before dreaming: ${busy.map((item) => `#${item.id} ${item.title}`).join(', ')}`,
       )
-    const session = await host.harness().commit((tx) => startSession(tx, Date.now()), context)
-    await (await host.harness().conversation(ultimate, context))!.submit(
-      {
+    const session = await host.harness().commit(async (tx) => {
+      const id = await startSession(tx, Date.now())
+      await deliver(host, tx, ultimate, {
         type: 'input',
-        content: `The user started dream session ${session}. Follow "For @ultimate" in the clone's extensions/dream/DREAM.md: start the dream branch now.`,
-        entry: { kind: 'dream.started', data: { session } },
-        requestId: `dream:start:${session}`,
-        whenBusy: 'followUp',
-      },
-      context,
-    )
+        session: id,
+        kind: 'dream.started',
+        content: `The user started dream session ${id}. Follow "For @ultimate" in the clone's extensions/dream/DREAM.md: start the dream branch now.`,
+      })
+      return id
+    }, context)
+    host.harness().resume()
     return { session }
   }),
   end: implementAction(EndAction, async (args, { host }) =>
@@ -293,28 +366,23 @@ export const actions = {
     }, context),
   ),
   journal: implementAction(JournalAction, async (args, { host }) => {
-    const { found, ultimate } = await host.harness().commit(
-      async (tx) => ({
-        found: structuredClone(await fileJournal(tx, args, Date.now())),
-        ultimate: await ultimateOf(tx),
-      }),
-      context,
-    )
-    if (ultimate === undefined) throw new Error('@ultimate has no conversation yet')
-    // A passive write, once per session: @ultimate reads it with the dream branch's answer, which wakes it.
-    await (await host.harness().conversation(ultimate, context))!.submit(
-      {
-        type: 'write',
-        requestId: `dream:journal:${found.id}`,
-        entry: {
+    const result = await host.harness().commit(async (tx) => {
+      const { found, filed } = await fileJournal(tx, args, Date.now())
+      if (filed) {
+        const ultimate = await ultimateOf(tx)
+        if (ultimate === undefined) throw new Error('@ultimate has no conversation yet')
+        // A passive write: @ultimate reads it with the dream branch's answer, which wakes it.
+        await deliver(host, tx, ultimate, {
+          type: 'write',
+          session: found.id,
           kind: 'dream.journal',
-          data: { session: found.id },
-          model: [{ role: 'user', content: journalText(found), timestamp: Date.now() }],
-        },
-      },
-      context,
-    )
-    return { session: found.id, proposals: found.proposals.length }
+          content: journalText(found),
+        })
+      }
+      return { session: found.id, proposals: found.proposals.length }
+    }, context)
+    host.harness().resume()
+    return result
   }),
   decide: implementAction(DecideAction, async (args, { host }) =>
     host.harness().commit((tx) => decide(tx, args, Date.now()), context),
@@ -335,5 +403,5 @@ export default function dream(host: ExtensionHost) {
   host.react('landed', [SubmissionLanded], (tx, { data }) =>
     landed(tx, data.conversationId, data.sha, Date.now()),
   )
-  return defineExtension({ name: 'dream' })
+  return defineExtension({ name: 'dream', tasks: [deliverTask(host)] })
 }

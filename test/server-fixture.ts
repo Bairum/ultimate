@@ -1,3 +1,4 @@
+import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve as resolvePath } from 'node:path'
 import { afterEach, vi } from 'vitest'
@@ -25,9 +26,6 @@ export async function fixture(extra = false, sources?: Record<string, string>, e
   const ultimateRoot = join(directory, 'repo')
   await mkdir(join(ultimateRoot, 'extensions', 'prompt'), { recursive: true })
   await cp(resolvePath('extensions/coding-tools'), join(ultimateRoot, 'extensions/coding-tools'), {
-    recursive: true,
-  })
-  await cp(resolvePath('extensions/faux'), join(ultimateRoot, 'extensions/faux'), {
     recursive: true,
   })
   await mkdir(join(ultimateRoot, 'web'), { recursive: true })
@@ -89,7 +87,7 @@ export async function fixture(extra = false, sources?: Record<string, string>, e
     projectRoot: ultimateRoot,
     userHome: directory,
     home: join(directory, 'home'),
-    faux: true,
+    faux: fauxProvider(),
     port: 0,
   }
   const server = await createServer(options)

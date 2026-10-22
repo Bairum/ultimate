@@ -1,8 +1,22 @@
 import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
+import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
+import { createModels } from '@earendil-works/pi-ai/models'
+import {
+  configure,
+  createRegistry,
+  Harness,
+  MemoryStorage,
+  ROOT_CONVERSATION_ID,
+} from '@earendil-works/pi-durable'
+import type { JsonValue } from '@earendil-works/chord'
 import type { Tx } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
-import {
+import type { ActionContext } from '../server/actions.ts'
+import type { ExtensionHost } from '../server/extensions.ts'
+import { Standing } from '../extensions/subagents/api.ts'
+import dream, {
+  actions,
   busyElsewhere,
   decide,
   fileJournal,
@@ -13,7 +27,7 @@ import {
   startSession,
   toolStats,
 } from '../extensions/dream/server.ts'
-import { temp } from './helpers.ts'
+import { temp, until } from './helpers.ts'
 
 /** A transaction over plain documents, keyed by kind and conversation. */
 function fakeTx() {
@@ -44,7 +58,7 @@ const journal = {
       size: 'S',
       retire: 'sol-runs-fast',
     },
-    { id: 'drop-stale', pass: 'memory', title: 'Delete memory demo' },
+    { id: 'drop-stale', pass: 'memory', title: 'Delete memory demo', risk: 'none' },
   ],
 }
 
@@ -84,13 +98,14 @@ it('files the journal once, validating its three lines and proposal ids', async 
   await expect(
     fileJournal(tx, { ...journal, proposals: [journal.proposals[0], journal.proposals[0]] }, 2),
   ).rejects.toThrow('unique slug')
-  const found = await fileJournal(tx, journal, 2)
+  const { found, filed } = await fileJournal(tx, journal, 2)
+  expect(filed).toBe(true)
   expect(found.proposals.map((item) => [item.id, item.status, item.retire])).toEqual([
     ['fast-default', 'open', 'sol-runs-fast'],
     ['drop-stale', 'open', undefined],
   ])
   // A second filing (a retried action) keeps the first.
-  await fileJournal(tx, { ...journal, text: 'other' }, 3)
+  expect((await fileJournal(tx, { ...journal, text: 'other' }, 3)).filed).toBe(false)
   expect((await session(tx)).journal?.text).toBe(journal.text)
   expect(journalText(await session(tx))).toContain(
     '- fast-default [codify] (S): Default fast for Sol — retires memory sol-runs-fast once landed',
@@ -117,6 +132,60 @@ it('follows approved proposals to landing and ends the session when all are sett
     'has ended',
   )
   expect(await startSession(tx, 7)).toBe(2)
+})
+
+it('returns a journal with no proposals again after its session ended', async () => {
+  const tx = fakeTx()
+  await startSession(tx, 1)
+  await fileJournal(tx, { ...journal, proposals: [] }, 2)
+  expect((await session(tx)).endedAt).toBe(2)
+  expect((await fileJournal(tx, { ...journal, proposals: [] }, 3)).filed).toBe(false)
+})
+
+it('delivers the start and the journal to @ultimate once, through a real harness', async () => {
+  const storage = new MemoryStorage()
+  const registry = createRegistry()
+  const harness = await Harness.open(storage, { models: createModels(), registry }, context)
+  await harness.root(context)
+  const ultimate = await harness.commit(async (tx) => {
+    const created = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+    await configure(tx, created.id, {})
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = created.id
+    return created.id
+  }, context)
+  const host = {
+    harness: () => harness,
+    conversations: () => [],
+    need: () => ({ standing: async () => ultimate }),
+    react: () => {},
+  } as unknown as ExtensionHost
+  registry.install(dream(host))
+  const call = { host } as ActionContext
+  expect(await actions.start(null, call)).toEqual({ session: 1 })
+  const filing = JSON.parse(JSON.stringify(journal)) as JsonValue
+  expect(await actions.journal(filing, call)).toEqual({ session: 1, proposals: 2 })
+  expect(await actions.journal(filing, call)).toEqual({ session: 1, proposals: 2 })
+  // The input starts a run that cannot finish without a model, so the write is admitted but waits in the inbox.
+  const submitted = () =>
+    harness.commit(
+      async (tx) =>
+        (
+          await Promise.all(
+            ['dream.started:1', 'dream.journal:1'].map((id) =>
+              tx.submissionByRequest(ultimate, id),
+            ),
+          )
+        ).map((submission) => submission?.type),
+      context,
+    )
+  await until(async () => !(await submitted()).includes(undefined))
+  expect(await submitted()).toEqual(['input', 'write'])
+  const deliveries = await harness.commit(
+    (tx) => tx.scanTasks({ kind: 'dream.deliver' }, 10),
+    context,
+  )
+  expect(deliveries.items).toHaveLength(2)
+  await harness.close(context)
 })
 
 it('counts top-level conversations at work besides @ultimate', () => {

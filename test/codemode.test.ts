@@ -1,6 +1,10 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import {
+  fauxAssistantMessage,
+  fauxToolCall,
+  fauxProvider,
+} from '@earendil-works/pi-ai/providers/faux'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
@@ -41,7 +45,6 @@ async function fixture() {
   await cp(resolve('extensions/coding-tools'), join(ultimateRoot, 'extensions/coding-tools'), {
     recursive: true,
   })
-  await cp(resolve('extensions/faux'), join(ultimateRoot, 'extensions/faux'), { recursive: true })
   await copyApis(ultimateRoot)
   await mkdir(join(ultimateRoot, 'web'), { recursive: true })
   await linkDependencies(ultimateRoot)
@@ -64,7 +67,7 @@ async function fixture() {
     projectRoot: ultimateRoot,
     userHome: directory,
     home: join(directory, 'home'),
-    faux: true,
+    faux: fauxProvider(),
     port: 0,
   }
   const server = await createServer(options)
@@ -72,6 +75,8 @@ async function fixture() {
   expect(
     server.extensions.info().find((extension) => extension.name === 'codemode')?.server?.error,
   ).toBeUndefined()
+  // A file for scripts to read.
+  await writeFile(join(server.host.home, 'scratch.txt'), 'before\n')
   return { server, options }
 }
 it('keeps codemode guidance without repeating top-level tool schemas', async () => {
@@ -368,7 +373,7 @@ it('reserves trust and secret writes for the UI while allowing normal actions', 
   await cp(resolve('server/lock.ts'), join(options.ultimateRoot, 'server/lock.ts'))
   // Onboarding and secrets use the shared helpers in lib/.
   await cp(resolve('lib'), join(options.ultimateRoot, 'lib'), { recursive: true })
-  const probes = { onboarding: 'decide', secrets: 'set', faux: 'seedMemory' } as const
+  const probes = { onboarding: 'decide', secrets: 'set' } as const
   for (const [name, probe] of Object.entries(probes)) {
     await cp(resolve(`extensions/${name}`), join(options.ultimateRoot, `extensions/${name}`), {
       recursive: true,
@@ -388,10 +393,6 @@ it('reserves trust and secret writes for the UI while allowing normal actions', 
     const response = await post(server, `/api/extensions/${extension}/actions/${action}`, { args })
     expect(response.status).toBe(200)
   }
-  // seedMemory writes memory past @ultimate's check; lineage isn't loaded here, so only the refusal is checked.
-  const seed = await run(server, `return await ultimate.action('faux', 'seedMemory', {});`)
-  expect(seed.data.isError).toBe(true)
-  expect(seed.text).toContain('faux/seedMemory is a user-only action')
   const normal = await run(server, `return await ultimate.action('secrets', 'list');`)
   expect(normal.data.isError).not.toBe(true)
   expect(normal.data.details.value).toEqual([
@@ -427,7 +428,7 @@ it('logs ultimate helper calls and labels a one-call script by its call id, with
 
 it('composes read and bash with private nested results and final JSON details', async () => {
   const { server } = await fixture()
-  const path = join(server.host.home, 'demo.txt')
+  const path = join(server.host.home, 'scratch.txt')
   const result = await run(
     server,
     `const source = await tools.read({path:${JSON.stringify(path)}}); const shell = await tools.bash({command:'echo nested-private'}); text(source.trim()); return {length:shell.length};`,
@@ -676,7 +677,7 @@ it('aborts nested work without committing store writes', async () => {
     fauxAssistantMessage(
       [
         fauxToolCall('codemode', {
-          code: `await tools.read({path:${JSON.stringify(join(server.host.home, 'demo.txt'))}}); await tools.bash({command:'sleep 30'}); store('aborted', true);`,
+          code: `await tools.read({path:${JSON.stringify(join(server.host.home, 'scratch.txt'))}}); await tools.bash({command:'sleep 30'}); store('aborted', true);`,
         }),
       ],
       { stopReason: 'toolUse' },
@@ -876,7 +877,7 @@ it('recovers an unsafe interrupted script with its committed nested-call log', a
     fauxAssistantMessage(
       [
         fauxToolCall('codemode', {
-          code: `await tools.read({path:${JSON.stringify(join(server.host.home, 'demo.txt'))}}); await tools.bash({command:'sleep 30'}); store('finished', true);`,
+          code: `await tools.read({path:${JSON.stringify(join(server.host.home, 'scratch.txt'))}}); await tools.bash({command:'sleep 30'}); store('finished', true);`,
         }),
       ],
       { stopReason: 'toolUse' },

@@ -101,7 +101,7 @@ function InstanceCall({ call }: { call: ToolCallView }) {
       : undefined
   const title =
     action === 'start'
-      ? `start${call.args.faux === true ? ' · faux' : ''}${started ? ` · ${started.url}` : ''}`
+      ? `start${started ? ` · ${started.url}` : ''}`
       : `${action}${id ? ` ${id.slice(0, 8)}` : ''}`
   return (
     <Tool defaultOpen={action !== 'logs' || call.status === 'error'}>
@@ -308,8 +308,8 @@ function Switcher() {
         >
           {current ? (
             <>
-              <span className="size-1.5 rounded-full bg-brand" />#{current.conversationId}
-              {current.faux && ' · faux'} · {port(current.url)}
+              <span className="size-1.5 rounded-full bg-brand" />#{current.conversationId} ·{' '}
+              {port(current.url)}
             </>
           ) : (
             `${data.length} ${data.length === 1 ? 'preview' : 'previews'}`
@@ -342,7 +342,6 @@ function Switcher() {
               {title(preview) && <span className="text-muted-foreground"> {title(preview)}</span>}
             </span>
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-              {preview.faux && 'faux · '}
               {port(preview.url)}
             </span>
           </DropdownMenuItem>

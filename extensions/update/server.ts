@@ -25,7 +25,7 @@ import {
   summaryFor,
   withLock,
 } from './clone.ts'
-import { Applied, CheckAction, DemoAction, Refused, StateAction, UpdateAction } from './refs.ts'
+import { Applied, CheckAction, Refused, StateAction, UpdateAction } from './refs.ts'
 import type { UpdateResult, UpdateState } from './refs.ts'
 
 /** How often the clone is compared with origin locally; origin itself is fetched at most hourly (`FETCH_EVERY`). */
@@ -99,72 +99,6 @@ function tail(error: unknown) {
   return output ? output.split('\n').slice(-20).join('\n') : String(error)
 }
 
-/** What a faux host shows, by demo state; the default is a clone 5 commits behind. */
-export function demoState(root: string, state: string, now: number): UpdateState {
-  const commits = [
-    {
-      sha: '0eb16c0',
-      subject: 'feat(review): comment on diff lines and send them to an agent',
-    },
-    {
-      sha: 'fadd20a',
-      subject: 'feat(cloud): record backups and moves as durable events',
-    },
-    {
-      sha: 'ac9ee15',
-      subject: 'feat(coding-tools): record every commit made through bash',
-    },
-    {
-      sha: 'fa5dd27',
-      subject: 'perf(prompt): announce a new build in a note on the next input',
-    },
-    {
-      sha: '2b3770c',
-      subject: 'feat(questions): an Open questions panel and Dismiss',
-    },
-  ]
-  const base = {
-    root,
-    branch: 'main',
-    fetchedAt: now - 12 * 60_000,
-    install: false,
-    restart: false,
-  }
-  const layers = { core: true, bin: false, lockfile: true, live: true }
-  const compare = 'https://diffshub.com/HazAT/ultimate/compare/5ef0c6e...0eb16c0'
-  if (state === 'current') return { ...base, behind: 0, commits: [] }
-  if (state === 'refused')
-    return {
-      ...base,
-      behind: 5,
-      commits,
-      layers,
-      compare,
-      refused: 'The checkout has uncommitted changes',
-    }
-  if (state === 'updated')
-    return {
-      ...base,
-      behind: 0,
-      commits: [],
-      restart: true,
-      updated: {
-        ok: true,
-        from: '5ef0c6e',
-        to: '0eb16c0',
-        commits: 5,
-        layers: { core: true, bin: true, lockfile: true, live: true },
-        install: 'done',
-      },
-    }
-  const summary = [
-    'Review surface: comment on diff lines and send them to an agent',
-    'Backups and moves now show in the System stream',
-    'Open questions stay in a panel until you answer or dismiss them',
-  ]
-  return { ...base, behind: 5, commits, summary, layers, compare }
-}
-
 /** A preview started by another Ultimate's `instance` tool: it shares the clone and must never touch it. */
 const preview = () => Boolean(process.env.ULTIMATE_INSTANCE_OWNER)
 
@@ -183,8 +117,8 @@ export default function update(host: ExtensionHost) {
   host.need(ConversationsApi)
   host.want(PauseApi)
   const shared = state(host)
-  // Faux and previews never fetch: the demo stands in, and a preview must not race the host on the same clone.
-  if (host.faux || preview()) return defineExtension({ name: 'update' })
+  // A preview never fetches: it must not race the host on the same clone.
+  if (preview()) return defineExtension({ name: 'update' })
   const tick = () => {
     // Paused: no fetch starts until Play; the next tick after it catches up.
     if (host.want(PauseApi)?.paused()) return
@@ -229,7 +163,6 @@ type Shared = {
   installing: Promise<void> | undefined
   latest: UpdateState | undefined
   updated: (UpdateResult & { ok: true }) | undefined
-  demo: string | undefined
 }
 
 /** Shared across reloads: a reload installs the new facet before the old one closes, and only one tick may run. */
@@ -241,7 +174,6 @@ const state = (host: ExtensionHost) =>
     installing: undefined,
     latest: undefined,
     updated: undefined,
-    demo: undefined,
   }))
 
 /** The clone-wide lock: fetches, updates and installs of one clone never overlap across the Ultimates on it. */
@@ -396,25 +328,18 @@ async function apply(
   return result
 }
 
-export const userActions = ['update', 'demo']
+export const userActions = ['update']
 
 export const actions = {
-  /** The clone's update state from the last check; a faux host answers its demo. */
+  /** The clone's update state from the last check. */
   state: implementAction(StateAction, async (_args, { host }) => {
     const shared = state(host)
-    if (host.faux) return demoState(host.ultimateRoot, shared.demo ?? 'behind', Date.now())
     if (preview()) return previewState(host.ultimateRoot)
     if (!shared.latest) await refresh(host, false)
     return shared.latest!
   }),
   check: implementAction(CheckAction, async (_args, { host }) => {
     const shared = state(host)
-    if (host.faux) {
-      // The demo's check takes a moment, then finds the 5 commits, so previews show the spinner and the behind view.
-      await new Promise((resolve) => setTimeout(resolve, 1500))
-      if ((shared.demo ?? 'behind') === 'current') shared.demo = 'behind'
-      return demoState(host.ultimateRoot, shared.demo ?? 'behind', Date.now())
-    }
     if (preview()) return previewState(host.ultimateRoot)
     // A background tick may be mid-check without forcing: let it finish, then fetch now. A second click joins.
     await shared.ticking
@@ -426,11 +351,6 @@ export const actions = {
   }),
   update: implementAction(UpdateAction, async (_args, { host }): Promise<UpdateResult> => {
     const shared = state(host)
-    if (host.faux) {
-      shared.demo = (shared.demo ?? 'behind') === 'refused' ? 'refused' : 'updated'
-      const demo = demoState(host.ultimateRoot, shared.demo, Date.now())
-      return demo.updated ?? { ok: false, refused: demo.refused! }
-    }
     if (preview()) return { ok: false, refused: 'A preview never updates the clone it runs from' }
     // One update at a time: a second click joins the first.
     shared.updating ??= run(host).finally(() => {
@@ -439,13 +359,5 @@ export const actions = {
     const result = await shared.updating
     await refresh(host, false)
     return result
-  }),
-  demo: implementAction(DemoAction, (args, { host }) => {
-    if (!host.faux) throw new Error('demo runs only under faux')
-    const value = typeof args === 'object' && args && !Array.isArray(args) ? args.state : undefined
-    if (value !== 'behind' && value !== 'refused' && value !== 'updated' && value !== 'current')
-      throw new Error('state must be behind, refused, updated or current')
-    state(host).demo = value
-    return demoState(host.ultimateRoot, value, Date.now())
   }),
 }

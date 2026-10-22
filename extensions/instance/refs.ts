@@ -7,7 +7,6 @@ export type Preview = {
   url: string
   /** The conversation that started it. */
   conversationId: number
-  faux: boolean
   /** False once it exited or was stopped. */
   running: boolean
   /** Where the tailnet reaches it while it runs, when it publishes itself there. */
