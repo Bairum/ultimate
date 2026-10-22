@@ -43,16 +43,23 @@ export async function idleNote(
     conversations.push(...page.items)
     cursor = page.next
   } while (cursor)
-  const running = new Set<ConversationId>()
-  for (const conversation of conversations)
-    if ((await tx.doc(LiveDoc, conversation.id)).run) running.add(conversation.id)
   // Owned descendants keep their branch working even when its coordinator is between turns.
-  for (const conversation of conversations.toReversed())
-    if (running.has(conversation.id) && conversation.owner)
-      running.add(conversation.owner.conversationId)
+  const children = new Map<ConversationId, ConversationId[]>()
+  for (const conversation of conversations)
+    if (conversation.owner)
+      children.set(conversation.owner.conversationId, [
+        ...(children.get(conversation.owner.conversationId) ?? []),
+        conversation.id,
+      ])
+  const working = async (id: ConversationId): Promise<boolean> => {
+    if ((await tx.doc(LiveDoc, id)).run) return true
+    for (const child of children.get(id) ?? []) if (await working(child)) return true
+    return false
+  }
   const idle = []
+  // Branches are ownerless, so subagents are skipped before any document read: this runs before every @ultimate input.
   for (const conversation of conversations) {
-    if (excluded.has(conversation.id) || running.has(conversation.id)) continue
+    if (conversation.owner || excluded.has(conversation.id)) continue
     if (!(await tx.doc(Branch, conversation.id)).branch) continue
     const metadata = await tx.doc(host.metadata, conversation.id)
     const age =
@@ -61,7 +68,7 @@ export async function idleNote(
         metadata.inputAt ?? metadata.answerAt ?? now,
         metadata.answerAt ?? metadata.inputAt ?? now,
       )
-    if (age <= 2 * 60 * 60 * 1000) continue
+    if (age <= 2 * 60 * 60 * 1000 || (await working(conversation.id))) continue
     idle.push({
       id: conversation.id,
       title: metadata.title ?? 'Untitled',
