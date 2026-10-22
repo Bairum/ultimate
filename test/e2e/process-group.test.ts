@@ -94,6 +94,30 @@ it('reports a group it may not probe (EPERM) as not ended instead of throwing fr
   }
 })
 
+it('stops a group that once reported a survivor once nothing of it is left', async () => {
+  const directory = await temp('ultimate-process-group-')
+  const pidFile = join(directory, 'run.pid')
+  const childFile = join(directory, 'child')
+  const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+    throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' })
+  })
+  try {
+    const group = spawnGroup('/bin/sh', ['-c', `sleep 60 & echo $! > '${childFile}'`], {
+      pidFile,
+    })
+    expect(await group.ended).toBe(false)
+    kill.mockRestore()
+    // The survivor goes later on its own: the settled `ended` must not keep the group stuck.
+    process.kill(Number(await readFile(childFile, 'utf8')), 'SIGKILL')
+    await until(() => !groupAlive(group.child.pid))
+    await stopGroup(group.child.pid!, { pidFile, leader: group, grace: 50 })
+    expect(await readdir(directory)).toEqual(['child'])
+  } finally {
+    kill.mockRestore()
+    await removeTemp(directory)
+  }
+})
+
 it('never signals a pid file whose pid now names another process, or a group whose leader is gone', async () => {
   const directory = await temp('ultimate-process-group-')
   const stranger = spawn('sleep', ['60'], { detached: true, stdio: 'ignore' })

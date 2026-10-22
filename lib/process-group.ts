@@ -58,6 +58,16 @@ export function groupAlive(pid?: number) {
   }
 }
 
+/** Like `groupAlive`, but a member this process may not probe (EPERM) counts as alive. */
+function probe(pid: number) {
+  try {
+    return groupAlive(pid)
+  } catch {
+    // EPERM: a member of another user survived, so the group is still there.
+    return true
+  }
+}
+
 function send(pid: number, name: NodeJS.Signals) {
   try {
     process.kill(-pid, name)
@@ -187,8 +197,9 @@ export async function stopGroup(
       send(pid, 'SIGTERM')
       if ((await within(leader.ended, grace)) === undefined && unreaped()) send(pid, 'SIGKILL')
     }
-    // After a KILL the leader's exit drains the rest of the group, with its own grace.
-    if (!(await within(leader.ended, grace + 3500)))
+    // After a KILL the leader's exit drains the rest of the group, with its own grace. `ended` is settled once and
+    // for all, so a group that reported a survivor is probed again: once empty, it exited after all.
+    if (!(await within(leader.ended, grace + 3500)) && (unreaped() || probe(pid)))
       throw new Error(`Process group ${pid} did not exit`)
   } else {
     const recorded = pidFile && (await readPidFile(pidFile)) === pid
