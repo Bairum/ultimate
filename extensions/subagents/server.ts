@@ -102,9 +102,7 @@ function createReporter() {
       sourceEntry?: EntryId
       answer?: EntryId
     },
-    | { phase: 'deliver'; retryRequest?: string }
-    | { phase: 'retry'; retryRequest: string; until: number }
-    | { phase: 'report'; report?: string; answer?: EntryId },
+    { phase: 'deliver' } | { phase: 'report'; report?: string; answer?: EntryId },
     null
   >({
     name: 'ultimate.subagent-reporter',
@@ -114,20 +112,10 @@ function createReporter() {
         ? { phase: 'deliver' }
         : { phase: 'report', report: input.text, answer: input.answer },
     phases: {
-      retry: (task, runtime, context) =>
-        runtime.sleepUntil(
-          task.state.checkpoint.until,
-          { phase: 'deliver', retryRequest: task.state.checkpoint.retryRequest },
-          context,
-        ),
       deliver: async (task, runtime, context) => {
         try {
           const child = (await runtime.conversation(task.input.conversationId, context))!
-          const retryRequest = task.state.checkpoint.retryRequest
-          const content =
-            retryRequest !== undefined
-              ? 'Your previous run stopped with a provider error. Continue from where you left off; check what you already did and do not redo it.'
-              : task.input.text
+          const content = task.input.text
           const settled = await (
             await child.submit(
               {
@@ -145,7 +133,7 @@ function createReporter() {
                   },
                 },
                 whenBusy: task.input.steer ? 'steer' : 'followUp',
-                requestId: retryRequest ?? `subagent:${task.id}`,
+                requestId: `subagent:${task.id}`,
               },
               context,
             )
@@ -174,76 +162,14 @@ function createReporter() {
                 },
               }
             }
+            // Provider failures belong to the watchdog. Keep the failed action so recover()
+            // delivers the answer of a later watchdog-retry (or manual continuation).
             if (
               settled.status === 'unanswered' &&
-              (settled.reason === 'model_error' || settled.reason === 'no_model') &&
-              retryRequest === undefined
+              (settled.reason === 'model_error' || settled.reason === 'no_model')
             ) {
-              const failedEntry = settled.entry
-              if (failedEntry === undefined) throw new Error('Provider failure has no input entry')
-              let failureId: EntryId | TaskId | undefined
-              if (settled.reason === 'no_model') {
-                // IDs share one allocation order. Generation follows its placed inputs; choose
-                // their first no-model failure, not a newer run that may already have started.
-                let cursor: Cursor | undefined
-                do {
-                  const page = await tx.scanTasks(
-                    {
-                      conversationId: child.id,
-                      kind: GenerationTask.definition.name,
-                      order: 'ascending',
-                    },
-                    500,
-                    cursor,
-                  )
-                  const generation = page.items.find(
-                    (candidate) =>
-                      candidate.id > failedEntry &&
-                      candidate.state.status === 'terminal' &&
-                      candidate.state.outcome.status === 'failed' &&
-                      (candidate.state.outcome.error.detail as { reason?: string } | undefined)
-                        ?.reason === 'no_model',
-                  )
-                  if (generation) {
-                    failureId = generation.id
-                    break
-                  }
-                  cursor = page.next
-                } while (cursor)
-              }
-              let cursor: Cursor | undefined
-              while (settled.reason === 'model_error') {
-                const page = await tx.scanEntries(
-                  { conversationId: child.id, minEntryId: settled.entry, order: 'ascending' },
-                  500,
-                  cursor,
-                )
-                const failure = page.items.find(
-                  (entry) =>
-                    entry.kind === AssistantEntry.kind &&
-                    entry.model?.[0]?.role === 'assistant' &&
-                    entry.model[0].stopReason === 'error',
-                )
-                if (failure) {
-                  failureId = failure.id
-                  break
-                }
-                cursor = page.next
-                if (cursor === undefined) break
-              }
-              if (failureId === undefined) throw new Error('Provider failure has no run identity')
-              action.retryRequest =
-                settled.reason === 'no_model'
-                  ? `subagent-retry:${child.id}:no-model:${failureId}`
-                  : `subagent-retry:${child.id}:${failureId}`
-              return {
-                status: 'running',
-                checkpoint: {
-                  phase: 'retry',
-                  retryRequest: action.retryRequest,
-                  until: Date.now() + 20_000,
-                },
-              }
+              action.status = 'failed'
+              return { status: 'running', checkpoint: { phase: 'report' } }
             }
             if (settled.status === 'unanswered' && settled.reason !== 'aborted') {
               const failure = settled.reason
@@ -660,8 +586,7 @@ export default function subagents(
     if (
       submission.type !== 'input' ||
       submission.status !== 'done' ||
-      submission.requestId?.startsWith('subagent:') ||
-      submission.requestId?.startsWith('subagent-retry:')
+      submission.requestId?.startsWith('subagent:')
     )
       return
     await host.harness().commit(async (tx) => {
@@ -683,10 +608,11 @@ export default function subagents(
         input?.kind === 'board.message' && message?.from === parent && message.reply === false
       for (const action of childActions) {
         if (!messaged || action.status !== undefined) continue
-        for (const request of [`subagent:${action.reporter}`, action.retryRequest ?? []].flat()) {
-          const sibling = await tx.submissionByRequest(submission.conversationId, request)
-          if (sibling?.status === 'done' && sibling.answer === submission.answer) messaged = false
-        }
+        const sibling = await tx.submissionByRequest(
+          submission.conversationId,
+          `subagent:${action.reporter}`,
+        )
+        if (sibling?.status === 'done' && sibling.answer === submission.answer) messaged = false
       }
       if (!messaged) {
         const action = childActions.at(-1)
@@ -694,7 +620,7 @@ export default function subagents(
         if (action?.status !== 'unanswered' && action?.status !== 'failed' && !interrupted) return
         const failed = await tx.submissionByRequest(
           submission.conversationId,
-          action.retryRequest ?? `subagent:${action.reporter}`,
+          `subagent:${action.reporter}`,
         )
         // IDs share one allocation order; an input withdrawn before placement has no entry.
         if (
@@ -1089,19 +1015,10 @@ export default function subagents(
               await api.waitForTask(reporter, context)
             }
             const submissions = await api.commit(async (tx) => {
-              const captured = await tx.doc(Subagents, api.conversationId)
-              const retries = Object.values(captured.actions).flatMap((action) =>
-                target.reporters.includes(action.reporter) && action.retryRequest
-                  ? [action.retryRequest]
-                  : [],
-              )
               return Promise.all(
-                [
-                  ...new Set([
-                    ...target.reporters.map((reporter) => `subagent:${reporter}`),
-                    ...retries,
-                  ]),
-                ].map((request) => tx.submissionByRequest(id, request)),
+                target.reporters.map((reporter) =>
+                  tx.submissionByRequest(id, `subagent:${reporter}`),
+                ),
               )
             }, context)
             for (const submission of submissions)
