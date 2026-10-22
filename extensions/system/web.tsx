@@ -85,6 +85,7 @@ function useLanes(range: number, live: boolean) {
           // Aborted when the window changes or the surface hides; the next fetch owns the state.
           if (!controller.signal.aborted) setState((previous) => ({ ...previous, error }))
         })
+    // oxlint-disable-next-line typescript/no-floating-promises -- load catches fetch failures and stores them in the displayed error state.
     void load()
     const timer = live ? setInterval(() => void load(), 2000) : undefined
     return () => {

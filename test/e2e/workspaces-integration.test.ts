@@ -124,6 +124,7 @@ async function fixture(
       const reactor = events.reactor(name, tokens, handler)
       openers.push(reactor.start)
       closers.push(reactor.stop)
+      // oxlint-disable-next-line typescript/no-floating-promises -- reactor start waits for its drain chain, which records handler failures rather than rejecting.
       if (started) void reactor.start()
     },
     implement: (api: { name: string }, value: unknown) => {

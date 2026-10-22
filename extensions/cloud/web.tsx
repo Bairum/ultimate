@@ -35,6 +35,7 @@ function poll<T>(
   return {
     subscribe: (listener: () => void) => {
       listeners.add(listener)
+      // oxlint-disable-next-line typescript/no-floating-promises -- tick catches load failures, keeps the previous value and retries on the next poll.
       if (listeners.size === 1) void tick()
       return () => {
         listeners.delete(listener)

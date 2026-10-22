@@ -231,9 +231,9 @@ it('leaves the log conversation out of conversation lists but serves it by id', 
 })
 
 // Compile-time: events type their data at emit and in reactors.
-export function typed(host: ExtensionHost, tx: Tx) {
+export async function typed(host: ExtensionHost, tx: Tx) {
   // @ts-expect-error a landing carries a sha string
-  void host.emit(tx, Landed, { sha: 1 })
+  await host.emit(tx, Landed, { sha: 1 })
   host.react('typed', [Landed], (_tx, event) => {
     const sha: string = event.data.sha
     void sha

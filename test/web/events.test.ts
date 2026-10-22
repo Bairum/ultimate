@@ -125,6 +125,7 @@ it('ignores superseded loaders and waits for the current generation', async () =
 it('removing a hanging initial facet allows readiness', async () => {
   const registry = createRegistry()
   registry.receiveSystem()
+  // oxlint-disable-next-line typescript/no-floating-promises -- deliberately hung loader tests removal while loading.
   void registry.setLoaders({ [path('hung')]: () => new Promise(() => {}) })
   await registry.setLoaders({})
   expect(registry.getReady()).toEqual({ ready: true, timedOut: false, failed: [], pending: [] })
@@ -138,6 +139,7 @@ it.each([true, false])(
     const ready = vi.fn<(data: unknown) => void>()
     stops.push(events.on('ultimate:ready', ready))
     if (system) registry.receiveSystem()
+    // oxlint-disable-next-line typescript/no-floating-promises -- deliberately hung loader tests the readiness deadline.
     void registry.setLoaders({ [path('hung')]: () => new Promise(() => {}) })
     await vi.advanceTimersByTimeAsync(7999)
     expect(registry.getReady().ready).toBe(false)

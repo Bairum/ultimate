@@ -33,14 +33,23 @@ export default function claudeCode(host: ExtensionHost) {
     const track = (response: ReturnType<typeof provider.streamSimple>) => {
       const settled = response.result()
       active.add(settled)
-      void settled.finally(() => active.delete(settled))
+      void settled.then(
+        () => active.delete(settled),
+        // The stream consumer receives the failure; tracking must not create another rejection.
+        () => active.delete(settled),
+      )
       return response
     }
     host.onClose(async () => {
       closing = true
       // Extension cleanup precedes harness suspension. Let its signal stop active
       // requests before closing warm workers; never turn suspension into an error.
-      if (active.size) void Promise.allSettled(active).then(() => closeClaudeProcesses())
+      if (active.size)
+        void Promise.allSettled(active)
+          .then(() => closeClaudeProcesses())
+          .catch((error: unknown) =>
+            host.notice(`Closing Claude processes failed: ${String(error)}`),
+          )
       else await closeClaudeProcesses()
     })
     const stream: typeof provider.stream = (...args) => {

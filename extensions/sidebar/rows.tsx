@@ -18,7 +18,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api, cn, Provided, useDocOf, useUltimate } from '@/sdk'
+import { api, cn, errorMessage, Provided, useDocOf, useUltimate } from '@/sdk'
+import { store } from '@/sdk/client'
 import { BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
 import {
   AgentMark,
@@ -165,7 +166,9 @@ function PhasedRow({
     setEditing(false)
     if (cancelled.current) return
     const title = value.trim()
-    void api.action(RenameAction, { id: conversation.id, title })
+    void api
+      .action(RenameAction, { id: conversation.id, title })
+      .catch((error: unknown) => store.notify({ level: 'error', message: errorMessage(error) }))
   }
   const title = (
     <span

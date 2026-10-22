@@ -54,7 +54,9 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
   })
   let system: Awaited<ReturnType<typeof createSystem>> | undefined
   const access = createAccess(() => {
-    void system?.changed()
+    void system
+      ?.changed()
+      .catch((error: unknown) => console.error('Publishing access changes failed:', error))
   })
   let api: Awaited<ReturnType<typeof createApi>> | undefined
   const http = createHttpServer((request, response) => {
@@ -269,12 +271,17 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
     closing = true
     await server?.close()
   }
-  process.on('SIGINT', () => {
-    void close().then(() => process.exit(0))
-  })
-  process.on('SIGTERM', () => {
-    void close().then(() => process.exit(0))
-  })
+  const shutdown = () => {
+    void close().then(
+      () => process.exit(0),
+      (error: unknown) => {
+        console.error('Server shutdown failed:', error)
+        process.exit(1)
+      },
+    )
+  }
+  process.on('SIGINT', shutdown)
+  process.on('SIGTERM', shutdown)
   if (process.env.ULTIMATE_SUPERVISED === '1' && process.send) {
     try {
       server = await prepareServer({ port: 0, publicUrl: process.env.ULTIMATE_PUBLIC_URL })
@@ -298,9 +305,7 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
           process.exit(1)
         })
       })
-      process.on('disconnect', () => {
-        void close().then(() => process.exit(0))
-      })
+      process.on('disconnect', shutdown)
       send({ type: 'prepared', port: server.port })
     } catch (error) {
       send({ type: 'failed', error: String(error) })

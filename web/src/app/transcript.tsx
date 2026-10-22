@@ -149,6 +149,7 @@ export function Transcript({ dock }: { dock?: boolean }) {
     // The library observes content growth, not viewport shrinkage as the composer grows.
     // Reuse its follow lock so resizing never pulls someone away from older messages.
     const resize = new ResizeObserver(() => {
+      // oxlint-disable-next-line typescript/no-floating-promises -- use-stick-to-bottom's frame loop resolves a boolean; it performs no rejecting async work.
       void stick.current?.scrollToBottom({ animation: 'instant', preserveScrollPosition: true })
     })
     resize.observe(scroll)
@@ -157,6 +158,7 @@ export function Transcript({ dock }: { dock?: boolean }) {
   // A sent message pins the view to the bottom and follows the run, even when the reader had scrolled up.
   useEvent('ultimate:sent', (value) => {
     if ((value as { conversationId?: number } | undefined)?.conversationId === id)
+      // oxlint-disable-next-line typescript/no-floating-promises -- use-stick-to-bottom's frame loop resolves a boolean; it performs no rejecting async work.
       void stick.current?.scrollToBottom({ animation: 'instant' })
   })
   // Keyed so a conversation never inherits the previous one's scroll position or follow state.
@@ -265,6 +267,7 @@ function TranscriptEntries() {
     if (id === undefined || after >= upTo || filled.current.has(key)) return
     filled.current.add(key)
     setFilling((count) => count + 1)
+    // oxlint-disable-next-line typescript/no-floating-promises -- this task catches history failures and displays them with setError.
     void (async () => {
       try {
         const rows: EntryRecord[] = []
@@ -457,6 +460,7 @@ function TranscriptEntries() {
       return undefined
     const observer = new IntersectionObserver(
       ([entry]) => {
+        // oxlint-disable-next-line typescript/no-floating-promises -- loadEarlier catches history failures and displays them with setError.
         if (entry?.isIntersecting) void loadEarlier()
       },
       { root, rootMargin: '100% 0px 0px 0px' },
@@ -543,6 +547,7 @@ function TranscriptEntries() {
     }
     if (!entries.some((entry) => entry.id === reveal)) {
       if (cursor !== undefined && reveal < cursor) {
+        // oxlint-disable-next-line typescript/no-floating-promises -- loadDown catches history failures and displays them with setError.
         void loadDown(reveal)
         return
       }

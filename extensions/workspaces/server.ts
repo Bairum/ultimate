@@ -216,6 +216,7 @@ export default function workspaceExtension(host: ExtensionHost) {
           host.notice(
             `Lander task ${change.value.id} faulted: ${change.value.state.outcome.error.message}; its queue resumes on the next submit or restart`,
           )
+        // oxlint-disable-next-line typescript/no-floating-promises -- resume catches failures and reports them through host.notice.
         else void resume()
       }
     })

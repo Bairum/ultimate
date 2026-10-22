@@ -3,7 +3,8 @@ import { CheckIcon, ChevronRightIcon, CopyIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { cn, useExtensionUiState } from '@/sdk'
+import { cn, errorMessage, useExtensionUiState } from '@/sdk'
+import { store } from '@/sdk/client'
 
 /** A collapsible group of the panel; which ones are closed is kept in durable UI state. */
 export function Section({
@@ -60,11 +61,14 @@ export function Copy({
         className,
       )}
       onClick={() => {
-        void navigator.clipboard.writeText(value).then(() => {
-          setCopied(true)
-          clearTimeout(timer.current)
-          timer.current = setTimeout(() => setCopied(false), 1200)
-        })
+        void navigator.clipboard
+          .writeText(value)
+          .then(() => {
+            setCopied(true)
+            clearTimeout(timer.current)
+            timer.current = setTimeout(() => setCopied(false), 1200)
+          })
+          .catch((error: unknown) => store.notify({ level: 'error', message: errorMessage(error) }))
       }}
       title={`${value}\nclick to copy`}
       type="button"

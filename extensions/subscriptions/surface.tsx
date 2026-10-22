@@ -260,7 +260,9 @@ function Script({
   useEffect(() => {
     if (!live) return undefined
     const timer = setInterval(() => {
+      // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
       void refetchLog()
+      // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
       if (view === 'script') void refetchScript()
     }, 2000)
     return () => clearInterval(timer)
@@ -281,6 +283,7 @@ function Script({
     } finally {
       setBusy(false)
       onChange()
+      // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
       void refetchLog()
     }
   }

@@ -98,6 +98,7 @@ function Control() {
                     setOff((previous) =>
                       on ? previous.filter((other) => other !== sound) : [...previous, sound],
                     )
+                    // oxlint-disable-next-line typescript/no-floating-promises -- preview catches and logs playback failures.
                     if (on) void preview(sound)
                   }}
                 />

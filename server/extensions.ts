@@ -188,7 +188,9 @@ export async function loadExtensions(
           if (open) log.notice(name, message)
         }
         notice(message)
-        void changed()
+        void Promise.resolve(changed()).catch((error: unknown) =>
+          console.error('Publishing extension changes failed:', error),
+        )
       },
       resource: <T>(key: string, create: () => T) =>
         extensionHost.resource(key, () => {
@@ -216,6 +218,7 @@ export async function loadExtensions(
         else {
           facetOpeners.get(facetHost)!.add(callback)
           openers.add(callback)
+          // oxlint-disable-next-line typescript/no-floating-promises -- runOpener catches and reports opener failures.
           if (open && [...facetHosts.values()].includes(facetHost)) void runOpener(callback)
         }
       },
@@ -338,6 +341,7 @@ export async function loadExtensions(
     },
     onOpen: (callback) => {
       openers.add(callback)
+      // oxlint-disable-next-line typescript/no-floating-promises -- runOpener catches and reports opener failures.
       if (open) void runOpener(callback)
     },
     onRelease: (callback) => {

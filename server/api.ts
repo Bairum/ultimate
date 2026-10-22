@@ -335,7 +335,7 @@ export async function createApi(
       }
       streams.add(stop)
       response.on('close', () => {
-        void stop()
+        void stop().catch((error: unknown) => console.error('Stopping event stream failed:', error))
       })
       if (request.destroyed || response.destroyed) await stop()
     } catch (error) {

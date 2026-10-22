@@ -271,7 +271,7 @@ export function eventLog(
       }
       return {
         start: async () => {
-          void stop()
+          await stop()
           state.active = active
           state.kinds = active.kinds
           unsubscribe = harness().subscribeCommits((publication) => {

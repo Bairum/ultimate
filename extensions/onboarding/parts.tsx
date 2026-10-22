@@ -28,6 +28,7 @@ export function useDescribed() {
   useEffect(() => {
     if (folders === seen.current) return
     seen.current = folders
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     void refetch()
   }, [folders, refetch])
   const entry = (name: string) => described.data?.find((candidate) => candidate.name === name)

@@ -191,7 +191,12 @@ export default function browserExtension(host: ExtensionHost) {
     const outcomes: string[] = []
     let page: Page | undefined
     const abort = () => {
-      void page?.context().close()
+      void page
+        ?.context()
+        .close()
+        .catch((error: unknown) =>
+          host.notice(`Closing aborted browser context failed: ${String(error)}`),
+        )
     }
     try {
       const png = screenshotFile(host.home, api.env?.cwd ?? host.projectRoot, args.path)

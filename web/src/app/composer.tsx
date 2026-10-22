@@ -240,6 +240,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     // A touch keyboard's return key writes a new line; the send button sends.
     if (touchKeyboard()) return
     event.preventDefault()
+    // oxlint-disable-next-line typescript/no-floating-promises -- send catches submission failures and displays them in the draft's error state.
     void send(event.altKey ? 'followUp' : 'steer')
   }
 
@@ -249,6 +250,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
       <PromptInput
         onSubmit={(event) => {
           event.preventDefault()
+          // oxlint-disable-next-line typescript/no-floating-promises -- send catches submission failures and displays them in the draft's error state.
           void send()
         }}
       >

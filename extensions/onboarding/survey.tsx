@@ -62,6 +62,7 @@ export function Familiarize({ id, dock }: { id: number; dock?: boolean }) {
                 if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
                 if (touchKeyboard()) return
                 event.preventDefault()
+                // oxlint-disable-next-line typescript/no-floating-promises -- begin catches setup failures and displays them with setError.
                 void begin()
               }}
               placeholder="Optional instructions: what this tree is for and how to read, e.g. focus on the API, also look through past conversations…"
