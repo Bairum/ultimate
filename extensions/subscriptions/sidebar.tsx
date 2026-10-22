@@ -60,13 +60,18 @@ export function WatchingSection() {
             data-sidebar-subscription={sub.id}
             key={sub.id}
             onClick={() => open(sub.id)}
-            title={`${sub.id} · ${sub.title}${sub.error ? `\n${sub.error}` : ''}`}
+            title={`${sub.id}${sub.scope === 'project' ? ' (project)' : ''} · ${sub.title}${sub.error ? `\n${sub.error}` : ''}`}
             type="button"
           >
             <Dot state={sub.state} />
             <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground/85">
               {sub.title}
             </span>
+            {sub.scope === 'project' && (
+              <span className="shrink-0 font-mono text-[10px] text-muted-foreground/50">
+                project
+              </span>
+            )}
             <span
               className={cn(
                 'shrink-0 font-mono text-[10px]',

@@ -3,7 +3,7 @@ import { actionRef } from '../../shared/extension-api.ts'
 import { defineEvent } from '../../shared/events.ts'
 import type { CreateArgs, Subscription, SubscriptionListItem } from './types.ts'
 
-/** `{ ask, title?, once?, secrets?, subscribers? }` → the new subscription; caller is also subscribed. */
+/** `{ ask, title?, once?, secrets?, subscribers?, scope?, slug? }` → the new subscription; caller is also subscribed. */
 export const CreateAction = actionRef<CreateArgs, Subscription>('subscriptions', 'create')
 /** No arguments → subscriptions including process-local `alive`. */
 export const ListAction = actionRef<null, SubscriptionListItem[]>('subscriptions', 'list')
