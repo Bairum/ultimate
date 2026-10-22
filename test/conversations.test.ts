@@ -291,6 +291,82 @@ it.concurrent('identifies first inputs and inputs after compaction, not other tu
   expect(await notes(continued)).toHaveLength(1)
 })
 
+it.each(['compaction', 'reset'] as const)(
+  'identifies the first request after a %s queued while busy',
+  async (kind) => {
+    const { server, create } = await launch()
+    const id = await create()
+    const conversation = (await server.harness.conversation(id, context))!
+    await submit(conversation, 'First')
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    server.host.faux!.setResponses([
+      async () => {
+        entered.resolve()
+        await release.promise
+        return fauxAssistantMessage('Busy answer')
+      },
+      (request) => {
+        expect(JSON.stringify(request.messages)).toContain(`You are conversation #${id}.`)
+        return fauxAssistantMessage('After boundary')
+      },
+    ])
+    const busy = await conversation.submit({ type: 'input', content: 'Busy' }, context)
+    await entered.promise
+    const write = await conversation.submit(
+      {
+        type: 'write',
+        entry: {
+          kind: kind === 'compaction' ? 'pi.compaction' : 'pi.reset',
+          head: 'self',
+          model: [{ role: 'user', content: 'New context without identity', timestamp: Date.now() }],
+        },
+      },
+      context,
+    )
+    const next = await conversation.submit({ type: 'input', content: 'Next' }, context)
+    release.resolve()
+    expect((await busy.wait(context)).status).toBe('done')
+    expect((await write.wait(context)).status).toBe('done')
+    expect((await next.wait(context)).status).toBe('done')
+    expect(await notes(conversation)).toHaveLength(0) // the request guard does not write history
+  },
+)
+
+it.concurrent('identifies the next model request after automatic overflow compaction mid-run', async () => {
+  const { server, create } = await launch()
+  const id = await create()
+  const conversation = (await server.harness.conversation(id, context))!
+  await submit(conversation, 'First')
+  await server.harness.commit(async (tx) => {
+    for (let n = 0; n < 8; n++)
+      await tx.appendEntry(id, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: `Part ${n} ${'word '.repeat(4000)}`, timestamp: n }],
+      })
+  }, context)
+  let resumed = false
+  server.host.faux!.setResponses([
+    fauxAssistantMessage('Too long', {
+      stopReason: 'error',
+      errorMessage: 'maximum context length exceeded',
+    }),
+    fauxAssistantMessage('Summary without identity'),
+    (request) => {
+      resumed = true
+      expect(JSON.stringify(request.messages)).toContain('Summary without identity')
+      expect(JSON.stringify(request.messages)).toContain(`You are conversation #${id}.`)
+      return fauxAssistantMessage('Resumed')
+    },
+  ])
+  expect((await submit(conversation, 'Continue')).status).toBe('done')
+  expect(resumed).toBe(true)
+  const marker = await server.harness.commit((tx) => tx.latestHeadMarker(id), context)
+  expect(marker?.kind).toBe('pi.compaction')
+  expect(marker?.data).toMatchObject({ reason: 'overflow' })
+  expect(await notes(conversation)).toHaveLength(0) // the request guard does not write history
+})
+
 it.concurrent('renames top-level conversations', async () => {
   const { server, summary, create, message, action } = await launch()
   const id = await create()

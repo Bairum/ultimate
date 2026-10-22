@@ -1,5 +1,6 @@
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { awaitWithContext } from '@earendil-works/chord/context'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -340,6 +341,76 @@ describe('side chats', () => {
     )
   })
 
+  it.each([
+    ['message', 'latest'],
+    ['message', 'entry'],
+    ['branch', 'latest'],
+    ['branch', 'entry'],
+  ] as const)(
+    'forwards the side chat image for %s with %s, not main’s image',
+    async (tool, ref) => {
+      const f = await fixture()
+      const side = await f.open()
+      const image = {
+        type: 'image' as const,
+        data: Buffer.from('side').toString('base64'),
+        mimeType: 'image/png',
+      }
+      const appendImage = (id: ConversationId, data: string) =>
+        f.server.harness.commit(
+          (tx) =>
+            tx.appendEntry(id, {
+              kind: 'pi.tool-result',
+              model: [
+                {
+                  role: 'toolResult',
+                  toolCallId: 'screenshot',
+                  toolName: 'screenshot',
+                  isError: false,
+                  content: [{ ...image, data }],
+                  timestamp: Date.now(),
+                },
+              ],
+            }),
+          context,
+        )
+      const screenshot = await appendImage(side, image.data)
+      await appendImage(f.main, Buffer.from('main').toString('base64'))
+      const target = await f.server.harness.createConversation(
+        { ownership: { kind: 'ownerless' } },
+        context,
+      )
+      const text = `image ${tool} ${ref}`
+      await f.call(side, tool, {
+        ...(tool === 'branch'
+          ? { prompt: text, root: ROOT_CONVERSATION_ID, isolated: false }
+          : { to: `#${target.id}`, text, reply: false }),
+        images: ref === 'latest' ? ref : screenshot.id,
+      })
+      await until(async () =>
+        (await f.server.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context))!.messages.some(
+          (message) => message.text === text && message.entry !== undefined,
+        ),
+      )
+      const sent = (await f.server.harness.snapshot(
+        Messages,
+        ROOT_CONVERSATION_ID,
+        context,
+      ))!.messages.find((message) => message.text === text)!
+      expect(sent).toMatchObject({ from: f.main, images: { entry: screenshot.id, count: 1 } })
+      const delivered = (await entries(f.server, sent.to as number)).find(
+        (entry) => entry.id === sent.entry,
+      )!
+      expect(
+        delivered.model!.flatMap((message) =>
+          typeof message.content === 'string'
+            ? []
+            : message.content.filter((block) => block.type === 'image'),
+        ),
+      ).toEqual([image])
+    },
+  )
+
   it('owns branches and notify tasks in main and leaves one non-waking note for each', async () => {
     const f = await fixture()
     const side = await f.open()
@@ -392,6 +463,83 @@ describe('side chats', () => {
       notes.filter((text) => text.includes(`Side chat #${side} requested notification`)),
     ).toHaveLength(1)
   })
+
+  it.each([false, true])(
+    'recovers notify provenance exactly once after a crash (after note: %s)',
+    async (afterNote) => {
+      const f = await fixture()
+      const side = await f.open()
+      const target = await f.server.harness.createConversation(
+        { ownership: { kind: 'ownerless' } },
+        context,
+      )
+      const reached = Promise.withResolvers<void>()
+      const forever = Promise.withResolvers<void>()
+      const extension = f.server.host.registry.snapshot().extension('lineage')!
+      f.server.host.registry.install(
+        defineExtension({
+          ...extension,
+          tools: extension.tools!.map((tool) =>
+            tool.name !== 'notify'
+              ? tool
+              : {
+                  ...tool,
+                  execute: (input, api, ctx) =>
+                    tool
+                      .execute(
+                        input,
+                        {
+                          ...api,
+                          commit: async (change, caller) => {
+                            const result = await api.commit(change, caller)
+                            if (!afterNote) {
+                              reached.resolve()
+                              await awaitWithContext(forever.promise, caller)
+                            }
+                            return result
+                          },
+                        },
+                        ctx,
+                      )
+                      .then(async (result) => {
+                        if (afterNote) {
+                          reached.resolve()
+                          await awaitWithContext(forever.promise, ctx)
+                        }
+                        return result
+                      }),
+                },
+          ),
+        }),
+      )
+      const pending = f
+        .call(side, 'notify', { id: target.id, wake: false })
+        .catch((error: unknown) => error)
+      await reached.promise
+      const provenance = async (server: typeof f.server) =>
+        (await entries(server, f.main)).filter(
+          (entry) =>
+            entry.kind === 'lineage.note' &&
+            JSON.stringify(entry.data).includes(`Side chat #${side} requested notification`),
+        )
+      expect(await provenance(f.server)).toHaveLength(afterNote ? 1 : 0)
+      servers.splice(servers.indexOf(f.server), 1)
+      await f.server.close()
+      await pending
+      const reopened = await fauxServer({ ultimateRoot, home: f.home, userHome: f.home })
+      servers.push(reopened)
+      reopened.host.faux!.setResponses([fauxAssistantMessage('Recovered')])
+      reopened.harness.resume()
+      await (await reopened.harness.conversation(side, context))!.waitForIdle(context)
+      expect(await provenance(reopened)).toHaveLength(1)
+      const tasks = await reopened.harness.commit(
+        async (tx) =>
+          (await tx.scanTasks({ conversationId: f.main, kind: 'lineage.notify' }, 100)).items,
+        context,
+      )
+      expect(tasks).toHaveLength(1)
+    },
+  )
 
   it('subscribes main by default and records the provenance without spawning a script', async () => {
     const f = await fixture()

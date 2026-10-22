@@ -744,6 +744,15 @@ export const Notified = defineDoc<{ answers: Record<string, number> }>({
   initial: () => ({ answers: {} }),
 })
 
+/** Created with the notify task: replay finishes cancellations and provenance without creating another task. */
+const NotifyReceipts = defineDoc<{ calls: Record<string, TaskId[]> }>({
+  kind: 'lineage.notify-receipts',
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'task',
+  initial: () => ({ calls: {} }),
+})
+
 /** How much of the finished conversation's last answer a notify delivers. */
 const FINISHED_CHARS = 1500
 const finishedText = (id: number, title: string | undefined, text: string) =>
@@ -1556,11 +1565,15 @@ export default function lineageExtension(host: ExtensionHost) {
           id: Type.Integer({ minimum: 1 }),
           wake: Type.Optional(Type.Boolean()),
         }),
+        // The transactional receipt reuses the task; cancellations and the request-id note tolerate replay.
+        replay: 'safe',
         async execute({ id, wake = true }, api, ctx) {
           const target = id as ConversationId
           const from = await actingAs(host, api.conversationId, ctx)
           if (target === from) throw new Error('A conversation cannot notify on itself')
           const replaced = await api.commit(async (tx) => {
+            const receipt = await tx.doc(NotifyReceipts, api.taskId)
+            if (receipt.calls[api.callId]) return [...receipt.calls[api.callId]]
             if (!(await tx.conversation(target))) throw new Error(`No conversation #${target}`)
             const pending: TaskId[] = []
             let cursor: Cursor | undefined
@@ -1583,6 +1596,7 @@ export default function lineageExtension(host: ExtensionHost) {
               { target, wake },
               { conversationId: from, ownership: { kind: 'conversation' }, background: true },
             )
+            receipt.calls[api.callId] = pending
             return pending
           }, ctx)
           for (const task of replaced) await host.harness().abortTask(task, ctx)

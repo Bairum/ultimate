@@ -828,6 +828,8 @@ async function send(
     steer?: boolean
     re?: number
     images?: ImagesRef
+    /** Images belong to the caller, even when another conversation is credited as sender. */
+    imagesFrom?: ConversationId
     /** The user's reply `re` dismisses that question instead of answering it. */
     dismiss?: boolean
   },
@@ -888,7 +890,7 @@ async function send(
     const images =
       input.images === undefined
         ? undefined
-        : await resolveImages(tx, from as ConversationId, input.images)
+        : await resolveImages(tx, input.imagesFrom ?? (from as ConversationId), input.images)
     // Only a Reply answers a question to the user, and only the one it replies to; a dismissal closes it unanswered.
     if (from === 'user' && input.re !== undefined)
       for (const m of (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages)
@@ -1366,6 +1368,7 @@ export default function messages(host: ExtensionHost) {
               text: input.prompt,
               reply: true,
               ...(input.images === undefined ? {} : { images: input.images }),
+              imagesFrom: api.conversationId,
             },
             ctx,
             api.taskId,
@@ -1408,7 +1411,14 @@ export default function messages(host: ExtensionHost) {
             (await api.memo<number>('message-id', ctx)) ??
             (await api.memo(
               'message-id',
-              await send(host, from, input, ctx, api.taskId, api.callId),
+              await send(
+                host,
+                from,
+                { ...input, imagesFrom: api.conversationId },
+                ctx,
+                api.taskId,
+                api.callId,
+              ),
               ctx,
             ))
           if (from !== api.conversationId && input.reply !== false) {

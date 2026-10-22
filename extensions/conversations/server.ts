@@ -291,6 +291,20 @@ export default (host: ExtensionHost) => {
           // Also identify owned conversations; this note never changes the cached system prompt.
           return identityNote(api.tx, api.conversationId)
         },
+        beforeRequest: (request, api) => {
+          // beforeInput sees the old head when queued writes land, and automatic compaction can resume
+          // without an input. Guard the actual request, including retries, without changing the system prefix.
+          const content = `You are conversation #${api.conversationId}.`
+          if (
+            !request.messages.some(
+              (message) => message.role === 'user' && message.content === content,
+            )
+          )
+            return {
+              messages: [...request.messages, { role: 'user', content, timestamp: Date.now() }],
+            }
+          return undefined
+        },
       }),
     ],
     sections: [
