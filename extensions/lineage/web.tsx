@@ -39,7 +39,7 @@ import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open } from '../workspaces/ui.tsx'
 import { CompactAction, ForgetAction, MemoryDoc, TallyDoc } from './refs.ts'
 import type { MemoryItem } from './refs.ts'
-import { column, EmptyRoot, MEMORY_PANEL, useRoots } from './ui.tsx'
+import { column, EmptyRoot, MEMORY_PANEL, MemoryHeader, useRoots } from './ui.tsx'
 import { GoBackAction, Rewound, RewoundDependent } from './rewind.tsx'
 
 function userText(entry: EntryRecord) {
@@ -673,6 +673,9 @@ function MemoryPanel() {
   const roots = useRoots() ?? []
   return (
     <div className="flex flex-col pb-4" data-lineage-memory-panel>
+      <Provided input={null} point={MemoryHeader}>
+        {(header) => header}
+      </Provided>
       {roots.map((root) => (
         <RootMemory key={root} label={roots.length > 1} root={root} />
       ))}
