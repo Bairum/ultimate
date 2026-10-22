@@ -19,7 +19,7 @@ and preserves the instructions. Request id `onboarding:<root>` ensures one input
 so Start here can show **@ultimate is setting up this project · open** across reloads.
 
 @ultimate greets, shows only applicable setup cards one at a time and waits for each choice, then reads the project
-with the user able to steer. It writes the root's first tally through `seed_tally`, suggests at most three useful
+with the user able to steer. It writes the root's first memories with `remember` (the user's instructions verbatim among them), suggests at most three useful
 project-specific agents, extensions or settings, and builds only what the user chooses. The first feature becomes a
 coordinator through `branch`. Roots stay read-only while @ultimate handles setup.
 Under faux the same flow is scripted without model tokens (see `faux/README.md`).

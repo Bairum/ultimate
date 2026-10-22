@@ -14,9 +14,10 @@ A project is a forest of conversation trees, like commit histories.
   calls a tally **context**; code, tools and model text call it "tally". The footer shows the memory's estimated tokens (what a branch starts from) and **Talk to @ultimate**; the sidebar
   shows each root heading its tree with its last three events (landings, notes, branches, compactions).
   Start a project with @ultimate: Continue on Get ready or **Set up with @ultimate** on Start here. It handles setup
-  cards, reads the project and seeds the first tally; optional focus becomes instructions. It maintains memory
-  with `remember` and the memory review (`extensions/lineage/README.md`), seeds empty roots with `seed_tally`, and reshapes tallies with `compact_tally` without deleting history.
-  Only a user request for independent work warrants `new_root`, seeded from its reading.
+  cards, reads the project and writes its first memories with `remember`; optional focus becomes instructions,
+  kept verbatim as a memory. The tally then builds up from branches and landings. @ultimate maintains memory with
+  `remember` and the memory review (`extensions/lineage/README.md`); the user can compact a tally from its footer
+  or ⌘K. A project has one root: independent work goes into branches.
   Roots and standing agents are never concluded or cleared, only compacted.
 - **A branch** is a feature, a fix, an experiment. @ultimate picks a root by reading its tally, then starts a
   coordinator branch that starts from its memory brief (or, without memories, its tally) before its prompt. A branch is never a subagent.
