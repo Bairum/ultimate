@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import {
+  defineDoc,
   defineExtension,
   GenerationTask,
   hook,
@@ -38,6 +39,34 @@ import {
 } from './refs.ts'
 
 export const docs = [Summaries, Overview]
+
+/** A fork needs its own identity; a new context head (compaction or reset) needs it again. */
+const SeenIdentity = defineDoc<{ head?: number }>({
+  kind: 'conversations.identity',
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
+
+async function identityNote(tx: Tx, id: ConversationId) {
+  const head = (await tx.latestHeadMarker(id))?.id ?? 0
+  const seen = await tx.doc(SeenIdentity, id)
+  if (seen.head === head) return undefined
+  seen.head = head
+  return {
+    entries: [
+      {
+        kind: 'conversations.identity',
+        model: [
+          { role: 'user' as const, content: `You are conversation #${id}.`, timestamp: Date.now() },
+        ],
+      },
+    ],
+  }
+}
 
 const record = (host: Pick<ExtensionHost, 'harness'>, id: ConversationId, caller: Context) =>
   host.harness().commit((tx) => tx.conversation(id), caller)
@@ -266,6 +295,22 @@ export default (host: ExtensionHost) => {
       hook(GenerationTask, {
         beforeInput: async (_input, api) => {
           await resumeIn(api.tx, [api.conversationId])
+          // Also identify owned conversations; this note never changes the cached system prompt.
+          return identityNote(api.tx, api.conversationId)
+        },
+        beforeRequest: (request, api) => {
+          // beforeInput sees the old head when queued writes land, and automatic compaction can resume
+          // without an input. Guard the actual request, including retries, without changing the system prefix.
+          // First, not last: a fixed position keeps the cached conversation prefix valid from one request to the next.
+          const content = `You are conversation #${api.conversationId}.`
+          if (
+            !request.messages.some(
+              (message) => message.role === 'user' && message.content === content,
+            )
+          )
+            return {
+              messages: [{ role: 'user', content, timestamp: 0 }, ...request.messages],
+            }
           return undefined
         },
       }),
@@ -281,7 +326,7 @@ export default (host: ExtensionHost) => {
         if (!topLevel.get(input.conversationId)) return undefined
         // Fixed text: a changed system prompt costs the prompt cache, and the list of others changed nearly every turn.
         return [
-          `You are conversation #${input.conversationId}. Other conversations in this project are separate agents with their own context, and some may work in your checkout: check \`git status\` before broad changes, never revert or reformat changes you did not make, and coordinate through the user.`,
+          'Other conversations in this project are separate agents with their own context, and some may work in your checkout: check `git status` before broad changes, never revert or reformat changes you did not make, and coordinate through the user.',
           'In codemode, `ultimate.conversations()` lists them with title, cwd and whether they are busy or concluded; `ultimate.entries(id)` shows what one did; `ultimate.projects()` lists other projects.',
         ].join('\n')
       }),

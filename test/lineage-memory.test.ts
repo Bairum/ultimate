@@ -184,12 +184,13 @@ it.concurrent('starts a branch from the memory brief, and without memories from 
   const briefed = await branch(server, 'Briefed branch')
   const view = await briefed.conversation.context(context)
   const said = view.messages.filter((message) => message.role !== 'system')
-  // The model context begins at the brief, then the prompt: none of the tally.
+  // The model context begins at the brief, then the identity note and prompt: none of the tally.
   expect(textOf(said[0].content)).toMatch(
     /^<project_memory root="#1">\npnpm \[fact\] — Use pnpm for everything \(updated 2026-10-21\)\n<\/project_memory>\n/,
   )
   expect(textOf(said[0].content)).toContain('ultimate.entries(1)')
-  expect(textOf(said[1].content)).toBe('Briefed branch')
+  expect(textOf(said[1].content)).toBe(`You are conversation #${briefed.id}.`)
+  expect(textOf(said[2].content)).toBe('Briefed branch')
   expect(JSON.stringify(view.messages)).not.toContain(marker)
   expect(view.entries[0]).toMatchObject({ kind: 'pi.reset' })
   // Catch-up starts after the root's tip at the fork, not from the tally's start.

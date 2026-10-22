@@ -33,6 +33,7 @@ import type {
   Tx,
 } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
+import { actingAs } from '../../lib/acting-as.ts'
 import type { ActionInput } from '../../lib/actions.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
@@ -743,6 +744,15 @@ export const Notified = defineDoc<{ answers: Record<string, number> }>({
   initial: () => ({ answers: {} }),
 })
 
+/** Created with the notify task: replay finishes cancellations and provenance without creating another task. */
+const NotifyReceipts = defineDoc<{ calls: Record<string, TaskId[]> }>({
+  kind: 'lineage.notify-receipts',
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'task',
+  initial: () => ({ calls: {} }),
+})
+
 /** How much of the finished conversation's last answer a notify delivers. */
 const FINISHED_CHARS = 1500
 const finishedText = (id: number, title: string | undefined, text: string) =>
@@ -1083,12 +1093,12 @@ export async function lineageSection(
   if (owned.get(id)) return undefined
   const root = await rootOf(host, id, ctx)
   if (id === root) return undefined
-  const rooted = root === undefined ? '' : `\nRoot: #${root}.`
+  const rooted = root === undefined ? '' : `Root: #${root}.\n`
   const state = (await host.harness().snapshot(Branch, id, ctx))?.branch
-  if (!state) return `You are #${id}.${rooted}\n${ZOOM}`
+  if (!state) return `${rooted}${ZOOM}`
   if (state.brief)
-    return `You are #${id}, branched from #${state.from} at entry ${state.at} for: ${state.intent}${rooted}\nYour context starts with your project's memory index and recent landings, kept in root #${root}: read a memory in full with \`memory {read: slug}\`, and the full tally (every branch, abstract and landing, with #<conversation>/<entry> breadcrumbs) with codemode \`ultimate.entries(${root})\`.\n${ZOOM}`
-  return `You are #${id}, branched from #${state.from} at entry ${state.at} for: ${state.intent}${rooted}\nYour context starts with the tally of your tree, kept in its root: one intent line per branch, the latest abstract of each, and every landing, with #<conversation>/<entry> breadcrumbs to read in full with codemode \`ultimate.entries(id)\`.\n${ZOOM}`
+    return `Branched from #${state.from} at entry ${state.at} for: ${state.intent}\n${rooted}Your context starts with your project's memory index and recent landings, kept in root #${root}: read a memory in full with \`memory {read: slug}\`, and the full tally (every branch, abstract and landing, with #<conversation>/<entry> breadcrumbs) with codemode \`ultimate.entries(${root})\`.\n${ZOOM}`
+  return `Branched from #${state.from} at entry ${state.at} for: ${state.intent}\n${rooted}Your context starts with the tally of your tree, kept in its root: one intent line per branch, the latest abstract of each, and every landing, with #<conversation>/<entry> breadcrumbs to read in full with codemode \`ultimate.entries(id)\`.\n${ZOOM}`
 }
 
 const COMPACT_SYSTEM =
@@ -1550,8 +1560,9 @@ export default function lineageExtension(host: ExtensionHost) {
           to: Type.Union([Type.Integer({ minimum: 1 }), Type.Literal('root')]),
           text: Type.String({ minLength: 1 }),
         }),
-        async execute({ to, text }, api) {
-          const target = await leaveNote(host, to, text, { from: api.conversationId })
+        async execute({ to, text }, api, ctx) {
+          const from = await actingAs(host, api.conversationId, ctx)
+          const target = await leaveNote(host, to, text, { from })
           return { output: [{ type: 'text', text: `Left a note in #${target}.` }] }
         },
       }),
@@ -1563,17 +1574,21 @@ export default function lineageExtension(host: ExtensionHost) {
           id: Type.Integer({ minimum: 1 }),
           wake: Type.Optional(Type.Boolean()),
         }),
+        // The transactional receipt reuses the task; cancellations and the request-id note tolerate replay.
+        replay: 'safe',
         async execute({ id, wake = true }, api, ctx) {
           const target = id as ConversationId
-          if (target === api.conversationId)
-            throw new Error('A conversation cannot notify on itself')
+          const from = await actingAs(host, api.conversationId, ctx)
+          if (target === from) throw new Error('A conversation cannot notify on itself')
           const replaced = await api.commit(async (tx) => {
+            const receipt = await tx.doc(NotifyReceipts, api.taskId)
+            if (receipt.calls[api.callId]) return [...receipt.calls[api.callId]]
             if (!(await tx.conversation(target))) throw new Error(`No conversation #${target}`)
             const pending: TaskId[] = []
             let cursor: Cursor | undefined
             do {
               const page = await tx.scanTasks(
-                { conversationId: api.conversationId, kind: Notify.definition.name },
+                { conversationId: from, kind: Notify.definition.name },
                 100,
                 cursor,
               )
@@ -1588,11 +1603,22 @@ export default function lineageExtension(host: ExtensionHost) {
             await tx.createTask(
               Notify,
               { target, wake },
-              { ownership: { kind: 'conversation' }, background: true },
+              { conversationId: from, ownership: { kind: 'conversation' }, background: true },
             )
+            receipt.calls[api.callId] = pending
             return pending
           }, ctx)
           for (const task of replaced) await host.harness().abortTask(task, ctx)
+          if (from !== api.conversationId)
+            await leaveNote(
+              host,
+              from,
+              `Side chat #${api.conversationId} requested notification for #${target} (report comes here).`,
+              {
+                from: api.conversationId,
+                requestId: `sidechat:notify:${api.taskId}:${api.callId}`,
+              },
+            )
           host.harness().resume()
           return {
             output: [

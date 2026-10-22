@@ -55,6 +55,10 @@ export { MessageActions } from '../app/message-actions.tsx'
 export { UserText, UserView } from '../app/user-turn.tsx'
 /** Renders with the value another extension provides for your point; see `definePoint`. */
 export { Provided } from '../app/boundary.tsx'
+export { ConversationScope } from './conversation-scope.tsx'
+/** Sends what the composer inside it submits somewhere else, such as a new side chat; see `composer` renderers. */
+export { ComposerRedirect } from '../app/composer.tsx'
+export type { ComposerTarget } from '../app/composer.tsx'
 export { api } from './client.ts'
 export { ActionError } from './api.ts'
 export type { ActionOptions, Api } from './api.ts'

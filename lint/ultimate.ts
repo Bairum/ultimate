@@ -228,7 +228,7 @@ export default {
           Literal(node: Node) {
             if (
               typeof node.value === 'string' &&
-              (/^(side chat|Branch from here|Clear context|New conversation)$/i.test(node.value) ||
+              (/^(Branch from here|Clear context|New conversation)$/i.test(node.value) ||
                 (node.value === 'board' &&
                   (node.parent?.key?.name ?? node.parent?.key?.value) === 'surface'))
             )

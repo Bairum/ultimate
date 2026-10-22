@@ -3,6 +3,8 @@ is in flight and what landed, and switch, rename, compact, conclude and resume c
 the core together, so it sits at the top of the core tier: it reads conversations, workspaces, subagents, lineage and
 messages, and shows what optional extensions provide through points (`conversations/ui.tsx`: a working phase, a plan task).
 Its UI state keeps the keys it had as part of conversations (`ext.conversations.*`).
+Rows under @ultimate's come from the `sidebar.under-ultimate` point (`ui.tsx`; side-chat fills it with open side
+chats). Conversations labelled `side-chat` are left out of every other list (`listed.ts`).
 
 Every standing agent's row leads with its mark (conversations' `AgentMark`): a small tinted tile with a glyph — a brand
 `U` for @ultimate (the title bar's wordmark), a green merge for the lander,

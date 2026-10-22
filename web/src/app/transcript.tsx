@@ -48,6 +48,7 @@ import {
   useNow,
   useStore,
   useSystem,
+  useUltimate,
 } from '../sdk/hooks.ts'
 import { entryRenderers, messageItems, toolLine } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
@@ -83,10 +84,11 @@ import { TranscriptSkeleton } from './transcript-skeleton.tsx'
 /** The shown conversation; `dock` fits it into a narrow side region. */
 export function Transcript({ dock }: { dock?: boolean }) {
   const { id, loading, busy } = useConversation()
+  const { conversationId } = useUltimate()
   // A conversation without messages opens as it is: no placeholder, nothing rising in.
   const messages = useStore((state) => {
     const shown = state.conversations.find(
-      (conversation) => conversation.id === (state.requested ?? id),
+      (conversation) => conversation.id === (conversationId ?? state.requested),
     )
     return shown?.inputAt !== undefined || shown?.answerAt !== undefined
   })

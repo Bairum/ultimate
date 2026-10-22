@@ -253,6 +253,7 @@ it.concurrent('branches from a tally: the root gets the prompt node, the branch 
   expect(view.entries.map((entry) => entry.kind)).not.toContain('lineage.branched')
   expect(view.entries.filter((entry) => entry.kind === 'pi.reset')).toEqual([reset])
   expect(said(view.messages)).toEqual([
+    ['user', `You are conversation #${first}.`],
     ['user', 'Add notes between conversations'],
     ['assistant', 'echo Add notes between conversations'],
   ])
@@ -275,6 +276,7 @@ it.concurrent('branches from a tally: the root gets the prompt node, the branch 
   )!
   expect(said(request)).toEqual([
     ['user', `#${first} started from #1/${reset.id}: Add notes between conversations`],
+    ['user', `You are conversation #${later}.`],
     ['user', 'Look at this'],
   ])
   expect(request.at(-1)!.content).toEqual([{ type: 'text', text: 'Look at this' }, image])
@@ -311,7 +313,7 @@ it.concurrent('branches from a tally: the root gets the prompt node, the branch 
   // A tally gets no prompt section, since it never requests; a branch learns where its context starts.
   expect(await section(server, ROOT_CONVERSATION_ID)).toBeUndefined()
   expect(await section(server, first)).toContain(
-    `You are #${first}, branched from #1 at entry ${reset.id} for: Add notes between conversations\nRoot: #1.\nYour context starts with the tally of your tree`,
+    `Branched from #1 at entry ${reset.id} for: Add notes between conversations\nRoot: #1.\nYour context starts with the tally of your tree`,
   )
   expect(
     (await post(server, '/api/extensions/lineage/actions/info', { args: { id: first } })).data
@@ -438,12 +440,14 @@ it.concurrent('writes the prompt node of a branch of a branch into the tree root
       textOf(messages.findLast((message) => message.role === 'user')?.content) === 'Go deeper',
   )!
   expect(said(request).map(([, text]) => text)).toEqual([
+    `You are conversation #${first}.`,
     'First line',
     'echo First line',
+    `You are conversation #${nested}.`,
     'Go deeper',
   ])
   expect(await section(server, nested)).toContain(
-    `You are #${nested}, branched from #${first} at entry ${answer.id} for: Go deeper\nRoot: #1.`,
+    `Branched from #${first} at entry ${answer.id} for: Go deeper\nRoot: #1.`,
   )
 })
 
@@ -516,6 +520,7 @@ it.concurrent('delivers a branch’s prompt once when the process stops before i
   )
   await conversation.waitForIdle(context)
   expect(said((await conversation.context(context)).messages)).toEqual([
+    ['user', `You are conversation #${id}.`],
     ['user', 'Survive a crash'],
     ['assistant', 'echo Survive a crash'],
   ])
@@ -587,7 +592,7 @@ it.concurrent('resolves the root per tree for notes, the prompt and compaction',
   await expect(send(outside)).rejects.toThrow(`#${outside} has no root`)
 
   expect(await section(server, nested)).toBe(
-    `You are #${nested}.\nRoot: #${other.id}.\nZoom out when you need to: read any conversation, a root or a sibling, with codemode \`ultimate.entries(id)\` and \`ultimate.search(text)\`. Leave a \`note\` for a conversation your work affects.`,
+    `Root: #${other.id}.\nZoom out when you need to: read any conversation, a root or a sibling, with codemode \`ultimate.entries(id)\` and \`ultimate.search(text)\`. Leave a \`note\` for a conversation your work affects.`,
   )
   expect(await section(server, outside)).not.toContain('Root:')
   expect(await section(server, subagent)).toBeUndefined()

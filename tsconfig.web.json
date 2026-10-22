@@ -44,6 +44,8 @@
     "extensions/sidebar/work.ts",
     "extensions/sidebar/landings.ts",
     "extensions/sidebar/label.ts",
+    "extensions/sidebar/listed.ts",
+    "extensions/side-chat/logic.ts",
     "extensions/system/feed.ts",
     "extensions/system/layout.ts",
     "extensions/workspaces/types.ts",
