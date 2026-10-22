@@ -17,10 +17,5 @@ export type SetupIssue = {
   fix?: SetupFix
 }
 
-/** No arguments → every area of this machine's setup, warnings first; faux answers the demo set by `demo`. */
+/** No arguments → every area of this machine's setup, warnings first. */
 export const CheckAction = actionRef<null, SetupIssue[]>('setup', 'check')
-/** `{ issues }` → `{ ok }`: faux only, show `issues` instead of the real check (null for the real one), for previews. */
-export const DemoAction = actionRef<{ issues: SetupIssue[] | null }, { ok: boolean }>(
-  'setup',
-  'demo',
-)

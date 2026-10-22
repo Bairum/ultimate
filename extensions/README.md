@@ -86,10 +86,9 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 
 - `ultimateRoot`, `projectRoot`, `userHome`, `home`: source, work, user and instance-state roots.
 - `modelRuntime`, `settings`: Pi model/auth runtime and settings.
-- `models()`: model descriptors, including availability and the faux model when enabled.
+- `models()`: model descriptors, including availability.
 - `skills(cwd)`: merged clone, Pi, user and project skills for a working directory.
 - `restart(approved)`: request a verified core swap; the async callback records the approved generation before activation.
-- `faux`: Pi's faux provider handle in dev mode, otherwise undefined. Demo scripting belongs to the `faux` extension.
 - `build()`, `system()`, `extensions()`: current build, system and extension inspection.
 - `conversations()`: every conversation's summary, as `useConversations()` gives the web; empty until the harness is open.
 - `harness()`, `uiState(context)`, `doc(kind)`: durable harness, root UI snapshot and exported conversation document token.

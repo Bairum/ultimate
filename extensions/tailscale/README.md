@@ -11,7 +11,7 @@ Exposure is on unless `~/.ultimate/settings.json` turns it off; only that file c
 }
 ```
 
-Omit `tailscale.allow` to allow only the machine owner's login (`Self.UserID` → `User.LoginName` in `tailscale status --json`). Project settings can turn exposure off but cannot turn on what your settings disable or change the allowlist; a project enable over your disable produces a notice and stays disabled. Faux servers never expose, except a faux preview started by another Ultimate's `instance` tool: it publishes like any preview (below), so the user can open it from their phone, and frees its port when it stops. Its faux model's tools only edit a scratch file in its temporary home. Without Tailscale installed the panel shows how to install it, without a notice. Install Tailscale, log in, enable HTTPS certificates in the admin console, and grant operator rights if needed with `sudo tailscale set --operator=$USER`.
+Omit `tailscale.allow` to allow only the machine owner's login (`Self.UserID` → `User.LoginName` in `tailscale status --json`). Project settings can turn exposure off but cannot turn on what your settings disable or change the allowlist; a project enable over your disable produces a notice and stays disabled. A preview started by another Ultimate's `instance` tool publishes like any preview (below), so the user can open it from their phone, and frees its port when it stops. `TAILSCALE_COMMAND` names another CLI; tests point it at a missing one, so test servers stay off the tailnet. Without Tailscale installed the panel shows how to install it, without a notice. Install Tailscale, log in, enable HTTPS certificates in the admin console, and grant operator rights if needed with `sudo tailscale set --operator=$USER`.
 
 ## UI
 
@@ -19,7 +19,7 @@ The title bar's `tailnet` indicator opens a popover with the `status` action, re
 
 - **ready:** the URL as a QR code to scan, with copy and open buttons, who may open it (`allow`), and that it is tailnet-only.
 - **Problems** (`not-installed`, `not-running`, `not-operator`, `https-disabled`, `port-conflict`, `error`): a short title and the hint; a command in the hint, such as `sudo tailscale set --operator=$USER`, becomes a chip that copies it. After a fix, **Check again** starts again in place; a settings change or a restart does too.
-- **disabled:** a switch that enables `tailscale` in `~/.ultimate/settings.json` through onboarding's `setExtension` action with user scope; it never offers project scope. The popover loads only with the extension, so this state shows when your settings disable it and a project enables it, and on faux servers other than previews. **Check again** rereads the user settings.
+- **disabled:** a switch that enables `tailscale` in `~/.ultimate/settings.json` through onboarding's `setExtension` action with user scope; it never offers project scope. The popover loads only with the extension, so this state shows when your settings disable it and a project enables it. **Check again** rereads the user settings.
 - **starting:** a quiet spinner.
 
 Other extensions read the status through `TailscaleApi` (`api.ts`), `host.want(TailscaleApi)?.status()`; `instance` takes the DNS name of its `url` for its previews' tailnet addresses.

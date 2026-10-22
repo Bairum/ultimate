@@ -251,7 +251,12 @@ it.concurrent('starts a lineage branch with a message input and caller attributi
     ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = []
   }, context)
   await ask(f.server, ultimate, 'BRANCH ' + JSON.stringify({ prompt: 'No roots', isolated: false }))
-  expect(f.requests.some((text) => text.includes('Choose a root. Roots: (none)'))).toBe(true)
+  // The refusal is a tool result in @ultimate's transcript; a note may join the same request after it.
+  await until(async () =>
+    (await entries(f.server, ultimate)).some((entry) =>
+      JSON.stringify(entry).includes('Choose a root. Roots: (none)'),
+    ),
+  )
 })
 
 it.concurrent('refreshes standing definitions for numeric-address deliveries', async () => {

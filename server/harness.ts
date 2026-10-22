@@ -7,8 +7,7 @@ import { compareExtensions } from './discovery.ts'
 import { acquireLock } from './lock.ts'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import type { FauxProviderHandle } from '@earendil-works/pi-ai/providers/faux'
 import { ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent'
 import { createRegistry, Harness } from '@earendil-works/pi-durable'
 import type { Context } from '@earendil-works/chord'
@@ -61,8 +60,6 @@ export function reportMessage(error: unknown, info: ReportInfo): string {
  */
 const large = { reserveTokens: 32768, keepRecentTokens: 60000, backgroundTokens: 131072 }
 export const compactionOverrides: Record<string, Partial<CompactionPolicy>> = {
-  // 128k window, 16k answers: start in the background at ~80k.
-  'faux/faux-1': { reserveTokens: 16384, keepRecentTokens: 16000, backgroundTokens: 32768 },
   // 500k window, 128k answers: blocking at ~467k, background from ~400k.
   'openai-codex/gpt-6.1-sol': {
     reserveTokens: 32768,
@@ -118,7 +115,8 @@ export interface HostOptions {
   projectRoot?: string
   userHome?: string
   home?: string
-  faux?: boolean
+  /** Tests only: a faux provider, registered with the configured ones; new conversations default to its model. */
+  faux?: FauxProviderHandle
   report?: (notice: Notice) => void
 }
 export async function prepareHarness(options: HostOptions) {
@@ -145,27 +143,27 @@ export async function prepareHarness(options: HostOptions) {
     }
     return found
   }
-  const fauxMode = options.faux ?? process.env.ULTIMATE_FAUX === '1'
   // Here, not with the extensions: model calls are traced through the models the harness opens with, and through the
   // runtime extensions call directly (health's pings), so `modelRuntime` below is the guarded one too.
   const trace = callTrace(join(home, 'trace.sqlite'))
   const modelCalls = modelTrace(trace)
   registry.install(modelCalls.extension)
   const modelRuntime = guardToolArguments(runtime, modelCalls)
-  let fauxHandle: ReturnType<typeof fauxProvider> | undefined
-  let models: Parameters<typeof Harness.open>[1]['models'] = modelRuntime
-  if (fauxMode) {
-    const collection = createModels()
-    const faux = fauxProvider({ tokensPerSecond: 350 })
-    fauxHandle = faux
-    collection.setProvider(faux.provider)
-    models = guardToolArguments(collection, modelCalls)
+  const { faux } = options
+  if (faux) {
+    runtime.registerNativeProvider(faux.provider)
+    await runtime.refresh({ allowNetwork: false })
   }
-  const available = fauxMode ? [] : await modelRuntime.getAvailable()
-  const preferred =
-    available.find(
-      (m) => m.provider === settings.getDefaultProvider() && m.id === settings.getDefaultModel(),
-    ) ?? available[0]
+  /** The model a new conversation starts on, read when the harness opens, after extensions registered theirs. */
+  const preferred = async () => {
+    if (faux) return faux.getModel()
+    const available = await modelRuntime.getAvailable()
+    return (
+      available.find(
+        (m) => m.provider === settings.getDefaultProvider() && m.id === settings.getDefaultModel(),
+      ) ?? available[0]
+    )
+  }
   let active:
     | {
         harness: Harness
@@ -188,8 +186,8 @@ export async function prepareHarness(options: HostOptions) {
       if (!active) throw new Error('Harness is not open')
       return active.storage.scanSubmissions(query, limit, cursor, caller)
     },
-    models: async () => (await listModels(modelRuntime, fauxHandle)).models,
-    model: (ref: ModelRef) => models.getModel(ref.provider, ref.modelId),
+    models: async () => (await listModels(modelRuntime)).models,
+    model: (ref: ModelRef) => modelRuntime.getModel(ref.provider, ref.modelId),
     skills: (cwd: string) => projectSkills({ ultimateRoot, projectRoot, userHome }, cwd),
     restart: (approved: (generation: number) => Promise<void>) =>
       requestSwap(approved, builds.current()),
@@ -207,7 +205,7 @@ export async function prepareHarness(options: HostOptions) {
     registry,
     extensionOrders,
     extensionSources,
-    faux: fauxHandle,
+    faux,
     async open(resume = true) {
       const owner = await acquireLock(
         join(home, 'storage.lock'),
@@ -226,7 +224,7 @@ export async function prepareHarness(options: HostOptions) {
         harness = await Harness.open(
           storage,
           {
-            models,
+            models: modelRuntime,
             registry,
             settings: createHarnessSettings(settings, () =>
               registry
@@ -253,14 +251,11 @@ export async function prepareHarness(options: HostOptions) {
           },
           context,
         )
+        const model = await preferred()
         const root = await harness.root(context, {
           agent: {
             cwd: projectRoot,
-            ...(fauxMode
-              ? { model: { provider: 'faux', modelId: 'faux-1' } }
-              : preferred
-                ? { model: { provider: preferred.provider, modelId: preferred.id } }
-                : {}),
+            ...(model ? { model: { provider: model.provider, modelId: model.id } } : {}),
             thinkingLevel: settings.getDefaultThinkingLevel(),
           },
         })

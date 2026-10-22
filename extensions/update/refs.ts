@@ -67,11 +67,6 @@ export const CheckAction = actionRef<null, UpdateState>('update', 'check')
  * dirty, diverged or switched clone and while the lander lands into it; never stashes, rebases or resets.
  */
 export const UpdateAction = actionRef<null, UpdateResult>('update', 'update')
-/** Faux only: show the status-line item in demo state `state`, for previews. */
-export const DemoAction = actionRef<
-  { state: 'behind' | 'refused' | 'updated' | 'current' },
-  UpdateState
->('update', 'demo')
 
 /**
  * The clone fast-forwarded `from..to` (`commits` commits) touching `layers`; `install` says whether packages were
