@@ -33,6 +33,7 @@ import type {
   Tx,
 } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
+import { actingAs } from '../../lib/acting-as.ts'
 import type { ActionInput } from '../../lib/actions.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
@@ -1541,8 +1542,9 @@ export default function lineageExtension(host: ExtensionHost) {
           to: Type.Union([Type.Integer({ minimum: 1 }), Type.Literal('root')]),
           text: Type.String({ minLength: 1 }),
         }),
-        async execute({ to, text }, api) {
-          const target = await leaveNote(host, to, text, { from: api.conversationId })
+        async execute({ to, text }, api, ctx) {
+          const from = await actingAs(host, api.conversationId, ctx)
+          const target = await leaveNote(host, to, text, { from })
           return { output: [{ type: 'text', text: `Left a note in #${target}.` }] }
         },
       }),
@@ -1556,15 +1558,15 @@ export default function lineageExtension(host: ExtensionHost) {
         }),
         async execute({ id, wake = true }, api, ctx) {
           const target = id as ConversationId
-          if (target === api.conversationId)
-            throw new Error('A conversation cannot notify on itself')
+          const from = await actingAs(host, api.conversationId, ctx)
+          if (target === from) throw new Error('A conversation cannot notify on itself')
           const replaced = await api.commit(async (tx) => {
             if (!(await tx.conversation(target))) throw new Error(`No conversation #${target}`)
             const pending: TaskId[] = []
             let cursor: Cursor | undefined
             do {
               const page = await tx.scanTasks(
-                { conversationId: api.conversationId, kind: Notify.definition.name },
+                { conversationId: from, kind: Notify.definition.name },
                 100,
                 cursor,
               )
@@ -1579,11 +1581,21 @@ export default function lineageExtension(host: ExtensionHost) {
             await tx.createTask(
               Notify,
               { target, wake },
-              { ownership: { kind: 'conversation' }, background: true },
+              { conversationId: from, ownership: { kind: 'conversation' }, background: true },
             )
             return pending
           }, ctx)
           for (const task of replaced) await host.harness().abortTask(task, ctx)
+          if (from !== api.conversationId)
+            await leaveNote(
+              host,
+              from,
+              `Side chat #${api.conversationId} requested notification for #${target} (report comes here).`,
+              {
+                from: api.conversationId,
+                requestId: `sidechat:notify:${api.taskId}:${api.callId}`,
+              },
+            )
           host.harness().resume()
           return {
             output: [

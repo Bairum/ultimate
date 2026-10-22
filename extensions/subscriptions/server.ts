@@ -16,6 +16,8 @@ import {
 import type { Agent, ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { actingAs } from '../../lib/acting-as.ts'
+import { LineageApi } from '../lineage/api.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import type { AgentDefinition } from '../../lib/agents.ts'
 import {
@@ -1054,23 +1056,40 @@ export default function subscriptions(host: ExtensionHost) {
             context,
           )
           if (cached) return cached
+          const caller =
+            args.action === 'create' || args.action === 'subscribe'
+              ? await actingAs(host, tool.conversationId, context)
+              : tool.conversationId
           const saved = await tool.commit(
             async (tx) => json(await tx.doc(Receipt, tool.taskId)),
             context,
           )
           let receipt = saved
           if (saved.result === undefined) {
-            const prepared = await api.prepare(args, tool.conversationId)
+            const prepared = await api.prepare(args, caller)
             receipt = await tool
               .commit(async (tx) => {
                 const value = await tx.doc(Receipt, tool.taskId)
                 if (value.result === undefined)
-                  Object.assign(value, await api.change(tx, args, prepared, tool.conversationId))
+                  Object.assign(value, await api.change(tx, args, prepared, caller))
                 return json(value)
               }, context)
               .finally(() => api.settle(prepared))
           }
           await api.apply(receipt.effect)
+          if (caller !== tool.conversationId) {
+            const sub = receipt.result as unknown as Subscription
+            await host
+              .need(LineageApi)
+              .leaveNote(
+                caller,
+                `Side chat #${tool.conversationId} ${args.action === 'create' ? 'created' : 'subscribed to'} subscription ${sub.id}.`,
+                {
+                  from: tool.conversationId,
+                  requestId: `sidechat:subscription:${tool.taskId}:${tool.callId}`,
+                },
+              )
+          }
           return tool.memo(
             'result',
             { output: [{ type: 'text' as const, text: concise(receipt.result!) }] },

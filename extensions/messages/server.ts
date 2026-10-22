@@ -45,6 +45,7 @@ import { callerOf } from './caller.ts'
 import { CallerAction } from './refs.ts'
 import type { Remote, Triage } from './refs.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { actingAs } from '../../lib/acting-as.ts'
 import { declared, needsDecision, parseVerdict, TRIAGE_SYSTEM, triageInput } from './triage.ts'
 import type { Verdict } from './triage.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
@@ -1316,6 +1317,7 @@ export default function messages(host: ExtensionHost) {
         // Lineage atomically deduplicates the fork; Sent deduplicates its first message.
         replay: 'safe',
         async execute(input, api, ctx) {
+          const from = await actingAs(host, api.conversationId, ctx)
           let id = await api.memo<number>('branch-id', ctx)
           if (id === undefined) {
             const lineage = host.need(LineageApi)
@@ -1343,7 +1345,7 @@ export default function messages(host: ExtensionHost) {
                 prompt: input.prompt,
                 isolated: input.isolated ?? true,
                 deliver: false,
-                by: api.conversationId,
+                by: from,
                 receipt: { taskId: api.taskId, callId: api.callId },
               },
               ctx,
@@ -1352,13 +1354,13 @@ export default function messages(host: ExtensionHost) {
             await host.harness().commit(async (tx) => {
               await configure(tx, branch.id, { instructions: coordinator.instructions })
               ;(await tx.doc(host.metadata, branch.id)).label = 'coordinator'
-              ;(await tx.doc(Started, branch.id)).by = api.conversationId
+              ;(await tx.doc(Started, branch.id)).by = from
             }, ctx)
             id = await api.memo('branch-id', branch.id, ctx)
           }
           const message = await send(
             host,
-            api.conversationId,
+            from,
             {
               to: `#${id}`,
               text: input.prompt,
@@ -1369,6 +1371,17 @@ export default function messages(host: ExtensionHost) {
             api.taskId,
             api.callId,
           )
+          if (from !== api.conversationId)
+            await host
+              .need(LineageApi)
+              .leaveNote(
+                from,
+                `Side chat #${api.conversationId} started branch #${id}: ${input.prompt.split('\n')[0].slice(0, 160)}`,
+                {
+                  from: api.conversationId,
+                  requestId: `sidechat:branch:${api.taskId}:${api.callId}`,
+                },
+              )
           return {
             output: [{ type: 'text', text: `Branch #${id} started; message ${message} sent.` }],
           }
@@ -1388,13 +1401,33 @@ export default function messages(host: ExtensionHost) {
         // The task-scoped receipt deduplicates admission; the memo returns the same id on replay.
         replay: 'safe',
         async execute(input, api, ctx) {
+          // A temporary copy cannot use main's privilege to message the user.
+          const from =
+            input.to === 'user' ? api.conversationId : await actingAs(host, api.conversationId, ctx)
           const id =
             (await api.memo<number>('message-id', ctx)) ??
             (await api.memo(
               'message-id',
-              await send(host, api.conversationId, input, ctx, api.taskId, api.callId),
+              await send(host, from, input, ctx, api.taskId, api.callId),
               ctx,
             ))
+          if (from !== api.conversationId && input.reply !== false) {
+            const sent = (await host
+              .harness()
+              .snapshot(Messages, ROOT_CONVERSATION_ID, ctx))!.messages.find(
+              (message) => message.id === id,
+            )!
+            await host
+              .need(LineageApi)
+              .leaveNote(
+                from,
+                `Side chat #${api.conversationId} messaged #${sent.to} (reply comes here): ${input.text.split('\n')[0].slice(0, 160)}`,
+                {
+                  from: api.conversationId,
+                  requestId: `sidechat:message:${api.taskId}:${api.callId}`,
+                },
+              )
+          }
           if (input.to !== 'user')
             return { output: [{ type: 'text', text: `Message ${id} sent.` }] }
           // The message is @ultimate's answer: the run ends here instead of restating it, unless a reply is owed.
