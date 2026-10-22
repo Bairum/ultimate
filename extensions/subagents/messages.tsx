@@ -42,9 +42,13 @@ export function AgentMessages() {
   )
 }
 
-/** Who sent a message: a subagent by its agent name, a top-level coordinator by its feature. */
+/** A subagent's definition name; a standing agent (label `agent`) and a coordinator go by their conversation. */
+const senderAgent = (origin: AgentOrigin, label?: string) =>
+  label === 'agent' ? undefined : (label ?? (origin.kind === 'report' ? origin.agent : undefined))
+
+/** Who sent a message: a subagent by its agent name, a standing agent by its `@name`, a coordinator by its feature. */
 function Sender({ origin, label }: { origin: AgentOrigin; label?: string }) {
-  const agent = label ?? (origin.kind === 'report' ? origin.agent : undefined)
+  const agent = senderAgent(origin, label)
   return agent ? `${agent} #${origin.sender}` : <ConversationRef id={origin.sender} />
 }
 
@@ -142,7 +146,7 @@ export function AgentInbox({
           <BotIcon className="size-3 shrink-0 text-brand" />
           <span
             className="min-w-0 truncate text-foreground"
-            title={`${sender?.label ?? (origin.kind === 'report' ? origin.agent : 'agent')} #${origin.sender}`}
+            title={`${senderAgent(origin, sender?.label) ?? sender?.title ?? 'agent'} #${origin.sender}`}
           >
             <Sender origin={origin} label={sender?.label} />
           </span>

@@ -5,7 +5,7 @@ import { ConversationRef } from '../../extensions/conversations/feature.tsx'
 
 const state = vi.hoisted(() => ({
   features: {} as Record<string, { feature?: string }>,
-  titles: [] as { id: number; title?: string }[],
+  titles: [] as { id: number; title?: string; label?: string }[],
 }))
 vi.mock('@/sdk', () => ({
   cn: (...names: unknown[]) => names.filter(Boolean).join(' '),
@@ -41,6 +41,16 @@ it('falls back to the live title, then to the id alone', () => {
     grayId: '#7',
   })
   expect(read({ id: 8 })).toEqual({ text: '#8', tag: undefined, grayId: '#8' })
+})
+
+it('names a standing agent by its @name alone, whatever feature or title it carries', () => {
+  state.features = { '43': { feature: 'Chat Cards' } }
+  state.titles = [{ id: 43, title: '@ultimate', label: 'agent' }]
+  expect(read({ id: 43, title: 'Fold cards in the chat' })).toEqual({
+    text: '@ultimate #43',
+    tag: undefined,
+    grayId: '#43',
+  })
 })
 
 it('shows a given title after the feature, and instead of the live one', () => {
