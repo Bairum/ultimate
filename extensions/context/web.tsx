@@ -131,8 +131,12 @@ function Row({
     <Collapsible className="group/row">
       <CollapsibleTrigger className="flex h-6 w-full cursor-pointer items-center gap-2 rounded-sm px-3 text-left hover:bg-accent/50">
         <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/60 transition-transform group-data-[state=open]/row:rotate-90" />
-        <span className="w-44 shrink-0 truncate text-foreground/85 max-sm:w-28">{name}</span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground/70">{hint}</span>
+        <span className="w-44 shrink-0 truncate text-foreground/85 max-sm:w-auto max-sm:min-w-0 max-sm:flex-1">
+          {name}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground/70 max-sm:hidden">
+          {hint}
+        </span>
         {total !== undefined && (
           <span className="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-muted max-sm:hidden">
             <span
