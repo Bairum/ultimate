@@ -33,6 +33,8 @@ import {
   StatsAction,
 } from './refs.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
+import { sweepPidFiles } from '../../lib/process-group.ts'
+import { checkPids } from './lander.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
 export const order = -200
 export const docs = [Workspaces]
@@ -226,6 +228,10 @@ export default function workspaceExtension(host: ExtensionHost) {
       pending = setTimeout(() => void stand(), 200)
     })
     await stand()
+    // Checks a crashed host left running would compete with the resumed lander's own run of them.
+    await sweepPidFiles(checkPids(host.home)).catch((error: unknown) => {
+      host.notice(`Lander check sweep failed: ${String(error)}`)
+    })
     await resume()
   })
   host.onClose(async () => {

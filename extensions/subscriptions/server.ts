@@ -1,9 +1,6 @@
-import { spawn } from 'node:child_process'
-import type { ChildProcess } from 'node:child_process'
-import { constants, writeFileSync } from 'node:fs'
+import { constants } from 'node:fs'
 import type { Dirent } from 'node:fs'
-import { access, appendFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { setTimeout as sleep } from 'node:timers/promises'
+import { access, appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord'
@@ -20,6 +17,8 @@ import type { Agent, ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
+import { groupAlive, readPidFile, spawnGroup, stopGroup } from '../../lib/process-group.ts'
+import type { GroupProcess } from '../../lib/process-group.ts'
 import { readSecret, validateName } from '../../lib/secrets.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { BoardApi } from '../board/api.ts'
@@ -67,30 +66,11 @@ const terminal = {
   status: 'terminal' as const,
   outcome: { status: 'completed' as const, result: null },
 }
-/** The executable cannot start until its pid file exists; host death before go produces EOF instead. */
-export const launchHandshake = 'read -r _ || exit 1; exec "$0"'
+export { handshake as launchHandshake } from '../../lib/process-group.ts'
 const json = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 function required(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} is required`)
   return value.trim()
-}
-function kill(pid: number, signal: NodeJS.Signals = 'SIGTERM') {
-  try {
-    process.kill(-pid, signal)
-  } catch (error) {
-    // The group may already have exited between the snapshot and the kill.
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
-  }
-}
-function alive(pid?: number) {
-  if (!pid) return false
-  try {
-    process.kill(-pid, 0)
-    return true
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false
-    throw error
-  }
 }
 type Delivery = {
   sub: Subscription
@@ -100,7 +80,7 @@ type Delivery = {
   targets: number[]
 }
 type Run = {
-  child: ChildProcess
+  child: GroupProcess
   active: boolean
   afterFire: boolean
   queue: Promise<void>
@@ -210,31 +190,16 @@ function backend(host: ExtensionHost) {
         owner,
       )
     }
-    async function readPid(id: string): Promise<number | undefined> {
-      let text: string
-      try {
-        text = await readFile(join(folder(id), 'pid'), 'utf8')
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-        throw error
-      }
-      const pid = Number(text.trim())
-      if (!Number.isSafeInteger(pid) || pid < 1) throw new Error(`Invalid pid file for ${id}`)
-      return pid
-    }
+    const readPid = (id: string) => readPidFile(join(folder(id), 'pid'))
     function cleanup(id: string, pid: number, run?: Run): Promise<void> {
       if (run?.cleanup) return run.cleanup
       const work = (async () => {
-        kill(pid)
-        const grace = Date.now() + 3000
-        while (alive(pid) && Date.now() < grace) await sleep(20)
-        if (alive(pid)) kill(pid, 'SIGKILL')
-        if (run) await run.closed
-        const deadline = Date.now() + 3000
-        while (alive(pid) && Date.now() < deadline) await sleep(20)
-        if (alive(pid)) throw new Error(`Subscription ${id}: process group ${pid} did not exit`)
-        // Never erase evidence for a replacement process, or before the whole group is confirmed gone.
-        if ((await readPid(id)) === pid) await rm(join(folder(id), 'pid'), { force: true })
+        // The pid file stays until the whole group is confirmed gone, and never names a replacement when removed.
+        await stopGroup(pid, { pidFile: join(folder(id), 'pid'), exited: run?.closed }).catch(
+          (error: unknown) => {
+            throw new Error(`Subscription ${id}: ${String(error)}`)
+          },
+        )
         if (runs.get(id) === run) runs.delete(id)
       })()
       if (!run) return work
@@ -326,12 +291,15 @@ function backend(host: ExtensionHost) {
       }
       await access(join(dir, 'run'), constants.X_OK)
       if (closing) throw new Error('Subscription supervisor is closing')
-      const child = spawn('/bin/sh', ['-c', launchHandshake, join(dir, 'run')], {
-        cwd: dir,
-        detached: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env,
-      })
+      let child: GroupProcess
+      try {
+        // The script waits behind the handshake until its pid file is written.
+        child = spawnGroup(join(dir, 'run'), [], { cwd: dir, env, pidFile: join(dir, 'pid') })
+      } catch (error) {
+        throw new Error(`Subscription ${id}: could not record its pid: ${String(error)}`, {
+          cause: error,
+        })
+      }
       const closed = Promise.withResolvers<void>()
       const run: Run = {
         child,
@@ -344,24 +312,10 @@ function backend(host: ExtensionHost) {
       child.on('error', (error) => {
         run.error = error.message
       })
-      child.stdin.on('error', (error) => {
-        run.error = error.message
-      })
       child.on('close', (code, signal) => {
         closed.resolve()
         enqueue(() => finish(id, run, code, signal ?? undefined, run.error))
       })
-      try {
-        // The wrapper waits for go until its pid is recorded; exec preserves the pid and process group.
-        if (child.pid) {
-          writeFileSync(join(dir, 'pid'), `${child.pid}\n`)
-          child.stdin.end('\n')
-        }
-      } catch (error) {
-        run.active = false
-        if (child.pid) await cleanup(id, child.pid, run)
-        throw error
-      }
       // Hold output until the pid and Started event are committed, even for an immediately exiting script.
       run.queue = host.harness().commit(async (tx) => {
         const saved = (await tx.doc(Subscriptions)).subscriptions[id]
@@ -547,7 +501,10 @@ function backend(host: ExtensionHost) {
       const state = await tx.doc(Subscriptions)
       if (args.action === 'list')
         return {
-          result: Object.values(state.subscriptions).map((s) => ({ ...s, alive: alive(s.pid) })),
+          result: Object.values(state.subscriptions).map((s) => ({
+            ...s,
+            alive: groupAlive(s.pid),
+          })),
         }
       if (args.action === 'create') {
         const id = `S${state.next++}`

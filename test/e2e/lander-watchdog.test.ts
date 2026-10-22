@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { runLanderCheck } from '../../extensions/workspaces/lander.ts'
@@ -12,7 +12,12 @@ it('kills a silent process group on stall and a printing process on the total ca
       const pidFile = join(directory, 'pid')
       const childFile = join(directory, 'child')
       const command = `echo $$ > '${pidFile}'; sleep 10 & echo $! > '${childFile}'; ${printing ? 'while true; do echo progress; sleep 0.02; done' : 'wait'}`
-      const result = await runLanderCheck(directory, command, context, { stall: 0.2, total: 0.5 })
+      const pids = join(directory, 'pids')
+      const result = await runLanderCheck(directory, command, context, pids, {
+        stall: 0.2,
+        total: 0.5,
+      })
+      expect(await readdir(pids)).toEqual([])
       expect(result.failure).toContain(printing ? 'Timed out after' : 'Stalled: no output for')
       expect(result.failure?.includes('progress')).toBe(printing)
       const pid = Number(await readFile(pidFile, 'utf8'))

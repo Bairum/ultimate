@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
@@ -12,7 +12,6 @@ import {
   defineTask,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type {
   AgentChange,
   ConversationDocToken,
@@ -20,6 +19,7 @@ import type {
   Tx,
 } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
+import { runGroup } from '../../lib/process-group.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
 import { CheckRan, Handoff, SubmissionLanded } from './api.ts'
@@ -173,11 +173,18 @@ export const limitsFor = (check: Check, limits: CheckLimits): CheckLimits =>
 const failedLine = /^\s*(FAIL|×|✗)\s/
 const seconds = (value: number) => (value < 60 ? `${value} s` : `${+(value / 60).toFixed(1)} min`)
 
-/** Watchdog aborts use the execution environment's process-group kill, just like task cancellation. */
+/** Where running checks record their process groups, so a host that crashed mid-check stops them on its next open. */
+export const checkPids = (home: string) => join(home, 'lander', 'checks')
+
+/**
+ * Run `command` with bash in its own process group, recorded in `pids` while it runs. The watchdog and task
+ * cancellation both stop the whole group: TERM, then KILL after a short grace.
+ */
 export async function runLanderCheck(
   path: string,
   command: string,
   context: Context,
+  pids: string,
   limits: CheckLimits = checkLimits,
 ) {
   let output = ''
@@ -207,29 +214,34 @@ export async function runLanderCheck(
       .join('\n')
       .trim()
   }
+  const onOutput = (text: string) => {
+    output = (output + text).slice(-3000)
+    const split = (partial + text).split('\n')
+    partial = split.pop()!.slice(-1000)
+    for (const line of split) {
+      const plain = stripVTControlCharacters(line).trim()
+      if (failedLine.test(plain)) failed.add(plain.slice(0, 300))
+    }
+    clearTimeout(stallTimer)
+    stallTimer = setTimeout(stalled, limits.stall * 1000)
+  }
   try {
-    const result = await new NodeExecutionEnv({ cwd: path }).exec(
-      command,
-      {
-        onOutput: (text) => {
-          output = (output + text).slice(-3000)
-          const split = (partial + text).split('\n')
-          partial = split.pop()!.slice(-1000)
-          for (const line of split) {
-            const plain = stripVTControlCharacters(line).trim()
-            if (failedLine.test(plain)) failed.add(plain.slice(0, 300))
-          }
-          clearTimeout(stallTimer)
-          stallTimer = setTimeout(stalled, limits.stall * 1000)
-        },
-      },
-      withAbortSignal(signal, context),
-    )
+    let exitCode: number
+    try {
+      exitCode = await runGroup('/bin/bash', ['-c', command], {
+        cwd: path,
+        pidFile: join(pids, `${randomUUID()}.pid`),
+        signal,
+        grace: 2000,
+        onOutput,
+      })
+    } catch (error) {
+      context.abortSignal?.throwIfAborted()
+      return { failure: `${output}\n${String(error)}`.trim() }
+    }
     context.abortSignal?.throwIfAborted()
     if (stopped) return { failure: watchdogFailure(stopped), timedOut: true }
-    if (!result.ok) return { failure: `${output}\n${result.error.message}`.trim() }
-    if (result.value.exitCode !== 0)
-      return { failure: `${output}\nexit ${result.value.exitCode}`.trim() }
+    if (exitCode !== 0) return { failure: `${output}\nexit ${exitCode}`.trim() }
     const last = lines(stripVTControlCharacters(output)).findLast((line) => line.trim())
     return { summary: last?.trim().slice(0, 200) }
   } finally {
@@ -820,7 +832,13 @@ export function createLander(
               const members = Array.isArray(group) ? group : [group]
               const commands = members.map((check) => check.command)
               const run = (command: string, member: number) =>
-                runLanderCheck(path, command, checkContext, limitsFor(members[member], limits))
+                runLanderCheck(
+                  path,
+                  command,
+                  checkContext,
+                  checkPids(host.home),
+                  limitsFor(members[member], limits),
+                )
               /** One command: its first run, then one rerun when that failed; its output tail if it failed twice. */
               const settle = async (command: string, member: number) => {
                 // Outcomes are durable (memos are first-writer-wins, so the rerun has its own key): a resume

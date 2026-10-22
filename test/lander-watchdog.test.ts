@@ -1,30 +1,40 @@
+import { tmpdir } from 'node:os'
 import { withAbortSignal } from '@earendil-works/chord/context'
-import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
-import { landerSettings, limitsFor, runLanderCheck } from '../extensions/workspaces/lander.ts'
+import { runGroup } from '../lib/process-group.ts'
+import {
+  landerSettings,
+  limitsFor,
+  runLanderCheck as run,
+} from '../extensions/workspaces/lander.ts'
+
+vi.mock('../lib/process-group.ts', () => ({ runGroup: vi.fn<typeof runGroup>() }))
+const runLanderCheck = (
+  path: string,
+  command: string,
+  ctx: typeof context,
+  limits?: Parameters<typeof run>[4],
+) => run(path, command, ctx, tmpdir(), limits)
 
 afterEach(() => {
-  vi.restoreAllMocks()
+  vi.resetAllMocks()
   vi.useRealTimers()
 })
 
+/** A check that prints `line` every `outputEvery` ms until it is stopped, then exits from SIGKILL. */
 function hanging(outputEvery?: number, line = 'progress\n') {
   vi.useFakeTimers()
-  return vi
-    .spyOn(NodeExecutionEnv.prototype, 'exec')
-    .mockImplementation(async (_command, options, ctx) => {
-      const timer = outputEvery
-        ? setInterval(() => options?.onOutput?.(line, ctx, { stream: 'stdout' }), outputEvery)
-        : undefined
+  vi.mocked(runGroup).mockImplementation(async (_program, _args, options) => {
+    const timer = outputEvery ? setInterval(() => options.onOutput(line), outputEvery) : undefined
+    // Like runGroup, a signal that aborted before the start stops the run at once.
+    if (!options.signal!.aborted)
       await new Promise<void>((resolve) =>
-        ctx.abortSignal!.addEventListener('abort', () => resolve(), { once: true }),
+        options.signal!.addEventListener('abort', () => resolve(), { once: true }),
       )
-      clearInterval(timer)
-      return { ok: false, error: new Error('aborted') } as Awaited<
-        ReturnType<NodeExecutionEnv['exec']>
-      >
-    })
+    clearInterval(timer)
+    return 137
+  })
 }
 
 it('stops a silent check at the stall limit', async () => {
@@ -131,12 +141,10 @@ it('preserves task cancellation instead of reporting a watchdog failure', async 
 
 it('keeps successful summaries and clears both timers', async () => {
   vi.useFakeTimers()
-  vi.spyOn(NodeExecutionEnv.prototype, 'exec').mockImplementation(
-    async (_command, options, ctx) => {
-      options?.onOutput?.('first\nlast\n', ctx, { stream: 'stdout' })
-      return { ok: true, value: { exitCode: 0 } }
-    },
-  )
+  vi.mocked(runGroup).mockImplementation(async (_program, _args, options) => {
+    options.onOutput('first\nlast\n')
+    return 0
+  })
   expect(await runLanderCheck('.', 'print', context)).toEqual({ summary: 'last' })
   expect(vi.getTimerCount()).toBe(0)
 })

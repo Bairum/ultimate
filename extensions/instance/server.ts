@@ -1,4 +1,3 @@
-import { spawn, type ChildProcess } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import {
   mkdtemp,
@@ -24,6 +23,8 @@ import { TailscaleApi } from '../tailscale/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { cleanPreview, sweepPreviews } from './cleanup.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { spawnGroup, stopGroup } from '../../lib/process-group.ts'
+import type { GroupProcess } from '../../lib/process-group.ts'
 import { ListAction } from './refs.ts'
 
 /** A preview keeps ordinary parent variables, but gets its own host identity and no inherited cloud settings. */
@@ -69,7 +70,7 @@ interface Instance {
   /** The conversation whose workspace it previews, or which started it in the shared checkout. */
   conversationId: number
   faux: boolean
-  child: ChildProcess
+  child: GroupProcess
   output: string
 }
 
@@ -131,15 +132,12 @@ export function remember(
 async function stop(instances: Map<string, Instance>, id: string) {
   const instance = instances.get(id)
   if (!instance) throw new Error(`Unknown instance: ${id}`)
-  if (instance.child.pid !== undefined && live(instance)) {
-    const exited = new Promise<void>((resolve) => instance.child.once('exit', () => resolve()))
-    instance.child.kill('SIGTERM')
-    const timer = setTimeout(() => instance.child.kill('SIGKILL'), 5000)
-    try {
-      await exited
-    } finally {
-      clearTimeout(timer)
-    }
+  if (instance.child.pid !== undefined) {
+    const exited = live(instance)
+      ? new Promise<void>((resolve) => instance.child.once('exit', () => resolve()))
+      : undefined
+    // The whole group: the preview and whatever it started without a group of its own.
+    await stopGroup(instance.child.pid, { grace: 5000, exited })
   }
   if (instance.temporary) {
     await unlink(join(instance.home, 'ultimate.lock')).catch((error: NodeJS.ErrnoException) => {
@@ -338,11 +336,8 @@ export default function instanceExtension(
                 faux: args.faux,
                 ownerPid: process.pid,
               })
-              const child = spawn(process.execPath, ['server/main.ts'], {
-                cwd,
-                env,
-                stdio: ['ignore', 'pipe', 'pipe'],
-              })
+              // No pid file: a preview exits by itself once its owner is gone (ULTIMATE_INSTANCE_OWNER).
+              const child = spawnGroup(process.execPath, ['server/main.ts'], { cwd, env })
               const id = randomUUID()
               const item: Instance = {
                 id,
