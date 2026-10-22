@@ -1,4 +1,5 @@
 import {
+  BrainIcon,
   ChevronRightIcon,
   CircleCheckIcon,
   GitBranchIcon,
@@ -38,7 +39,7 @@ import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open } from '../workspaces/ui.tsx'
 import { ForgetAction, MemoryDoc, TallyDoc } from './refs.ts'
 import type { MemoryItem } from './refs.ts'
-import { column, EmptyRoot, useRoots } from './ui.tsx'
+import { column, EmptyRoot, MEMORY_PANEL, useRoots } from './ui.tsx'
 import { GoBackAction, Rewound, RewoundDependent } from './rewind.tsx'
 
 function userText(entry: EntryRecord) {
@@ -564,11 +565,14 @@ function MemoryRow({
   slug,
   item,
   now,
+  plain,
 }: {
   root: number
   slug: string
   item: MemoryItem
   now: number
+  /** Under a heading that already names its kind: no kind chip. */
+  plain?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [forgetting, setForgetting] = useState(false)
@@ -583,9 +587,11 @@ function MemoryRow({
           type="button"
         >
           <span className="flex w-full min-w-0 items-center gap-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
-            <span className={cn('shrink-0 rounded-sm px-1', kindTones[item.kind])}>
-              {item.kind}
-            </span>
+            {!plain && (
+              <span className={cn('shrink-0 rounded-sm px-1', kindTones[item.kind])}>
+                {item.kind}
+              </span>
+            )}
             <span className="min-w-0 truncate text-foreground/80">{slug}</span>
             <span
               className="ml-auto shrink-0 pl-1 text-muted-foreground/60"
@@ -640,6 +646,93 @@ function MemoryRow({
   )
 }
 
+const kindSections = [
+  ['decision', 'Decisions'],
+  ['fact', 'Facts'],
+  ['lesson', 'Lessons'],
+] as const
+
+/**
+ * The Memory panel: each root's project memory, what every new branch starts from, grouped into decisions, facts and
+ * lessons, newest first, with the brief's size. A row unfolds its body and source; @ultimate maintains it.
+ */
+function MemoryPanel() {
+  const roots = useRoots() ?? []
+  return (
+    <div className="flex flex-col pb-4" data-lineage-memory-panel>
+      {roots.map((root) => (
+        <RootMemory key={root} label={roots.length > 1} root={root} />
+      ))}
+    </div>
+  )
+}
+
+function RootMemory({ root, label }: { root: number; label: boolean }) {
+  const memories = useDocOf(root, MemoryDoc)?.memories ?? {}
+  const tally = useDocOf(root, TallyDoc)
+  const actions = useUltimate()
+  const now = useNow(60_000)
+  const slugs = Object.keys(memories).toSorted(
+    (a, b) => memories[b].updated - memories[a].updated || a.localeCompare(b),
+  )
+  return (
+    <section className="px-3 pt-3" data-lineage-memory={root}>
+      <div className="flex min-w-0 items-center gap-2 font-mono text-[11px] text-muted-foreground">
+        {label && <span className="shrink-0 text-foreground">#{root}</span>}
+        <span className="min-w-0 truncate">
+          {tally?.briefTokens !== undefined
+            ? `${formatTokens(tally.briefTokens)} tokens · every new branch starts here`
+            : 'Every new branch starts here'}
+        </span>
+        <button
+          className="ml-auto shrink-0 cursor-pointer text-brand hover:underline"
+          onClick={() => void talkToUltimate(actions)}
+          type="button"
+        >
+          Talk to @ultimate
+        </button>
+      </div>
+      {slugs.length === 0 ? (
+        <p className="py-6 text-xs text-muted-foreground">
+          No memories yet. @ultimate keeps decisions, facts and lessons here as branches land.
+        </p>
+      ) : (
+        kindSections.map(([kind, title]) => {
+          const shown = slugs.filter((slug) => memories[slug].kind === kind)
+          if (!shown.length) return null
+          return (
+            <div className="mt-3" data-memory-kind={kind} key={kind}>
+              <h3 className="flex items-center gap-1.5 pb-1 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+                <span className={cn('size-1.5 rounded-full', kindDots[kind])} />
+                {title}
+                <span className="text-muted-foreground/60">{shown.length}</span>
+              </h3>
+              <ul className="-mx-1.5 flex flex-col">
+                {shown.map((slug) => (
+                  <MemoryRow
+                    item={memories[slug]}
+                    key={slug}
+                    now={now}
+                    plain
+                    root={root}
+                    slug={slug}
+                  />
+                ))}
+              </ul>
+            </div>
+          )
+        })
+      )}
+    </section>
+  )
+}
+
+const kindDots: Record<MemoryItem['kind'], string> = {
+  decision: 'bg-brand',
+  fact: 'bg-muted-foreground/60',
+  lesson: 'bg-amber-500',
+}
+
 /** Keeps the roots streaming for synchronous readers, such as the `when` of the agent's Compact command. */
 function Roots() {
   useRoots()
@@ -660,6 +753,9 @@ export default defineWebExtension({
   },
   messageActions: [GoBackAction],
   composer: RootComposer,
+  panels: [
+    { id: MEMORY_PANEL, title: 'Memory', icon: BrainIcon, component: MemoryPanel, order: -6 },
+  ],
   slots: { overlay: [Roots] },
   // A root runs no turns and gets no summaries: its tally speaks for it.
   provides: [provide(Unsummarized, (id) => useRoots()?.includes(id) ?? false)],

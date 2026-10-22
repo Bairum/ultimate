@@ -1,4 +1,5 @@
-import { ChevronRightIcon, EllipsisIcon, FoldVerticalIcon, MessageCircleIcon } from 'lucide-react'
+import { EllipsisIcon, FoldVerticalIcon, MessageCircleIcon, ScrollTextIcon } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useEffect, useRef } from 'react'
 import {
   DropdownMenu,
@@ -6,39 +7,19 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import {
-  api,
-  cn,
-  events,
-  formatTokens,
-  Provided,
-  useAction,
-  useDocOf,
-  useEvents,
-  useUltimate,
-} from '@/sdk'
+import { api, cn, formatTokens, Provided, useAction, useDocOf, useEvents, useUltimate } from '@/sdk'
+import { CompactAction, MEMORY_PANEL, MemoryDoc, TallyDoc } from '../lineage/ui.tsx'
 import { Committed } from '../coding-tools/ui.tsx'
 import { BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
-import { CompactAction, RecentAction, TallyDoc } from '../lineage/ui.tsx'
-import type { RootEvent } from '../lineage/types.ts'
 import { CommitCount, ProgressAction, Review, useWorkspaceIndex } from '../workspaces/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import { AgentMark, ConversationPhase, FeatureTag, useOverview } from '../conversations/ui.tsx'
 import { ago } from './lander.tsx'
-import { useSidebarState } from './state.tsx'
+import type { Landing } from './landings.ts'
+import { Section } from './section.tsx'
 import { workOf } from './work.ts'
 import type { Work } from './work.ts'
-
-type Landing = Extract<RootEvent, { type: 'landed' }>
-type Actions = Pick<ReturnType<typeof useUltimate>, 'switchConversation' | 'showSurface'>
-
-/** Opens `conversation` at `entry` on the Agent surface. */
-function openEntry(actions: Actions, conversation: number, entry: number) {
-  events.emit('board:open', { conversation, entry })
-  actions.showSurface('agent')
-  actions.switchConversation(conversation)
-}
 
 /** When a branch last landed: its latest landed submission's last step. */
 export function landedAt(index: ReturnType<typeof useWorkspaceIndex>, id: number) {
@@ -111,6 +92,8 @@ type FlightProps = {
   shown: boolean
   now: number
   work?: Work
+  /** Its subagents, one line each. */
+  children?: ReactNode
 }
 
 /** Uncommitted edits as "+ 4 edits", opening a review of them while something reviews. */
@@ -152,6 +135,7 @@ function PhasedFlightRow({
   shown,
   now,
   work,
+  children,
   phase,
 }: FlightProps & { phase?: { word: string; waiting: boolean } }) {
   const actions = useUltimate()
@@ -164,7 +148,7 @@ function PhasedFlightRow({
       <button
         aria-current={shown ? 'true' : undefined}
         className={cn(
-          'flex w-full min-w-0 cursor-pointer flex-col gap-0.5 rounded-sm py-1 pr-2 pl-[42px] text-left outline-none hover:bg-sidebar-accent/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
+          'mx-2 flex w-[calc(100%-1rem)] min-w-0 cursor-pointer flex-col gap-0.5 rounded-md py-1 pr-2 pl-2.5 text-left outline-none hover:bg-sidebar-accent/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
           shown && 'bg-sidebar-accent',
         )}
         data-in-flight={conversation.id}
@@ -209,53 +193,14 @@ function PhasedFlightRow({
       {work && (
         // Its own line under the row's button, so its links never nest in it.
         <span
-          className="flex min-w-0 items-center gap-2 pr-2 pb-0.5 pl-[54px] font-mono text-[10px] leading-4 text-muted-foreground/80"
+          className="flex min-w-0 items-center gap-2 pr-2 pb-0.5 pl-[30px] font-mono text-[10px] leading-4 text-muted-foreground/80"
           data-flight-work={conversation.id}
         >
           {work.commits && <CommitCount count={work.commits.count} range={work.commits.spec} />}
           {work.edits && <Edits count={work.edits.count} spec={work.edits.spec} />}
         </span>
       )}
-    </li>
-  )
-}
-
-/** A landing as one line: the feature it shipped, its commit count linking the compare range, its age. */
-function LandingLine({ event, root, now }: { event: Landing; root: number; now: number }) {
-  const actions = useUltimate()
-  const label = event.feature ?? event.title
-  return (
-    <li
-      className="flex h-5 min-w-0 items-center gap-1.5 rounded-sm pr-2 pl-[42px] font-mono text-[10.5px] text-muted-foreground hover:bg-sidebar-accent/60"
-      data-root-event="landed"
-    >
-      <button
-        className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        onClick={() => openEntry(actions, root, event.entry)}
-        title={[event.feature, event.title, `Open #${root}/${event.entry}`]
-          .filter(Boolean)
-          .join(' · ')}
-        type="button"
-      >
-        {event.feature ? (
-          <FeatureTag className="max-w-full" feature={event.feature} />
-        ) : (
-          <span className="truncate font-sans text-[11.5px] text-foreground/80">
-            {label ?? event.sha.slice(0, 7)}
-          </span>
-        )}
-      </button>
-      <CommitCount
-        className="text-muted-foreground/80"
-        count={event.commits}
-        href={event.compare}
-        range={event.base ? `${event.base}...${event.sha}` : undefined}
-      />
-      {event.at !== undefined && (
-        <span className="w-6 shrink-0 text-right text-muted-foreground/60">
-          {ago(event.at, now)}
-        </span>
-      )}
+      {children}
     </li>
   )
 }
@@ -295,165 +240,157 @@ function useFlightWork(branches: ConversationSummary[]) {
   )
 }
 
-/** A section's quiet heading, as a fold toggle when it folds. */
-const heading =
-  'flex w-full items-center gap-1 pt-1 pb-0.5 pl-[42px] font-mono text-[9.5px] tracking-wider text-muted-foreground/70 uppercase'
+/** An open branch for the In flight section, with whether it (or a subagent of it) works and its subagent lines. */
+export type Flight = {
+  conversation: ConversationSummary
+  working: boolean
+  parked?: boolean
+  subagents?: ReactNode
+}
 
 /**
- * The head of a tree as a small dashboard: the context every branch starts from, what is in flight (open branches
- * with their feature, state and age) and what landed (feature, commit count linking the compare range on GitHub, age),
- * folded to the last few. Notes, new branches and compactions stay on the root's page. A root is never concluded or
- * cleared; its menu compacts the context or opens @ultimate, who keeps it.
+ * Whether a flight still counts as open once the roots' own landing notes are known too: the lander keeps only recent
+ * results, so a branch whose landing note is newer than its latest input landed, unless it works again.
  */
-export function RootRow({
+export const stillOpen = (flight: Flight, landings: readonly Landing[]) =>
+  flight.working ||
+  !landings.some(
+    (event) =>
+      event.from === flight.conversation.id &&
+      (event.at ?? 0) >= (flight.conversation.inputAt ?? 0),
+  )
+
+/**
+ * In flight · N: every open branch across the project's trees, newest input first, each with its feature, state, age,
+ * its work so far and its subagents nested below it. It replaces the per-root tree; concluded and landed work sits in
+ * the Landed, Earlier and Concluded folds.
+ */
+export function InFlight({
+  flights,
+  shownId,
+  now,
+}: {
+  flights: Flight[]
+  shownId?: number
+  now: number
+}) {
+  const work = useFlightWork(flights.map((flight) => flight.conversation))
+  if (!flights.length) return null
+  return (
+    <Section count={flights.length} id="in-flight" label="In flight">
+      <ul className="flex flex-col gap-px">
+        {flights.map((flight) => (
+          <FlightRow
+            conversation={flight.conversation}
+            key={flight.conversation.id}
+            now={now}
+            parked={flight.parked}
+            shown={flight.conversation.id === shownId}
+            work={work.get(flight.conversation.id)}
+            working={flight.working}
+          >
+            {flight.subagents}
+          </FlightRow>
+        ))}
+      </ul>
+    </Section>
+  )
+}
+
+const kinds = [
+  ['decision', 'decisions'],
+  ['fact', 'facts'],
+  ['lesson', 'lessons'],
+] as const
+
+/**
+ * A root's project memory as one row: what every new branch starts from, counted by kind, with the brief's size; a
+ * click opens the Memory panel. Its tally, the browsable history behind it, is a quiet `context` link beside it. A
+ * root without memories yet shows its context's size and opens the context.
+ */
+export function MemoryRow({
   conversation,
   shown,
-  shownId,
   working,
-  flights,
-  now,
   onTalk,
 }: {
   conversation: ConversationSummary
   shown: boolean
-  shownId?: number
   working?: 'self' | 'subagents'
-  /** Open branches of this tree, newest first, with whether each works. */
-  flights: { conversation: ConversationSummary; working: boolean; parked?: boolean }[]
-  now: number
   onTalk: () => void
 }) {
   const actions = useUltimate()
   const id = conversation.id
   const tally = useDocOf(id, TallyDoc)
-  const [unfolded, setUnfolded] = useSidebarState<number[]>('landingsOpen', [])
-  const more = unfolded.includes(id)
-  const landings = useAction(
-    RecentAction,
-    { id, types: ['landed'], limit: 10 },
-    { onError: () => {} },
-  )
-  const { refetch } = landings
-  // Every entry the root gets recounts its tokens: a new count means something may have landed.
-  const tokens = tally?.tokens
-  const first = useRef(true)
-  useEffect(() => {
-    if (first.current) {
-      first.current = false
-      return
-    }
-    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
-    void refetch()
-  }, [tokens, refetch])
-  // A hardcoded name: the root's summary title described its pre-context history, not what it holds now.
-  const name = 'Project context'
-  // Asked for landings only.
-  const landed = (landings.data ?? []) as Landing[]
-  const shownLandings = more ? landed : landed.slice(0, 3)
-  // The root's own landing notes count too: the lander keeps only recent results.
-  const open = flights.filter(
-    (flight) =>
-      flight.working ||
-      !landed.some(
-        (event) =>
-          event.from === flight.conversation.id &&
-          (event.at ?? 0) >= (flight.conversation.inputAt ?? 0),
-      ),
-  )
-  const work = useFlightWork(open.map((flight) => flight.conversation))
+  const memories = Object.values(useDocOf(id, MemoryDoc)?.memories ?? {})
+  const counts = kinds
+    .map(
+      ([kind, plural]) => [memories.filter((item) => item.kind === kind).length, plural] as const,
+    )
+    .filter(([count]) => count > 0)
+  const tokens = tally?.since === undefined ? undefined : (tally.briefTokens ?? tally.tokens)
+  const openContext = () => {
+    actions.showSurface('agent')
+    actions.switchConversation(id)
+  }
   return (
-    <div
-      className={cn(
-        'group relative mx-2 rounded-md pb-1 transition-colors',
-        shown ? 'bg-sidebar-accent/60' : 'hover:bg-sidebar-accent/30',
-      )}
-      data-conversation={id}
-      data-root-row={id}
-    >
+    <div className="group relative" data-conversation={id} data-root-row={id}>
       <button
-        aria-current={shown ? 'true' : undefined}
-        className="flex h-9 w-full min-w-0 cursor-pointer items-center gap-2.5 rounded-md pr-7 pl-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
-        onClick={() => actions.switchConversation(id)}
-        title={conversation.title ? `${conversation.title} · #${id}` : `#${id}`}
+        aria-label={`Project memory of #${id}`}
+        className="mx-2 flex h-11 w-[calc(100%-1rem)] min-w-0 cursor-pointer items-center gap-2.5 rounded-md pr-7 pl-2 text-left outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+        onClick={() => (memories.length ? actions.openPanel(MEMORY_PANEL) : openContext())}
+        title={
+          memories.length
+            ? 'What every new branch starts from · open Memory'
+            : 'No memories yet: branches start from the project context'
+        }
         type="button"
       >
-        <AgentMark name="root" presence={working === 'self' ? 'working' : undefined} />
-        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-          <span
-            className={cn(
-              'truncate text-[13px] font-semibold',
-              shown ? 'text-foreground' : 'text-foreground/90',
+        <AgentMark name="memory" presence={working === 'self' ? 'working' : undefined} />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span className="truncate text-[13px] leading-5 font-semibold text-foreground">
+              Memory
+            </span>
+            {tokens !== undefined && (
+              <span
+                className="shrink-0 font-mono text-[10px] text-muted-foreground/70"
+                title="Tokens every new branch starts from"
+              >
+                {formatTokens(tokens)}
+              </span>
             )}
-          >
-            {name}
           </span>
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">#{id}</span>
+          <span className="truncate font-mono text-[10px] leading-4 text-muted-foreground">
+            {counts.length
+              ? counts
+                  .map(
+                    ([count, plural]) => `${count} ${count === 1 ? plural.slice(0, -1) : plural}`,
+                  )
+                  .join(' · ')
+              : 'none yet'}
+          </span>
         </span>
-        {tokens !== undefined && tally?.since !== undefined && (
-          <span
-            className="shrink-0 font-mono text-[10px] text-muted-foreground/80"
-            title={
-              tally.briefTokens === undefined
-                ? 'Context every new branch starts from'
-                : 'Memory every new branch starts from'
-            }
-          >
-            {formatTokens(tally.briefTokens ?? tokens)}
-          </span>
-        )}
       </button>
-      {open.length > 0 && (
-        <section aria-label={`In flight in ${name}`}>
-          <h3 className={heading}>In flight · {open.length}</h3>
-          <ul className="flex flex-col">
-            {open.map((flight) => (
-              <FlightRow
-                conversation={flight.conversation}
-                key={flight.conversation.id}
-                now={now}
-                parked={flight.parked}
-                shown={flight.conversation.id === shownId}
-                work={work.get(flight.conversation.id)}
-                working={flight.working}
-              />
-            ))}
-          </ul>
-        </section>
-      )}
-      {landed.length > 0 && (
-        <section aria-label={`Landed in ${name}`}>
-          {landed.length > 3 ? (
-            <button
-              aria-expanded={more}
-              className={cn(heading, 'cursor-pointer outline-none hover:text-foreground')}
-              onClick={() =>
-                setUnfolded((previous) => [
-                  ...previous.filter((root) => root !== id),
-                  ...(more ? [] : [id]),
-                ])
-              }
-              type="button"
-            >
-              Landed
-              <ChevronRightIcon
-                className={cn('size-2.5 transition-transform', more && 'rotate-90')}
-              />
-              <span className="normal-case">{more ? 'fewer' : `${landed.length - 3} more`}</span>
-            </button>
-          ) : (
-            <h3 className={heading}>Landed</h3>
-          )}
-          <ul className="flex flex-col">
-            {shownLandings.map((event) => (
-              <LandingLine event={event} key={event.entry} now={now} root={id} />
-            ))}
-          </ul>
-        </section>
-      )}
+      <button
+        aria-current={shown ? 'true' : undefined}
+        className={cn(
+          'mx-2 flex h-6 w-[calc(100%-1rem)] min-w-0 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-[42px] text-left font-mono text-[10px] text-muted-foreground/70 outline-none hover:bg-sidebar-accent/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
+          shown && 'bg-sidebar-accent text-foreground',
+        )}
+        data-root-context={id}
+        onClick={openContext}
+        title="Every branch, abstract and landing, with breadcrumbs"
+        type="button"
+      >
+        <ScrollTextIcon className="size-3 shrink-0" />
+        <span className="truncate">Project context</span>
+        <span className="shrink-0 text-muted-foreground/50">#{id}</span>
+      </button>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger
           aria-label="Root actions"
-          className="invisible absolute top-1 right-1 flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none group-focus-within:visible group-hover:visible pointer-coarse:visible hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:visible data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
+          className="invisible absolute top-3 right-3 flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none group-focus-within:visible group-hover:visible pointer-coarse:visible hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:visible data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
         >
           <EllipsisIcon className="size-3.5" />
         </DropdownMenuTrigger>

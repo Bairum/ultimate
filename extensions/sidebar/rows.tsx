@@ -428,6 +428,79 @@ type ChildRowProps = {
   parked?: boolean
 }
 
+/**
+ * A subagent in one line under an In flight branch: its mark, plan chip, role and `#id`, and its state word; its
+ * latest activity (or plan task) on hover. `depth` indents a subagent's own subagents.
+ */
+export function SubagentLine(props: ChildRowProps & { depth: number }) {
+  return (
+    <Provided input={props.conversation.id} point={ConversationTask}>
+      {(task) => <TaskedSubagentLine {...props} task={task} />}
+    </Provided>
+  )
+}
+
+function TaskedSubagentLine({
+  conversation,
+  row,
+  shown,
+  primary,
+  parked,
+  depth,
+  task,
+}: ChildRowProps & { depth: number; task?: { chip: ReactNode; title: string } }) {
+  const actions = useUltimate()
+  const board = useDocOf(1, BoardDoc) ?? emptyBoard
+  const state = conversationState(
+    {
+      id: conversation.id,
+      kind: 'subagent',
+      runState: row?.runState,
+      busy: conversation.busy,
+      parked,
+      primary,
+    },
+    board,
+  )
+  const working = state === 'working'
+  const known = state in settled ? settled[state as keyof typeof settled] : undefined
+  return (
+    <button
+      aria-current={shown ? 'true' : undefined}
+      className={cn(
+        'mx-2 flex h-6 w-[calc(100%-1rem)] min-w-0 cursor-pointer items-center gap-1.5 rounded-md pr-2 text-left font-mono text-[10.5px] outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
+        shown && 'bg-sidebar-accent',
+      )}
+      data-child-conversation={conversation.id}
+      onClick={() => actions.switchConversation(conversation.id)}
+      style={{ paddingLeft: 20 + depth * 12 }}
+      title={[
+        `${conversation.label ?? 'Agent'} · #${conversation.id}`,
+        task?.title ?? row?.activity ?? conversation.title,
+      ]
+        .filter(Boolean)
+        .join('\n')}
+      type="button"
+    >
+      <span className="w-2 shrink-0 text-muted-foreground/40">└</span>
+      <Mark state={state} unseen={false} working={working ? 'self' : undefined} />
+      {task?.chip}
+      <span className="min-w-0 flex-1 truncate text-foreground/75">
+        {conversation.label ?? 'agent'}
+        <span className="text-muted-foreground/60"> #{conversation.id}</span>
+      </span>
+      <span
+        className={cn(
+          'shrink-0 text-[10px]',
+          working ? 'text-brand' : (known?.tone ?? 'text-muted-foreground/70'),
+        )}
+      >
+        {working ? 'working' : (known?.word.toLowerCase() ?? 'idle')}
+      </span>
+    </button>
+  )
+}
+
 /** A subagent under its conversation; one working on a plan task leads with its chip and shows the task's title. */
 export function ChildRow(props: ChildRowProps) {
   return (
