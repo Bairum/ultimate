@@ -79,6 +79,8 @@ export default defineWebExtension({
       icon: TerminalIcon,
       component: ClaudeCodePanel,
       order: 10,
+      // Opened from ⌘K and the model picker.
+      tab: false,
     },
   ],
   commands: [

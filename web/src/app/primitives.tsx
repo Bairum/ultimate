@@ -18,7 +18,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { actions, layout, shellKeys } from '../sdk/actions.ts'
 import { useConversation, useExtensions, useRegionOpen, useUiState } from '../sdk/hooks.ts'
-import { panelItems, slotItems } from '../sdk/registry.ts'
+import { panelItems, shownPanels, slotItems } from '../sdk/registry.ts'
 import type { PanelItem } from '../sdk/registry.ts'
 import { overlays, useViewport } from '../sdk/viewport.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
@@ -302,11 +302,11 @@ export function Panels() {
   if (panels.length === 0) return null
   const overlay = overlays('panels', viewport)
   if (!open && !overlay) return null
-  const active = panels.find((panel) => panel.id === selected) ?? panels[0]
+  const { active, tabs } = shownPanels(panels, selected)
   const Panel = active.component
   const content = (
     <>
-      <PanelTabs active={active} panels={panels} />
+      <PanelTabs active={active} panels={tabs} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <ExtensionBoundary
           extension={active.extension}

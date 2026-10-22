@@ -82,6 +82,8 @@ export default defineWebExtension({
       icon: TimerIcon,
       component: AutomationsPanel,
       order: 7,
+      // Opened from the sidebar's SCHEDULED rows and ⌘K.
+      tab: false,
     },
   ],
   commands: [

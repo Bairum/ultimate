@@ -410,7 +410,15 @@ function Opener() {
 export default defineWebExtension({
   slots: { overlay: [Opener] },
   panels: [
-    { id: 'secrets', title: 'Secrets', icon: KeyRoundIcon, component: SecretsPanel, order: 9 },
+    // Opened from ⌘K and missing-secret prompts.
+    {
+      id: 'secrets',
+      title: 'Secrets',
+      icon: KeyRoundIcon,
+      component: SecretsPanel,
+      order: 9,
+      tab: false,
+    },
   ],
   commands: [
     {
