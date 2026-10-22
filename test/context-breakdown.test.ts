@@ -181,6 +181,22 @@ it('shows the recorded model, and the configured one marked as such only before 
   expect(modelLine(undefined, {})).toBeUndefined()
 })
 
+it('carries a fork the entries its source’s compaction kept before the marker', () => {
+  const source = (fields: object) => ({ ...fields, conversationId: 1 }) as unknown as EntryRecord
+  const dropped = source(user('dropped by the compaction'))
+  const kept = source(user('k'.repeat(35)))
+  const compaction = source(
+    entry('pi.compaction', { model: [{ role: 'user', content: 's'.repeat(70), timestamp: 0 }] }),
+  )
+  const head = { ...compaction, head: kept.id } as EntryRecord
+  const after = source(user('a'.repeat(35)))
+  const own = user('mine')
+  const breakdown = breakdownAt([dropped, kept, head, after, own], 4)
+  expect(breakdown.injected?.label).toBe('inherited history · 3 messages')
+  expect(breakdown.injected?.tokens).toBe(20 + 10 + 10)
+  expect(breakdown.injected?.content).not.toContain('dropped')
+})
+
 it('finds where a fork’s own entries start', () => {
   const inherited = { ...user('root'), conversationId: 1 } as unknown as EntryRecord
   const own = user('mine')

@@ -172,13 +172,20 @@ function plain(entry: EntryRecord) {
 
 /**
  * The history a fork carries into its first context: its source's entries from their last context start up to `own`,
- * the fork's first entry. Empty when the fork starts its own context.
+ * the fork's first entry. A compaction keeps the entries from its `head` on, before its marker too. Empty when the
+ * fork starts its own context.
  */
 function inherited(entries: readonly EntryRecord[], own: number): Injected | undefined {
   if (own <= 0 || startsContext(entries[own])) return undefined
   let from = own - 1
   while (from > 0 && !startsContext(entries[from])) from--
-  const carried = entries.slice(from, own).filter((entry) => {
+  const start = entries[from]
+  const head = start?.kind === 'pi.compaction' ? start.head : undefined
+  const kept =
+    head === undefined
+      ? entries.slice(from, own)
+      : [start, ...entries.slice(0, own).filter((entry) => entry.id >= head && entry !== start)]
+  const carried = kept.filter((entry) => {
     const role = entry.model?.[0]?.role
     return role !== undefined && role !== 'system'
   })
