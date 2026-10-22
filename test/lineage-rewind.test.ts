@@ -85,10 +85,12 @@ async function fixture() {
     )!.id as number
   const call = (action: string, args: object) =>
     post(server, `/api/extensions/lineage/actions/${action}`, { args })
+  // These assertions describe the work and rewind notes, not the hidden identity reminder.
   const said = async () =>
     (await conversation.context(context)).messages
       .filter((message) => message.role !== 'system')
       .map((message) => textOf(message.content))
+      .filter((text) => text !== `You are conversation #${conversation.id}.`)
   return { server, conversation, ask, answer, call, said, requests, summaries, state }
 }
 
