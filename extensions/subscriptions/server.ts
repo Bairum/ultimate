@@ -245,9 +245,9 @@ function backend(host: ExtensionHost) {
         const done = sub.once && sub.state === 'done'
         const stopped = !!run?.stopped || closing
         if (!stopped && sub.state !== 'running' && !done) return
-        // A script that printed DONE and exited 0 asked to stop: the same state as `stop`, with nobody woken.
+        // A recurring script that printed DONE and exited 0 asked to stop: the same state as `stop`, with nobody woken.
         const said = run?.done
-        const finished = !stopped && !done && said !== undefined && code === 0
+        const finished = !sub.once && !stopped && !done && said !== undefined && code === 0
         // A fired one-shot is already done in its FIRE commit, so any other unplanned exit is a failure.
         // Shutdown keeps running subscriptions enabled for reopen.
         if (finished) {

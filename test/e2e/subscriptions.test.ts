@@ -246,6 +246,17 @@ it('stops a recurring script that prints DONE and exits 0 without waking anyone;
   expect(await get()).toMatchObject({ exitCode: 2, enabled: true })
   await until(async () => (await inputs(sub.conversationId)).includes('subscriptions.failed'))
   expect(await done()).toHaveLength(2)
+
+  // A one-shot cannot DONE: exiting without a FIRE still fails, so its subscribers are not left waiting.
+  const once = await create(app)
+  await writeRun(folder(once.id), 'echo DONE')
+  await call(app, 'start', once.id)
+  await until(
+    async () =>
+      (await app.harness.snapshot(Subscriptions, context))!.subscriptions[once.id].state ===
+      'investigating',
+  )
+  expect(await done()).toHaveLength(2)
 })
 
 it('waits for a SIGTERM-ignoring script to die before stop returns and removes its pid file', async () => {
