@@ -785,6 +785,38 @@ it('uses a notice, not a card, when @ultimate fails after one retry', async () =
   expect(await f.entries()).toHaveLength(0)
 })
 
+it('checks all siblings of a dense owner and times idleNote with 1500 conversations', async () => {
+  const f = await fixture()
+  const branch = await f.conversation('Dense branch')
+  const last = await f.harness.commit(async (tx) => {
+    ;(await tx.doc(Branch, branch)).branch = { from: ROOT_CONVERSATION_ID, at: 0, intent: 'idle' }
+    ;(await tx.doc(Metadata, branch)).inputAt = 1
+    const anchor = await tx.createTask(Anchor, null, {
+      conversationId: branch,
+      ownership: { kind: 'conversation' },
+    })
+    let child = branch
+    for (let i = 0; i < 1497; i++)
+      child = (await tx.createConversation({ ownership: { kind: 'task', taskId: anchor } })).id
+    ;(await tx.doc(LiveDoc, child)).run = { taskId: anchor, inputs: [] }
+    return child
+  }, context)
+  let started = performance.now()
+  const busy = await f.harness.commit((tx) => idleNote(tx, f.host, f.ultimate, 20_000_000), context)
+  const busyMs = performance.now() - started
+  expect(busy).toBeUndefined()
+  await f.harness.commit(async (tx) => {
+    delete (await tx.doc(LiveDoc, last)).run
+  }, context)
+  started = performance.now()
+  const idle = await f.harness.commit((tx) => idleNote(tx, f.host, f.ultimate, 20_000_000), context)
+  const idleMs = performance.now() - started
+  expect(idle?.entries[0].data.ids).toEqual([branch])
+  console.info(
+    `idleNote (1500 conversations): busy ${busyMs.toFixed(2)} ms; idle ${idleMs.toFixed(2)} ms`,
+  )
+})
+
 it('includes only idle open branches, does not repeat unchanged IDs, clears the note, and caps it', async () => {
   const f = await fixture()
   const ids: Record<string, ConversationId> = {}

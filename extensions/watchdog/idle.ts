@@ -45,12 +45,13 @@ export async function idleNote(
   } while (cursor)
   // Owned descendants keep their branch working even when its coordinator is between turns.
   const children = new Map<ConversationId, ConversationId[]>()
-  for (const conversation of conversations)
-    if (conversation.owner)
-      children.set(conversation.owner.conversationId, [
-        ...(children.get(conversation.owner.conversationId) ?? []),
-        conversation.id,
-      ])
+  for (const conversation of conversations) {
+    if (!conversation.owner) continue
+    const owner = conversation.owner.conversationId
+    const siblings = children.get(owner) ?? []
+    siblings.push(conversation.id)
+    children.set(owner, siblings)
+  }
   const working = async (id: ConversationId): Promise<boolean> => {
     if ((await tx.doc(LiveDoc, id)).run) return true
     for (const child of children.get(id) ?? []) if (await working(child)) return true
