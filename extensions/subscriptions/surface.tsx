@@ -158,7 +158,17 @@ export function Subscriptions() {
                     <span className="flex min-w-0 items-center gap-2">
                       <Dot state={sub.state} />
                       <span className="min-w-0 flex-1 truncate text-[13px]">{sub.title}</span>
-                      <span className="shrink-0 font-mono text-[11px] text-muted-foreground/70">
+                      <span
+                        className="shrink-0 font-mono text-[11px] text-muted-foreground/70"
+                        title={
+                          sub.scope === 'project'
+                            ? 'Project subscription: committed in .ultimate/subscriptions/'
+                            : undefined
+                        }
+                      >
+                        {sub.scope === 'project' && (
+                          <span className="text-muted-foreground/50">project · </span>
+                        )}
                         {sub.id}
                       </span>
                     </span>

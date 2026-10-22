@@ -1,9 +1,13 @@
 export type Subscription = {
+  /** `S<n>` for a user subscription, the folder's slug for a project subscription. */
   id: string
+  /** Committed in `<project>/.ultimate/subscriptions/<id>/`; absent for a user subscription. */
+  scope?: 'project'
   title: string
   ask: string
   once: boolean
   enabled: boolean
+  /** The owning agent; a discovered project subscription gets an idle one at discovery. */
   conversationId: number
   subscribers: number[]
   secrets?: string[]
@@ -22,6 +26,10 @@ export type Subscription = {
 export type SubscriptionListItem = Subscription & { alive: boolean }
 export type CreateArgs = {
   ask: string
+  /** `project` commits the subscription in `<project>/.ultimate/subscriptions/<slug>/`; default `user`. */
+  scope?: 'user' | 'project'
+  /** A project subscription's id and folder name; derived from the title when absent. */
+  slug?: string
   title?: string
   once?: boolean
   secrets?: string[]
@@ -34,6 +42,12 @@ export type Args = Partial<CreateArgs> & {
   lines?: number
   reason?: string
 }
+
+/** The committed `subscription.json` of a project subscription. */
+export type Manifest = { title: string; ask: string; once: boolean; secrets?: string[] }
+/** Lowercase, so a slug never collides with a user subscription's `S<n>`. */
+export const SLUG = /^[a-z][a-z0-9-]{0,62}$/
+export const ID = /^(?:S[1-9]\d*|[a-z][a-z0-9-]{0,62})$/
 
 /** Only stdout has a protocol; progress on stderr never fires a subscription. */
 export function fireText(line: string, stdout: boolean): string | undefined {

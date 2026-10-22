@@ -17,6 +17,7 @@ import type { Agent, ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
+import type { AgentDefinition } from '../../lib/agents.ts'
 import {
   closeOutput,
   groupAlive,
@@ -46,8 +47,8 @@ import {
   SubscribeAction,
   UnsubscribeAction,
 } from './refs.ts'
-import { doneText, fireText, trimLog } from './types.ts'
-import type { Args, Subscription, SubscriptionListItem } from './types.ts'
+import { doneText, fireText, ID, SLUG, trimLog } from './types.ts'
+import type { Args, Manifest, Subscription, SubscriptionListItem } from './types.ts'
 
 export const Subscriptions = defineDoc<{
   next: number
@@ -82,12 +83,44 @@ function required(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} is required`)
   return value.trim()
 }
+function validId(value: unknown): string {
+  const id = required(value, 'id')
+  if (!ID.test(id)) throw new Error('id must be S<n> or a project subscription slug')
+  return id
+}
+const MANIFEST = 'subscription.json'
+/** A project subscription's committed manifest, or undefined when the file is missing or malformed. */
+function manifest(value: unknown): Manifest | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const { title, ask, once, secrets } = value as Record<string, unknown>
+  if (typeof ask !== 'string' || !ask.trim()) return undefined
+  if (title !== undefined && (typeof title !== 'string' || !title.trim())) return undefined
+  if (once !== undefined && typeof once !== 'boolean') return undefined
+  if (
+    secrets !== undefined &&
+    (!Array.isArray(secrets) || secrets.some((s) => typeof s !== 'string'))
+  )
+    return undefined
+  return {
+    title: title?.trim() ?? ask.trim().slice(0, 80),
+    ask: ask.trim(),
+    once: once ?? true,
+    ...(secrets?.length ? { secrets: secrets as string[] } : {}),
+  }
+}
 type Delivery = {
   sub: Subscription
   event: number | string
   kind: 'writing' | 'fired' | 'failed' | 'escalated'
   text: string
   targets: number[]
+}
+/** What an action validated before its transaction: the agent to create, a project slug, a subscriber. */
+type Prepared = {
+  profile?: AgentDefinition
+  parent?: Agent
+  slug?: string
+  target?: number
 }
 type Run = {
   child: GroupProcess
@@ -111,6 +144,148 @@ function backend(host: ExtensionHost) {
     // home is the stable project state directory (~/.ultimate/projects/<name>-<hash>), not a worktree cwd.
     const folder = (id: string) =>
       join(host.userHome, '.ultimate/subscriptions', basename(host.home), id)
+    // A project subscription's `run` and manifest are committed in the host checkout; its runtime stays in folder().
+    const projectDir = (id: string) => join(host.projectRoot, '.ultimate/subscriptions', id)
+    const runPath = (sub: Pick<Subscription, 'id' | 'scope'>) =>
+      join(sub.scope === 'project' ? projectDir(sub.id) : folder(sub.id), 'run')
+    const trusted = async () => (await host.projectSetup()).decision === true
+    /** Manifests under `<project>/.ultimate/subscriptions/<slug>/`, only in a project chosen as local. */
+    async function manifests() {
+      const found = new Map<string, Manifest>()
+      if (!(await trusted())) return found
+      let entries: Dirent[]
+      try {
+        entries = await readdir(join(host.projectRoot, '.ultimate/subscriptions'), {
+          withFileTypes: true,
+        })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return found
+        throw error
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !SLUG.test(entry.name)) continue
+        let text: string
+        try {
+          text = await readFile(join(projectDir(entry.name), MANIFEST), 'utf8')
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+          throw error
+        }
+        let parsed: Manifest | undefined
+        try {
+          parsed = manifest(JSON.parse(text))
+          parsed?.secrets?.forEach(validateName)
+        } catch {
+          // Malformed JSON or a bad secret name is reported below like any other invalid manifest.
+          parsed = undefined
+        }
+        if (parsed) found.set(entry.name, parsed)
+        else host.notice(`Subscription ${entry.name}: invalid ${MANIFEST}`)
+      }
+      return found
+    }
+    /**
+     * Bring project records in line with the committed manifests: a new folder becomes a stopped subscription that
+     * never starts by itself, a changed manifest updates its fields, and a removed folder (or an untrusted project)
+     * stops and forgets its record. Commits only when something changed.
+     */
+    async function discover() {
+      const found = await manifests()
+      const differs = (subs: Record<string, Subscription>) =>
+        [...found].some(
+          ([id, m]) =>
+            !subs[id] ||
+            (subs[id].scope === 'project' &&
+              JSON.stringify([subs[id].title, subs[id].ask, subs[id].once, subs[id].secrets]) !==
+                JSON.stringify([m.title, m.ask, m.once, m.secrets])),
+        ) || Object.values(subs).some((s) => s.scope === 'project' && !found.has(s.id))
+      const current = (await host.harness().snapshot(Subscriptions, BACKGROUND_CONTEXT))
+        ?.subscriptions
+      if (!differs(current ?? {})) return
+      // A new subscription gets its agent now, idle under @ultimate, so every record has one.
+      const prepared = [...found.keys()].some((id) => !current?.[id]) ? await agentFor() : undefined
+      const removed = await host.harness().commit(async (tx) => {
+        const state = await tx.doc(Subscriptions)
+        const stops: Effect[] = []
+        const now = Date.now()
+        for (const [id, m] of found) {
+          const sub = state.subscriptions[id]
+          if (!sub && prepared)
+            state.subscriptions[id] = {
+              id,
+              scope: 'project',
+              ...m,
+              enabled: false,
+              conversationId: await agentConversation(tx, prepared, id, m.title, host.projectRoot),
+              subscribers: [],
+              createdAt: now,
+              updatedAt: now,
+              state: 'stopped',
+              fires: 0,
+            }
+          else if (sub?.scope === 'project') {
+            delete sub.secrets
+            Object.assign(sub, m, { updatedAt: now })
+          }
+        }
+        for (const sub of Object.values(state.subscriptions)) {
+          if (sub.scope !== 'project' || found.has(sub.id)) continue
+          delete state.subscriptions[sub.id]
+          stops.push({ id: sub.id, action: 'stop', ...(sub.pid ? { previousPid: sub.pid } : {}) })
+        }
+        return stops
+      }, BACKGROUND_CONTEXT)
+      for (const stop of removed) await apply(stop)
+    }
+    /** Create, inside `tx`, the ownerless conversation of subscription `id`'s agent. */
+    async function agentConversation(
+      tx: Tx,
+      prepared: Prepared,
+      id: string,
+      title: string,
+      cwd: string,
+    ) {
+      const child = await host.need(SubagentsApi).createChild(tx, {
+        owner: { kind: 'ownerless' },
+        definition: prepared.profile,
+        parentAgent: prepared.parent!,
+        modelRuntime: host.modelRuntime,
+        metadata: host.metadata,
+        label: 'subscription',
+        title: `${id} · ${title}`,
+        cwd,
+      })
+      return child.id
+    }
+    /** The agent a new subscription conversation is configured from, and its parent: the caller, else @ultimate. */
+    async function agentFor(caller?: number): Promise<Prepared> {
+      const profile = (
+        await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
+      ).definitions.find((d) => d.name === 'subscription')
+      if (!profile) throw new Error('Missing subscription agent definition')
+      const parentId =
+        caller ?? (await host.need(SubagentsApi).standing('ultimate', BACKGROUND_CONTEXT))
+      const conversation = await host
+        .harness()
+        .conversation(parentId as ConversationId, BACKGROUND_CONTEXT)
+      if (!conversation) throw new Error(`Unknown caller #${parentId}`)
+      return { profile, parent: await conversation.agent(BACKGROUND_CONTEXT) }
+    }
+    /** What a subscription agent is told about its subscription, at creation and on each failure. */
+    const brief = (sub: Subscription) =>
+      [
+        `You own subscription ${sub.id} "${sub.title}".`,
+        `Ask: ${sub.ask}`,
+        `Mode: ${sub.once ? 'one-shot' : 'recurring'}`,
+        `Named secret environment variables: ${sub.secrets?.join(', ') || 'none'}`,
+        `Executable: ${runPath(sub)}`,
+        `Persistent memory: ${join(folder(sub.id), 'state')} ($SUBSCRIPTION_STATE).`,
+        ...(sub.scope === 'project'
+          ? [
+              `This is a project subscription: run and ${MANIFEST} are committed in ${projectDir(sub.id)}, and run starts in ${host.projectRoot}. After you change run, say that the change is uncommitted in the project checkout.`,
+            ]
+          : []),
+      ].join('\n')
     const snapshot = async (id: string) => {
       const sub = (await host.harness().snapshot(Subscriptions, BACKGROUND_CONTEXT))?.subscriptions[
         id
@@ -142,9 +317,9 @@ function backend(host: ExtensionHost) {
           if (kind === 'writing') await mkdir(join(folder(sub.id), 'state'), { recursive: true })
           const content =
             kind === 'writing'
-              ? `You own subscription ${sub.id} "${sub.title}".\nAsk: ${sub.ask}\nMode: ${sub.once ? 'one-shot' : 'recurring'}\nNamed secret environment variables: ${sub.secrets?.join(', ') || 'none'}\nFolder: ${folder(sub.id)}\nExecutable: ${join(folder(sub.id), 'run')}\nPersistent memory: ${join(folder(sub.id), 'state')} ($SUBSCRIPTION_STATE).\nWrite and briefly test run, then use subscription start {id:"${sub.id}"}.`
+              ? `${brief(sub)}\nWrite and briefly test run, then use subscription start {id:"${sub.id}"}.`
               : kind === 'failed'
-                ? `Subscription ${sub.id} "${sub.title}" failed: ${text}\nInvestigate, fix run, and use subscription start. After 2 failed recovery attempts, or if it cannot work, use subscription escalate with a clear reason.\nLast 50 log lines:\n${await tail(sub.id)}`
+                ? `Subscription ${sub.id} "${sub.title}" failed: ${text}\nInvestigate, fix run, and use subscription start. After 2 failed recovery attempts, or if it cannot work, use subscription escalate with a clear reason.\n${sub.scope === 'project' ? `${brief(sub)}\n` : ''}Last 50 log lines:\n${await tail(sub.id)}`
                 : `Subscription ${sub.id} "${sub.title}" ${kind}: ${text}`
           if (kind === 'escalated')
             await host
@@ -310,12 +485,16 @@ function backend(host: ExtensionHost) {
         if (!value) throw new Error(`Missing secret ${name}; add it in Secrets (⌘K → Secrets)`)
         env[name] = value
       }
-      await access(join(dir, 'run'), constants.X_OK)
+      await access(runPath(sub), constants.X_OK)
       if (closing) throw new Error('Subscription supervisor is closing')
       let group: Group
       try {
         // The script waits behind the handshake until its pid file is written.
-        group = spawnGroup(join(dir, 'run'), [], { cwd: dir, env, pidFile: join(dir, 'pid') })
+        group = spawnGroup(runPath(sub), [], {
+          cwd: sub.scope === 'project' ? host.projectRoot : dir,
+          env,
+          pidFile: join(dir, 'pid'),
+        })
       } catch (error) {
         throw new Error(`Subscription ${id}: could not record its pid: ${String(error)}`, {
           cause: error,
@@ -433,7 +612,7 @@ function backend(host: ExtensionHost) {
         }
       } else await stopProcess(value.id, value.previousPid)
     }
-    async function prepare(args: Args, caller?: number) {
+    async function prepare(args: Args, caller?: number): Promise<Prepared> {
       const valid = [
         'create',
         'list',
@@ -467,31 +646,57 @@ function backend(host: ExtensionHost) {
         for (const id of args.subscribers ?? [])
           if (!(await host.harness().conversation(id as ConversationId, BACKGROUND_CONTEXT)))
             throw new Error(`Unknown subscriber #${id}`)
-        const profile = (
-          await discoverAgents(
-            host.ultimateRoot,
-            host.projectRoot,
-            host.userHome,
-            host.modelRuntime,
-          )
-        ).definitions.find((d) => d.name === 'subscription')
-        if (!profile) throw new Error('Missing subscription agent definition')
-        const conversation = await host
-          .harness()
-          .conversation(caller as ConversationId, BACKGROUND_CONTEXT)
-        if (!conversation) throw new Error(`Unknown caller #${caller}`)
-        return { profile, parent: await conversation.agent(BACKGROUND_CONTEXT) }
+        if (args.scope !== undefined && args.scope !== 'user' && args.scope !== 'project')
+          throw new Error('scope must be user or project')
+        if (args.scope !== 'project') {
+          if (args.slug !== undefined) throw new Error('slug is only for project subscriptions')
+          return await agentFor(caller)
+        }
+        if (!(await trusted()))
+          throw new Error("Choose this project's local setup before creating project subscriptions")
+        const slug =
+          args.slug ??
+          (args.title ?? required(args.ask, 'ask'))
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^[^a-z]+|-+$/g, '')
+            .slice(0, 40)
+            .replace(/-+$/, '')
+        if (typeof slug !== 'string' || !SLUG.test(slug))
+          throw new Error('slug must match ^[a-z][a-z0-9-]*$ (at most 63 characters)')
+        const committed: Manifest = {
+          title: args.title?.trim() ?? required(args.ask, 'ask').slice(0, 80),
+          ask: required(args.ask, 'ask'),
+          once: args.once ?? true,
+          ...(args.secrets?.length ? { secrets: args.secrets } : {}),
+        }
+        const text = `${JSON.stringify(committed, null, 2)}\n`
+        const path = join(projectDir(slug), MANIFEST)
+        // Written before the record commits. A replay finds its own identical manifest and adopts it; a different
+        // one is another subscription.
+        const existing = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error
+          return undefined
+        })
+        if (existing !== undefined && existing !== text)
+          throw new Error(`Subscription ${slug} already exists; pass another slug`)
+        await mkdir(projectDir(slug), { recursive: true })
+        await writeFile(path, text)
+        return { ...(await agentFor(caller)), slug }
       }
-      if (args.action === 'list') return {}
-      const id = required(args.id, 'id')
-      if (!/^S[1-9]\d*$/.test(id)) throw new Error('id must be S<n>')
-      await snapshot(id)
+      if (args.action === 'list') {
+        await discover()
+        return {}
+      }
+      const id = validId(args.id)
+      if (!id.startsWith('S')) await discover()
+      const sub = await snapshot(id)
       if (args.action === 'start') {
         try {
-          await access(join(folder(id), 'run'), constants.X_OK)
+          await access(runPath(sub), constants.X_OK)
         } catch {
           throw new Error(
-            `Missing or non-executable ${join(folder(id), 'run')}; write it and chmod +x it first`,
+            `Missing or non-executable ${runPath(sub)}; write it and chmod +x it first`,
           )
         }
       }
@@ -517,7 +722,7 @@ function backend(host: ExtensionHost) {
     async function change(
       tx: Tx,
       args: Args,
-      prepared: Awaited<ReturnType<typeof prepare>>,
+      prepared: Prepared,
       caller?: number,
     ): Promise<{ result: JsonValue; effect?: Effect }> {
       const state = await tx.doc(Subscriptions)
@@ -529,25 +734,29 @@ function backend(host: ExtensionHost) {
           })),
         }
       if (args.action === 'create') {
-        const id = `S${state.next++}`
-        const child = await host.need(SubagentsApi).createChild(tx, {
-          owner: { kind: 'ownerless' },
-          definition: prepared.profile,
-          parentAgent: prepared.parent as Agent,
-          modelRuntime: host.modelRuntime,
-          metadata: host.metadata,
-          label: 'subscription',
-          title: `${id} · ${args.title?.trim() ?? required(args.ask, 'ask').slice(0, 80)}`,
-          cwd: (await tx.doc(AgentDoc, caller as ConversationId)).cwd ?? host.projectRoot,
-        })
+        const id = prepared.slug ?? `S${state.next++}`
+        const title = args.title?.trim() ?? required(args.ask, 'ask').slice(0, 80)
+        // A concurrent list may already have discovered the manifest written in prepare: adopt its agent.
+        const conversationId =
+          (prepared.slug && state.subscriptions[prepared.slug]?.conversationId) ||
+          (await agentConversation(
+            tx,
+            prepared,
+            id,
+            title,
+            prepared.slug
+              ? host.projectRoot
+              : ((await tx.doc(AgentDoc, caller as ConversationId)).cwd ?? host.projectRoot),
+          ))
         const now = Date.now()
         const sub: Subscription = {
           id,
+          ...(prepared.slug ? { scope: 'project' as const } : {}),
           title: args.title?.trim() ?? required(args.ask, 'ask').slice(0, 80),
           ask: required(args.ask, 'ask'),
           once: args.once ?? true,
           enabled: true,
-          conversationId: child.id,
+          conversationId,
           subscribers: [...new Set([caller!, ...(args.subscribers ?? [])])],
           ...(args.secrets ? { secrets: args.secrets } : {}),
           createdAt: now,
@@ -559,7 +768,7 @@ function backend(host: ExtensionHost) {
         await deliver(tx, sub, 'create', 'writing', sub.ask)
         return { result: sub }
       }
-      const id = required(args.id, 'id')
+      const id = validId(args.id)
       const sub = state.subscriptions[id]
       if (!sub) throw new Error(`Unknown subscription: ${id}`)
       if (args.action === 'log') return { result: { text: await tail(id, args.lines) } }
@@ -621,7 +830,7 @@ function backend(host: ExtensionHost) {
       return receipt.result
     }
     async function status(id: string): Promise<SubscriptionListItem> {
-      if (!/^S[1-9]\d*$/.test(id)) throw new Error('id must be S<n>')
+      if (!validId(id).startsWith('S')) await discover()
       const sub = await snapshot(id)
       return { ...json(sub), alive: groupAlive(sub.pid) }
     }
@@ -645,10 +854,12 @@ function backend(host: ExtensionHost) {
       }
       // Sweep files, not ledger records: stop/delete may have committed just before a crash.
       for (const entry of folders) {
-        if (!entry.isDirectory() || !/^S[1-9]\d*$/.test(entry.name)) continue
+        if (!entry.isDirectory() || !ID.test(entry.name)) continue
         const pid = await readPid(entry.name)
         if (pid) await cleanup(entry.name, pid, runs.get(entry.name))
       }
+      // A project subscription whose folder is gone, or whose project is no longer chosen, is forgotten before restarts.
+      await discover()
       const state = await host.harness().snapshot(Subscriptions, BACKGROUND_CONTEXT)
       for (const sub of Object.values(state?.subscriptions ?? {})) {
         if (sub.state !== 'running' || !sub.enabled) continue
@@ -660,7 +871,7 @@ function backend(host: ExtensionHost) {
         }
       }
     }
-    return { Deliver, operate, status, prepare, change, apply, open, close }
+    return { Deliver, operate, status, prepare, change, apply, open, close, runPath }
   })
 }
 
@@ -704,11 +915,11 @@ export const actions = {
   ),
   // Outside the reload-stable supervisor: a read needs no process state, and stays current on reload.
   script: implementAction(ScriptAction, async (args, { host }) => {
-    const id = input(args, 'script').id
-    if (typeof id !== 'string' || !/^S[1-9]\d*$/.test(id)) throw new Error('id must be S<n>')
+    const id = validId(input(args, 'script').id)
     const state = await host.harness().snapshot(Subscriptions, BACKGROUND_CONTEXT)
-    if (!state?.subscriptions[id]) throw new Error(`Unknown subscription: ${id}`)
-    const path = join(host.userHome, '.ultimate/subscriptions', basename(host.home), id, 'run')
+    const sub = state?.subscriptions[id]
+    if (!sub) throw new Error(`Unknown subscription: ${id}`)
+    const path = backend(host).runPath(sub)
     try {
       const text = await readFile(path, 'utf8')
       return { path, text: text.length > 65536 ? `${text.slice(0, 65536)}\n…` : text }
@@ -749,7 +960,7 @@ export default function subscriptions(host: ExtensionHost) {
         // Transactional receipts deduplicate mutations; start reuses its committed live pid on replay.
         replay: 'safe',
         description:
-          'Subscribe conversations to background conditions. create {ask,title?,once?,secrets?,subscribers?} starts an agent that writes a cheap script; returns immediately. list; subscribe/unsubscribe {id,to?: "#id"|"@name"} (default caller); start/stop/delete {id}; log {id,lines?}; escalate {id,reason}. IDs are S<n>. A recurring script that prints DONE and exits 0 stops cleanly; start resumes it. Failures wake only the subscription agent; escalation notifies subscribers and @ultimate. Files and conversation survive delete.',
+          'Subscribe conversations to background conditions. create {ask,title?,once?,secrets?,subscribers?,scope?,slug?} starts an agent that writes a cheap script; returns immediately. scope "project" commits it in <project>/.ultimate/subscriptions/<slug>/ for everyone on the repo (default "user": this machine only). list; subscribe/unsubscribe {id,to?: "#id"|"@name"} (default caller); start/stop/delete {id}; log {id,lines?}; escalate {id,reason}. IDs are S<n> for user subscriptions and the slug for project ones; project subscriptions never start by themselves. A recurring script that prints DONE and exits 0 stops cleanly; start resumes it. Failures wake only the subscription agent; escalation notifies subscribers and @ultimate. Files and conversation survive delete.',
         parameters: Type.Object({
           action: Type.Union(
             [
@@ -770,6 +981,8 @@ export default function subscriptions(host: ExtensionHost) {
           once: Type.Optional(Type.Boolean()),
           secrets: Type.Optional(Type.Array(Type.String())),
           subscribers: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }))),
+          scope: Type.Optional(Type.Union([Type.Literal('user'), Type.Literal('project')])),
+          slug: Type.Optional(Type.String()),
           to: Type.Optional(Type.String()),
           lines: Type.Optional(Type.Integer({ minimum: 1, maximum: 2000 })),
           reason: Type.Optional(Type.String()),

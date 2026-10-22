@@ -4,6 +4,8 @@ Supervised background scripts that wake subscribed conversations when they print
 
 `subscription create {ask, title?, once?, secrets?, subscribers?}` creates `S<n>` and a normal, ownerless child using `agents/subscription.md`. The caller is subscribed automatically. The child writes and briefly tests its executable, then calls `subscription start {id}`. `once` defaults to true.
 
+`scope: 'project'` (default `user`) creates a project subscription instead, with optional `slug`, otherwise derived from the title; see below.
+
 Other operations: `list`; `subscribe` / `unsubscribe {id, to?}` (`#id` or `@name`, default caller); `start`, `stop`, `delete {id}`; `log {id, lines?}` (default 50, maximum 2000); `escalate {id, reason}`. Delete stops the process and removes the record, keeping files and the conversation. Tool memo and transactional receipts deduplicate mutations on replay.
 
 ## Files and lifecycle
@@ -14,9 +16,23 @@ Stdout `FIRE <text>` wakes each subscriber with a `subscriptions.fired` input; t
 
 The supervisor keeps process handles in a reload-stable resource. Every spawn starts a shell waiting for a go line on stdin. The supervisor synchronously writes `pid` before sending go and closing stdin; EOF before go exits without running the script. The shell uses exec to preserve the pid and process group. Stop, restart, delete, facet reload/disable, release, and shutdown share process-group cleanup: SIGTERM, up to three seconds of grace, then SIGKILL. The pid file is removed only after the group is gone. On open it sweeps every `S<n>/pid`, including deleted subscriptions, then restarts enabled running subscriptions. Script state must tolerate restart. The session document `ultimate.subscriptions` stores explicit lifecycle states and lifetime fire counts. Lifecycle events (`subscriptions.started`, `.fired`, `.done`, `.exited`, `.escalated`) and state changes commit together. Root-owned durable delivery tasks are created in those same transactions; Pi's atomic `submit` request-id dedupe prevents duplicate inputs per subscriber/event.
 
+## Project subscriptions
+
+Like project extensions and agents, a project can commit subscriptions that everyone working on it shares:
+
+```
+<project>/.ultimate/subscriptions/<slug>/
+  run                 executable, committed
+  subscription.json   {"title": "…", "ask": "…", "once": false, "secrets": ["GH_TOKEN"]}
+```
+
+`ask` is required; `title` defaults to the ask's first 80 characters, `once` to true, and `secrets` are names only, never values. The slug (`^[a-z][a-z0-9-]*$`, at most 63 characters) is the id on every machine, so it never collides with a user `S<n>`. The runtime stays machine-local in the same place as a user subscription's, `~/.ultimate/subscriptions/<project>/<slug>/` (`state/`, `output.log`, `pid`), and the record lives in the session document keyed by the slug, with its enabled state, fires, subscribers and agent conversation.
+
+Project subscriptions load only when the project is chosen as local, the same trust rule as `.ultimate/extensions/` (see `docs/settings.md`). They are discovered on open, `list`, `status` and any slug operation. A new folder becomes a stopped subscription with an idle agent conversation under @ultimate; it never starts by itself, so a fresh clone does not begin polling unasked. An agent, an extension (`want({name:'subscriptions'})?.start('<slug>')`) or the Start button starts it; after that, it is restarted on reopen like any enabled subscription. A changed manifest updates the record; a removed folder, or a project no longer chosen, stops it and forgets the record. `delete` forgets only the local record; the folder rediscovers it. `run` starts in the project root and runs from the host checkout, so an edit made in a branch takes effect once it lands. When its agent repairs `run`, it edits the committed file in place and says the change is uncommitted.
+
 ## Service
 
-`SubscriptionsApi` in `api.ts` lets another extension drive a subscription without an agent: `start(id)`, `stop(id)` and `status(id)`, each returning the subscription with `alive`. Subscriptions is optional, so `want` it and handle `undefined`. Start and stop commit, so never await them inside a transaction, such as a reactor's handler; call them from an action, or start them from a reactor without awaiting, with a `.catch` that reports the error. A project extension in `.ultimate/extensions/` outside the clone cannot import `api.ts`; it passes a token of the same name, `host.want({ name: 'subscriptions' })`. For example, an extension that reacts to `subscriptions.fired` to store a PR list restarts its stopped poller with `start('S3')` when a new PR opens.
+`SubscriptionsApi` in `api.ts` lets another extension drive a subscription without an agent, by `S<n>` or slug: `start(id)`, `stop(id)` and `status(id)`, each returning the subscription with `alive`. Subscriptions is optional, so `want` it and handle `undefined`. Start and stop commit, so never await them inside a transaction, such as a reactor's handler; call them from an action, or start them from a reactor without awaiting, with a `.catch` that reports the error. A project extension in `.ultimate/extensions/` outside the clone cannot import `api.ts`; it passes a token of the same name, `host.want({ name: 'subscriptions' })`. For example, an extension that reacts to `subscriptions.fired` to store a PR list restarts its stopped poller with `start('S3')` when a new PR opens.
 
 ## Browser API
 

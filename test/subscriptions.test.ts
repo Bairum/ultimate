@@ -96,7 +96,10 @@ it('lets a project extension read, stop and start a subscription through the ser
   expect(await call('start')).toContain('Missing or non-executable')
   expect(await call('status')).toMatchObject({ state: 'stopped' })
   expect(await call('status', 'S99')).toBe('Error: Unknown subscription: S99')
-  expect(await call('status', 'nope')).toBe('Error: id must be S<n>')
+  expect(await call('status', 'nope')).toBe('Error: Unknown subscription: nope')
+  expect(await call('status', 'Not/A slug')).toBe(
+    'Error: id must be S<n> or a project subscription slug',
+  )
   expect(server.extensions.catalogue().apis.find((api) => api.name === 'subscriptions')).toEqual({
     name: 'subscriptions',
     provider: 'subscriptions',
