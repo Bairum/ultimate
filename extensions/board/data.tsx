@@ -5,16 +5,6 @@ import type { BoardData, BoardMessage, Remote } from './refs.ts'
 export const remoteLabel = (remote: Pick<Remote, 'project' | 'machine'>) =>
   `@ultimate@${remote.project} on ${remote.machine}`
 
-/** The stored response that made tool call `call`: going back from a message it sent returns there. */
-export const callerOf = (entries: readonly EntryRecord[], call: string) =>
-  entries.findLast((entry) => {
-    const message = entry.model?.[0]
-    return (
-      message?.role === 'assistant' &&
-      message.content.some((block) => block.type === 'toolCall' && block.id === call)
-    )
-  })
-
 /** Whether tool call `call` ended in an error, from its stored result. */
 export const callFailed = (entries: readonly EntryRecord[], call: string) =>
   entries.some((entry) => {

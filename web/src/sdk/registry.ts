@@ -67,6 +67,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 const isString: Check = (value) => typeof value === 'string'
 const isNumber: Check = (value) => typeof value === 'number'
+const isBoolean: Check = (value) => typeof value === 'boolean'
 const isFunction: Check = (value) => typeof value === 'function'
 /** A function or class component, or an exotic one such as `memo(…)`. */
 const isComponent: Check = (value) => isFunction(value) || (isObject(value) && '$$typeof' in value)
@@ -103,9 +104,10 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
         icon: optional(isComponent),
         component: isComponent,
         order: optional(isNumber),
+        tab: optional(isBoolean),
       }),
     ),
-    'an array of { id, title, icon?, component, order? }',
+    'an array of { id, title, icon?, component, order?, tab? }',
   ],
   surfaces: [
     arrayOf(
@@ -357,6 +359,16 @@ export function panelItems(records: readonly ExtensionRecord[]): PanelItem[] {
       (extension?.panels ?? []).map((panel) => ({ ...panel, extension: name, version })),
     )
     .toSorted((a, b) => (a.order ?? 0) - (b.order ?? 0))
+}
+
+/**
+ * The shown panel, `selected` or else the first with a tab (none while only tabless ones exist), and the tab row: every
+ * panel with a tab, plus a tabless one (`tab: false`) while it is shown.
+ */
+export function shownPanels(panels: readonly PanelItem[], selected: string | null) {
+  const active =
+    panels.find((panel) => panel.id === selected) ?? panels.find((panel) => panel.tab !== false)
+  return { active, tabs: panels.filter((panel) => panel.tab !== false || panel === active) }
 }
 
 /** The home surface: shown by default, and whenever the chosen surface cannot be. */

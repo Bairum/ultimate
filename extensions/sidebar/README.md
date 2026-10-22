@@ -62,7 +62,7 @@ and Scheduled sections of the `sidebar.top` slot draw the same heading. Top to b
 Landed branches and older conversations that are neither roots nor branches live in the collapsed "Earlier · N" group,
 above "Concluded · N". There, branches nest under their source (`branchOf.conversationId`), with a hairline guide
 and one indent per depth; siblings sort by latest input. Isolated rows carry a short `#<conversationId>` badge;
-Workspace details in their menu opens the Workspaces panel. The shown row is highlighted, also while one of its
+Workspace details in their menu opens Info's Workspace section. The shown row is highlighted, also while one of its
 subagents is shown. Each row has its title (or `#id` for shared rows, `Untitled conversation` for isolated rows)
 and the time of its latest message (`now`, `5m`, `3h`, `2d`,
 then a date). Its leading mark pulses while it or any of its subagents works, and is solid when an answer arrived
@@ -90,7 +90,7 @@ invented delegation edges. Expansion is persisted in `ext.conversations.expanded
 header's Workspaces button opens the read-only checkout panel.
 Conclude releases clean, fully landed checkouts, including owned subagent checkouts. Uncommitted files,
 unlanded commits, and busy checkouts are kept.
-The Workspaces panel shows checkouts read-only.
+Info's Workspace section shows checkouts read-only.
 
 On hover or focus, a row's `…` menu offers Rename (inline; also on double-click; Enter or leaving the field saves,
 Escape cancels, and after either key focus returns to the row), Compact context (keeps the gist and frees context;

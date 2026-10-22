@@ -9,6 +9,7 @@ import {
   panelItems,
   entryRenderers,
   resolveSurface,
+  shownPanels,
   slotItems,
   surfaceItems,
   toolRenderers,
@@ -17,10 +18,15 @@ import {
   composerRenderers,
   chatTools,
 } from '../../web/src/sdk/registry.ts'
-import type { ExtensionLoader, SurfaceItem } from '../../web/src/sdk/registry.ts'
+import type { ExtensionLoader, PanelItem, SurfaceItem } from '../../web/src/sdk/registry.ts'
 import type { WebExtension } from '../../web/src/sdk/types.ts'
 
 const path = (name: string) => `../../extensions/${name}/web.tsx`
+/** The shown panel's id and the tab row's ids. */
+const ids = ({ active, tabs }: ReturnType<typeof shownPanels>) => [
+  active?.id,
+  tabs.map((item) => item.id),
+]
 const component = (label: string) => Object.assign(() => null, { displayName: label })
 const module = (extension: WebExtension) => ({ default: extension })
 /** A chat row of an entry of `kind`. */
@@ -578,5 +584,35 @@ describe('web extension registry', () => {
     expect(report).toHaveBeenCalledOnce()
     expect(report.mock.calls[0][0]).toMatchObject({ id: 'broken.cmd', extension: 'broken' })
     expect(String(report.mock.calls[0][1])).toContain('predicate failed')
+  })
+
+  it('keeps a tabless panel out of the tab row until it is shown, and never shows it by default', () => {
+    const panel = (id: string, tab?: boolean): PanelItem => ({
+      id,
+      title: id,
+      component: component(id),
+      extension: id,
+      version: 1,
+      ...(tab === undefined ? {} : { tab }),
+    })
+    const panels = [panel('secrets', false), panel('todos'), panel('info', true)]
+    expect(ids(shownPanels(panels, null))).toEqual(['todos', ['todos', 'info']])
+    expect(ids(shownPanels(panels, 'gone'))).toEqual(['todos', ['todos', 'info']])
+    expect(ids(shownPanels(panels, 'info'))).toEqual(['info', ['todos', 'info']])
+    expect(ids(shownPanels(panels, 'secrets'))).toEqual(['secrets', ['secrets', 'todos', 'info']])
+    // Only tabless panels: none shows until one is opened.
+    expect(ids(shownPanels([panels[0]], null))).toEqual([undefined, []])
+    expect(ids(shownPanels([panels[0]], 'secrets'))).toEqual(['secrets', ['secrets']])
+  })
+
+  it('rejects a panel whose tab is not a boolean', async () => {
+    const registry = createRegistry()
+    await registry.setLoaders({
+      [path('odd')]: async () =>
+        module({
+          panels: [{ id: 'x', title: 'X', component: component('x'), tab: 'no' as never }],
+        }),
+    })
+    expect(registry.getSnapshot()[0].error).toMatch(/^panels must be .*tab\?/)
   })
 })

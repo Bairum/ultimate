@@ -30,7 +30,7 @@ describe('message answer cards', () => {
   })
 })
 
-describe('the Questions panel', () => {
+describe('open questions in To-dos', () => {
   it('lists every question still waiting on the user, newest first, until answered or dismissed', () => {
     const messages = [
       open,

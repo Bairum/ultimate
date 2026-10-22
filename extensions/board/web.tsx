@@ -1,6 +1,14 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { useEffect, useState } from 'react'
-import { defineWebExtension, events, useConversation, useDocOf, useEvent, useUltimate } from '@/sdk'
+import {
+  api,
+  defineWebExtension,
+  events,
+  useConversation,
+  useDocOf,
+  useEvent,
+  useUltimate,
+} from '@/sdk'
 import {
   Address,
   BackgroundSummary,
@@ -9,8 +17,9 @@ import {
   ChatAnswer,
   MessageCall,
 } from './cards.tsx'
-import { chatQuiet, emptyBoard, answeredMessages, scriptMessaged, ultimateChat } from './data.tsx'
-import { BoardDoc } from './refs.ts'
+import { answeredMessages, chatQuiet, emptyBoard, scriptMessaged, ultimateChat } from './data.tsx'
+import { callerOf } from './caller.ts'
+import { BoardDoc, CallerAction } from './refs.ts'
 import type { BoardData } from './refs.ts'
 
 function BoardAnswerLabel({ entry }: { entry: EntryRecord }) {
@@ -29,19 +38,34 @@ function BoardAnswerLabel({ entry }: { entry: EntryRecord }) {
   ))
 }
 
-/** Stay mounted across surfaces so an Open click can reveal after Agent mounts and loads. */
+/**
+ * Stay mounted across surfaces so an Open click can reveal after Agent mounts and loads. `board:open` names the entry,
+ * or the tool call that sent a message (`call`): the response that made it, found in the loaded entries or else in the
+ * stored history, which the transcript then pages in.
+ */
 function BoardNavigation() {
   const { id, entries, loading } = useConversation()
   const { surface } = useUltimate()
-  const [target, setTarget] = useState<{ conversation: number; entry: number }>()
+  const [target, setTarget] = useState<{ conversation: number; entry?: number; call?: string }>()
   useEvent('board:open', (value) => setTarget(value as NonNullable<typeof target>))
   useEffect(() => {
     if (!target || surface !== 'agent' || id !== target.conversation || loading) return undefined
-    const frame = requestAnimationFrame(() => {
-      events.emit('ultimate:reveal-entry', { conversationId: id, entryId: target.entry })
-      setTarget(undefined)
-    })
-    return () => cancelAnimationFrame(frame)
+    const { call } = target
+    const reveal = (entry: number) =>
+      events.emit('ultimate:reveal-entry', { conversationId: id, entryId: entry })
+    const loaded = target.entry ?? (call && callerOf(entries, call.split('/')[0])?.id)
+    setTarget(undefined)
+    if (loaded) {
+      const frame = requestAnimationFrame(() => reveal(loaded))
+      return () => cancelAnimationFrame(frame)
+    }
+    if (call)
+      api.action(CallerAction, { conversation: id, call }).then(
+        ({ entry }) => entry !== undefined && reveal(entry),
+        // The conversation is open either way; only the scroll to the question is lost.
+        () => undefined,
+      )
+    return undefined
   }, [surface, id, entries, loading, target])
   return null
 }
@@ -53,7 +77,7 @@ export default defineWebExtension({
     'board.reply': BoardInput,
     // The message's row already says it woke the agent: `action`.
     'board.wake': () => null,
-    // The agent's reminder of the questions still open; the user sees them in the Questions panel.
+    // The agent's reminder of the questions still open; the user sees them in the To-dos panel.
     'board.open': () => null,
     'pi.assistant': ChatAnswer,
   },

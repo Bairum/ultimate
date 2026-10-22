@@ -44,7 +44,6 @@ import {
   answerTo,
   answeredMessages,
   callFailed,
-  callerOf,
   chatQuiet,
   counterparts,
   emptyBoard,
@@ -55,6 +54,7 @@ import {
   sentBy,
   sentStatus,
 } from './data.tsx'
+import { callerOf } from './caller.ts'
 import { BoardDoc } from './refs.ts'
 import type { BoardMessage, Remote } from './refs.ts'
 import { MessageAnswers } from './points.tsx'

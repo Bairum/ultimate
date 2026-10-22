@@ -28,6 +28,8 @@ export interface PanelContribution {
   icon?: ComponentType<{ className?: string }>
   component: ComponentType
   order?: number
+  /** `false` keeps the panel out of the tab row until it is opened (`openPanel`, a command); default `true`. */
+  tab?: boolean
 }
 
 /**

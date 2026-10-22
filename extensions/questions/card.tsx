@@ -115,9 +115,8 @@ function Card({
         event.ctrlKey ||
         event.altKey ||
         target?.closest('input, textarea, select, [contenteditable="true"]') ||
-        // Outside this card, another card, a control or the Questions panel keeps its own keys.
-        (!root.current?.contains(target) &&
-          target?.closest('[data-questions-card], [data-open-questions], button, a'))
+        // Outside this card, another card or a control keeps its own keys.
+        (!root.current?.contains(target) && target?.closest('[data-questions-card], button, a'))
       )
         return
       const choice = /^[1-9a-z]$/.test(event.key)

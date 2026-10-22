@@ -81,7 +81,9 @@ export default defineWebExtension({
       title: 'Automations',
       icon: TimerIcon,
       component: AutomationsPanel,
-      order: -4,
+      order: 7,
+      // Opened from the sidebar's SCHEDULED rows and ⌘K.
+      tab: false,
     },
   ],
   commands: [

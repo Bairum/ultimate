@@ -1,6 +1,6 @@
 # Questions
 
-Answer cards and the Questions panel for @ultimate's questions to the user. One thing asks: a reply-expected Board
+Answer cards for @ultimate's questions to the user. One thing asks: a reply-expected Board
 message to the user. @ultimate's `message { to: 'user', text, reply: true }` (the default) makes board emit
 `board.asked` in the transaction that appends the message; questions' `asked` reactor records the request and creates
 the extraction task in one transaction, once per message. One-way messages, user posts and messages to conversations
@@ -38,8 +38,7 @@ memoized response or creating duplicate cards.
 
 ## Card
 
-Under the outgoing `message` card in @ultimate's transcript, through board's `MessageAnswers` point, and in the
-Questions panel. Confirmations offer Yes/No; choices show the extracted options, their letter and a `pick` marker on
+Under the outgoing `message` card in @ultimate's transcript, through board's `MessageAnswers` point. Confirmations offer Yes/No; choices show the extracted options, their letter and a `pick` marker on
 recommended ones. Both offer “Something else…” with an inline field. **Accept picks** chooses every pick at once. Send answers is enabled after at least one answer; omitted questions stay
 out. Dismiss closes the message without an answer. A message without extracted questions gets a one-line answer field
 (sent as a Reply to that message) and Dismiss. On phones, one question shows at a time with Back/Next. On desktop, 1–9
@@ -47,13 +46,11 @@ or an option's letter chooses, ↑/↓ moves between questions and Enter goes to
 conversation's newest open card; they leave alone input/textarea editing and keys pressed
 in another card, on another control or in the panel, whose cards take no global keys.
 
-## Questions panel
+## Where open questions wait
 
-A right-panel tab listing every message that waits on the user, newest first: the asker, how long ago, the message,
-its card and Dismiss, and an Open chat link to the asker's conversation. With extracted questions, the message folds
-under Full message. It lists only what is open, so a question leaves it once answered or
-dismissed. The amber count next to the top-bar @ultimate button opens it from any surface; ⌘K “Show open questions”
-does too.
+The To-dos tab lists every message that waits on the user at its top, newest first; a row opens the asking
+conversation at the message, where this card answers or dismisses it. The amber count next to the top-bar @ultimate
+button opens the tab from any surface; ⌘K “Show open questions” does too.
 
 ## Actions
 
