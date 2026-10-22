@@ -16,7 +16,6 @@ import {
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { ConversationSummary } from '../../shared/protocol.ts'
 import { Standing, SubagentsApi } from '../subagents/api.ts'
 import { SubmissionLanded } from '../workspaces/api.ts'
 import {
@@ -25,12 +24,11 @@ import {
   EndAction,
   JournalAction,
   PassAction,
-  PreflightAction,
   StartAction,
   StatsAction,
 } from './refs.ts'
 import type { PassState, Proposal, Session, ToolStats } from './refs.ts'
-import { PASSES } from './types.ts'
+import { busyElsewhere, PASSES } from './types.ts'
 import type { PassName } from './types.ts'
 
 export const Sessions = defineDoc<{ next: number; sessions: Session[] }>({
@@ -91,13 +89,6 @@ function settle(found: Session, now: number) {
     found.proposals.every((item) => item.status !== 'open' && item.status !== 'approved')
   )
     found.endedAt = now
-}
-
-/** Top-level conversations at work besides @ultimate: their work in progress is not part of this dream. */
-export function busyElsewhere(conversations: readonly ConversationSummary[], ultimate?: number) {
-  return conversations
-    .filter((item) => item.busy && item.id !== ultimate && item.parentConversationId === undefined)
-    .map((item) => ({ id: item.id, title: item.title ?? `#${item.id}` }))
 }
 
 /** Record a new session in `tx`; refuses while one is open. */
@@ -317,21 +308,6 @@ const deliver = (
 const ultimateOf = async (tx: Tx) => (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
 
 export const actions = {
-  preflight: implementAction(PreflightAction, async (_args, { host }) => {
-    const { ultimate, active } = await host.harness().commit(
-      async (tx) => ({
-        ultimate: await ultimateOf(tx),
-        active: (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions.find(
-          (item) => item.endedAt === undefined,
-        )?.id,
-      }),
-      context,
-    )
-    return {
-      busy: busyElsewhere(host.conversations(), ultimate),
-      ...(active === undefined ? {} : { active }),
-    }
-  }),
   start: implementAction(StartAction, async (_args, { host }) => {
     const ultimate = await host.need(SubagentsApi).standing('ultimate', context)
     const busy = busyElsewhere(host.conversations(), ultimate)

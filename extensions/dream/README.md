@@ -3,8 +3,10 @@ for @ultimate and the dream branch, is in [DREAM.md](DREAM.md); this file is the
 
 ## Flow
 
-1. The user presses **Dream** (Memory panel header or ⌘K "Dream…"). The modal shows `preflight`: conversations at work
-   besides @ultimate block a start, as does a session still open.
+1. The user presses **Dream** (Memory panel header or ⌘K "Dream…"). The modal shows what blocks a start, live from the
+   conversation list and `dream.sessions`: conversations at work besides @ultimate, or a session still open. The
+   session's started card has End session until its journal is filed, so a dream that stopped early never blocks the
+   next one.
 2. User-only `start` refuses the same way, records session N in `dream.sessions` on conversation 1 and submits a
    `dream.started` input to @ultimate (request id `dream.started:N`, a follow-up when it is busy). The input goes
    through a `dream.deliver` task created in the session's own commit, so a crash cannot strand a session.
@@ -25,6 +27,6 @@ not built.
 
 ## Actions
 
-`refs.ts` holds the documents and actions: `preflight`, `start` and `end` (user-only), `pass`, `journal`, `decide`,
+`refs.ts` holds the documents and actions: `start` and `end` (user-only), `pass`, `journal`, `decide`,
 and `stats`, which reads tool calls from `<home>/trace.sqlite` read-only: calls, failures and mean duration per tool,
 the 20 most frequent errors, and enabled tools never called in the trace's window (7 days or 200k rows).

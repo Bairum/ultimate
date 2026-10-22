@@ -68,9 +68,13 @@ export function StartedCard({ entry }: { entry: EntryRecord }) {
       session={id}
     >
       {session && !filed && (
-        <div className="px-3 py-2.5">
-          <Passes session={session} />
-        </div>
+        <>
+          <div className="px-3 py-2.5">
+            <Passes session={session} />
+          </div>
+          {/* A dream that stops before its journal must not hold the next one off. */}
+          <Footer session={session} />
+        </>
       )}
       {session && filed && (
         <p className="px-3 py-2 text-[12px] text-muted-foreground">
@@ -200,7 +204,7 @@ function Proposals({ session }: { session: Session }) {
                     · retires memory <span className="text-foreground/80">{proposal.retire}</span>
                   </span>
                 )}
-                {proposal.status === 'approved' && proposal.branch !== undefined && (
+                {proposal.branch !== undefined && (
                   <button
                     className="flex min-w-0 cursor-pointer items-center gap-1 hover:text-foreground"
                     onClick={() => switchConversation(proposal.branch!)}
@@ -260,7 +264,7 @@ function Footer({ session }: { session: Session }) {
         <Tally proposals={session.proposals} />
         <span className="ml-auto flex items-center gap-1.5">
           <MoonIcon className="size-3" />
-          Session complete · {formatTime(session.endedAt)}
+          {session.journal ? 'Session complete' : 'Session ended'} · {formatTime(session.endedAt)}
         </span>
       </div>
     )
@@ -296,7 +300,11 @@ function Footer({ session }: { session: Session }) {
       ) : (
         <>
           <span className="mr-auto">
-            <Tally proposals={session.proposals} />
+            {session.journal ? (
+              <Tally proposals={session.proposals} />
+            ) : (
+              <span className="text-muted-foreground">Dreaming…</span>
+            )}
           </span>
           <Button className="h-6" onClick={() => setConfirming(true)} size="xs" variant="ghost">
             End session

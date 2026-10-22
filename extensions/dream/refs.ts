@@ -43,14 +43,6 @@ export const DreamDoc = docRef<{ next: number; sessions: Session[] }>('dream.ses
 /** `dream.started` and `dream.journal` entries in @ultimate's conversation name their session. */
 export type SessionEntry = { session: number }
 
-/** What keeps a dream from starting: conversations at work besides @ultimate, or a session still open. */
-export type Preflight = {
-  busy: { id: number; title: string }[]
-  active?: number
-}
-
-/** No arguments → what keeps a dream from starting now. */
-export const PreflightAction = actionRef<null, Preflight>('dream', 'preflight')
 /** No arguments → `{ session }`: record a session and ask @ultimate to start the dream branch. User-only. */
 export const StartAction = actionRef<null, { session: number }>('dream', 'start')
 /** `{ session }` → `{ session }`: end a session whatever its proposals' state. User-only. */

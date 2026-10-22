@@ -2,13 +2,12 @@ import { LoaderCircleIcon, MoonIcon } from 'lucide-react'
 import { Fragment, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { api, errorMessage, useAction, useDialog, useUltimate } from '@/sdk'
+import { api, errorMessage, useConversations, useDialog, useDocOf, useUltimate } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
-import { talkToUltimate } from '../subagents/ui.tsx'
-import { PreflightAction, StartAction } from './refs.ts'
-import type { Preflight } from './refs.ts'
+import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
+import { DreamDoc, StartAction } from './refs.ts'
 import { passLabels } from './moon.tsx'
-import { PASSES } from './types.ts'
+import { busyElsewhere, PASSES } from './types.ts'
 import type { PassName } from './types.ts'
 
 /** The dialog id the "Dream…" command, the Memory panel's button and the status-line hint open. */
@@ -34,8 +33,23 @@ export function DreamDialog() {
   )
 }
 
+/** What keeps a dream from starting, live: conversations at work besides @ultimate, or a session still open. */
+type Preflight = { busy: { id: number; title: string }[]; active?: number }
+
+function usePreflight(): Preflight | undefined {
+  const conversations = useConversations()
+  const standing = useDocOf(1, StandingDoc)
+  const sessions = useDocOf(1, DreamDoc)
+  if (standing === undefined || sessions === undefined) return undefined
+  const active = sessions?.sessions.find((item) => item.endedAt === undefined)?.id
+  return {
+    busy: busyElsewhere(conversations, standing?.ultimate),
+    ...(active === undefined ? {} : { active }),
+  }
+}
+
 function Body({ onClose }: { onClose: () => void }) {
-  const preflight = useAction(PreflightAction, null, { onError: () => undefined })
+  const state = usePreflight()
   const actions = useUltimate()
   const [starting, setStarting] = useState(false)
   const [failure, setFailure] = useState<string>()
@@ -48,12 +62,10 @@ function Body({ onClose }: { onClose: () => void }) {
       await talkToUltimate(actions)
     } catch (error) {
       setFailure(errorMessage(error))
-      await preflight.refetch()
     } finally {
       setStarting(false)
     }
   }
-  const state = preflight.data
   const blocked = !!state && (state.busy.length > 0 || state.active !== undefined)
   return (
     <>
@@ -135,7 +147,7 @@ function Blockers({ state }: { state: Preflight }) {
     return (
       <p className="text-[12px] leading-relaxed text-muted-foreground" data-dream-blocked="active">
         <span className="text-foreground">Dream session {state.active} is still open.</span> Settle
-        or end it from its journal card before dreaming again.
+        or end it from its card in @ultimate's conversation before dreaming again.
       </p>
     )
   if (!state.busy.length) return null

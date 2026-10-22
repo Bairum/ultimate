@@ -17,7 +17,6 @@ import type { ExtensionHost } from '../server/extensions.ts'
 import { Standing } from '../extensions/subagents/api.ts'
 import dream, {
   actions,
-  busyElsewhere,
   decide,
   fileJournal,
   journalText,
@@ -27,6 +26,7 @@ import dream, {
   startSession,
   toolStats,
 } from '../extensions/dream/server.ts'
+import { busyElsewhere } from '../extensions/dream/types.ts'
 import { temp, until } from './helpers.ts'
 
 /** A transaction over plain documents, keyed by kind and conversation. */
