@@ -362,14 +362,12 @@ export function panelItems(records: readonly ExtensionRecord[]): PanelItem[] {
 }
 
 /**
- * The shown panel, `selected` or else the first with a tab, and the tab row: every panel with a tab, plus a tabless one
- * (`tab: false`) while it is shown.
+ * The shown panel, `selected` or else the first with a tab (none while only tabless ones exist), and the tab row: every
+ * panel with a tab, plus a tabless one (`tab: false`) while it is shown.
  */
 export function shownPanels(panels: readonly PanelItem[], selected: string | null) {
   const active =
-    panels.find((panel) => panel.id === selected) ??
-    panels.find((panel) => panel.tab !== false) ??
-    panels[0]
+    panels.find((panel) => panel.id === selected) ?? panels.find((panel) => panel.tab !== false)
   return { active, tabs: panels.filter((panel) => panel.tab !== false || panel === active) }
 }
 

@@ -24,7 +24,7 @@ import type { WebExtension } from '../../web/src/sdk/types.ts'
 const path = (name: string) => `../../extensions/${name}/web.tsx`
 /** The shown panel's id and the tab row's ids. */
 const ids = ({ active, tabs }: ReturnType<typeof shownPanels>) => [
-  active.id,
+  active?.id,
   tabs.map((item) => item.id),
 ]
 const component = (label: string) => Object.assign(() => null, { displayName: label })
@@ -600,6 +600,9 @@ describe('web extension registry', () => {
     expect(ids(shownPanels(panels, 'gone'))).toEqual(['todos', ['todos', 'info']])
     expect(ids(shownPanels(panels, 'info'))).toEqual(['info', ['todos', 'info']])
     expect(ids(shownPanels(panels, 'secrets'))).toEqual(['secrets', ['secrets', 'todos', 'info']])
+    // Only tabless panels: none shows until one is opened.
+    expect(ids(shownPanels([panels[0]], null))).toEqual([undefined, []])
+    expect(ids(shownPanels([panels[0]], 'secrets'))).toEqual(['secrets', ['secrets']])
   })
 
   it('rejects a panel whose tab is not a boolean', async () => {

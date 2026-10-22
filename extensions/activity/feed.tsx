@@ -66,9 +66,23 @@ export function tone(event: EventRecord): 'error' | 'warning' | 'quiet' | undefi
   return undefined
 }
 
-/** Whether filter `filter` shows `event`; passed checks and started backups are noise and never show. */
-export const shows = (filter: Filter, event: EventRecord) =>
-  filters[filter].some((token) => token.is(event)) && tone(event) !== 'quiet'
+/**
+ * Whether filter `filter` shows `event`: Problems only warnings and errors; passed checks and started backups are noise
+ * and never show.
+ */
+export function shows(filter: Filter, event: EventRecord) {
+  if (!filters[filter].some((token) => token.is(event))) return false
+  const loudness = tone(event)
+  return filter === 'problems'
+    ? loudness === 'error' || loudness === 'warning'
+    : loudness !== 'quiet'
+}
+
+/** Lists of events as one, newest first, each event once. */
+export const joined = (lists: readonly (readonly ActivityEvent[])[]) =>
+  [...new Map(lists.flat().map((event) => [event.id, event])).values()].toSorted(
+    (a, b) => b.id - a.id,
+  )
 
 /** `now`, `5m`, `3h`, `2d`, then a short date, as the sidebar's root rows show ages. */
 function ago(at: number, now: number) {

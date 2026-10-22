@@ -2,7 +2,7 @@
  * The Board in the browser: every message between conversations and the user, which the sidebar, the message cards
  * and the sounds read, and the event of a question to the user. Browser-safe.
  */
-import { docRef } from '../../shared/extension-api.ts'
+import { actionRef, docRef } from '../../shared/extension-api.ts'
 import { defineEvent } from '../../shared/events.ts'
 
 /**
@@ -46,6 +46,15 @@ export type BoardData = { messages: BoardMessage[]; next: number }
 
 /** Every message between conversations and the user, oldest first, on conversation 1. */
 export const BoardDoc = docRef<BoardData>('board')
+
+/**
+ * `{ conversation, call }` → `{ entry }`: the response in `conversation`'s history that made tool call `call` (a
+ * message's `call`), however old; no `entry` when the history has none.
+ */
+export const CallerAction = actionRef<{ conversation: number; call: string }, { entry?: number }>(
+  'board',
+  'caller',
+)
 
 /**
  * Conversation `from` asked the user something: it posted reply-enabled Board message `message` to the user. Emitted in

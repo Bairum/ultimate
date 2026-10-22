@@ -1,5 +1,5 @@
 import { ActivityIcon, LoaderCircleIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   api,
   cn,
@@ -11,7 +11,7 @@ import {
   useNow,
   useUltimate,
 } from '@/sdk'
-import { activityEvents, Feed, filters, shows, tone } from './feed.tsx'
+import { activityEvents, Feed, filters, joined, shows, tone } from './feed.tsx'
 import type { ActivityEvent, Filter } from './feed.tsx'
 import { PageAction } from './refs.ts'
 
@@ -122,7 +122,7 @@ function ActivityPanel() {
         <Older
           before={live.at(-1)?.id}
           filter={filter}
-          key={`${filter}:${since ?? ''}`}
+          key={`${filter}:${range}`}
           now={now}
           recent={recent}
           since={since}
@@ -135,8 +135,9 @@ function ActivityPanel() {
 
 /**
  * The live rows, then the older pages asked for with Load older, from just before the live feed's oldest shown kind
- * (the newest page without one): the feed holds every newer event, so the two join without gaps or repeats. Keyed by
- * filter and range, so a change starts over.
+ * (the newest page without one): the feed holds every newer event, so the two join without gaps or repeats. Once
+ * paging starts, rows the live feed drops stay. Keyed by filter and range, so a change starts over; rows that age out
+ * of the range leave without losing the pages.
  */
 function Older({
   recent,
@@ -154,7 +155,13 @@ function Older({
   now: number
 }) {
   const [older, setOlder] = useState<ActivityEvent[]>([])
+  const [kept, setKept] = useState<ActivityEvent[]>([])
   const [next, setNext] = useState<number>()
+  const paging = next !== undefined || older.length > 0
+  // The live feed holds the newest events only: keep what it showed, so newer arrivals leave no gap above the pages.
+  useEffect(() => {
+    if (paging) setKept((previous) => joined([previous, recent]))
+  }, [paging, recent])
   const [done, setDone] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string>()
@@ -162,6 +169,7 @@ function Older({
     setLoading(true)
     setError(undefined)
     try {
+      setKept((previous) => joined([previous, recent]))
       const from = next ?? before
       const page = await api.action(PageAction, {
         kinds: filters[filter].map((token) => token.name),
@@ -178,7 +186,9 @@ function Older({
       setLoading(false)
     }
   }
-  const shown = [...recent, ...older.filter((event) => shows(filter, event))]
+  const shown = joined([recent, kept, older]).filter(
+    (event) => shows(filter, event) && (since === undefined || event.at >= since),
+  )
   return (
     <>
       <Feed

@@ -9,7 +9,6 @@ import {
   useAction,
   useConversation,
   useSystem,
-  useUltimate,
 } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
 import {
@@ -59,7 +58,6 @@ export function Workspaces() {
 
 /** The shown conversation's checkout: path and branch to copy, target, commits ahead and the last landing. */
 function Checkout({ conversation }: { conversation: WorkspaceConversation }) {
-  const actions = useUltimate()
   const info = useAction(InfoAction, { id: conversation.id }, { onError: () => undefined })
   const queued = useLanderQueue().find((item) => item.conversationId === conversation.id)
   const recorded = conversation.workspace!
@@ -127,15 +125,6 @@ function Checkout({ conversation }: { conversation: WorkspaceConversation }) {
         >
           {workspace.state === 'failed' ? workspace.error : info.error?.message}
         </p>
-      )}
-      {useConversation().id !== conversation.id && (
-        <button
-          className="mt-1 font-mono text-[11px] text-muted-foreground hover:text-foreground"
-          onClick={() => actions.switchConversation(conversation.id)}
-          type="button"
-        >
-          open #{conversation.id}
-        </button>
       )}
     </div>
   )

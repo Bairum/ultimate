@@ -1,11 +1,11 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import { accentIndex, accentOf } from '../../extensions/board/accent.tsx'
+import { callerOf } from '../../extensions/board/caller.ts'
 import {
   answerTo,
   answeredMessages,
   callFailed,
-  callerOf,
   chatQuiet,
   conversationState,
   counterparts,

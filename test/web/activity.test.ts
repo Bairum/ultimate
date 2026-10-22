@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi } from 'vitest'
-import { Feed } from '../../extensions/activity/feed.tsx'
+import { Feed, joined, shows } from '../../extensions/activity/feed.tsx'
 import type { ActivityEvent } from '../../extensions/activity/feed.tsx'
 
 vi.mock('@/sdk', () => ({
@@ -132,6 +132,33 @@ it('opens the conversation a notice happened in, and names the sha when a landin
   ])
   expect(notice).toMatchObject({ text: 'cloud paused now', opens: '#44', amber: false })
   expect(landing).toMatchObject({ text: 'abcdef1 2 commits 2m', opens: '#12/3' })
+})
+
+it('keeps only warnings and errors under Problems, and drops started backups everywhere', () => {
+  const backup = (id: number, phase: string) =>
+    event(id, 'cloud.backup', minutes(id), { project: 'ultimate', phase })
+  const notice = (id: number, level: string) =>
+    event(id, 'ultimate.notice', minutes(id), { extension: 'cloud', message: 'x', level })
+  const list = [
+    backup(1, 'done'),
+    backup(2, 'failed'),
+    backup(3, 'started'),
+    notice(4, 'info'),
+    notice(5, 'warning'),
+  ]
+  expect(list.filter((item) => shows('problems', item)).map((item) => item.id)).toEqual([2, 5])
+  expect(list.filter((item) => shows('all', item)).map((item) => item.id)).toEqual([1, 2, 4, 5])
+})
+
+it('joins the live feed, rows it dropped and older pages without gaps or repeats', () => {
+  const span = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, index) =>
+      event(to - index, 'lineage.rooted', minutes(0), { id: to - index, intent: 'x' }),
+    )
+  // Paging started with live 101–200 and loaded 51–100; then the live feed moved on to 102–201.
+  const kept = span(101, 200)
+  const merged = joined([span(102, 201), kept, span(51, 100)]).map((item) => item.id)
+  expect(merged).toEqual(Array.from({ length: 151 }, (_, index) => 201 - index))
 })
 
 it('stays quiet when nothing has happened', () => {

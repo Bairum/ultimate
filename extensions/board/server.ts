@@ -41,7 +41,10 @@ import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
 import { Asked, Board, BoardApi, Gate, MessageSent, Triaged } from './api.ts'
 import type { BoardMessage } from './api.ts'
+import { callerOf } from './caller.ts'
+import { CallerAction } from './refs.ts'
 import type { Remote, Triage } from './refs.ts'
+import { implementAction } from '../../lib/actions.ts'
 import { declared, needsDecision, parseVerdict, TRIAGE_SYSTEM, triageInput } from './triage.ts'
 import type { Verdict } from './triage.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
@@ -1048,6 +1051,28 @@ async function tell(
   return { message: id, delivered }
 }
 export const actions = {
+  [CallerAction.name]: implementAction(CallerAction, async (args, { host }) => {
+    const { conversation, call } = (args ?? {}) as Record<string, unknown>
+    if (!Number.isSafeInteger(conversation) || (conversation as number) < 1)
+      throw new Error('conversation must be a conversation id')
+    if (typeof call !== 'string' || !call) throw new Error('call must be a tool call id')
+    // A nested codemode call (`<script>/<n>`) was made by the response that called the script.
+    const id = call.split('/')[0]
+    return host.harness().commit(async (tx) => {
+      let cursor: Parameters<Tx['scanEntries']>[2]
+      do {
+        const page = await tx.scanEntries(
+          { conversationId: conversation as ConversationId },
+          SCAN_PAGE,
+          cursor,
+        )
+        const found = callerOf(page.items, id)
+        if (found) return { entry: found.id }
+        cursor = page.next
+      } while (cursor !== undefined)
+      return {}
+    }, BACKGROUND_CONTEXT)
+  }),
   /**
    * `{ key, text, reply, from: { project, machine } }`: another project's Ultimate messages this instance's primary
    * agent, the only conversation it can reach. A repeated `key` returns the first delivery's id.

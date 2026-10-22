@@ -299,10 +299,11 @@ export function Panels() {
   const open = useRegionOpen('panels')
   const viewport = useViewport()
   const [selected] = useUiState<string | null>(shellKeys.panel, null)
-  if (panels.length === 0) return null
+  const { active, tabs } = shownPanels(panels, selected)
+  // Only tabless panels and none opened: nothing to show until one is.
+  if (!active) return null
   const overlay = overlays('panels', viewport)
   if (!open && !overlay) return null
-  const { active, tabs } = shownPanels(panels, selected)
   const Panel = active.component
   const content = (
     <>
