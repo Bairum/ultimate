@@ -115,7 +115,8 @@ it('stops a group that once reported a survivor once nothing of it is left', asy
   } finally {
     kill.mockRestore()
     const child = Number(await readFile(childFile, 'utf8').catch(() => '0'))
-    if (child) process.kill(child, 'SIGKILL')
+    // Usually killed by the test already.
+    if (child && (await running(child))) process.kill(child, 'SIGKILL')
     await removeTemp(directory)
   }
 })
