@@ -18,7 +18,15 @@ import {
 import type { EntryRecord } from '@/sdk'
 import { AgentMark } from '../conversations/ui.tsx'
 import { DefinitionAction } from '../subagents/ui.tsx'
-import { breakdownAt, diffAt, opensContext, ownStart, removesAll, systemOf } from './breakdown.ts'
+import {
+  breakdownAt,
+  diffAt,
+  modelLine,
+  opensContext,
+  ownStart,
+  removesAll,
+  systemOf,
+} from './breakdown.ts'
 import type { Breakdown, Diff, Section, Tool } from './breakdown.ts'
 
 const plural = (n: number, noun: string) => n > 0 && `${n} ${noun}${n === 1 ? '' : 's'}`
@@ -202,35 +210,44 @@ function AgentPart({ breakdown }: { breakdown: Breakdown }) {
     { enabled: !!identity.definition, onError: () => {} },
   )
   const definition = shown.data?.definition
-  const model = breakdown.model
-    ? `${breakdown.model.provider}/${breakdown.model.model}${breakdown.model.thinking ? ` · ${breakdown.model.thinking}` : ''}`
-    : agent.model
-      ? `${agent.model.provider}/${agent.model.modelId}${agent.thinkingLevel ? ` · ${agent.thinkingLevel}` : ''}`
-      : undefined
+  const model = modelLine(breakdown.model, agent)
   const path =
     shown.data &&
     (shown.data.path.startsWith(system?.code.ultimateRoot ?? '\0')
       ? shown.data.path.slice((system?.code.ultimateRoot.length ?? 0) + 1)
       : shown.data.path.replace(system?.machine.home ?? '\0', '~'))
   return (
-    <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-3 gap-y-1 px-3 pt-3">
+    <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-1 px-3 pt-3">
       <span className="text-muted-foreground/70">agent</span>
-      <span className="min-w-0">
-        <span className="text-foreground/90">{identity.name}</span>
-        {path && (
-          <span className="text-muted-foreground/70">
-            {' '}
-            · {path} · {shown.data?.source}
-          </span>
-        )}
-        {definition?.description && (
-          <span className="mt-0.5 block font-sans text-[12.5px] leading-snug text-muted-foreground">
-            {definition.description}
-          </span>
+      <span className="text-foreground/90">{identity.name}</span>
+      <span className="text-muted-foreground/70">model</span>
+      <span className="truncate text-foreground/90">
+        {model ? (
+          <>
+            {model.text}
+            {model.configured && <span className="text-muted-foreground/70"> (configured)</span>}
+          </>
+        ) : (
+          'none configured'
         )}
       </span>
-      <span className="text-muted-foreground/70">model</span>
-      <span className="truncate text-foreground/90">{model ?? 'not yet requested'}</span>
+      {path && (
+        <>
+          <span className="text-muted-foreground/70">definition</span>
+          <span className="min-w-0">
+            <span className="break-all text-foreground/85">{path}</span>
+            <span className="text-muted-foreground/70"> · current file</span>
+            {definition?.description && (
+              <span className="mt-0.5 block font-sans text-[12.5px] leading-snug text-muted-foreground">
+                {definition.description}
+              </span>
+            )}
+            <span className="mt-0.5 block font-sans text-[11.5px] leading-snug text-muted-foreground/70">
+              What it ran with is the instructions section below.
+            </span>
+          </span>
+        </>
+      )}
     </div>
   )
 }

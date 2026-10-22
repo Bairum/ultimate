@@ -3,6 +3,7 @@ import { expect, it } from 'vitest'
 import {
   breakdownAt,
   diffAt,
+  modelLine,
   opensContext,
   ownStart,
   promptAt,
@@ -166,6 +167,18 @@ it('takes a fork start’s snapshot after a remove-all and its reordered re-add'
   expect(breakdown.prompt?.tools.map((tool) => tool.name)).toEqual(['read'])
   expect(opensContext(entries, 3, 1)).toBe(true)
   expect(opensContext(entries, 2, 1)).toBe(false)
+})
+
+it('shows the recorded model, and the configured one marked as such only before any response', () => {
+  const configured = { model: { provider: 'faux', modelId: 'faux-1' }, thinkingLevel: 'high' }
+  expect(
+    modelLine({ provider: 'anthropic', model: 'claude', thinking: 'low' }, configured),
+  ).toEqual({
+    text: 'anthropic/claude · low',
+    configured: false,
+  })
+  expect(modelLine(undefined, configured)).toEqual({ text: 'faux/faux-1 · high', configured: true })
+  expect(modelLine(undefined, {})).toBeUndefined()
 })
 
 it('finds where a fork’s own entries start', () => {

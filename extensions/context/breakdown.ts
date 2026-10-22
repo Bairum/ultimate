@@ -284,6 +284,27 @@ export function diffAt(entries: readonly EntryRecord[], index: number): Diff {
   return { sections, tools, delta }
 }
 
+/**
+ * The model line of a breakdown: the model and thinking level its first response recorded, or, before any response,
+ * the conversation's configured ones, marked `configured` since no request has used them yet.
+ */
+export function modelLine(
+  recorded: Breakdown['model'],
+  configured: { model?: { provider: string; modelId: string }; thinkingLevel?: string },
+): { text: string; configured: boolean } | undefined {
+  if (recorded)
+    return {
+      text: `${recorded.provider}/${recorded.model}${recorded.thinking ? ` · ${recorded.thinking}` : ''}`,
+      configured: false,
+    }
+  if (!configured.model) return undefined
+  const { provider, modelId } = configured.model
+  return {
+    text: `${provider}/${modelId}${configured.thinkingLevel ? ` · ${configured.thinkingLevel}` : ''}`,
+    configured: true,
+  }
+}
+
 /** The index of the shown conversation's first own entry; a fork's earlier entries are its source's history. */
 export const ownStart = (entries: readonly EntryRecord[], id: number | undefined) =>
   entries.findIndex((entry) => entry.conversationId === id)
