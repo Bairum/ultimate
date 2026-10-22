@@ -40,6 +40,11 @@ export function fireText(line: string, stdout: boolean): string | undefined {
   return stdout && /^FIRE(?:\s|$)/.test(line) ? line.slice(4).trim() : undefined
 }
 
+/** `DONE [text]` on stdout asks to stop cleanly; it takes effect when the script then exits 0. */
+export function doneText(line: string, stdout: boolean): string | undefined {
+  return stdout && /^DONE(?:\s|$)/.test(line) ? line.slice(4).trim() : undefined
+}
+
 /** Keep both bounds even for a single very long output line. */
 export function trimLog(text: string): string {
   const lines = text.split('\n').slice(-2001).join('\n')

@@ -6,7 +6,7 @@ import type { JsonValue } from '@earendil-works/chord'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { Board } from '../../extensions/board/api.ts'
 import { launchHandshake, Subscriptions } from '../../extensions/subscriptions/server.ts'
-import { Exited } from '../../extensions/subscriptions/refs.ts'
+import { Done, Exited } from '../../extensions/subscriptions/refs.ts'
 import type { Subscription } from '../../extensions/subscriptions/types.ts'
 import { context } from '../../server/harness.ts'
 import { eventHost, fauxServer, temp, until } from '../helpers.ts'
@@ -201,6 +201,51 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
       throw error
     }
   })
+})
+
+it('stops a recurring script that prints DONE and exits 0 without waking anyone; start resumes it with its state', async () => {
+  const { app, folder } = await fixture()
+  const sub = (await app.extensions.invoke(
+    'subscriptions',
+    'create',
+    { ask: 'Poll until merged', once: false },
+    new AbortController().signal,
+    (await app.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)).id,
+  )) as Subscription
+  const get = async () =>
+    (await app.harness.snapshot(Subscriptions, context))!.subscriptions[sub.id]
+  const inputs = async (id: number) =>
+    (
+      await (await app.harness.conversation(id as ConversationId, context))!.context(context)
+    ).entries
+      .filter((e) => e.conversationId === id && e.kind.startsWith('subscriptions.'))
+      .map((e) => e.kind)
+  const done = () => eventHost(() => app.harness, 'test').eventLog.recent({ events: [Done] })
+  // Each run counts itself in its state folder, fires the count and stops itself.
+  await writeRun(
+    folder(sub.id),
+    'n=$(($(cat "$SUBSCRIPTION_STATE/n" 2>/dev/null || echo 0) + 1)); echo $n > "$SUBSCRIPTION_STATE/n"; echo FIRE $n; echo DONE all merged',
+  )
+  await call(app, 'start', sub.id)
+  await until(async () => !!(await get()).exitedAt)
+  expect(await get()).toMatchObject({ state: 'stopped', enabled: false, exitCode: 0, fires: 1 })
+  expect((await get()).error).toBeUndefined()
+  expect((await done()).map((e) => e.data)).toEqual([{ id: sub.id, text: 'all merged' }])
+  await call(app, 'start', sub.id)
+  await until(async () => (await get()).fires === 2 && (await get()).state === 'stopped')
+  expect(await readFile(join(folder(sub.id), 'state/n'), 'utf8')).toBe('2\n')
+  await until(async () => (await inputs(sub.subscribers[0])).length === 2)
+  expect(await inputs(sub.subscribers[0])).toEqual(['subscriptions.fired', 'subscriptions.fired'])
+  // The owning agent got only its writing brief: no failure input.
+  expect(await inputs(sub.conversationId)).toEqual(['subscriptions.writing'])
+
+  // DONE followed by a non-zero exit stays a failure.
+  await writeRun(folder(sub.id), 'echo DONE; exit 2')
+  await call(app, 'start', sub.id)
+  await until(async () => (await get()).state === 'investigating')
+  expect(await get()).toMatchObject({ exitCode: 2, enabled: true })
+  await until(async () => (await inputs(sub.conversationId)).includes('subscriptions.failed'))
+  expect(await done()).toHaveLength(2)
 })
 
 it('waits for a SIGTERM-ignoring script to die before stop returns and removes its pid file', async () => {

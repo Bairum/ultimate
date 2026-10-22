@@ -46,5 +46,7 @@ export const Started = defineEvent<{ id: string; pid: number }>('subscriptions.s
 export const Exited = defineEvent<{ id: string; code: number | null; signal?: string }>(
   'subscriptions.exited',
 )
+/** A script printed `DONE [text]` and exited 0: it is stopped, without a failure or a wake; `start` resumes it. */
+export const Done = defineEvent<{ id: string; text?: string }>('subscriptions.done')
 /** Recovery failed and the subscription agent escalated. */
 export const Escalated = defineEvent<{ id: string; reason: string }>('subscriptions.escalated')

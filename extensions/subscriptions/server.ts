@@ -28,9 +28,11 @@ import type { Group, GroupProcess } from '../../lib/process-group.ts'
 import { readSecret, validateName } from '../../lib/secrets.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { BoardApi } from '../board/api.ts'
+import { SubscriptionsApi } from './api.ts'
 import {
   CreateAction,
   DeleteAction,
+  Done,
   EscalateAction,
   Escalated,
   Exited,
@@ -44,8 +46,8 @@ import {
   SubscribeAction,
   UnsubscribeAction,
 } from './refs.ts'
-import { fireText, trimLog } from './types.ts'
-import type { Args, Subscription } from './types.ts'
+import { doneText, fireText, trimLog } from './types.ts'
+import type { Args, Subscription, SubscriptionListItem } from './types.ts'
 
 export const Subscriptions = defineDoc<{
   next: number
@@ -92,6 +94,8 @@ type Run = {
   group: Group
   active: boolean
   afterFire: boolean
+  /** The text of a `DONE` line; an exit 0 after it stops the subscription cleanly. */
+  done?: string
   queue: Promise<void>
   cleanup?: Promise<void>
   error?: string
@@ -241,14 +245,21 @@ function backend(host: ExtensionHost) {
         const done = sub.once && sub.state === 'done'
         const stopped = !!run?.stopped || closing
         if (!stopped && sub.state !== 'running' && !done) return
+        // A script that printed DONE and exited 0 asked to stop: the same state as `stop`, with nobody woken.
+        const said = run?.done
+        const finished = !stopped && !done && said !== undefined && code === 0
         // A fired one-shot is already done in its FIRE commit, so any other unplanned exit is a failure.
         // Shutdown keeps running subscriptions enabled for reopen.
-        if (!stopped && !done) sub.state = 'investigating'
+        if (finished) {
+          sub.state = 'stopped'
+          sub.enabled = false
+        } else if (!stopped && !done) sub.state = 'investigating'
         sub.updatedAt = sub.exitedAt = Date.now()
         if (code !== null) sub.exitCode = code
         delete sub.pid
         const event = await host.emit(tx, Exited, { id, code, ...(signal ? { signal } : {}) })
-        if (sub.state === 'done') sub.enabled = false
+        if (finished) await host.emit(tx, Done, { id, ...(said ? { text: said } : {}) })
+        else if (sub.state === 'done') sub.enabled = false
         else if (!stopped) {
           sub.error = error ?? `Process exited with code ${code}${signal ? ` (${signal})` : ''}`
           await deliver(tx, sub, event.id, 'failed', sub.error)
@@ -362,6 +373,8 @@ function backend(host: ExtensionHost) {
         const trimmed = trimLog(output)
         if (trimmed !== output) await writeFile(path, trimmed)
         const fire = fireText(text, stdout)
+        const done = doneText(text, stdout)
+        if (done !== undefined) run.done = done
         await host.harness().commit(async (tx) => {
           const saved = (await tx.doc(Subscriptions)).subscriptions[id]
           if (!saved || saved.pid !== child.pid || saved.state !== 'running') return
@@ -607,6 +620,11 @@ function backend(host: ExtensionHost) {
       if (args.action === 'start') return json(await snapshot(required(args.id, 'id')))
       return receipt.result
     }
+    async function status(id: string): Promise<SubscriptionListItem> {
+      if (!/^S[1-9]\d*$/.test(id)) throw new Error('id must be S<n>')
+      const sub = await snapshot(id)
+      return { ...json(sub), alive: groupAlive(sub.pid) }
+    }
     const close = async () => {
       closing = true
       // A pending launch may be reading secrets or checking its executable; it must settle before cleanup.
@@ -642,7 +660,7 @@ function backend(host: ExtensionHost) {
         }
       }
     }
-    return { Deliver, operate, prepare, change, apply, open, close }
+    return { Deliver, operate, status, prepare, change, apply, open, close }
   })
 }
 
@@ -714,6 +732,11 @@ export default function subscriptions(host: ExtensionHost) {
   host.need(SubagentsApi)
   host.need(BoardApi)
   const api = backend(host)
+  host.implement(SubscriptionsApi, {
+    start: async (id) => (await api.operate({ action: 'start', id }), api.status(id)),
+    stop: async (id) => (await api.operate({ action: 'stop', id }), api.status(id)),
+    status: api.status,
+  })
   host.onOpen(api.open)
   host.onRelease(api.close)
   host.onClose(api.close)
@@ -726,7 +749,7 @@ export default function subscriptions(host: ExtensionHost) {
         // Transactional receipts deduplicate mutations; start reuses its committed live pid on replay.
         replay: 'safe',
         description:
-          'Subscribe conversations to background conditions. create {ask,title?,once?,secrets?,subscribers?} starts an agent that writes a cheap script; returns immediately. list; subscribe/unsubscribe {id,to?: "#id"|"@name"} (default caller); start/stop/delete {id}; log {id,lines?}; escalate {id,reason}. IDs are S<n>. Failures wake only the subscription agent; escalation notifies subscribers and @ultimate. Files and conversation survive delete.',
+          'Subscribe conversations to background conditions. create {ask,title?,once?,secrets?,subscribers?} starts an agent that writes a cheap script; returns immediately. list; subscribe/unsubscribe {id,to?: "#id"|"@name"} (default caller); start/stop/delete {id}; log {id,lines?}; escalate {id,reason}. IDs are S<n>. A recurring script that prints DONE and exits 0 stops cleanly; start resumes it. Failures wake only the subscription agent; escalation notifies subscribers and @ultimate. Files and conversation survive delete.',
         parameters: Type.Object({
           action: Type.Union(
             [
