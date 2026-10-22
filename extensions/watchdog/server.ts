@@ -105,8 +105,7 @@ async function details(tx: Tx, metadata: ExtensionHost['metadata'], task: Genera
   const previous = generations.findLastIndex(
     (candidate) => candidate.id < task.id && failed(candidate),
   )
-  const { upper, assistant: failedAssistant } = await boundary(tx, task, generations[index + 1])
-  let assistant = failedAssistant
+  const { upper, assistant } = await boundary(tx, task, generations[index + 1])
   const lower =
     previous < 0 ? 0 : (await boundary(tx, generations[previous], generations[previous + 1])).upper
   let step = 'model request'
@@ -119,7 +118,6 @@ async function details(tx: Tx, metadata: ExtensionHost['metadata'], task: Genera
     )
     for (const entry of page.items) {
       const message = entry.model?.[0]
-      if (message?.role === 'assistant') assistant ??= message
       const call =
         message?.role === 'assistant' &&
         message.content.findLast((part) => part.type === 'toolCall')

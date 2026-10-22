@@ -663,6 +663,50 @@ it('recovers missed failures without reporting historical failures on fresh inst
   expect(await f.entries()).toHaveLength(1)
 })
 
+it.each([false, true])(
+  'does not borrow retryability from history (no model: %s)',
+  async (noModel) => {
+    const f = await fixture((transcript) =>
+      inputText(transcript) === 'fail'
+        ? error('invalid configuration')
+        : fauxAssistantMessage('ok'),
+    )
+    const branch = await f.conversation('Current failure')
+    await f.harness.commit(async (tx) => {
+      await tx.appendEntry(branch, {
+        kind: 'pi.assistant',
+        model: [
+          fauxAssistantMessage([fauxToolCall('read', { path: 'README.md' })], {
+            stopReason: 'toolUse',
+          }),
+        ],
+      })
+      await tx.appendEntry(branch, {
+        kind: 'pi.assistant',
+        model: [error('429 rate limit exceeded')],
+      })
+      if (noModel)
+        await configure(tx, branch, { model: { provider: 'missing', modelId: 'missing' } })
+    }, context)
+    await (await f.submit(branch, 'fail')).wait(context)
+    await until(async () => (await f.entries()).length === 1)
+    expect((await f.entries())[0].data).toMatchObject({
+      conversation: branch,
+      step: 'read',
+      retried: false,
+      error: noModel ? 'Model missing/missing is not available' : 'invalid configuration',
+    })
+    f.advance(60_000)
+    await f.harness.waitForIdle(context)
+    expect((await f.tasks()).map((task) => task.state.status)).toEqual(['terminal'])
+    expect(
+      (
+        await f.host.scanSubmissions({ conversationId: branch }, 100, undefined, context)
+      ).items.some((input) => input.requestId?.startsWith('watchdog-retry:')),
+    ).toBe(false)
+  },
+)
+
 it('recovers no-model failures separately from earlier reply-expecting inputs and retry runs', async () => {
   const f = await fixture((transcript) =>
     inputText(transcript) === 'fail' ? error() : fauxAssistantMessage('ok'),
