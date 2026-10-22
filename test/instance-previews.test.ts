@@ -2,7 +2,9 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { previewEnv, remember, stopped } from '../extensions/instance/server.ts'
+import type { ConversationId } from '@earendil-works/pi-durable'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { previewEnv, previewWorkspace, remember, stopped } from '../extensions/instance/server.ts'
 import { at, label } from '../extensions/instance/links.ts'
 
 const homes: string[] = []
@@ -25,6 +27,27 @@ const preview = (port: number, conversationId = 1) => ({
   url: `http://127.0.0.1:${port}`,
   conversationId,
   faux: true,
+})
+
+it('previews the nearest owner worktree of a subagent, else the host checkout', async () => {
+  // Branch 10 has a worktree; 11 is its subagent and 12 a subagent of that. 20 owns 21, neither isolated.
+  const owners: Record<number, number> = { 11: 10, 12: 11, 21: 20 }
+  const branch = { path: '/worktrees/10', state: 'ready' }
+  const host = {
+    harness: () => ({
+      commit: async <T>(run: (tx: unknown) => Promise<T>) =>
+        run({
+          conversation: async (id: ConversationId) =>
+            owners[id] === undefined ? { id } : { id, owner: { conversationId: owners[id] } },
+        }),
+    }),
+  }
+  const workspaces = { get: async (id: ConversationId) => (id === 10 ? branch : undefined) }
+  const resolve = (id: number) =>
+    previewWorkspace(host as never, workspaces as never, id as ConversationId, BACKGROUND_CONTEXT)
+  expect(await resolve(11)).toBe(branch)
+  expect(await resolve(12)).toBe(branch)
+  expect(await resolve(21)).toBeUndefined()
 })
 
 it.each([false, true])(
