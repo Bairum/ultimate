@@ -13,7 +13,8 @@ import { fastForward, Refusal } from '../../lib/fast-forward.ts'
 import type { Git } from '../../lib/fast-forward.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
 import { ConversationsApi } from '../conversations/api.ts'
-import { WorkspacesApi } from '../workspaces/api.ts'
+import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
+import type { LandedData } from '../workspaces/api.ts'
 import { PauseApi } from '../pause/api.ts'
 import {
   cloneState,
@@ -61,6 +62,32 @@ const installedSince = (root: string, startedAt: number) =>
     (info) => info.mtimeMs > startedAt,
     () => false,
   )
+
+/** Install the lockfile's packages when they differ from the installed ones; the install's last lines when it fails. */
+async function installPackages(
+  root: string,
+): Promise<{ install: 'done' | 'failed' | 'skipped'; installError?: string }> {
+  if (!(await installOwed(root))) return { install: 'skipped' }
+  try {
+    await exec('pnpm', ['install', '--frozen-lockfile'], { cwd: root, timeout: 10 * 60_000 })
+    return { install: 'done' }
+  } catch (error) {
+    return { install: 'failed', installError: tail(error) }
+  }
+}
+
+/**
+ * Whether a landing calls for an install in the clone at `root`: its range changes `pnpm-lock.yaml` or `patches/`, and
+ * the clone's checkout holds the landed commit (the lander fast-forwarded it, so it is the host's checkout).
+ */
+export async function landingInstalls(git: Git, { base, sha }: Pick<LandedData, 'base' | 'sha'>) {
+  const files = await git('merge-base', '--is-ancestor', sha, 'HEAD').then(
+    () => git('diff', '--name-only', base, sha),
+    // Not an ancestor, or unknown here: the landing went into another repository or branch.
+    () => '',
+  )
+  return files.split('\n').some((file) => file === 'pnpm-lock.yaml' || file.startsWith('patches/'))
+}
 
 /** The last output lines of a failed command. */
 function tail(error: unknown) {
@@ -167,12 +194,30 @@ export default function update(host: ExtensionHost) {
         shared.ticking = undefined
       })
   }
+  // A landing into the host's checkout that changes packages installs them at once; the status line then asks for the
+  // restart, or shows the install as owed when it failed. Not awaited: the reactor's transaction stays short.
+  host.react(
+    'install-landed',
+    [SubmissionLanded],
+    async (_tx, { data }) => {
+      const root = host.ultimateRoot
+      if (!(await landingInstalls(gitIn(root), data))) return
+      shared.installing ??= withLock(await lockOf(root), () => installPackages(root))
+        .then(() => refresh(host, false))
+        .catch((error: unknown) => host.notice(`Install after landing: ${String(error)}`))
+        .finally(() => {
+          shared.installing = undefined
+        })
+    },
+    { from: 'now' },
+  )
   const start = setTimeout(tick, 30_000)
   const timer = setInterval(tick, TICK)
   host.onClose(async () => {
     clearTimeout(start)
     clearInterval(timer)
     await shared.ticking
+    await shared.installing
   })
   return defineExtension({ name: 'update' })
 }
@@ -181,6 +226,7 @@ type Shared = {
   ticking: Promise<void> | undefined
   checking: Promise<void> | undefined
   updating: Promise<UpdateResult> | undefined
+  installing: Promise<void> | undefined
   latest: UpdateState | undefined
   updated: (UpdateResult & { ok: true }) | undefined
   demo: string | undefined
@@ -192,6 +238,7 @@ const state = (host: ExtensionHost) =>
     ticking: undefined,
     checking: undefined,
     updating: undefined,
+    installing: undefined,
     latest: undefined,
     updated: undefined,
     demo: undefined,
@@ -324,20 +371,8 @@ async function apply(
   const files =
     moved.before === moved.after ? '' : await git('diff', '--name-only', moved.before, moved.after)
   const layers = layersOf(files.split('\n').filter(Boolean))
-  let install: 'done' | 'failed' | 'skipped' = 'skipped'
-  let installError: string | undefined
   // Owed while the lockfile differs from the installed one: a failed install is retried by the next update.
-  if (await installOwed(root))
-    try {
-      await exec('pnpm', ['install', '--frozen-lockfile'], {
-        cwd: root,
-        timeout: 10 * 60_000,
-      })
-      install = 'done'
-    } catch (error) {
-      install = 'failed'
-      installError = tail(error)
-    }
+  const { install, installError } = await installPackages(root)
   const result = {
     ok: true as const,
     from: moved.before.slice(0, 7),

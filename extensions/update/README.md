@@ -45,6 +45,10 @@ It refuses, and changes nothing, when:
 
 It never stashes, rebases or resets.
 
+## After a landing
+
+The lander fast-forwards the host's checkout itself, so a landing that changes packages would leave the old ones on disk. On each `workspaces.landed` whose range changes `pnpm-lock.yaml` or `patches/`, and whose commit the clone's `HEAD` holds (the landing went into this clone's checkout), the extension runs the same install under the clone-wide lock, after the lander's checks and outside its timing. A patch-only change counts too: its hash sits in the lockfile's `patchedDependencies`, so the lockfile differs from the installed one. The item then reads `updated · restart`, or `install owed` when the install failed. Nothing restarts by itself; faux servers and previews never install.
+
 ## Events
 
 Each update records a durable event, emitted in its own commit right after the change, because the clone lives outside storage. A crash in between loses the event, not the update.
