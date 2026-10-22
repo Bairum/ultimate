@@ -9,6 +9,7 @@ export const Metadata = defineDoc<{
   answerAt?: number
 }>({
   kind: 'ultimate.metadata',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',

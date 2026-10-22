@@ -118,7 +118,8 @@ async function fixture(
                 retryTask,
                 {
                   ...runtime,
-                  sleep: (_until, sleepContext) => runtime.sleep(Date.now() + 5, sleepContext),
+                  sleepUntil: (_until, checkpoint, sleepContext) =>
+                    runtime.sleepUntil(Date.now() + 5, checkpoint, sleepContext),
                 },
                 taskContext,
               ),

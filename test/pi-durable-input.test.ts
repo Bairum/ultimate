@@ -7,6 +7,7 @@ import { temp, until } from './helpers.ts'
 
 const Placed = defineDoc<{ count: number }>({
   kind: 'input-test.placed',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',

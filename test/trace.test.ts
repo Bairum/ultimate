@@ -18,6 +18,7 @@ afterAll(async () => {
 })
 
 const tokens = `
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import { defineApi } from '${resolve('shared/extension-api.ts')}'
 import { defineEvent } from '${resolve('shared/events.ts')}'
@@ -45,7 +46,7 @@ export default (host) => {
   const thrown = host.resource('beta.thrown', () => new Error('boom'))
   host.implement(Beta, {
     async work(args) {
-      await host.harness().commit((tx) => host.emit(tx, Worked, { n: 1 }), {})
+      await host.harness().commit((tx) => host.emit(tx, Worked, { n: 1 }), BACKGROUND_CONTEXT)
       return { done: true, args }
     },
     boom() { throw thrown },

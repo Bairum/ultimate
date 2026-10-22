@@ -30,6 +30,7 @@ import type { KeptWork } from '../conversations/types.ts'
 
 export const Workspaces = defineDoc<WorkspaceIndex>({
   kind: WorkspacesDoc.kind,
+  checkpointWhen: () => false,
   version: 4,
   scope: 'conversation',
   history: 'latest',

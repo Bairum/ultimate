@@ -25,6 +25,7 @@ export const order = -100
  */
 const SeenBuild = defineDoc<{ id?: string; files?: Record<string, string> }>({
   kind: 'prompt.build',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -156,7 +157,7 @@ export default function prompt(host: ExtensionHost) {
   return defineExtension({
     name: 'prompt',
     hooks: [
-      // Pi upstream: @earendil-works/pi-durable@1.3.0 — patched transactional beforeInput hook.
+      // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched transactional beforeInput hook.
       // The build is a note on the input that starts a run, not a system-prompt section: every hot reload changed that
       // section, and a changed system prompt rewrites the whole prompt cache. A conversation's first run records it.
       hook(GenerationTask, {
@@ -230,7 +231,7 @@ export default function prompt(host: ExtensionHost) {
             : []),
         ].join('\n')
       }),
-      // Pi upstream: @earendil-works/pi-coding-agent@1.3.0 src/core/system-prompt.ts and src/core/tools/*.ts — copied tool guidance adapted from unexported prompt contributions. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.
+      // Pi upstream: @earendil-works/pi-coding-agent@1.4.0 src/core/system-prompt.ts and src/core/tools/*.ts — copied tool guidance adapted from unexported prompt contributions. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.
       section('tools', (input) => {
         const guidance: Record<string, string> = {
           read: '- read: inspect files, with offset/limit for large files.',

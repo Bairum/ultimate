@@ -11,6 +11,7 @@ import type { BranchInput, leaveNote, rootOf, startBranch } from './server.ts'
 /** The project's roots, each the top of one conversation tree; a fresh project's first conversation is its first. */
 export const Roots = defineDoc<{ roots: number[] }>({
   kind: RootsDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -26,6 +27,7 @@ export type BranchState = { from: number; at: number; intent: string; brief?: tr
  */
 export const Branch = defineDoc<{ branch?: BranchState }>({
   kind: 'lineage.branch',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',

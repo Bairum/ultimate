@@ -11,6 +11,7 @@ import type { PauseDocState, PauseNote, PauseState, RunningTask } from './refs.t
 
 const State = defineDoc<PauseDocState>({
   kind: PauseDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -176,7 +177,7 @@ async function state(host: Host): Promise<PauseState> {
   }
 }
 
-// Pi upstream: @earendil-works/pi-durable@1.3.0 — patched Harness.hold()/release() keep the scheduler from starting tasks.
+// Pi upstream: @earendil-works/pi-durable@1.4.0 — patched Harness.hold()/release() keep the scheduler from starting tasks.
 /** Hold the scheduler, then record the pause and each run mid-turn now (its task and first input), which Play notes. */
 async function pause(host: Host) {
   const harness = host.harness()

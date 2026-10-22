@@ -533,11 +533,12 @@ it('returns a trace tree with its events on a running server', async () => {
   await symlink(resolve('extensions/system'), join(root, 'extensions/system'))
   await writeFile(
     join(root, 'extensions/alpha/server.ts'),
-    `import { defineEvent } from '${resolve('shared/events.ts')}'
+    `import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { defineEvent } from '${resolve('shared/events.ts')}'
 const Pinged = defineEvent('alpha.pinged')
 export default { name: 'alpha' }
 export const actions = {
-  ping: async (args, { host }) => host.harness().commit((tx) => host.emit(tx, Pinged, args), {}),
+  ping: async (args, { host }) => host.harness().commit((tx) => host.emit(tx, Pinged, args), BACKGROUND_CONTEXT),
 }`,
   )
   const home = await temp()

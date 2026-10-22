@@ -16,6 +16,7 @@ import type { CallTrace } from './trace.ts'
 /** Where the log lives and how far each reactor has read; on the root, next to other project-wide indexes. */
 export const EventLog = defineDoc<{ conversation?: number; cursors: Record<string, number> }>({
   kind: 'ultimate.events',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -26,6 +27,7 @@ export const EventLog = defineDoc<{ conversation?: number; cursors: Record<strin
 /** The newest events, oldest first, for the browser (`useEvents()`); on the root. */
 export const EventFeed = defineDoc<{ events: EventRecord[] }>({
   kind: EVENT_FEED,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',

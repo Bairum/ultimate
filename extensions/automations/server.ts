@@ -57,12 +57,14 @@ export type Automation = {
 }
 export const Automations = defineDoc<{ next: number; automations: Record<string, Automation> }>({
   kind: 'ultimate.automations',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'session',
   initial: () => ({ next: 1, automations: {} }),
 })
 const Receipt = defineDoc<{ result?: JsonValue; abort?: TaskId }>({
   kind: 'ultimate.automation-receipt',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'task',
   initial: () => ({}),
@@ -277,16 +279,12 @@ function backend(host: Host) {
           a.nextAt = until
           return { status: 'running', checkpoint: { phase: 'sleep', until } }
         }, context),
-      sleep: async (task, runtime, context) => {
-        await runtime.sleep(task.state.checkpoint.until, context)
-        await runtime.commit(
-          () => ({
-            status: 'running',
-            checkpoint: { phase: 'fire', until: task.state.checkpoint.until },
-          }),
+      sleep: (task, runtime, context) =>
+        runtime.sleepUntil(
+          task.state.checkpoint.until,
+          { phase: 'fire', until: task.state.checkpoint.until },
           context,
-        )
-      },
+        ),
       fire: (task, runtime, context) =>
         runtime.commit(async (tx) => {
           const a = (await tx.doc(Automations)).automations[task.input.id]

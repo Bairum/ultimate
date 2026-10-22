@@ -34,6 +34,7 @@ export const Subagents = defineDoc<{
   >
 }>({
   kind: 'ultimate.subagents',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -44,6 +45,7 @@ export const Subagents = defineDoc<{
 /** `{ [name]: conversationId }` of the standing agents, on the root conversation. */
 export const Standing = defineDoc<Record<string, ConversationId>>({
   kind: StandingDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -54,6 +56,7 @@ export const Standing = defineDoc<Record<string, ConversationId>>({
 /** The definition a conversation was configured from: children (including automation runs) and standing agents. */
 export const Profile = defineDoc<{ definition?: string }>({
   kind: 'ultimate.agent-profile',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',

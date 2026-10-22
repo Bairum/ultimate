@@ -21,6 +21,7 @@ const Branched = defineEvent<{ id: number }>('test.branched')
 const doc = (kind: string) =>
   defineDoc<{ shas: string[] }>({
     kind,
+    checkpointWhen: () => false,
     version: 1,
     scope: 'conversation',
     history: 'latest',
