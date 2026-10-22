@@ -19,6 +19,7 @@ import {
   price,
   selectModel,
   useCurrentModel,
+  usePickerTarget,
 } from './state.tsx'
 import type { ModelInfo, ProviderInfo } from './state.tsx'
 
@@ -78,11 +79,11 @@ export function ModelRow({
   )
 }
 
-/** Searchable models of every provider, grouped; picking one configures the shown conversation. */
+/** Searchable models of every provider, grouped; picking one configures the conversation that opened it. */
 export function ModelPicker() {
   const [open, setOpen] = useDialog(dialogs.picker)
   const actions = useUltimate()
-  const { ref, models, loading } = useCurrentModel()
+  const { id, ref, models, loading } = useCurrentModel(usePickerTarget())
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string>()
   const providers = useMemo(
@@ -120,7 +121,7 @@ export function ModelPicker() {
       return
     }
     setError(undefined)
-    selectModel(model).then(
+    selectModel(model, id).then(
       () => setOpen(false),
       (failure: unknown) => setError(errorMessage(failure)),
     )

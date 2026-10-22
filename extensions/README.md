@@ -37,8 +37,10 @@ Wrap `<Conversation/>` in `<ConversationScope id={id}>` (both from `@/sdk`) to r
 switching the shell. `useConversation(select?)`, `useTranscript`, `useDoc`/`useDocKind`, `useUltimate().conversationId`,
 `useIntro`, `useCompact`/`useCompactQuiet`, and `useAction` follow the nearest scope, as do transcript/composer
 contributions. Scopes of the same id share a stream; the last unmount releases it. Outside a scope these hooks keep
-their existing behaviour. Explicit `useDocOf` ids, root UI state, shell navigation, commands, `getConversation()` and
-the imperative `api` stay global: callbacks using `api` must pass the scoped id explicitly when acting on it.
+their existing behaviour. A shortcut pressed inside a scope runs its command with the scope's id as
+`context.conversationId` (Escape stops the scoped run). Explicit `useDocOf` ids, root UI state, shell navigation, the
+palette, `getConversation()` without an id and the imperative `api` stay global: callbacks using `api` must pass the
+scoped id explicitly when acting on it, as toolbar contributions do with `useConversation().id`.
 
 ## Where extensions live
 
@@ -508,11 +510,12 @@ commands: [
 ]
 ```
 
-`run(context)` gets the shell actions (below), the shown `conversationId`, and the shown `surface` id; return a promise
+`run(context)` gets the shell actions (below), the shown `conversationId` (the scoped one for a shortcut typed inside a
+`ConversationScope`), and the shown `surface` id; return a promise
 to have a failure reported as a notice. `when(context)` hides the command when it returns false, such as
 `when: (context) => context.surface === 'commits'` for a command of one surface; a `when` that throws hides it too and
-reports a notice naming your extension. Commands run outside React: read the current state with `getConversation()`
-and `getState()`, not hooks.
+reports a notice naming your extension. Commands run outside React: read the current state with
+`getConversation(context.conversationId)` and `getState()`, not hooks, and act on `context.conversationId`.
 
 Plain keys and Shift+letter never fire while the user types; chords with `mod`, `alt`, or `ctrl` do. A plain key that
 must work in the composer too sets `whileTyping: true`, as Escape (`agent.stop`) and Shift+Tab

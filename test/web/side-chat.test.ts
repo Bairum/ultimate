@@ -1,5 +1,11 @@
 import { expect, it } from 'vitest'
-import { endings, frontSide, openSides, togglesSideMode } from '../../extensions/side-chat/logic.ts'
+import {
+  createEndings,
+  endings,
+  frontSide,
+  openSides,
+  togglesSideMode,
+} from '../../extensions/side-chat/logic.ts'
 import { topLevelRows } from '../../extensions/sidebar/listed.ts'
 
 const tab = {
@@ -70,4 +76,20 @@ it('lists side chats as no branch, root or earlier row in the sidebar', () => {
     { id: 91, parentConversationId: 90 },
   ])
   expect(rows.map((row) => row.id)).toEqual([44, 90])
+})
+
+it('keeps a failed inject and an ending in flight on their own side chat', async () => {
+  const states = createEndings((failure) => (failure as Error).message)
+  const pending = Promise.withResolvers<never>()
+  const inject = states.end(82, 'inject', () => pending.promise)
+  expect(states.get(82)).toEqual({ ending: 'inject' })
+  // Another side chat in the same pane neither spins nor is disabled by 82's inject.
+  expect(states.get(120)).toEqual({})
+  pending.reject(new Error('side-chat/inject: summary model faux/nope not found'))
+  await inject
+  expect(states.get(82)).toEqual({ error: 'summary model faux/nope not found' })
+  expect(states.get(120)).toEqual({})
+  // A retry clears the error while it runs and on success.
+  await states.end(82, 'inject', async () => undefined)
+  expect(states.get(82)).toEqual({})
 })
