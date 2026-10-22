@@ -62,9 +62,10 @@ export function groupAlive(pid?: number) {
 function probe(pid: number) {
   try {
     return groupAlive(pid)
-  } catch {
-    // EPERM: a member of another user survived, so the group is still there.
-    return true
+  } catch (error) {
+    // A member of another user survived, so the group is still there.
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') return true
+    throw error
   }
 }
 

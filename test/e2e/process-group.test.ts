@@ -114,6 +114,8 @@ it('stops a group that once reported a survivor once nothing of it is left', asy
     expect(await readdir(directory)).toEqual(['child'])
   } finally {
     kill.mockRestore()
+    const child = Number(await readFile(childFile, 'utf8').catch(() => '0'))
+    if (child) process.kill(child, 'SIGKILL')
     await removeTemp(directory)
   }
 })
