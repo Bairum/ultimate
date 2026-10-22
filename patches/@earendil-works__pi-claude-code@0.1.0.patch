@@ -1,5 +1,5 @@
 diff --git a/src/claude-cli.ts b/src/claude-cli.ts
-index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..2dfa7877769bc8cf58de207756d129852424ca86 100644
+index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..316c8d91bc8e4cf0e38f1da9333c84203f09b24b 100644
 --- a/src/claude-cli.ts
 +++ b/src/claude-cli.ts
 @@ -544,15 +544,23 @@ function setReplayCacheBreakpoints(messages: NativeRequestMessage[]): void {
@@ -46,3 +46,37 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..2dfa7877769bc8cf58de207756d12985
  
    return Buffer.from(JSON.stringify(payload));
  }
+@@ -726,6 +736,20 @@ function launchPlan(input: RunClaudeInput): ClaudeLaunchPlan {
+   };
+ }
+ 
++/**
++ * Claude Code ended a turn without its full response. Without stderr this is a
++ * transient stream ending, worded to match pi-ai's retryable "ended without"
++ * pattern; with stderr, Claude Code's reason decides.
++ */
++export function incompleteResponseError(stderr: string): Error {
++  const detail = stderr.trim();
++  return new Error(
++    detail
++      ? `Incomplete Claude Code response: assistant, message_stop and one result required (${detail.slice(-500)})`
++      : "Incomplete Claude Code response: stream ended without assistant, message_stop and one result",
++  );
++}
++
+ class ClaudeProcess {
+   busy = false;
+   readonly createdAt = Date.now();
+@@ -976,11 +1000,7 @@ class ClaudeProcess {
+         message = assistants.at(-1);
+       }
+ 
+-      if (!message || !sawMessageStop || !result) {
+-        throw new Error(
+-          `Incomplete Claude Code response: assistant, message_stop and one result required${this.stderr ? ` (${this.stderr.trim().slice(-500)})` : ""}`,
+-        );
+-      }
++      if (!message || !sawMessageStop || !result) throw incompleteResponseError(this.stderr);
+ 
+       const nativeFailureHandled = this.relay.denied > 0 || message.stop_reason === "refusal";
+       if (nativeError && !nativeFailureHandled) throw new Error(`Claude Code API error: ${nativeError}`);
