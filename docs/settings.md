@@ -14,6 +14,14 @@ triage that decides whether an agent's update wakes @ultimate;
 in faux mode the unset default is `faux/faux-1:off`. Set it in either file or with
 the "Summary model…" command, and it applies to the next request. `fastModels` (`["openai-codex/<id>", …]`, or `openai/`; project over
 user) runs those models on the priority tier through the `fast` extension, at a higher usage rate.
+Compaction thresholds come from Pi's settings (`~/.pi/agent/settings.json`, then `<project>/.pi/settings.json`,
+key `compaction`: `enabled`, `reserveTokens`, `keepRecentTokens`) over Pi Durable's defaults (reserve 16k, keep 20k,
+background compaction 32k below the blocking threshold), which suit a ~200k window. `server/harness.ts`
+(`compactionOverrides`) sets per-model values by context window: `faux/faux-1` (128k), `openai-codex/gpt-6.1-sol`
+(500k) and the 1M-window Claude Code models, which keep more recent context and start compacting in the background
+earlier. `compaction.modelOverrides` in those settings files, keyed by exact `"provider/modelId"` (fields
+`reserveTokens`, `keepRecentTokens`, `backgroundTokens`, `enabled`), replaces them field by field. Pi's settings files
+are read when the server starts.
 User config is independent of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` holds only its isolate setup
 and lander checks.
 

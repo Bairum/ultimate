@@ -25,6 +25,8 @@ import type {
   Extension,
   HarnessSettings,
   ModelRef,
+  ReportInfo,
+  CompactionPolicy,
   Page,
   SubmissionQuery,
   SubmissionRecord,
@@ -36,6 +38,47 @@ import { applyHttpProxySettings, configureHttpDispatcher } from './http.ts'
 import type { Notice } from '../shared/protocol.ts'
 
 export { context }
+
+/** A notice of a Pi Durable report, led by what failed: the task and conversation, extension or host callback. */
+export function reportMessage(error: unknown, info: ReportInfo): string {
+  const parts: string[] = []
+  if ('task' in info && info.task)
+    parts.push(`task #${info.task.id} (${info.task.kind}) in #${info.task.conversationId}`)
+  else if ('conversationId' in info && info.conversationId !== undefined)
+    parts.push(`#${info.conversationId}`)
+  if ('extension' in info && info.extension) parts.push(`extension ${info.extension}`)
+  if (info.type === 'host_error') parts.push(`host callback ${info.callback}`)
+  const reason = 'reason' in info ? ` (${info.reason.replaceAll('_', ' ')})` : ''
+  const about = parts.length > 0 ? `: ${parts.join(', ')}` : ''
+  return `${info.type.replaceAll('_', ' ')}${reason}${about}. ${String(error)}`
+}
+
+/**
+ * Compaction per model, from its context window and answer size, over Pi's defaults (reserve 16k, keep 20k, background
+ * 32k), which suit a ~200k window. Larger windows keep more room for the answer, more recent context verbatim, and
+ * start the background compaction earlier, so a long turn rarely waits on a blocking one. A `compaction.modelOverrides`
+ * entry in Pi's settings files replaces these field by field.
+ */
+const large = { reserveTokens: 32768, keepRecentTokens: 60000, backgroundTokens: 131072 }
+export const compactionOverrides: Record<string, Partial<CompactionPolicy>> = {
+  // 128k window, 16k answers: start in the background at ~80k.
+  'faux/faux-1': { reserveTokens: 16384, keepRecentTokens: 16000, backgroundTokens: 32768 },
+  // 500k window, 128k answers: blocking at ~467k, background from ~400k.
+  'openai-codex/gpt-6.1-sol': {
+    reserveTokens: 32768,
+    keepRecentTokens: 40000,
+    backgroundTokens: 65536,
+  },
+  // 1M windows, 128k answers: blocking at ~967k, background from ~836k.
+  'claude-code/default': large,
+  'claude-code/claude-opus-5-5': large,
+  'claude-code/claude-fable-5-1': large,
+  'claude-code/claude-sonnet-5': large,
+  'claude-code/claude-sonnet-5-5': large,
+  'claude-code/claude-haiku-5-5': large,
+  // claude-code/claude-haiku-4-5-20251001 has a 200k window: Pi's defaults fit.
+}
+
 export function createHarnessSettings(
   settings: SettingsManager,
   extensions: () => Extension[],
@@ -54,7 +97,11 @@ export function createHarnessSettings(
       }
     },
     get compaction() {
-      return settings.getCompactionSettings()
+      const configured = settings.getSettings().compaction?.modelOverrides ?? {}
+      const modelOverrides = { ...compactionOverrides }
+      for (const [model, entry] of Object.entries(configured))
+        modelOverrides[model] = { ...modelOverrides[model], ...entry }
+      return { ...settings.getCompactionSettings(), modelOverrides }
     },
     get retry() {
       return settings.getRetrySettings()
@@ -201,7 +248,8 @@ export async function prepareHarness(options: HostOptions) {
                 ),
             ),
             env,
-            onReport: (error) => options.report?.({ level: 'error', message: String(error) }),
+            onReport: (error, info) =>
+              options.report?.({ level: 'error', message: reportMessage(error, info) }),
           },
           context,
         )
