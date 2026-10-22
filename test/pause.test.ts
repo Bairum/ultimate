@@ -1,6 +1,11 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
-import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import {
+  fauxAssistantMessage,
+  fauxText,
+  fauxToolCall,
+  fauxProvider,
+} from '@earendil-works/pi-ai/providers/faux'
 import {
   defineExtension,
   defineTask,
@@ -48,7 +53,12 @@ const streamTask = (released: Promise<void>) =>
 /** A faux harness with the pause extension and a `work` tool that runs until the test releases it, as bash would. */
 async function fixture(home?: string) {
   home ??= await temp('ultimate-pause-')
-  const prepared = await prepareHarness({ ultimateRoot: home, userHome: home, home, faux: true })
+  const prepared = await prepareHarness({
+    ultimateRoot: home,
+    userHome: home,
+    home,
+    faux: fauxProvider(),
+  })
   let finish: (() => void) | undefined
   let finished = 0
   const background = Promise.withResolvers<void>()

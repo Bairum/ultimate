@@ -194,7 +194,6 @@ export async function main(args = process.argv.slice(2)) {
     throw new Error(`${dir} has no GitHub origin remote; pass --dir <project checkout>`)
   const cloud = await cloudConfig({
     userHome: user,
-    faux: undefined,
     notice: (message) => {
       throw new Error(message)
     },

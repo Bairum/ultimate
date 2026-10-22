@@ -428,7 +428,8 @@ export const actions = {
     if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter))
       throw new Error('frontmatter must be an object')
     if (typeof instructions !== 'string') throw new Error('instructions must be a string')
-    const { description, model, thinking, tools, isolate, resident, onFailure, fast } = frontmatter
+    const { description, model, thinking, tools, denyTools, isolate, resident, onFailure, fast } =
+      frontmatter
     if (typeof description !== 'string') throw new Error('description is required')
     if (model !== undefined && typeof model !== 'string') throw new Error('model must be a string')
     if (thinking !== undefined && typeof thinking !== 'string')
@@ -438,6 +439,11 @@ export const actions = {
       (!Array.isArray(tools) || !tools.every((tool) => typeof tool === 'string'))
     )
       throw new Error('tools must be a list of tool names')
+    if (
+      denyTools !== undefined &&
+      (!Array.isArray(denyTools) || !denyTools.every((tool) => typeof tool === 'string'))
+    )
+      throw new Error('denyTools must be a list of tool names')
     if (isolate !== undefined && isolate !== 'none' && isolate !== 'worktree')
       throw new Error('isolate must be none or worktree')
     if (onFailure !== undefined && onFailure !== 'diagnose' && onFailure !== 'fix')
@@ -468,6 +474,7 @@ export const actions = {
         ...(model ? { model } : {}),
         ...(thinking ? { thinking } : {}),
         ...(tools ? { tools } : {}),
+        ...(denyTools?.length ? { denyTools } : {}),
         ...(isolate ? { isolate } : {}),
         ...(resident !== undefined ? { resident } : {}),
         ...(onFailure ? { onFailure } : {}),

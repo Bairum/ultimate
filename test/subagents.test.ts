@@ -1,3 +1,4 @@
+import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 // First: helpers mocks the faux provider's token pacing, which must apply before the server modules load.
 import { eventHost, idleNeed, until, temp, removeTemp } from './helpers.ts'
 import { awaitWithContext } from '@earendil-works/chord/context'
@@ -77,7 +78,7 @@ async function fixture(
     ultimateRoot,
     userHome,
     home: join(ultimateRoot, 'home'),
-    faux: true,
+    faux: fauxProvider(),
   })
   prepared.registry.install(CodingTools)
   if (extension) prepared.registry.install(extension)
@@ -1752,6 +1753,7 @@ describe('subagents', () => {
       frontmatter: {
         description: 'Project scout: reads only',
         tools: ['read'],
+        denyTools: ['instance'],
         thinking: 'high',
         resident: true,
       },
@@ -1776,7 +1778,7 @@ describe('subagents', () => {
     await actions.saveDefinition(override, ctx)
     const raw = await readFile(join(project, 'scout.md'), 'utf8')
     expect(raw).toBe(
-      '---\nname: scout\ndescription: "Project scout: reads only"\nthinking: high\ntools: [read]\nresident: true\n---\n\n# Project\n\nRead the code.\n',
+      '---\nname: scout\ndescription: "Project scout: reads only"\nthinking: high\ntools: [read]\ndenyTools: [instance]\nresident: true\n---\n\n# Project\n\nRead the code.\n',
     )
     expect(await readFile(join(ultimateRoot, 'agents/scout.md'), 'utf8')).toBe(builtin)
     const found = await discoverAgents(
@@ -1790,6 +1792,7 @@ describe('subagents', () => {
       description: 'Project scout: reads only',
       resident: true,
       tools: ['read'],
+      denyTools: ['instance'],
       thinking: 'high',
       instructions: '# Project\n\nRead the code.',
     })

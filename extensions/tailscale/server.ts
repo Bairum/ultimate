@@ -53,7 +53,9 @@ export const actions: Record<string, ExtensionAction> = {
 
 export default function tailscale(host: ExtensionHost) {
   let status: Status = { state: 'disabled', allow: [] }
-  let cli = 'tailscale'
+  // TAILSCALE_COMMAND names another CLI; tests point it at a missing one so test servers stay off the tailnet.
+  const override = process.env.TAILSCALE_COMMAND
+  let cli = override ?? 'tailscale'
   let ownedPort: number | undefined
   let localTarget: string | undefined
   let dnsName: string | undefined
@@ -138,8 +140,10 @@ export default function tailscale(host: ExtensionHost) {
         output = (await command(['status', '--json'])).stdout
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-        cli = '/Applications/Tailscale.app/Contents/MacOS/Tailscale'
         try {
+          // A named CLI that is missing means none: the macOS app is only the default's fallback.
+          if (override) throw error
+          cli = '/Applications/Tailscale.app/Contents/MacOS/Tailscale'
           await access(cli, constants.X_OK)
         } catch {
           // On by default, so a machine without Tailscale gets a status, not a notice on every start.
@@ -286,9 +290,6 @@ export default function tailscale(host: ExtensionHost) {
     running ??= start().finally(() => (running = undefined))
     return (opening = running)
   }
-  // Faux servers are token-free demos and tests and never change the machine's Serve mappings, except a faux preview
-  // started by another Ultimate's `instance` tool: the user opens it on their tailnet, and it frees its port on close.
-  if (host.faux && !preview) return defineExtension({ name: 'tailscale' })
   host.onOpen(begin)
   retries.set(host, begin)
   host.implement(TailscaleApi, { status: () => status })

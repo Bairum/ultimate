@@ -7,7 +7,7 @@ import type { ExtensionHost } from '../server/extensions.ts'
 import { createAccess } from '../server/request-security.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { createServer } from '../server/main.ts'
-import { copyApis, fauxServer, linkDependencies, post, temp, until } from './helpers.ts'
+import { copyApis, linkDependencies, post, temp, until } from './helpers.ts'
 
 const closes: (() => Promise<void>)[] = []
 afterEach(async () => {
@@ -49,6 +49,8 @@ else if (args[0] === 'serve') {
 `,
   )
   await chmod(script, 0o755)
+  // This file runs its own stub CLI from PATH, not the missing one test/setup.ts names for every other server.
+  vi.stubEnv('TAILSCALE_COMMAND', undefined)
   vi.stubEnv('PATH', home)
   const invocations = async () => {
     try {
@@ -62,12 +64,7 @@ else if (args[0] === 'serve') {
     }
   }
   const live = new Set<string>()
-  async function instance(
-    projectRoot = '/project/a',
-    localPort = 4747,
-    serverHome = '/homes/a',
-    faux = false,
-  ) {
+  async function instance(projectRoot = '/project/a', localPort = 4747, serverHome = '/homes/a') {
     const url = `http://127.0.0.1:${localPort}`
     live.add(url)
     const openers: (() => Promise<void>)[] = []
@@ -78,7 +75,6 @@ else if (args[0] === 'serve') {
       userHome: home,
       home: serverHome,
       projectRoot,
-      ...(faux && { faux: {} }),
       projects: async () => [...live].map((liveUrl) => ({ running: { url: liveUrl } })),
       access,
       notice: (message: string) => notices.push(message),
@@ -141,7 +137,6 @@ it('is on by default, applies user-only settings through the real loader and tea
     userHome: f.home,
     home: join(f.home, 'state'),
     port: 0,
-    faux: false,
   })
   closes.push(async () => {
     await server.vite.watcher.close()
@@ -177,23 +172,6 @@ it('is on by default, applies user-only settings through the real loader and tea
   )
 })
 
-it('never exposes a faux server', async () => {
-  const f = await fixture()
-  const root = await repo(f.home)
-  const server = await fauxServer({
-    ultimateRoot: root,
-    projectRoot: root,
-    userHome: f.home,
-    home: join(f.home, 'state'),
-    port: 0,
-  })
-  closes.push(() => server.close())
-  expect(
-    (await post(server, '/api/extensions/tailscale/actions/status', { args: null })).data.result,
-  ).toEqual({ state: 'disabled', allow: [] })
-  expect(server.system.current().access.origins).toEqual([])
-  expect(await f.invocations()).toEqual([])
-})
 it('serves, verifies the owner login by default, and tears down only its port', async () => {
   const f = await fixture()
   const app = await f.instance()
@@ -379,6 +357,15 @@ it('retries a failed start on request, one start at a time, and does nothing onc
   expect(await retry()).toEqual(first)
   expect(await f.invocations()).toHaveLength(calls)
 })
+it('treats a missing TAILSCALE_COMMAND as not installed, never falling back to another CLI', async () => {
+  const f = await fixture()
+  // The stub on PATH would publish; a named but missing CLI must win over it and over the macOS app.
+  vi.stubEnv('TAILSCALE_COMMAND', join(f.home, 'missing-tailscale'))
+  const app = await f.instance()
+  expect(await app.status()).toMatchObject({ state: 'not-installed' })
+  expect(app.notices).toEqual([])
+  expect(await f.invocations()).toEqual([])
+})
 it('reports not installed quietly without attempting Serve', async () => {
   const f = await fixture()
   vi.stubEnv('PATH', join(f.home, 'missing'))
@@ -458,10 +445,10 @@ it('gives a preview of the same project its own port and frees it when the previ
   expect(Object.keys(await registry())).toEqual(['/project/a'])
   expect((await app.status()).url).toBe('https://rog.example.ts.net:4747')
 })
-it('publishes a faux preview and frees its port when it ends', async () => {
+it('publishes a preview and frees its port when it ends', async () => {
   const f = await fixture()
   vi.stubEnv('ULTIMATE_INSTANCE_OWNER', String(process.pid))
-  const preview = await f.instance('/project/a', 4800, '/tmp/faux-preview', true)
+  const preview = await f.instance('/project/a', 4800, '/tmp/preview')
   expect(await preview.status()).toMatchObject({
     state: 'ready',
     url: 'https://rog.example.ts.net:4800',

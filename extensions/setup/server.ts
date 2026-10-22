@@ -25,7 +25,7 @@ import { HealthApi } from '../health/api.ts'
 import type { MemoryDoc, RootsDoc } from '../lineage/refs.ts'
 import { Standing } from '../subagents/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
-import { CheckAction, DemoAction } from './refs.ts'
+import { CheckAction } from './refs.ts'
 import type { SetupIssue } from './refs.ts'
 
 const LOGIN = { label: 'Log in', command: 'auth.login' }
@@ -52,13 +52,12 @@ type CheckHost = Pick<
   | 'extensions'
   | 'need'
   | 'want'
-  | 'faux'
   | 'doc'
   | 'harness'
 >
 
 const configured = (host: Pick<CheckHost, 'modelRuntime'>, provider: string) =>
-  provider === 'faux' || host.modelRuntime.getProviderAuthStatus(provider).configured
+  host.modelRuntime.getProviderAuthStatus(provider).configured
 
 async function summaryArea(host: CheckHost): Promise<SetupIssue> {
   const status = await host.need(ConversationsApi).summaryModelStatus()
@@ -399,14 +398,10 @@ export async function noteFor(
   }
 }
 
-/** The faux demo set, shown instead of the real check while set. */
-let demo: SetupIssue[] | null = null
-
 export default function setup(host: ExtensionHost) {
   // The check reads files and the model runtime: cached briefly so a burst of inputs reads once.
   const cache = host.resource('setup.check', () => ({ at: 0, issues: [] as SetupIssue[] }))
   const current = async (tx: Tx) => {
-    if (host.faux && demo) return demo
     if (Date.now() - cache.at > 30_000) {
       cache.issues = await check(host, (doc, id) => tx.doc(doc, id))
       cache.at = Date.now()
@@ -434,13 +429,5 @@ export default function setup(host: ExtensionHost) {
 export const pollActions = ['check']
 
 export const actions = {
-  check: implementAction(CheckAction, async (_args, { host }) =>
-    host.faux && demo ? demo : check(host),
-  ),
-  demo: implementAction(DemoAction, (args, { host }) => {
-    if (!host.faux) throw new Error('demo runs only under faux')
-    const issues = (args as { issues?: unknown } | null)?.issues
-    demo = Array.isArray(issues) ? (issues as SetupIssue[]) : null
-    return { ok: true }
-  }),
+  check: implementAction(CheckAction, async (_args, { host }) => check(host)),
 }

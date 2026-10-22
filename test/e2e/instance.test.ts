@@ -1,7 +1,12 @@
 import { createHash } from 'node:crypto'
 import { cp, readFile, stat, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxText,
+  fauxToolCall,
+} from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../../server/harness.ts'
@@ -80,7 +85,7 @@ async function fixture({ foreign = false } = {}) {
     projectRoot: project,
     home: join(root, 'home'),
     userHome: root,
-    faux: true,
+    faux: fauxProvider(),
   })
   let opened: Awaited<ReturnType<typeof prepared.open>>
   const resources = new Map<string, unknown>()
@@ -206,19 +211,16 @@ const listed = (preview: Preview, conversationId: number) => ({
   id: preview.id,
   url: preview.url,
   conversationId,
-  faux: true,
   running: true,
 })
 it('selects shared, isolated main and owned child checkouts with the main project decision', async () => {
   const f = await fixture()
   try {
-    expect(await f.call('instance', { action: 'start', subagent: 999999, faux: true })).toContain(
+    expect(await f.call('instance', { action: 'start', subagent: 999999 })).toContain(
       'Unknown subagent',
     )
     const main = await f.main()
-    const own = JSON.parse(
-      await f.call('instance', { action: 'start', faux: true }, main.id),
-    ) as Preview
+    const own = JSON.parse(await f.call('instance', { action: 'start' }, main.id)) as Preview
     expect(
       await f.call(
         'subagent',
@@ -231,20 +233,16 @@ it('selects shared, isolated main and owned child checkouts with the main projec
     )[0]
     const childWorkspace = (await f.service.get(child.conversationId, context))!
     expect(childWorkspace.source).toBe(main.workspace.path)
-    const shared = JSON.parse(await f.call('instance', { action: 'start', faux: true })) as Preview
+    const shared = JSON.parse(await f.call('instance', { action: 'start' })) as Preview
     const selected = JSON.parse(
-      await f.call(
-        'instance',
-        { action: 'start', subagent: child.conversationId, faux: true },
-        main.id,
-      ),
+      await f.call('instance', { action: 'start', subagent: child.conversationId }, main.id),
     ) as Preview
     expect(new Set([shared.url, own.url, selected.url]).size).toBe(3)
     expect(new Set([shared.home, own.home, selected.home, f.prepared.home]).size).toBe(4)
     await assertProject(shared, f.source, true)
     await assertProject(own, main.workspace.path, true)
     await assertProject(selected, childWorkspace.path, true)
-    expect(await f.run({ action: 'start', faux: true })).toContain('At most three')
+    expect(await f.run({ action: 'start' })).toContain('At most three')
     expect(await f.list()).toEqual(
       expect.arrayContaining([
         listed(own, main.id),
@@ -289,7 +287,7 @@ it('selects shared, isolated main and owned child checkouts with the main projec
     }
     await f.service.discard(child.conversationId, context)
     await f.service.discard(main.id, context)
-    expect(await f.run({ action: 'start', faux: true }, main.id)).toContain('active, ready')
+    expect(await f.run({ action: 'start' }, main.id)).toContain('active, ready')
   } finally {
     await f.close()
   }
@@ -298,9 +296,7 @@ it('previews a workspace of another project on the host Ultimate', async () => {
   const f = await fixture({ foreign: true })
   try {
     const main = await f.main()
-    const preview = JSON.parse(
-      await f.call('instance', { action: 'start', faux: true }, main.id),
-    ) as Preview
+    const preview = JSON.parse(await f.call('instance', { action: 'start' }, main.id)) as Preview
     expect(await readFile(join(main.workspace.path, 'README.md'), 'utf8')).toContain('not Ultimate')
     await assertProject(preview, main.workspace.path, true, f.source)
     await f.run({ action: 'stop', id: preview.id })
@@ -316,13 +312,11 @@ it('cleans up a failed or aborted preview and allows its home to be reused', asy
     const original = await readFile(entry, 'utf8')
     await writeFile(entry, "throw new Error('preview startup failure')\n")
     const home = join(f.root, 'failed-home')
-    expect(await f.run({ action: 'start', home, faux: true }, main.id)).toContain(
-      'preview startup failure',
-    )
+    expect(await f.run({ action: 'start', home }, main.id)).toContain('preview startup failure')
     expect(JSON.parse(await f.run({ action: 'list' }))).toEqual([])
     await writeFile(entry, 'setInterval(() => {}, 1000)\n')
     const controller = new AbortController()
-    const abort = f.run({ action: 'start', home, faux: true }, main.id, {
+    const abort = f.run({ action: 'start', home }, main.id, {
       ...context,
       abortSignal: controller.signal,
     })
@@ -331,9 +325,7 @@ it('cleans up a failed or aborted preview and allows its home to be reused', asy
     expect(await abort).toContain('AbortError')
     expect(JSON.parse(await f.run({ action: 'list' }))).toEqual([])
     await writeFile(entry, original)
-    const preview = JSON.parse(
-      await f.run({ action: 'start', home, faux: true }, main.id),
-    ) as Preview
+    const preview = JSON.parse(await f.run({ action: 'start', home }, main.id)) as Preview
     const retained = join(home, 'worktrees', 'retained')
     await git(f.source, 'worktree', 'add', '-b', 'retained-preview', retained)
     process.kill(preview.pid, 'SIGTERM')
@@ -362,7 +354,7 @@ it('removes preview registrations, branches and temporary homes on stop and shut
     const beforeTrees = await git(f.source, 'worktree', 'list', '--porcelain')
     const beforeBranches = await git(f.source, 'branch', '--format=%(refname)')
     for (const shutdown of [false, true]) {
-      const preview = JSON.parse(await f.run({ action: 'start', faux: true })) as Preview
+      const preview = JSON.parse(await f.run({ action: 'start' })) as Preview
       await until(async () =>
         (await git(f.source, 'worktree', 'list', '--porcelain')).includes(preview.home),
       )

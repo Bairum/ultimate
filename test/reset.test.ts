@@ -1,3 +1,4 @@
+import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -46,7 +47,7 @@ it('keeps every path from opening storage on a home an interrupted reset left', 
     ultimateRoot: path,
     userHome: path,
     home: path,
-    faux: true,
+    faux: fauxProvider(),
   })
   await expect(prepared.open(false)).rejects.toThrow('A reset or restore of')
   expect(existsSync(join(path, 'state.sqlite'))).toBe(false)

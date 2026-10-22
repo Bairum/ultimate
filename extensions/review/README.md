@@ -49,4 +49,3 @@ Actions (`refs.ts`):
   tip in `workspaces.landed`), a commit's `Ultimate-Conversation` trailer, else the primary agent.
 - `send { conversation, spec, comments, note? }` (user only) → `{ conversation }`. At most 50 comments, each text up
   to 4,000 characters and excerpt up to 40 lines and 8 KB, to an existing conversation; it steers a busy one.
-  Under faux the agent answers a review by listing the places it names.

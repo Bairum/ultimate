@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path'
 import { cloudConfig, fetchRegister, httpBase } from '../lib/cloud.ts'
 import { git } from '../lib/git.ts'
 import { readSecret } from '../lib/secrets.ts'
+import { scriptedModel } from '../test/e2e/scripted-model.ts'
 
 const root = resolve(import.meta.dirname, '..')
 const SNAPSHOT_KEY = 'ULTIMATE_CLOUD_SNAPSHOT_KEY'
@@ -31,20 +32,23 @@ function childEnv(extra: Record<string, string>) {
   }
 }
 
-/** A faux Ultimate on `project` with home `home`, as machine `machine`; resolves its URL once it listens. */
+/** An Ultimate on `project` with home `home`, as machine `machine`; resolves its URL once it listens. */
 async function start(
   o: { project: string; home: string; user: string; machine: string },
   cloud: Record<string, string>,
+  model: Record<string, string>,
 ) {
   const child = spawn(process.execPath, [join(root, 'server/main.ts')], {
     cwd: o.project,
     env: childEnv({
       ...cloud,
+      ...model,
+      // Scratch machines stay off the tailnet: they find no Tailscale CLI.
+      TAILSCALE_COMMAND: join(o.user, 'no-tailscale'),
       HOME: o.user,
       ULTIMATE_PROJECT: o.project,
       ULTIMATE_HOME: o.home,
       ULTIMATE_PORT: '0',
-      ULTIMATE_FAUX: '1',
       ULTIMATE_CLOUD_MACHINE: o.machine,
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -89,7 +93,6 @@ async function entries(url: string, id: number) {
 async function main() {
   const configured = await cloudConfig({
     userHome: homedir(),
-    faux: undefined,
     notice: (message) => {
       throw new Error(message)
     },
@@ -110,6 +113,8 @@ async function main() {
   const hash = createHash('sha256').update(key).digest('hex')
   console.log(`Cloud ${new URL(base).host}, project ${key}, scratch ${scratch}`)
   const children: ChildProcess[] = []
+  // Every machine's conversations run on a scripted model that answers each prompt the same way, without tokens.
+  const model = await scriptedModel(() => ({ text: 'Seeded answer' }))
   /** This run's machine names that sent a backup, so the Worker may have registered them: cleanup deletes only these. */
   const registered = new Set<string>()
   try {
@@ -140,13 +145,18 @@ async function main() {
     const b = { ...other, project: a.project }
 
     step(`A: a conversation with known entries, backed up as ${a.machine}`)
-    let running = await start(a, cloud)
+    let running = await start(a, cloud, model.env)
     children.push(running.child)
     const created = await call(running.url, '/api/conversations', { title: 'fleet e2e' })
     check(created.status === 201, `creating a conversation: ${JSON.stringify(created.data)}`)
     const id = created.data.id as number
-    const seeded = await action(running.url, 'faux', 'seedHistory', { conversation: id, count: 8 })
-    check(seeded.status === 200, `seeding entries: ${JSON.stringify(seeded.data)}`)
+    const seeded = await call(running.url, `/api/conversations/${id}/submit`, { text: 'Hello' })
+    check(seeded.status === 202, `seeding entries: ${JSON.stringify(seeded.data)}`)
+    const answered = Date.now() + 30_000
+    while (!(await entries(running.url, id)).includes('Seeded answer')) {
+      check(Date.now() < answered, 'the seeded answer never arrived')
+      await new Promise((done) => setTimeout(done, 200))
+    }
     const known = await entries(running.url, id)
     registered.add(a.machine)
     const first = await action(running.url, 'cloud', 'backup')
@@ -196,7 +206,7 @@ async function main() {
     )
 
     step('B: the same entries, then a backup on top of A’s')
-    running = await start(b, cloud)
+    running = await start(b, cloud, model.env)
     children.push(running.child)
     check((await entries(running.url, id)) === known, 'restored entries differ from A’s')
     registered.add(b.machine)
@@ -213,7 +223,7 @@ async function main() {
     await stop(running.child)
 
     step('A again: its parent is stale, so the Worker refuses; then force')
-    running = await start(a, cloud)
+    running = await start(a, cloud, model.env)
     children.push(running.child)
     const refused = await action(running.url, 'cloud', 'backup')
     check(refused.status !== 200, 'a stale backup was accepted')
@@ -234,6 +244,7 @@ async function main() {
     console.log('\n✓ fleet e2e passed')
   } finally {
     for (const child of children) await stop(child)
+    await model.close()
     step('cleanup')
     const remove = async (path: string) => {
       const response = await fetch(new URL(path, base), {

@@ -4,7 +4,7 @@ Keeps the Ultimate clone the host runs from (`host.ultimateRoot`, the `<self>` b
 
 ## Checking
 
-Every running Ultimate compares the clone with `origin/<default branch>` every 5 minutes, and 30 s after start. That comparison is local and costs nothing. It fetches origin only when the clone's last fetch is older than an hour. The last fetch is read from `.git/FETCH_HEAD`'s mtime, so several Ultimates on one clone (each project's host) fetch at most once an hour between them, and a fetch by hand counts too. The fetch uses `lib/fast-forward.ts`, which retries a GitHub origin over the other transport (SSH ↔ HTTPS), and git never prompts. Fetches, summaries and updates hold a clone-wide lock (`.git/ultimate-update.lock`, the core's SQLite-held lock from `server/lock.ts`, released with its process), and the fetch's age and the summary cache are read again under it. Faux servers and previews never check, and their `state` and `update` never touch the clone.
+Every running Ultimate compares the clone with `origin/<default branch>` every 5 minutes, and 30 s after start. That comparison is local and costs nothing. It fetches origin only when the clone's last fetch is older than an hour. The last fetch is read from `.git/FETCH_HEAD`'s mtime, so several Ultimates on one clone (each project's host) fetch at most once an hour between them, and a fetch by hand counts too. The fetch uses `lib/fast-forward.ts`, which retries a GitHub origin over the other transport (SSH ↔ HTTPS), and git never prompts. Fetches, summaries and updates hold a clone-wide lock (`.git/ultimate-update.lock`, the core's SQLite-held lock from `server/lock.ts`, released with its process), and the fetch's age and the summary cache are read again under it. Previews never check, and their `state` and `update` never touch the clone.
 
 When a check finds a new range, the summary model is asked once (`ConversationsApi.askSummaryModel`) for 2–4 plain lines on what it brings. Its input is the range's commit subjects and bodies, never diffs, clipped to 12,000 characters. The answer is cached by `<head>..<origin head>` in `.git/ultimate-update-summary.json`, shared by every Ultimate on the clone; a missing or failing model caches no lines, and the popover shows the commit list instead.
 
@@ -47,7 +47,7 @@ It never stashes, rebases or resets.
 
 ## After a landing
 
-The lander fast-forwards the host's checkout itself, so a landing that changes packages would leave the old ones on disk. On each `workspaces.landed` whose range changes `pnpm-lock.yaml` or `patches/`, and whose commit the clone's `HEAD` holds (the landing went into this clone's checkout), the extension runs the same install under the clone-wide lock, after the lander's checks and outside its timing. A patch-only change counts too: its hash sits in the lockfile's `patchedDependencies`, so the lockfile differs from the installed one. The item then reads `updated · restart`, or `install owed` when the install failed. Nothing restarts by itself; faux servers and previews never install.
+The lander fast-forwards the host's checkout itself, so a landing that changes packages would leave the old ones on disk. On each `workspaces.landed` whose range changes `pnpm-lock.yaml` or `patches/`, and whose commit the clone's `HEAD` holds (the landing went into this clone's checkout), the extension runs the same install under the clone-wide lock, after the lander's checks and outside its timing. A patch-only change counts too: its hash sits in the lockfile's `patchedDependencies`, so the lockfile differs from the installed one. The item then reads `updated · restart`, or `install owed` when the install failed. Nothing restarts by itself; previews never install.
 
 ## Events
 
@@ -55,7 +55,3 @@ Each update records a durable event, emitted in its own commit right after the c
 
 - `update.applied`: `{ root, from, to, commits, layers, install }`, for an update that moved the clone.
 - `update.refused`: `{ root, reason }`.
-
-## Faux
-
-A faux server answers a demo: 5 commits behind, touching server and the lockfile. `demo {state: 'behind' | 'refused' | 'updated' | 'current'}` switches it for previews, and Update now moves the demo to `updated`, or stays `refused`. Check now takes 1.5 s and turns `current` into `behind`.

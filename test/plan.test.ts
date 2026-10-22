@@ -1,5 +1,9 @@
 import { join } from 'node:path'
-import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import {
+  fauxAssistantMessage,
+  fauxToolCall,
+  fauxProvider,
+} from '@earendil-works/pi-ai/providers/faux'
 import { defineExtension } from '@earendil-works/pi-durable'
 import type { ConversationId, JsonObject } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
@@ -15,7 +19,7 @@ it('shares the root ledger read-only with descendants, saves verdicts, and repla
     ultimateRoot: directory,
     userHome: directory,
     home: join(directory, 'home'),
-    faux: true,
+    faux: fauxProvider(),
   })
   const plan = planExtension({
     react: () => {},
@@ -259,7 +263,7 @@ it('indexes linked children with their task and renames them after it', async ()
     ultimateRoot: directory,
     userHome: directory,
     home: join(directory, 'home'),
-    faux: true,
+    faux: fauxProvider(),
   })
   let opened!: Awaited<ReturnType<typeof prepared.open>>
   const openers: (() => Promise<void>)[] = []

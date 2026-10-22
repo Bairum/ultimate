@@ -1,3 +1,4 @@
+import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import type { JsonValue } from '@earendil-works/chord'
 import { awaitWithContext } from '@earendil-works/chord/context'
@@ -41,7 +42,7 @@ async function fixture() {
     ultimateRoot: root,
     userHome,
     home: join(root, 'home'),
-    faux: true,
+    faux: fauxProvider(),
   })
   vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
   let opened: OpenHost

@@ -18,7 +18,7 @@ async function fixture() {
   const projectSettings = vi.fn<ExtensionHost['projectSettings']>(async () => ({
     cloud: { url: 'wss://untrusted/sync' },
   }))
-  const host = { userHome, projectRoot, faux: undefined, notice, projectSettings }
+  const host = { userHome, projectRoot, notice, projectSettings }
   const settings = (value: JsonObject) =>
     writeJson(join(userHome, '.ultimate/settings.json'), { cloud: value })
   await settings({ url: 'wss://user/sync', machine: 'user-machine' })
@@ -50,32 +50,21 @@ it('ignores project cloud settings, even without a user URL', async () => {
   expect(host.notice).not.toHaveBeenCalled()
 })
 
-it('keeps faux silent without an explicit environment URL', async () => {
-  const { host } = await fixture()
-  expect(
-    await cloudConfig({ ...host, faux: {} as NonNullable<ExtensionHost['faux']> }, {}),
-  ).toBeUndefined()
-  expect(host.notice).not.toHaveBeenCalled()
-})
-
 it('keeps previews silent without an explicit environment URL', async () => {
   const { host } = await fixture()
   expect(await cloudConfig(host, { ULTIMATE_INSTANCE_OWNER: '123' })).toBeUndefined()
   expect(host.notice).not.toHaveBeenCalled()
 })
 
-it('prefers environment overrides, including on faux previews', async () => {
+it('prefers environment overrides, including on previews', async () => {
   const { host } = await fixture()
   expect(
-    await cloudConfig(
-      { ...host, faux: {} as NonNullable<ExtensionHost['faux']> },
-      {
-        ULTIMATE_INSTANCE_OWNER: '123',
-        ULTIMATE_CLOUD_URL: 'ws://override/sync',
-        ULTIMATE_CLOUD_TOKEN: 'env-token',
-        ULTIMATE_CLOUD_MACHINE: 'env-machine',
-      },
-    ),
+    await cloudConfig(host, {
+      ULTIMATE_INSTANCE_OWNER: '123',
+      ULTIMATE_CLOUD_URL: 'ws://override/sync',
+      ULTIMATE_CLOUD_TOKEN: 'env-token',
+      ULTIMATE_CLOUD_MACHINE: 'env-machine',
+    }),
   ).toEqual({ url: 'ws://override/sync', token: 'env-token', machine: 'env-machine' })
 })
 
