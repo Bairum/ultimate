@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import {
   groupAlive,
   runGroup,
@@ -68,6 +68,28 @@ it('stops what a leader left in its group when it exits', async () => {
     // Its leader is reaped, so stopping it again signals nothing and only confirms it is gone.
     await stopGroup(group.child.pid!, { leader: group })
   } finally {
+    await removeTemp(directory)
+  }
+})
+
+it('reports a group it may not probe (EPERM) as not ended instead of throwing from the exit listener', async () => {
+  const directory = await temp('ultimate-process-group-')
+  const childFile = join(directory, 'child')
+  // A member under another user answers EPERM; that needs root to set up, so the probe is made to answer it.
+  const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+    throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' })
+  })
+  try {
+    const group = spawnGroup('/bin/sh', ['-c', `sleep 60 & echo $! > '${childFile}'`], {})
+    expect(await group.ended).toBe(false)
+    kill.mockRestore()
+    await expect(stopGroup(group.child.pid!, { leader: group, grace: 50 })).rejects.toThrow(
+      'did not exit',
+    )
+  } finally {
+    kill.mockRestore()
+    const child = Number(await readFile(childFile, 'utf8').catch(() => '0'))
+    if (child) process.kill(child, 'SIGKILL')
     await removeTemp(directory)
   }
 })

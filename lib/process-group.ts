@@ -114,20 +114,24 @@ export function spawnGroup(
   child.stdin.on('error', () => {
     // A process that exits before reading go closes the pipe; its exit reports what happened.
   })
-  const left = new Promise<boolean>((resolve) => {
+  const left = new Promise<boolean>((resolve, reject) => {
     child.once('error', () => resolve(false))
-    // Checked in the same tick as the leader's reaping, so a group still there is ours.
-    child.once('exit', () => resolve(groupAlive(child.pid)))
+    // Checked in the same tick as the leader's reaping, so a group still there is ours. A member this process may not
+    // probe (EPERM) must not throw inside the listener.
+    child.once('exit', () => {
+      try {
+        resolve(groupAlive(child.pid))
+      } catch (error) {
+        reject(error)
+      }
+    })
   })
-  const ended = left.then(async (remains) => {
-    if (!remains) return true
-    try {
-      return await drain(child.pid!, grace)
-    } catch {
-      // A member this process may not signal (EPERM) survived; stopGroup reports it.
-      return false
-    }
-  })
+  const ended = left
+    .then((remains) => !remains || drain(child.pid!, grace))
+    .catch(
+      // A member this process may not signal survived; stopGroup reports that the group did not exit.
+      () => false,
+    )
   const closed = new Promise<void>((resolve) => child.once('close', () => resolve()))
   if (child.pid === undefined) return { child, ended, closed }
   try {

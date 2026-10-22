@@ -93,7 +93,6 @@ type Run = {
   active: boolean
   afterFire: boolean
   queue: Promise<void>
-  closed: Promise<void>
   cleanup?: Promise<void>
   error?: string
   finished?: boolean
@@ -312,21 +311,18 @@ function backend(host: ExtensionHost) {
         })
       }
       const { child } = group
-      const closed = Promise.withResolvers<void>()
       const run: Run = {
         child,
         group,
         active: true,
         afterFire: false,
         queue: Promise.resolve(),
-        closed: closed.promise,
       }
       runs.set(id, run)
       child.on('error', (error) => {
         run.error = error.message
       })
       child.on('close', (code, signal) => {
-        closed.resolve()
         enqueue(() => finish(id, run, code, signal ?? undefined, run.error))
       })
       // Hold output until the pid and Started event are committed, even for an immediately exiting script.
