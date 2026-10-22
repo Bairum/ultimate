@@ -301,6 +301,7 @@ export default (host: ExtensionHost) => {
         beforeRequest: (request, api) => {
           // beforeInput sees the old head when queued writes land, and automatic compaction can resume
           // without an input. Guard the actual request, including retries, without changing the system prefix.
+          // First, not last: a fixed position keeps the cached conversation prefix valid from one request to the next.
           const content = `You are conversation #${api.conversationId}.`
           if (
             !request.messages.some(
@@ -308,7 +309,7 @@ export default (host: ExtensionHost) => {
             )
           )
             return {
-              messages: [...request.messages, { role: 'user', content, timestamp: Date.now() }],
+              messages: [{ role: 'user', content, timestamp: 0 }, ...request.messages],
             }
           return undefined
         },
