@@ -72,6 +72,7 @@ import {
   windowKey,
 } from './chat.ts'
 import type { AsideGroup, ChatPart, QuietGroup, WorkRun } from './chat.ts'
+import { reachedFork } from './fork.ts'
 import { readerLeft } from './follow.ts'
 import { column } from './layout.ts'
 import { callsStart, indexTools, partialOf, slotsOf, toolCallView } from './model.ts'
@@ -191,14 +192,11 @@ function TranscriptEntries() {
   // A windowed stream pages on from its oldest entry. A whole one after a head marker scans from its newest: retained
   // suffixes can precede discarded compaction markers, which a minimum-active-ID cursor would skip. A whole one without
   // a marker is the whole history.
-  // A fork's history before its own first entry is its source's and stays hidden: paging stops at the start of the
-  // context it carries in, where the model's view of it begins.
-  const loaded = [...active, ...history]
-  const own = loaded
-    .filter((entry) => entry.conversationId === id)
-    .toSorted((a, b) => a.id - b.id)[0]
-  const forked = loaded.some(
-    (entry) => entry.conversationId !== id && (startsContext(own) || startsContext(entry)),
+  // A fork's history before its own first entry is its source's and stays hidden: paging stops at the fork point.
+  const forked = reachedFork(
+    [...active, ...history],
+    id,
+    older !== undefined && active[0]?.head !== undefined ? active[0].id : undefined,
   )
   const cursor =
     exhausted || forked
@@ -702,9 +700,6 @@ function TranscriptEntries() {
     </TranscriptContext>
   )
 }
-
-const startsContext = (entry: EntryRecord | undefined) =>
-  entry?.kind === 'pi.reset' || entry?.kind === 'pi.compaction'
 
 /** A set-aside group is known by its first entry, so it stays open while later rows join it. */
 const asideKey = (group: AsideGroup) => partsOf(group.aside[0])[0].entry.id
