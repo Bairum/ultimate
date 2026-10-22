@@ -19,7 +19,7 @@ import type {
   Tx,
 } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
-import { runGroup } from '../../lib/process-group.ts'
+import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
 import { CheckRan, Handoff, SubmissionLanded } from './api.ts'
@@ -174,7 +174,13 @@ const failedLine = /^\s*(FAIL|×|✗)\s/
 const seconds = (value: number) => (value < 60 ? `${value} s` : `${+(value / 60).toFixed(1)} min`)
 
 /** Where running checks record their process groups, so a host that crashed mid-check stops them on its next open. */
-export const checkPids = (home: string) => join(home, 'lander', 'checks')
+export const checkPids = (home: string) => join(home, 'lander-checks')
+/**
+ * Stop the checks a previous process left running. Pi resumes a lander task before extensions open, so files of
+ * this process name live checks, never leftovers.
+ */
+export const sweepChecks = (home: string) =>
+  sweepPidFiles(checkPids(home), (name) => name.startsWith(`${process.pid}-`))
 
 /**
  * Run `command` with bash in its own process group, recorded in `pids` while it runs. The watchdog and task
@@ -230,7 +236,7 @@ export async function runLanderCheck(
     try {
       exitCode = await runGroup('/bin/bash', ['-c', command], {
         cwd: path,
-        pidFile: join(pids, `${randomUUID()}.pid`),
+        pidFile: join(pids, `${process.pid}-${randomUUID()}.pid`),
         signal,
         grace: 2000,
         onOutput,

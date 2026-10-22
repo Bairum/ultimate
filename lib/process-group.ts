@@ -1,46 +1,49 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import type { ChildProcessByStdio, SpawnOptions } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
-import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
 import { constants as osConstants } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { exec } from './exec.ts'
 
 /** The program cannot start until its pid is recorded; a parent that dies before go gives EOF instead. */
 export const handshake = 'read -r _ || exit 1; exec "$0" "$@"'
 
 export type GroupProcess = ChildProcessByStdio<Writable, Readable, Readable>
+/**
+ * A process group this process started. `ended` resolves once the leader has exited and nothing of its group is left:
+ * `true`, or `false` when a member survived KILL. `closed` resolves when its output pipes have closed.
+ */
+export type Group = { child: GroupProcess; ended: Promise<boolean>; closed: Promise<void> }
 
 /**
- * Start `program` as the leader of its own process group, held behind the handshake until `pidFile` (when given)
- * names it. `exec` keeps the pid and group, and the program gets an empty stdin. A failed pid write throws; the held
- * process then reads EOF and exits without running.
+ * Signalling a group needs positive evidence that it is ours: its leader not yet reaped by this process, or a pid file
+ * whose recorded start time is the leader's. While any member lives, the kernel never gives the group's id to
+ * another process; once it is empty, reuse needs the pid counter to wrap. So a group verified once stays ours while
+ * it is polled every few milliseconds, never across a gap.
  */
-export function spawnGroup(
-  program: string,
-  args: string[],
-  options: Omit<SpawnOptions, 'detached' | 'stdio'> & { pidFile?: string },
-): GroupProcess {
-  const { pidFile, ...rest } = options
-  const child = spawn('/bin/sh', ['-c', handshake, program, ...args], {
-    ...rest,
-    detached: true,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
-  child.stdin.on('error', () => {
-    // A process that exits before reading go closes the pipe; its exit reports what happened.
-  })
-  if (child.pid === undefined) return child
+
+/** Who process `pid` is, the same on every read while it lives (its start time), or undefined once it is gone. */
+function identify(pid: number): string | undefined {
+  if (process.platform === 'darwin') {
+    try {
+      return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim()
+    } catch {
+      // ps exits 1 when the pid is gone.
+      return undefined
+    }
+  }
+  let stat: string
   try {
-    if (pidFile) writeFileSync(pidFile, `${child.pid}\n`)
+    stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
   } catch (error) {
-    child.stdin.end()
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
     throw error
   }
-  child.stdin.end('\n')
-  return child
+  // Field 22 is the start time in ticks since boot; the name before it may hold spaces. The boot id tells boots apart.
+  const ticks = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
+  return `${readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()}:${ticks}`
 }
 
 /** Whether any process of group `pid` still exists. */
@@ -55,93 +58,171 @@ export function groupAlive(pid?: number) {
   }
 }
 
-/** The pid a pid file names, or undefined when there is none. */
-export async function readPidFile(path: string) {
-  let text: string
-  try {
-    text = await readFile(path, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-    throw error
-  }
-  const pid = Number(text.trim())
-  if (!Number.isSafeInteger(pid) || pid < 1) throw new Error(`Invalid pid file ${path}`)
-  return pid
-}
-
-/** When process `pid` started, in epoch milliseconds (to about a second), or undefined when it is gone. */
-async function startedAt(pid: number) {
-  if (process.platform === 'darwin') {
-    const { stdout } = await exec('ps', ['-o', 'lstart=', '-p', String(pid)]).catch(
-      // ps exits 1 when the pid is gone.
-      () => ({ stdout: '' }),
-    )
-    return stdout.trim() ? Date.parse(stdout.trim()) : undefined
-  }
-  let line: string
-  try {
-    line = await readFile(`/proc/${pid}/stat`, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-    throw error
-  }
-  // Field 22 is the start time in clock ticks since boot (USER_HZ, 100 on Linux); the name before it may hold spaces.
-  const ticks = Number(line.slice(line.lastIndexOf(')') + 2).split(' ')[19])
-  const boot = Number(/^btime (\d+)$/m.exec(await readFile('/proc/stat', 'utf8'))?.[1])
-  return boot * 1000 + ticks * 10
-}
-
-/**
- * Whether group `pid` still runs and is the one recorded at `recordedAt`: a leader that started after its pid file
- * was written is a recycled pid. While the group exists its pid is never reused, so a leader that is gone but whose
- * group remains is still ours.
- */
-async function ours(pid: number, recordedAt?: number) {
-  if (!groupAlive(pid)) return false
-  if (recordedAt === undefined) return true
-  const started = await startedAt(pid)
-  // The start time is precise to about a second; a recycled pid needs a whole pid-space wrap after the write.
-  return started === undefined || started <= recordedAt + 1500
-}
-
-async function send(pid: number, name: NodeJS.Signals) {
+function send(pid: number, name: NodeJS.Signals) {
   try {
     process.kill(-pid, name)
   } catch (error) {
-    // The group may exit between the check and the signal.
+    // The group may empty between the check and the signal.
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
   }
 }
 
+/** `promise`'s value, or undefined when it takes longer than `ms`. */
+function within<T>(promise: Promise<T>, ms: number) {
+  const timer = new AbortController()
+  return Promise.race([
+    promise,
+    sleep(ms, undefined, { signal: timer.signal }).catch(
+      // Aborted once `promise` settled first; the race already has its value.
+      () => undefined,
+    ),
+  ]).finally(() => timer.abort())
+}
+
+/** Poll group `pid` until it is empty or `ms` passed; whether it is empty. */
+async function gone(pid: number, ms: number) {
+  const deadline = Date.now() + ms
+  while (groupAlive(pid) && Date.now() < deadline) await sleep(20)
+  return !groupAlive(pid)
+}
+
+/** Stop group `pid`, verified ours just now: TERM, KILL after `grace` ms; whether it emptied. */
+async function drain(pid: number, grace: number) {
+  send(pid, 'SIGTERM')
+  if (await gone(pid, grace)) return true
+  send(pid, 'SIGKILL')
+  return gone(pid, 3000)
+}
+
 /**
- * Stop the whole group `pid`: TERM, KILL after `grace` ms, then wait until no process of it is left (and `exited`,
- * the caller's own exit promise, settled). With `pidFile`, a pid that file names is only signalled while it is the
- * recorded process, and the file is removed once the group is gone. Rejects when the group survives KILL.
+ * Start `program` as the leader of its own process group, held behind the handshake until `pidFile` (when given)
+ * records it. `exec` keeps the pid and group, and the program gets an empty stdin. When the leader exits, whatever it
+ * left in its group is stopped too (TERM, KILL after `grace` ms): nothing of a group outlives its leader. A failed pid
+ * write throws; the held process then reads EOF and exits without running.
+ */
+export function spawnGroup(
+  program: string,
+  args: string[],
+  options: Omit<SpawnOptions, 'detached' | 'stdio'> & { pidFile?: string; grace?: number },
+): Group {
+  const { pidFile, grace = 3000, ...rest } = options
+  const child = spawn('/bin/sh', ['-c', handshake, program, ...args], {
+    ...rest,
+    detached: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  child.stdin.on('error', () => {
+    // A process that exits before reading go closes the pipe; its exit reports what happened.
+  })
+  const left = new Promise<boolean>((resolve) => {
+    child.once('error', () => resolve(false))
+    // Checked in the same tick as the leader's reaping, so a group still there is ours.
+    child.once('exit', () => resolve(groupAlive(child.pid)))
+  })
+  const ended = left.then(async (remains) => {
+    if (!remains) return true
+    try {
+      return await drain(child.pid!, grace)
+    } catch {
+      // A member this process may not signal (EPERM) survived; stopGroup reports it.
+      return false
+    }
+  })
+  const closed = new Promise<void>((resolve) => child.once('close', () => resolve()))
+  if (child.pid === undefined) return { child, ended, closed }
+  try {
+    if (pidFile) {
+      writeFileSync(`${pidFile}.start`, `${identify(child.pid)}\n`)
+      writeFileSync(pidFile, `${child.pid}\n`)
+    }
+  } catch (error) {
+    child.stdin.end()
+    throw error
+  }
+  child.stdin.end('\n')
+  return { child, ended, closed }
+}
+
+/** A file's trimmed text, or undefined when there is none. */
+async function text(path: string) {
+  try {
+    return (await readFile(path, 'utf8')).trim()
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+/** The pid a pid file names, or undefined when there is none. Its leader's start time sits next to it, in `.start`. */
+export async function readPidFile(path: string) {
+  const value = await text(path)
+  if (value === undefined) return undefined
+  const pid = Number(value)
+  if (!Number.isSafeInteger(pid) || pid < 1) throw new Error(`Invalid pid file ${path}`)
+  return pid
+}
+
+/**
+ * Stop the whole group `pid` and wait until nothing of it is left; rejects when a member survives KILL.
+ * - With `leader`, the group this process started: signalled only while its leader is unreaped; after that the
+ *   leader's own exit stops the rest (`Group.ended`).
+ * - Otherwise `pidFile` must name `pid` and record its leader's start time: a recycled pid, or a leader that is gone,
+ *   is never signalled. A file without a start time (written by hand or by an older Ultimate) counts while its pid
+ *   runs and leads its group.
+ *
+ * The pid file is removed once the group is gone, unless it names another process by then.
  */
 export async function stopGroup(
   pid: number,
-  options: { pidFile?: string; grace?: number; exited?: Promise<unknown> } = {},
+  options: { pidFile?: string; leader?: Group; grace?: number } = {},
 ) {
-  const { pidFile, grace = 3000, exited } = options
-  const recordedAt =
-    pidFile && (await readPidFile(pidFile)) === pid ? (await stat(pidFile)).mtimeMs : undefined
-  const wait = async (ms: number) => {
-    const deadline = Date.now() + ms
-    while ((await ours(pid, recordedAt)) && Date.now() < deadline) await sleep(20)
+  const { pidFile, leader, grace = 3000 } = options
+  const unreaped = () => leader!.child.exitCode === null && leader!.child.signalCode === null
+  if (leader) {
+    if (unreaped()) {
+      send(pid, 'SIGTERM')
+      if ((await within(leader.ended, grace)) === undefined && unreaped()) send(pid, 'SIGKILL')
+    }
+    // After a KILL the leader's exit drains the rest of the group, with its own grace.
+    if (!(await within(leader.ended, grace + 3500)))
+      throw new Error(`Process group ${pid} did not exit`)
+  } else {
+    const recorded = pidFile && (await readPidFile(pidFile)) === pid
+    const start = recorded ? await text(`${pidFile}.start`) : undefined
+    const ours =
+      recorded &&
+      (start === undefined
+        ? identify(pid) !== undefined && groupAlive(pid)
+        : identify(pid) === start)
+    if (ours && !(await drain(pid, grace))) throw new Error(`Process group ${pid} did not exit`)
   }
-  if (await ours(pid, recordedAt)) await send(pid, 'SIGTERM')
-  await wait(grace)
-  if (await ours(pid, recordedAt)) await send(pid, 'SIGKILL')
-  await exited
-  await wait(3000)
-  if (await ours(pid, recordedAt)) throw new Error(`Process group ${pid} did not exit`)
-  // Never erase a pid file that names a replacement process.
-  if (pidFile && (await readPidFile(pidFile)) === pid) await rm(pidFile, { force: true })
+  if (pidFile && (await readPidFile(pidFile)) === pid) {
+    await rm(`${pidFile}.start`, { force: true })
+    await rm(pidFile, { force: true })
+  }
+}
+
+/**
+ * Wait until `group`'s output pipes close. A process outside the group (`setsid`) can hold them open forever, so after
+ * `ms` they are closed from this end.
+ */
+export async function closeOutput(group: Pick<Group, 'child' | 'closed'>, ms = 1000) {
+  if (
+    (await within(
+      group.closed.then(() => true),
+      ms,
+    )) === undefined
+  ) {
+    group.child.stdout.destroy()
+    group.child.stderr.destroy()
+    await group.closed
+  }
 }
 
 /**
  * Run `program` as a recorded process group to its end and resolve its exit code (128 + signal number when a signal
- * ended it). An abort of `signal`, and the leader's exit, stop whatever remains of the group; the pid file goes with it.
+ * ended it). A `signal` aborted before the start runs nothing; an abort later stops the group. Nothing of the group
+ * outlives the run, and the pid file goes with it.
  */
 export async function runGroup(
   program: string,
@@ -156,15 +237,15 @@ export async function runGroup(
 ) {
   const { signal, grace, onOutput, ...spawnOptions } = options
   await mkdir(dirname(options.pidFile), { recursive: true })
-  const child = spawnGroup(program, args, spawnOptions)
-  // The leader's exit gives the code; its output ends only when every process holding the pipes is gone.
+  signal?.throwIfAborted()
+  const group = spawnGroup(program, args, { ...spawnOptions, grace })
+  const { child } = group
   const exited = new Promise<number>((resolve, reject) => {
     child.once('error', reject)
     child.once('exit', (code, name) =>
       resolve(code ?? (name ? 128 + (osConstants.signals[name] ?? 0) : 1)),
     )
   })
-  const closed = new Promise<void>((resolve) => child.once('close', () => resolve()))
   for (const stream of [child.stdout, child.stderr]) {
     stream.setEncoding('utf8')
     stream.on('data', onOutput)
@@ -172,26 +253,28 @@ export async function runGroup(
   const stop = () =>
     child.pid === undefined
       ? Promise.resolve()
-      : stopGroup(child.pid, { pidFile: options.pidFile, grace, exited: closed })
-  let stopping: Promise<void> | undefined
+      : stopGroup(child.pid, { pidFile: options.pidFile, leader: group, grace })
+  // A stop that fails while the leader still runs ends the run at once.
+  const failure = Promise.withResolvers<never>()
   const halt = () => {
-    stopping ??= stop()
+    stop().catch(failure.reject)
   }
   signal?.addEventListener('abort', halt, { once: true })
-  if (signal?.aborted) halt()
   try {
-    const code = await exited
-    // A finished leader can leave background children in its group; nothing of a run outlives it.
-    halt()
-    await stopping
+    const code = await Promise.race([exited, failure.promise])
+    await stop()
+    await closeOutput(group)
     return code
   } finally {
     signal?.removeEventListener('abort', halt)
   }
 }
 
-/** Stop every group that a `*.pid` file in `directory` names: what a crash left behind. */
-export async function sweepPidFiles(directory: string) {
+/** Stop every group a `*.pid` file in `directory` names, except files `keep` accepts: what a crash left behind. */
+export async function sweepPidFiles(
+  directory: string,
+  keep: (name: string) => boolean = () => false,
+) {
   let names: string[]
   try {
     names = await readdir(directory)
@@ -199,7 +282,7 @@ export async function sweepPidFiles(directory: string) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
     throw error
   }
-  for (const name of names.filter((file) => file.endsWith('.pid'))) {
+  for (const name of names.filter((file) => file.endsWith('.pid') && !keep(file))) {
     const pidFile = join(directory, name)
     const pid = await readPidFile(pidFile)
     if (pid) await stopGroup(pid, { pidFile })

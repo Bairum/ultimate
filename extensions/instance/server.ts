@@ -24,7 +24,7 @@ import { WorkspacesApi } from '../workspaces/api.ts'
 import { cleanPreview, sweepPreviews } from './cleanup.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { spawnGroup, stopGroup } from '../../lib/process-group.ts'
-import type { GroupProcess } from '../../lib/process-group.ts'
+import type { Group, GroupProcess } from '../../lib/process-group.ts'
 import { ListAction } from './refs.ts'
 
 /** A preview keeps ordinary parent variables, but gets its own host identity and no inherited cloud settings. */
@@ -71,6 +71,7 @@ interface Instance {
   conversationId: number
   faux: boolean
   child: GroupProcess
+  group: Group
   output: string
 }
 
@@ -132,13 +133,10 @@ export function remember(
 async function stop(instances: Map<string, Instance>, id: string) {
   const instance = instances.get(id)
   if (!instance) throw new Error(`Unknown instance: ${id}`)
-  if (instance.child.pid !== undefined) {
-    const exited = live(instance)
-      ? new Promise<void>((resolve) => instance.child.once('exit', () => resolve()))
-      : undefined
-    // The whole group: the preview and whatever it started without a group of its own.
-    await stopGroup(instance.child.pid, { grace: 5000, exited })
-  }
+  // The whole group: the preview and whatever it started without a group of its own. Its unreaped leader proves the
+  // group is still ours; once it exited, the group stopped with it.
+  if (instance.child.pid !== undefined)
+    await stopGroup(instance.child.pid, { leader: instance.group, grace: 5000 })
   if (instance.temporary) {
     await unlink(join(instance.home, 'ultimate.lock')).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
@@ -337,7 +335,12 @@ export default function instanceExtension(
                 ownerPid: process.pid,
               })
               // No pid file: a preview exits by itself once its owner is gone (ULTIMATE_INSTANCE_OWNER).
-              const child = spawnGroup(process.execPath, ['server/main.ts'], { cwd, env })
+              const group = spawnGroup(process.execPath, ['server/main.ts'], {
+                cwd,
+                env,
+                grace: 5000,
+              })
+              const { child } = group
               const id = randomUUID()
               const item: Instance = {
                 id,
@@ -348,6 +351,7 @@ export default function instanceExtension(
                 conversationId,
                 faux: args.faux === true,
                 child,
+                group,
                 output: '',
               }
               instances.set(id, item)

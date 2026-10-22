@@ -17,8 +17,14 @@ import type { Agent, ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
-import { groupAlive, readPidFile, spawnGroup, stopGroup } from '../../lib/process-group.ts'
-import type { GroupProcess } from '../../lib/process-group.ts'
+import {
+  closeOutput,
+  groupAlive,
+  readPidFile,
+  spawnGroup,
+  stopGroup,
+} from '../../lib/process-group.ts'
+import type { Group, GroupProcess } from '../../lib/process-group.ts'
 import { readSecret, validateName } from '../../lib/secrets.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { BoardApi } from '../board/api.ts'
@@ -83,6 +89,7 @@ type Delivery = {
 }
 type Run = {
   child: GroupProcess
+  group: Group
   active: boolean
   afterFire: boolean
   queue: Promise<void>
@@ -197,11 +204,13 @@ function backend(host: ExtensionHost) {
       if (run?.cleanup) return run.cleanup
       const work = (async () => {
         // The pid file stays until the whole group is confirmed gone, and never names a replacement when removed.
-        await stopGroup(pid, { pidFile: join(folder(id), 'pid'), exited: run?.closed }).catch(
+        // A run's own group is identified by its unreaped leader, a crashed host's by its pid file.
+        await stopGroup(pid, { pidFile: join(folder(id), 'pid'), leader: run?.group }).catch(
           (error: unknown) => {
             throw new Error(`Subscription ${id}: ${String(error)}`)
           },
         )
+        if (run) await closeOutput(run.group)
         if (runs.get(id) === run) runs.delete(id)
       })()
       if (!run) return work
@@ -293,18 +302,20 @@ function backend(host: ExtensionHost) {
       }
       await access(join(dir, 'run'), constants.X_OK)
       if (closing) throw new Error('Subscription supervisor is closing')
-      let child: GroupProcess
+      let group: Group
       try {
         // The script waits behind the handshake until its pid file is written.
-        child = spawnGroup(join(dir, 'run'), [], { cwd: dir, env, pidFile: join(dir, 'pid') })
+        group = spawnGroup(join(dir, 'run'), [], { cwd: dir, env, pidFile: join(dir, 'pid') })
       } catch (error) {
         throw new Error(`Subscription ${id}: could not record its pid: ${String(error)}`, {
           cause: error,
         })
       }
+      const { child } = group
       const closed = Promise.withResolvers<void>()
       const run: Run = {
         child,
+        group,
         active: true,
         afterFire: false,
         queue: Promise.resolve(),
