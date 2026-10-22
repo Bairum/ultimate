@@ -1,8 +1,7 @@
 import { defineDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-// oxlint-disable-next-line no-restricted-imports -- read concluded IDs in the input transaction, without a nested Session read
-import { UiState } from '../../server/ui-state.ts'
+import { ConversationsApi } from '../conversations/api.ts'
 import { Branch } from '../lineage/api.ts'
 import { Messages } from '../messages/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
@@ -23,8 +22,7 @@ export async function idleNote(
   conversationId: ConversationId,
   now: number,
 ) {
-  const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
-  const concluded = new Set((ui['ext.conversations.concluded'] ?? []) as number[])
+  const concluded = await host.need(ConversationsApi).concludedIn(tx)
   const queue = (await tx.doc(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID)).queue
   const excluded = new Set([...concluded, ...queue.map((item) => item.conversationId)])
   const messages = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages

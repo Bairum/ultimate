@@ -34,6 +34,7 @@ import { Branch } from '../extensions/lineage/api.ts'
 import { Standing, Subagents } from '../extensions/subagents/api.ts'
 import subagents from '../extensions/subagents/server.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
+import { concludedIn } from '../extensions/conversations/server.ts'
 import { Metadata } from '../server/metadata.ts'
 import { UiState } from '../server/ui-state.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
@@ -96,7 +97,8 @@ async function fixture(
     onRelease: () => {},
     scanSubmissions: (...args: Parameters<MemoryStorage['scanSubmissions']>) =>
       storage.scanSubmissions(...args),
-    need: () => ({ doc: Workspaces }),
+    need: (api: { name: string }) =>
+      api.name === 'conversations' ? { concludedIn } : { doc: Workspaces },
   } as unknown as ExtensionHost
   const original = watchdog(host)
   const backend = {

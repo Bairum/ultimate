@@ -8,7 +8,8 @@ import { attach, fauxServer, post, prepareFauxServer, temp, until } from './help
 import type { ConversationSummary } from '../shared/protocol.ts'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
-import { actions as conversationActions } from '../extensions/conversations/server.ts'
+import { actions as conversationActions, concludedIn } from '../extensions/conversations/server.ts'
+import { UiState } from '../server/ui-state.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { actionExec } from '../server/actions.ts'
 import { currentAnswer, exchangeUser } from '../extensions/conversations/summary.ts'
@@ -73,6 +74,23 @@ async function launch() {
       post(server, `/api/extensions/conversations/actions/${name}`, { args }),
   }
 }
+it.concurrent('reads concluded IDs from the current transaction without exposing mutable document state', async () => {
+  const { server, create } = await launch()
+  const id = await create()
+  await server.harness.commit(async (tx) => {
+    expect(await concludedIn(tx)).toEqual(new Set())
+    const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
+    ui['ext.conversations.concluded'] = [id]
+    const ids = await concludedIn(tx)
+    expect(ids).toEqual(new Set([id]))
+    ids.clear()
+    expect(await concludedIn(tx)).toEqual(new Set([id]))
+    ui['ext.conversations.concluded'] = 'invalid'
+    expect(await concludedIn(tx)).toEqual(new Set())
+    ui['ext.conversations.concluded'] = []
+  }, context)
+})
+
 it.concurrent('tells each top-level conversation about the others in a fixed text', async () => {
   const { server, home, summary, create, message, render } = await launch()
   const root = ROOT_CONVERSATION_ID
