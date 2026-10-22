@@ -2832,6 +2832,41 @@ it.concurrent('recovery does not mark an unregistered folder ready or run tools 
   expect(await readFile(join(workspace.path, 'unrelated.txt'), 'utf8')).toBe('keep me')
 })
 
+/** A ready workspace whose worktree Git removed, leaving its folder with only ignored local state, as `wrangler dev` does. */
+async function leftover(unlanded: boolean) {
+  const f = await fixture()
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  if (unlanded) await commit(workspace.path, 'unlanded.txt')
+  else {
+    await commit(workspace.path)
+    await f.service.land(id, context)
+  }
+  await git(workspace.source, 'worktree', 'remove', workspace.path)
+  await mkdir(join(workspace.path, '.wrangler'), { recursive: true })
+  await writeFile(join(workspace.path, '.wrangler/state.json'), '{}')
+  return { f, id, workspace }
+}
+it.concurrent('release removes the leftover folder of a worktree Git already removed', async () => {
+  const { f, id, workspace } = await leftover(false)
+  expect(await f.service.pending([id], context)).toEqual([])
+  expect(await f.service.release([id], context)).toEqual([])
+  await expect(access(workspace.path)).rejects.toThrow('ENOENT')
+  expect(await git(f.projectRoot, 'branch', '--list', workspace.branch)).toBe('')
+  expect((await f.service.get(id, context))!.state).toBe('removed')
+  expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
+})
+it.concurrent('release keeps the unlanded branch of a worktree Git already removed', async () => {
+  const { f, id, workspace } = await leftover(true)
+  const tip = await git(f.projectRoot, 'rev-parse', workspace.branch)
+  const expected = [{ id, uncommitted: 0, unlanded: 1 }]
+  expect(await f.service.pending([id], context)).toEqual(expected)
+  expect(await f.service.release([id], context)).toEqual(expected)
+  expect(await git(f.projectRoot, 'rev-parse', workspace.branch)).toBe(tip)
+  expect(await readFile(join(workspace.path, '.wrangler/state.json'), 'utf8')).toBe('{}')
+})
+
 it.concurrent('the tool gate blocks a checkout removed after the provider request began', async () => {
   const f = await fixture()
   const id = await f.create()
