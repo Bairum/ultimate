@@ -302,8 +302,20 @@ export default function watchdog(host: ExtensionHost) {
     const tasks = await host.harness().commit(async (tx) => {
       const receipts = await tx.doc(Receipts, ROOT_CONVERSATION_ID)
       if (receipts.highWater === undefined) {
-        const newest = await tx.scanTasks({ order: 'descending' }, 1)
-        receipts.highWater = newest.items[0]?.id ?? 0
+        let newest = 0
+        let unfinished = Infinity
+        let cursor: Cursor | undefined
+        do {
+          const page = await tx.scanTasks({}, 500, cursor)
+          for (const task of page.items) {
+            newest = task.id
+            if (task.state.status !== 'terminal') unfinished = Math.min(unfinished, task.id)
+            // Terminal failures are historical even when a still-running older task holds the mark back.
+            if (failed(task)) receipts.tasks[String(task.id)] = true
+          }
+          cursor = page.next
+        } while (cursor)
+        receipts.highWater = unfinished === Infinity ? newest : unfinished - 1
         return []
       }
       const all = []

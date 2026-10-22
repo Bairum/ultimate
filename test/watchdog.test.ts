@@ -617,6 +617,33 @@ it('lets reply:true board messages report their own failures, including during r
   expect(await f.tasks()).toHaveLength(0)
 })
 
+it('reports a generation running at installation without backfilling newer historical failures', async () => {
+  const f = await fixture((transcript) => {
+    if (inputText(transcript).startsWith('[run failed]')) return fauxAssistantMessage('ok')
+    if (inputText(transcript) === 'historical') return error('old failure')
+    return transcript.messages.at(-1)?.role === 'toolResult'
+      ? error('in-flight failure')
+      : fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
+  }, false)
+  const running = await f.conversation('In flight at install')
+  const pending = await f.submit(running, 'in flight')
+  await until(async () => f.held())
+  const historical = await f.conversation('Already failed')
+  await (await f.submit(historical, 'historical')).wait(context)
+  await f.install()
+  f.release()
+  await pending.wait(context)
+  await until(async () => (await f.entries()).length === 1)
+  expect((await f.entries())[0].data).toMatchObject({
+    conversation: running,
+    error: 'in-flight failure',
+  })
+  await f.reopen()
+  await f.harness.waitForIdle(context)
+  expect(await f.entries()).toHaveLength(1)
+  expect(await f.tasks()).toHaveLength(1)
+})
+
 it('recovers missed failures without reporting historical failures on fresh install', async () => {
   const f = await fixture(
     (transcript) => (inputText(transcript) === 'fail' ? error() : fauxAssistantMessage('ok')),
