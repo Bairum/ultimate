@@ -81,7 +81,7 @@ export default defineWebExtension({
       title: 'Automations',
       icon: TimerIcon,
       component: AutomationsPanel,
-      order: -4,
+      order: 7,
     },
   ],
   commands: [

@@ -409,7 +409,9 @@ function Opener() {
 
 export default defineWebExtension({
   slots: { overlay: [Opener] },
-  panels: [{ id: 'secrets', title: 'Secrets', icon: KeyRoundIcon, component: SecretsPanel }],
+  panels: [
+    { id: 'secrets', title: 'Secrets', icon: KeyRoundIcon, component: SecretsPanel, order: 9 },
+  ],
   commands: [
     {
       id: 'secrets.panel',
