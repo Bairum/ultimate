@@ -17,6 +17,13 @@ tail truncation keeps it) as an ordinary result, so the run goes on and the stee
 instead of after the wait. Follow-ups never interrupt. A marked command that changes things (`git push|commit|merge`,
 an `install` or `migrate` word) is refused with a hint to split it, so a steer can never cut it mid-way.
 
+Any running bash call can be cancelled from its card (the × next to its timer): the user-only action
+`cancel {callId}` (`refs.ts`) records the call in the conversation's durable `coding-tools.cancelled` document, which
+every bash call watches like the inbox above, so a cancel reaches a call across a reload. The call kills its command
+and returns the output so far followed by "[Cancelled by the user after 5m 09s; …]" as an ordinary result; the run
+goes on and the card shows `cancelled`. The call removes its mark when it ends; a cancel of a call that is not running
+fails and drops marks a Stop left behind.
+
 Pi's `prepare` hook only changes the command, cwd, and environment, not the timeout, so one wrapper injects the
 default and formats execution timeout errors.
 

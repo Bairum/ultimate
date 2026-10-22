@@ -3,12 +3,15 @@ import { readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import type { Context } from '@earendil-works/chord'
-import { withCancel } from '@earendil-works/chord/context'
+import { BACKGROUND_CONTEXT, withCancel } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import {
+  type ConversationId,
+  defineDoc,
   defineExtension,
   defineTool,
   InboxDoc,
+  LiveDoc,
   type ToolExecutionApi,
   type ToolExecutionResult,
   type ToolRegistration,
@@ -23,7 +26,8 @@ import {
 } from '@earendil-works/pi-durable/tools'
 import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { Committed } from './refs.ts'
+import { implementAction } from '../../lib/actions.ts'
+import { CancelAction, CancelledDoc, Committed } from './refs.ts'
 
 function defaultBashTimeout() {
   const seconds = Number(process.env.ULTIMATE_BASH_TIMEOUT ?? 600)
@@ -85,47 +89,114 @@ export function changes(command: string) {
   )
 }
 
+/** The bash calls the user cancelled that may still run (`CancelAction`), by call id → when. */
+const Cancelled = defineDoc<{ calls: Record<string, number> }>({
+  kind: CancelledDoc.kind,
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({ calls: {} }),
+})
+export const docs = [Cancelled]
+
+/** `40s`, `5m 09s`, `2h 05m`. */
+function took(ms: number) {
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600)
+    return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
+  return `${Math.floor(seconds / 3600)}h ${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}m`
+}
+
 /**
- * Run `run` until it finishes or a steer is queued in this call's conversation, whichever comes first. A steer joins a
- * run only after the tool round, so a wait would otherwise hold it; ending the command here lets the run go on and the
- * steer be placed at once. Follow-ups wait for the run's end anyway, so they never interrupt.
+ * Run `run` until it finishes or is stopped, whichever comes first: by the user's cancel of this call, or, when
+ * `interruptible`, by a steer queued in its conversation. A steer joins a run only after the tool round, so a wait would
+ * otherwise hold it; ending the command here lets the run go on and the steer be placed at once. Follow-ups wait for the
+ * run's end anyway, so they never interrupt. A stopped command is killed, and the call ends with the output so far and a
+ * notice, as an ordinary result.
  */
-async function untilSteered(
+async function untilStopped(
   run: (context: Context) => Promise<ToolExecutionResult>,
   api: ToolExecutionApi,
+  interruptible: boolean | undefined,
   context: Context,
 ): Promise<ToolExecutionResult> {
-  const inbox = await api.watchDoc(InboxDoc, api.conversationId, context)
-  if (!inbox) return run(context)
+  const id = api.conversationId
+  // A watch needs the document to exist; created once per conversation.
+  if (!(await api.snapshot(Cancelled, id, context)))
+    await api.commit((tx) => tx.doc(Cancelled, id), context)
+  const cancelled = (await api.watchDoc(Cancelled, id, context))!
+  const inbox = interruptible ? await api.watchDoc(InboxDoc, id, context) : undefined
   const started = performance.now()
   const { context: command, cancel } = withCancel(context)
-  let steered = false
-  const inspect = (value: typeof inbox.value) => {
-    if (steered || !value?.items.some((item) => item.mode === 'steer')) return
-    steered = true
-    cancel(new Error('Interrupted by a steering message'))
+  let reason: string | undefined
+  const stop = (why: string) => {
+    if (reason) return
+    reason = why
+    cancel(new Error(why))
   }
-  inbox.start(async (value) => inspect(value))
+  const inspectCancelled = (value: typeof cancelled.value) => {
+    if (value?.calls[api.callId] !== undefined) stop('Cancelled by the user')
+  }
+  const inspectInbox = (value: NonNullable<typeof inbox>['value']) => {
+    if (value?.items.some((item) => item.mode === 'steer'))
+      stop('Interrupted by a steering message')
+  }
+  cancelled.start(async (value) => inspectCancelled(value))
+  inbox?.start(async (value) => inspectInbox(value))
   try {
-    inspect(inbox.value)
+    inspectCancelled(cancelled.value)
+    if (inbox) inspectInbox(inbox.value)
     return await run(command)
   } catch (error) {
-    if (!steered || context.abortSignal?.aborted) throw error
+    if (!reason || context.abortSignal?.aborted) throw error
     const retained = api.retainedOutput()
-    const seconds = Math.round((performance.now() - started) / 1000)
     // The notice goes last: long output keeps its tail, so a leading notice would be cut.
     return {
       output: [
         {
           type: 'text',
-          text: `${retained.text || '(no output)'}\n[Interrupted by a steering message after ${seconds}s; the output above is the last the command printed.]`,
+          text: `${retained.text || '(no output)'}\n[${reason} after ${took(performance.now() - started)}; the output above is the last the command printed.]`,
         },
       ],
       structuredOutput: { output: retained.text, truncated: retained.truncated, exitCode: 130 },
     }
   } finally {
-    await inbox.stop()
+    const marked = cancelled.value?.calls[api.callId] !== undefined
+    await Promise.all([cancelled.stop(), inbox?.stop()])
+    // A mark that arrived as the command ended is dropped too; after a Stop the run's next cancel cleans up instead.
+    if (marked && !context.abortSignal?.aborted)
+      await api.commit(async (tx) => {
+        delete (await tx.doc(Cancelled, id)).calls[api.callId]
+      }, context)
   }
+}
+
+export const userActions = ['cancel']
+export const actions = {
+  cancel: implementAction(CancelAction, async (args, { host, conversationId }) => {
+    const callId =
+      args && typeof args === 'object' && !Array.isArray(args) ? args.callId : undefined
+    if (typeof callId !== 'string' || conversationId === undefined)
+      throw new Error('Invalid bash call')
+    const id = conversationId as ConversationId
+    await host.harness().commit(async (tx) => {
+      const live = await tx.doc(LiveDoc, id)
+      const running = new Set(
+        [...(live.tools ?? []), ...(live.nestedTools ?? [])].flatMap((slot) =>
+          slot.name === 'bash' && slot.status === 'running' ? [slot.callId] : [],
+        ),
+      )
+      if (!running.has(callId)) throw new Error('That bash call is not running')
+      const calls = (await tx.doc(Cancelled, id)).calls
+      // Drop marks of calls a Stop ended before they could remove them.
+      for (const stale of Object.keys(calls)) if (!running.has(stale)) delete calls[stale]
+      calls[callId] = Date.now()
+    }, BACKGROUND_CONTEXT)
+    return null
+  }),
 }
 
 type Made = {
@@ -230,7 +301,7 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
       })
       const run = (command: Context) => call.execute(args, api, command)
       try {
-        return interruptible ? await untilSteered(run, api, context) : await run(context)
+        return await untilStopped(run, api, interruptible, context)
       } finally {
         // A failed or stopped command may still have committed, so record what it made either way.
         const commits = await madeCommits(log, api.conversationId)

@@ -9,7 +9,8 @@ import {
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { changes } from '../../extensions/coding-tools/server.ts'
 import { context } from '../../server/harness.ts'
-import { fauxServer, removeTemp, temp, until } from '../helpers.ts'
+import { LiveDoc } from '@earendil-works/pi-durable'
+import { fauxServer, post, removeTemp, temp, until } from '../helpers.ts'
 
 let directory: string
 let server: Awaited<ReturnType<typeof fauxServer>>
@@ -30,7 +31,15 @@ afterAll(async () => {
  * Run one bash call; once its command has touched `$READY`, queue `input` (a steer or a follow-up) when given. Returns the call's
  * result text, the user messages in order, and how long the run took.
  */
-async function run(args: Record<string, unknown>, input?: 'steer' | 'followUp') {
+const cancel = (callId?: string) =>
+  post(server, '/api/extensions/coding-tools/actions/cancel', {
+    args: { callId },
+    conversationId: server.root.id,
+  }).then(({ status, data }) => ({ status, error: (data as { error?: string }).error }))
+
+async function run(args: Record<string, unknown>, input?: 'steer' | 'followUp' | 'cancel') {
+  const cancels: { status: number; error?: string }[] = []
+  let callId: string | undefined
   const started = join(directory, `started-${Math.random()}`)
   const command = `READY='${started}'; ${String(args.command)}`
   // Answer by the transcript, not a fixed list, so other model calls (titles, summaries) cannot shift it.
@@ -49,11 +58,21 @@ async function run(args: Record<string, unknown>, input?: 'steer' | 'followUp') 
   const queued: { wait(context: unknown): Promise<unknown> }[] = []
   if (input) {
     await until(() => existsSync(started))
-    queued.push(
-      await server.root.submit({ type: 'input', content: `a ${input}`, whenBusy: input }, context),
-    )
+    if (input === 'cancel') {
+      const live = await server.harness.snapshot(LiveDoc, server.root.id, context)
+      callId = live?.tools?.find((slot) => slot.name === 'bash')?.callId
+      cancels.push(await cancel('unknown'), await cancel(callId))
+    } else
+      queued.push(
+        await server.root.submit(
+          { type: 'input', content: `a ${input}`, whenBusy: input },
+          context,
+        ),
+      )
   }
   await first.wait(context)
+  // A finished call cannot be cancelled any more.
+  if (callId) cancels.push(await cancel(callId))
   const ms = performance.now() - begin
   await Promise.all(queued.map((handle) => handle.wait(context)))
   const view = await server.root.viewState(context)
@@ -66,6 +85,7 @@ async function run(args: Record<string, unknown>, input?: 'steer' | 'followUp') 
       isError: result?.role === 'toolResult' && result.isError,
       users: messages.filter((m) => m.role === 'user').map((m) => m.content),
       ms,
+      cancels,
     }
   } finally {
     view.dispose()
@@ -87,6 +107,25 @@ it('ends an interruptible call when a steer arrives, kills it, and lets the run 
   expect(users.at(-1)).toBe('a steer')
   const shell = Number(await readFile(pid, 'utf8'))
   expect(() => process.kill(shell, 0)).toThrow('ESRCH')
+})
+
+it('ends any call the user cancels, kills it, and lets the run go on', async () => {
+  const pid = join(directory, 'cancel-pid')
+  const { result, isError, cancels, ms } = await run(
+    { command: `echo $$ > '${pid}'; echo working; touch "$READY"; sleep 30` },
+    'cancel',
+  )
+  expect(cancels).toEqual([
+    { status: 500, error: 'That bash call is not running' },
+    { status: 200, error: undefined },
+    { status: 500, error: 'That bash call is not running' },
+  ])
+  expect(ms).toBeLessThan(15000)
+  expect(isError).toBe(false)
+  expect(result).toMatch(/working(\\n)+\[Cancelled by the user after \d+s/)
+  const shell = Number(await readFile(pid, 'utf8'))
+  expect(() => process.kill(shell, 0)).toThrow('ESRCH')
+  expect((await server.harness.snapshot(LiveDoc, server.root.id, context))?.run).toBeUndefined()
 })
 
 it('keeps the notice when the output fills the retained window', async () => {

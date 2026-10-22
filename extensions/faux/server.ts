@@ -370,6 +370,17 @@ export default async function fauxExtension(host: ExtensionHost) {
       ) {
         return fauxAssistantMessage([fauxToolCall('restart', {})], { stopReason: 'toolUse' })
       }
+      if (last?.role === 'user' && last.content === 'long bash demo') {
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('bash', {
+              command:
+                'cd ~; sleep 1; for i in $(seq 1 60); do echo "poll $i: checks pending"; sleep 5; done',
+            }),
+          ],
+          { stopReason: 'toolUse' },
+        )
+      }
       if (last?.role === 'user' && last.content === 'fail demo') {
         return fauxAssistantMessage([], {
           stopReason: 'error',

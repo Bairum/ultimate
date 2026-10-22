@@ -1,5 +1,14 @@
 /** Coding tools in the browser: the event each commit made through the bash tool records. Browser-safe. */
 import { defineEvent } from '../../shared/events.ts'
+import { actionRef, docRef } from '../../shared/extension-api.ts'
+
+/** Per conversation: the bash calls the user cancelled and are still running, by call id → when (ms). */
+export const CancelledDoc = docRef<{ calls: Record<string, number> }>('coding-tools.cancelled')
+/**
+ * User-only: cancel the running bash call `callId` of the shown conversation. It kills the command and ends the call
+ * with the output so far and a notice, as an ordinary result; the run goes on. Throws when no such call runs.
+ */
+export const CancelAction = actionRef<{ callId: string }, null>('coding-tools', 'cancel')
 
 /**
  * Conversation `conversation` made commit `sha` (full) through the bash tool, in repository `repo` (its main

@@ -1,5 +1,6 @@
 // Pi upstream: @earendil-works/pi-durable@1.4.0 src/tools/bash.ts and src/tools/edit.ts — internal bash exit_code diagnostic message drives exitOf and untyped details.patch/details.diff drive Edit. Drop when Pi exports structured bash outcomes and structured diff rows for rendering.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { XIcon } from 'lucide-react'
+import { type SyntheticEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { AnsiOutput } from '@/components/ai/ansi-output'
 import { CodeBlock, languageFromPath } from '@/components/ai/code-block'
 import {
@@ -12,6 +13,7 @@ import {
   ToolSection,
 } from '@/components/ai/tool'
 import {
+  api,
   cn,
   defineWebExtension,
   formatBytes,
@@ -23,6 +25,7 @@ import {
 import type { ToolCallView } from '@/sdk'
 import { type BashStep, formatBashCommand } from './bash-command.tsx'
 import { countChanges, Diff, editRows, parseDisplayDiff, parsePatch } from './diff.tsx'
+import { CancelAction } from './refs.ts'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 
@@ -188,6 +191,8 @@ function Edit({ call }: { call: ToolCallView }) {
 }
 
 function exitOf(call: ToolCallView): { label: string; ok: boolean } | undefined {
+  if (call.status === 'done' && /\n\[Cancelled by the user after [^\]]*\]$/.test(call.output))
+    return { label: 'cancelled', ok: false }
   if (call.status === 'done') return { label: 'exit 0', ok: true }
   if (call.status === 'interrupted') return { label: 'interrupted', ok: false }
   if (call.status !== 'error') return undefined
@@ -251,6 +256,43 @@ function BashSummary({ steps }: { steps: BashStep[] }) {
   )
 }
 
+/**
+ * Cancel a running bash call: its command is killed and the model gets the output so far. A `span` with the button
+ * role: it sits inside the header's trigger button, which cannot nest buttons.
+ */
+function CancelCall({ callId }: { callId: string }) {
+  const [sent, setSent] = useState(false)
+  const cancel = (event: SyntheticEvent) => {
+    event.stopPropagation()
+    event.preventDefault()
+    if (sent) return
+    setSent(true)
+    api.action(CancelAction, { callId }).catch((error: unknown) => {
+      setSent(false)
+      throw error
+    })
+  }
+  return (
+    <span
+      aria-disabled={sent}
+      aria-label="Cancel this command"
+      className={cn(
+        '-mx-1 flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
+        sent && 'pointer-events-none opacity-40',
+      )}
+      onClick={cancel}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') cancel(event)
+      }}
+      role="button"
+      tabIndex={0}
+      title="Cancel this command; the agent gets the output so far"
+    >
+      <XIcon className="size-3" />
+    </span>
+  )
+}
+
 function Bash({ call }: { call: ToolCallView }) {
   const command = text(call.args.command)
   const display = useMemo(() => formatBashCommand(command), [command])
@@ -283,8 +325,13 @@ function Bash({ call }: { call: ToolCallView }) {
                 {directory}
               </span>
             )}
-            {exit && !exit.ok && <span className="text-error">{exit.label}</span>}
+            {exit && !exit.ok && (
+              <span className={exit.label === 'cancelled' ? 'text-warning' : 'text-error'}>
+                {exit.label}
+              </span>
+            )}
             {duration && <span>{duration}</span>}
+            {running && <CancelCall callId={call.id} />}
           </>
         }
         name="$"
