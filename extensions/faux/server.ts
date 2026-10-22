@@ -52,7 +52,7 @@ export default async function fauxExtension(host: ExtensionHost) {
       const system = transcript.messages[0]
       const asked = transcript.messages.findLastIndex((message) => message.role === 'user')
       if (system?.role === 'system' && typeof system.content === 'string') {
-        // Board triage: a landing, failure or question acts, anything else is an update. `(slow)` holds the verdict
+        // Messages triage: a landing, failure or question acts, anything else is an update. `(slow)` holds the verdict
         // for a few seconds, so a preview can show the row assessing.
         if (system.content.startsWith('Triage a message')) {
           const text = messageText(last?.content)
@@ -1178,7 +1178,7 @@ export const actions = {
       if (!baseline?.sections || !baseline.toolsAdded)
         throw new Error(`#${from} has no full system prompt yet; send it a message first`)
       const at = Date.now()
-      const skip = new Set(['workspace_workflow', 'board', 'codemode', 'lineage', 'subagents'])
+      const skip = new Set(['workspace_workflow', 'messages', 'codemode', 'lineage', 'subagents'])
       const sections = Object.fromEntries(
         Object.entries(baseline.sections).filter(([key]) => !skip.has(key)),
       )

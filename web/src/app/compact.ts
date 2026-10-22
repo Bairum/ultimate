@@ -2,14 +2,14 @@ import type { AssistantMessage, ToolCall } from '@earendil-works/pi-ai'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 
 /** A transcript row: an entry, or only some content blocks of an assistant message. */
-export interface ChatPart {
+export interface CompactPart {
   entry: EntryRecord
   /** Indexes of the content blocks shown; the whole entry when absent. */
   blocks?: readonly number[]
 }
 /** A run of work folded into one row: the parts it hides and its steps, the tool calls and thoughts in it. */
 export interface WorkRun {
-  work: readonly ChatPart[]
+  work: readonly CompactPart[]
   steps: number
 }
 
@@ -21,17 +21,17 @@ const stepsOf = (blocks: AssistantMessage['content']) =>
   ).length
 
 /**
- * The rows of a conversation that reads as a chat. Each run of tool calls and thinking between inputs, messages and
+ * The rows of a conversation that uses compact mode. Each run of tool calls and thinking between inputs, messages and
  * answers folds into one `WorkRun`, without the calls `visible` keeps: those split a run and stay rows of their own.
  * Only responses that go on to use tools are work; an answer shows whole, its thinking included. System prompt changes
  * join the run they fall in, and a run without a step shows as it is.
  */
-export function chatRows(
+export function compactRows(
   entries: readonly EntryRecord[],
   visible: (call: ToolCall) => boolean,
-): (ChatPart | WorkRun)[] {
-  const rows: (ChatPart | WorkRun)[] = []
-  let run: ChatPart[] = []
+): (CompactPart | WorkRun)[] {
+  const rows: (CompactPart | WorkRun)[] = []
+  let run: CompactPart[] = []
   let steps = 0
   const flush = () => {
     if (steps > 0) rows.push({ work: run, steps })
@@ -39,7 +39,7 @@ export function chatRows(
     run = []
     steps = 0
   }
-  const show = (part: ChatPart) => {
+  const show = (part: CompactPart) => {
     flush()
     rows.push(part)
   }
@@ -89,7 +89,7 @@ export function chatRows(
 
 /** Background rows folded together: a stretch of quiet rows and the runs of work between them. */
 export interface QuietGroup {
-  quiet: readonly (ChatPart | WorkRun)[]
+  quiet: readonly (CompactPart | WorkRun)[]
   /** Steps in its runs of work. */
   steps: number
 }
@@ -100,12 +100,12 @@ export interface QuietGroup {
  * progress keeps its own line, and a stretch with no quiet row that shows stays as it is.
  */
 export function groupQuiet(
-  rows: readonly (ChatPart | WorkRun)[],
-  quiet: (part: ChatPart) => boolean | 'hidden',
-): (ChatPart | WorkRun | QuietGroup)[] {
-  const grouped: (ChatPart | WorkRun | QuietGroup)[] = []
-  let stretch: (ChatPart | WorkRun)[] = []
-  let shown = new Set<ChatPart | WorkRun>()
+  rows: readonly (CompactPart | WorkRun)[],
+  quiet: (part: CompactPart) => boolean | 'hidden',
+): (CompactPart | WorkRun | QuietGroup)[] {
+  const grouped: (CompactPart | WorkRun | QuietGroup)[] = []
+  let stretch: (CompactPart | WorkRun)[] = []
+  let shown = new Set<CompactPart | WorkRun>()
   const flush = () => {
     const end = stretch.findLastIndex((row) => shown.has(row)) + 1
     const group = stretch.slice(0, end)
@@ -134,7 +134,7 @@ export function groupQuiet(
 }
 
 /** The group where `entry` first shows, if it does in one: revealing the entry opens it. */
-export function quietOf(rows: readonly (ChatPart | WorkRun | QuietGroup)[], entry: number) {
+export function quietOf(rows: readonly (CompactPart | WorkRun | QuietGroup)[], entry: number) {
   const first = rows.find((row) => partsOf(row).some((part) => part.entry.id === entry))
   return first && 'quiet' in first ? first : undefined
 }
@@ -196,12 +196,12 @@ export function setAsideIds(entries: readonly EntryRecord[]): Set<number> {
 
 /** Rows set aside by a go-back, folded together: each consecutive stretch of them is one group. */
 export interface AsideGroup {
-  aside: readonly (ChatPart | WorkRun | QuietGroup)[]
+  aside: readonly (CompactPart | WorkRun | QuietGroup)[]
   /** Its entries with messages other than system prompt changes, as the go-back counted them. */
   steps: number
 }
 /** A part's key: its entry, and its first block when it shows only some. */
-export const partKey = (part: ChatPart) =>
+export const partKey = (part: CompactPart) =>
   part.blocks ? `${part.entry.id}:${part.blocks[0]}` : String(part.entry.id)
 
 /**
@@ -237,17 +237,17 @@ export function anchorSelector(anchor: { entryId: number; last?: number; inner?:
 }
 
 /** The parts a row shows, those of its runs and groups included. */
-export const partsOf = (row: ChatPart | WorkRun | QuietGroup): readonly ChatPart[] =>
+export const partsOf = (row: CompactPart | WorkRun | QuietGroup): readonly CompactPart[] =>
   'quiet' in row ? row.quiet.flatMap(partsOf) : 'work' in row ? row.work : [row]
 
 /** `rows` with each stretch of rows whose entries are all in `aside` folded into one group. */
 export function groupAside(
-  rows: readonly (ChatPart | WorkRun | QuietGroup)[],
+  rows: readonly (CompactPart | WorkRun | QuietGroup)[],
   aside: ReadonlySet<number>,
-): (ChatPart | WorkRun | QuietGroup | AsideGroup)[] {
+): (CompactPart | WorkRun | QuietGroup | AsideGroup)[] {
   if (!aside.size) return [...rows]
-  const grouped: (ChatPart | WorkRun | QuietGroup | AsideGroup)[] = []
-  let group: (ChatPart | WorkRun | QuietGroup)[] = []
+  const grouped: (CompactPart | WorkRun | QuietGroup | AsideGroup)[] = []
+  let group: (CompactPart | WorkRun | QuietGroup)[] = []
   const flush = () => {
     if (!group.length) return
     const entries = new Set(group.flatMap(partsOf).map((part) => part.entry))
@@ -269,7 +269,7 @@ export function groupAside(
 }
 
 /** The folded run where `entry` first shows, if it starts in one: revealing the entry opens it. */
-export function runOf(rows: readonly (ChatPart | WorkRun | QuietGroup)[], entry: number) {
+export function runOf(rows: readonly (CompactPart | WorkRun | QuietGroup)[], entry: number) {
   const flat = rows.flatMap((row) => ('quiet' in row ? row.quiet : [row]))
   const first = flat.find((row) => partsOf(row).some((part) => part.entry.id === entry))
   return first && 'work' in first ? first : undefined

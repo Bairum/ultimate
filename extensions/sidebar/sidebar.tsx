@@ -32,7 +32,13 @@ import {
   useWorkspaceIndex,
 } from '../workspaces/ui.tsx'
 import { Row, ChildRow, StandingRow, SubagentLine } from './rows.tsx'
-import { BoardDoc, conversationState, emptyBoard, stateTone, stateWord } from '../board/ui.tsx'
+import {
+  MessagesDoc,
+  conversationState,
+  emptyMessages,
+  stateTone,
+  stateWord,
+} from '../messages/ui.tsx'
 import { InFlight, inFlight, MemoryRow, stillOpen } from './root.tsx'
 import type { Flight } from './root.tsx'
 import { Landed, useLandings } from './landed.tsx'
@@ -99,7 +105,7 @@ const noneParked: ReadonlySet<number> = new Set()
 /** The tree, with how many messages and answers wait on the user for @ultimate's row. */
 function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number> }) {
   const overview = useOverview()
-  const board = useDocOf(1, BoardDoc) ?? emptyBoard
+  const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const tasks = useTasks()
   const foreground = new Set<number>(
     Object.values(tasks?.tasks ?? {})
@@ -245,7 +251,7 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
             parked: parked.has(conversation.id),
             primary: ultimateId,
           },
-          board,
+          log,
         )
       : waiting > 0
         ? 'waits'
@@ -308,7 +314,7 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
         parked: parked.has(conversation.id),
         primary: ultimateId,
       },
-      board,
+      log,
     )
     // Queued input counts as working too; subagents working below it say so.
     const state = working.get(conversation.id) ?? (derived === 'working' ? 'self' : undefined)

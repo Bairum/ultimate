@@ -4,7 +4,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { cn, defineWebExtension, useDocOf, useExtensionUiState } from '@/sdk'
-import { BoardDoc, emptyBoard } from '../board/ui.tsx'
+import { MessagesDoc, emptyMessages } from '../messages/ui.tsx'
 import { OverviewDoc } from '../conversations/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { listener, sounds } from './cues.ts'
@@ -40,7 +40,7 @@ async function announce(cue: Cue) {
  */
 function Player() {
   const overview = useDocOf(1, OverviewDoc)
-  const board = useDocOf(1, BoardDoc)
+  const log = useDocOf(1, MessagesDoc)
   const agent = useDocOf(1, StandingDoc)?.ultimate
   const { muted, off } = useSettings()
   const [hear] = useState(listener)
@@ -49,12 +49,12 @@ function Player() {
     const due = hear({
       agent,
       row: overview.conversations[agent],
-      messages: (board ?? emptyBoard).messages,
+      messages: (log ?? emptyMessages).messages,
     })
     for (const cue of due)
       if (!muted && !off.includes(cue.sound))
         announce(cue).catch((error: unknown) => console.warn('Sound failed', error))
-  }, [hear, overview, board, agent, muted, off])
+  }, [hear, overview, log, agent, muted, off])
   return null
 }
 

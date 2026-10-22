@@ -3,7 +3,7 @@ import { defineDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-dur
 import type { ConversationId, Cursor, SubmissionId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { Gate } from '../board/api.ts'
+import { Gate } from '../messages/api.ts'
 import { PauseApi } from './api.ts'
 import { lasted } from './lasted.ts'
 import { PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'

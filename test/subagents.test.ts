@@ -1129,7 +1129,7 @@ describe('turns without an answer', () => {
     await f.opened.harness.waitForIdle(context)
     const [child] = await children(f.opened)
     const handle = (await f.opened.harness.conversation(child.conversationId, context))!
-    // What the Board's delivery submits: a two-way message gets a Board reply, a one-way one nothing.
+    // What message delivery submits: a two-way message gets a reply, a one-way one nothing.
     const deliver = async (id: number, reply: boolean, content: string) =>
       (
         await handle.submit(

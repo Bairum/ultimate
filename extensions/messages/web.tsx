@@ -12,21 +12,27 @@ import {
 import {
   Address,
   BackgroundSummary,
-  BoardInput,
+  MessageInput,
   BranchCall,
-  ChatAnswer,
+  CompactAnswer,
   MessageCall,
 } from './cards.tsx'
-import { answeredMessages, chatQuiet, emptyBoard, scriptMessaged, ultimateChat } from './data.tsx'
+import {
+  answeredMessages,
+  backgroundRow,
+  emptyMessages,
+  scriptMessaged,
+  ultimateCompact,
+} from './data.tsx'
 import { callerOf } from './caller.ts'
-import { BoardDoc, CallerAction } from './refs.ts'
-import type { BoardData } from './refs.ts'
+import { MessagesDoc, CallerAction } from './refs.ts'
+import type { MessagesData } from './refs.ts'
 
-function BoardAnswerLabel({ entry }: { entry: EntryRecord }) {
-  const board = useDocOf(1, BoardDoc) ?? emptyBoard
+function MessageAnswerLabel({ entry }: { entry: EntryRecord }) {
+  const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const conversation = useConversation((value) => value.id)
   const messages =
-    conversation === undefined ? [] : answeredMessages(board.messages, conversation, entry.id)
+    conversation === undefined ? [] : answeredMessages(log.messages, conversation, entry.id)
   return messages.map((message) => (
     <span
       key={message.id}
@@ -39,15 +45,15 @@ function BoardAnswerLabel({ entry }: { entry: EntryRecord }) {
 }
 
 /**
- * Stay mounted across surfaces so an Open click can reveal after Agent mounts and loads. `board:open` names the entry,
+ * Stay mounted across surfaces so an Open click can reveal after Agent mounts and loads. `messages:open` names the entry,
  * or the tool call that sent a message (`call`): the response that made it, found in the loaded entries or else in the
  * stored history, which the transcript then pages in.
  */
-function BoardNavigation() {
+function MessageNavigation() {
   const { id, entries, loading } = useConversation()
   const { surface } = useUltimate()
   const [target, setTarget] = useState<{ conversation: number; entry?: number; call?: string }>()
-  useEvent('board:open', (value) => setTarget(value as NonNullable<typeof target>))
+  useEvent('messages:open', (value) => setTarget(value as NonNullable<typeof target>))
   useEffect(() => {
     if (!target || surface !== 'agent' || id !== target.conversation || loading) return undefined
     const { call } = target
@@ -71,31 +77,31 @@ function BoardNavigation() {
 }
 
 export default defineWebExtension({
-  slots: { overlay: [BoardNavigation] },
+  slots: { overlay: [MessageNavigation] },
   entries: {
-    'board.message': BoardInput,
-    'board.reply': BoardInput,
+    'board.message': MessageInput,
+    'board.reply': MessageInput,
     // The message's row already says it woke the agent: `action`.
     'board.wake': () => null,
     // The agent's reminder of the questions still open; the user sees them in the To-dos panel.
     'board.open': () => null,
-    'pi.assistant': ChatAnswer,
+    'pi.assistant': CompactAnswer,
   },
   tools: { message: MessageCall, branch: BranchCall },
-  chat: {
-    when: ultimateChat,
+  compact: {
+    when: ultimateCompact,
     tools: [
       'message',
       'branch',
       'workspace',
       'setup',
       // A script that messaged you stays visible, so its messages show as bubbles, even when it was interrupted.
-      (call, docs) => scriptMessaged(call, docs.board as BoardData | null | undefined),
+      (call, docs) => scriptMessaged(call, docs.board as MessagesData | null | undefined),
     ],
     docs: ['board'],
-    // Traffic between agents is background to your chat with @ultimate: each stretch of it folds into one line.
-    quiet: (row, docs) => chatQuiet(row, docs.board as BoardData | null | undefined),
+    // Traffic between agents is background to your conversation with @ultimate: each stretch of it folds into one line.
+    quiet: (row, docs) => backgroundRow(row, docs.board as MessagesData | null | undefined),
     summary: BackgroundSummary,
   },
-  answerLabels: [BoardAnswerLabel],
+  answerLabels: [MessageAnswerLabel],
 })

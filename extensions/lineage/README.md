@@ -64,7 +64,7 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   `lineage.landing-note` task in it that delivers the note as a write (request id `lander-root:<submission>`). A second
   reactor, `lineage/conclude-landed`, starts a background `lineage.conclude-landed` task in a top-level submitter: it
   waits for the lander's report (`lander:<submission>`) to settle and the submitter and its subagents to go idle, then
-  concludes it through `ConversationsApi.concludeIn`, unless it is running or has queued input, has a reply-enabled Board
+  concludes it through `ConversationsApi.concludeIn`, unless it is running or has queued input, has a reply-enabled
   message still open, or a subagent still runs. That check, the conclusion and the task's next phase commit in one
   transaction, so a replay never concludes twice; freeing the worktree follows as its own phase. A lander that goes idle
   without sending the report (aborted) ends the task. Any later input resumes the branch. The
@@ -121,7 +121,7 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   or no difference), or "changed, outside the checkout" (never passed to Git), so uncommitted work from before the
   entry stays out;
   commits since; and the conversations that built on the path (subagents and branches it started, conversations it
-  messaged per `board.sent` events, read by kind since board needs lineage). User-only `rewind {conversation, at, summarize?}` runs task
+  messaged per `board.sent` events, read by kind since messages depends on lineage). User-only `rewind {conversation, at, summarize?}` runs task
   `lineage.rewind` in the conversation: it appends one `lineage.rewound` entry whose `edits` omit every entry after
   `at` that still contributes (and restore entries up to `at` an earlier go-back changed), and whose user-role message
   is the note. The conversation keeps its id, worktree, files and commits; nothing runs until the next input, and the
@@ -190,7 +190,7 @@ is undefined. The conversations summarizer uses this to publish an abstract afte
 An optional `receipt: { taskId, callId }` records the branch id atomically with the fork in the originating task's
 `lineage.branch-receipts` document. Repeating that task and call returns the same branch; Pi retires the receipt when
 the task completes. The method returns `{ id }`. With `deliver: false`, no `lineage.prompt` task is created: the caller
-must deliver its first input (the board uses a reply-enabled message). `by: conversationId` attributes the tally's branch node to that caller,
+must deliver its first input (messages uses a reply-enabled message). `by: conversationId` attributes the tally's branch node to that caller,
 including its standing-agent name when available.
 
 The user talks to @ultimate in its own conversation, opened by the top-bar @ultimate button or first sidebar row; it picks a root by reading tallies and starts coordinator branches.

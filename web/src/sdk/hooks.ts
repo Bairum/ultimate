@@ -28,10 +28,10 @@ import type { ActionArgs, ActionError, ActionOptions } from './api.ts'
 import { actionRef, docRef } from '../../../shared/extension-api.ts'
 import type { ActionRef, DocRef } from '../../../shared/extension-api.ts'
 import { api, registry, store, uiState } from './client.ts'
-import { HOME, chatTools, documentItems, introOf } from './registry.ts'
+import { HOME, compactTools, documentItems, introOf } from './registry.ts'
 import type { State } from './store.ts'
 import { errorMessage, formatDuration } from './format.ts'
-import type { ChatRow, ToolCallView, UltimateContext } from './types.ts'
+import type { CompactRow, ToolCallView, UltimateContext } from './types.ts'
 import { useViewport } from './viewport.ts'
 
 /** Page readiness is sticky; failed facet names remain available even before ready. */
@@ -275,48 +275,52 @@ export function useDialog(id: string): [boolean, (open: boolean) => void] {
 export function useExtensions() {
   return useSyncExternalStore(registry.subscribe, registry.getSnapshot)
 }
-const chatFailures = new Set<string>()
-/** Reports a `chat.when` that threw once per message, as a notice naming its extension. */
-function reportChat(extension: string, error: unknown) {
-  const message = `extension ${extension}: chat is off, its when() threw: ${errorMessage(error)}`
-  if (chatFailures.has(message)) return
-  chatFailures.add(message)
+const compactFailures = new Set<string>()
+/** Reports a `compact.when` that threw once per message, as a notice naming its extension. */
+function reportCompact(extension: string, error: unknown) {
+  const message = `extension ${extension}: compact is off, its when() threw: ${errorMessage(error)}`
+  if (compactFailures.has(message)) return
+  compactFailures.add(message)
   // Predicates run while React renders the transcript; notify after that render.
   queueMicrotask(() => store.notify({ level: 'error', message }))
 }
 const noDocs = {}
 /**
- * Which calls stay visible when the shown conversation reads as a chat (`chat` contributions), else `undefined`; it
+ * Which calls stay visible when the shown conversation uses compact mode (`compact` contributions), else `undefined`; it
  * follows the root documents the contributions' tests read.
  */
-export function useChat(): ((call: ToolCall) => boolean) | undefined {
-  const { chat, docs } = useChatConfig()
-  return useMemo(() => chat && ((call: ToolCall) => chat.keeps(call, docs)), [chat, docs])
+export function useCompact(): ((call: ToolCall) => boolean) | undefined {
+  const { compact, docs } = useCompactConfig()
+  return useMemo(() => compact && ((call: ToolCall) => compact.keeps(call, docs)), [compact, docs])
 }
 /**
- * Which rows of the shown chat are background that folds into groups, and the line a group shows (`chat` contributions'
+ * Which rows of the shown compact transcript are background that folds into groups, and the line a group shows (`compact` contributions'
  * `quiet` and `summary`), else `undefined`.
  */
-export function useChatQuiet() {
-  const { chat, docs } = useChatConfig()
+export function useCompactQuiet() {
+  const { compact, docs } = useCompactConfig()
   return useMemo(
-    () => chat && { quiet: (row: ChatRow) => chat.quiet(row, docs), summary: chat.summary },
-    [chat, docs],
+    () =>
+      compact && { quiet: (row: CompactRow) => compact.quiet(row, docs), summary: compact.summary },
+    [compact, docs],
   )
 }
-function useChatConfig() {
+function useCompactConfig() {
   const records = useExtensions()
   const conversation = useStore((state) =>
     state.conversations.find((summary) => summary.id === state.view?.conversation.id),
   )
-  const chat = useMemo(() => chatTools(records, conversation, reportChat), [records, conversation])
-  const kinds = chat?.docs.join(',') ?? ''
+  const compact = useMemo(
+    () => compactTools(records, conversation, reportCompact),
+    [records, conversation],
+  )
+  const kinds = compact?.docs.join(',') ?? ''
   useEffect(() => {
     const releases = kinds ? kinds.split(',').map((kind) => store.watchDocOf(1, kind)) : []
     return () => releases.forEach((release) => release())
   }, [kinds])
   const docs = useStore((state) => (kinds ? state.docsOf[1] : undefined)) ?? noDocs
-  return { chat, docs }
+  return { compact, docs }
 }
 const introFailures = new Set<string>()
 function reportIntro(extension: string, error: unknown) {

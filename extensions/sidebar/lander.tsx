@@ -1,6 +1,6 @@
 import { cn, Provided } from '@/sdk'
-import { stateTone, stateWord } from '../board/ui.tsx'
-import type { ConversationState } from '../board/ui.tsx'
+import { stateTone, stateWord } from '../messages/ui.tsx'
+import type { ConversationState } from '../messages/ui.tsx'
 import type { useWorkspaceIndex } from '../workspaces/ui.tsx'
 import { ConversationPhase } from '../conversations/ui.tsx'
 

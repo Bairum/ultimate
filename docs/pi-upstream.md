@@ -7,7 +7,7 @@
 - `extensions/lineage/server.ts` — inlines Pi's unexported createCompaction so tally checks and manual compaction creation share one transaction. Drop when Pi exposes atomic compaction admission.
 - `extensions/lineage/rewind.ts` — copies pi-durable's unexported normalizeToolPath (unicode spaces, a leading @) so going back resolves edit and write paths exactly as those tools do, then resolves them with the exported NodeExecutionEnv.absolutePath (home directory and file URLs). Drop when Pi exports resolveToolPath's normalization.
 - `extensions/lineage/catchup.ts` — uses the patched transactional beforeInput hook to place catch-up notes before inputs. Drop the patch when Pi ships input-placement hooks.
-- `extensions/board/server.ts` — uses the same hook to place the line listing an agent's open questions to the user before the input that starts its run.
+- `extensions/messages/server.ts` — uses the same hook to place the line listing an agent's open questions to the user before the input that starts its run.
 - `extensions/prompt/server.ts` — uses the same hook to place a "Build changed" note before the input that starts a run, keeping the build out of the cached system prompt.
 - `extensions/conversations/server.ts` — uses the same hook to resume a concluded conversation in the commit that places its input.
 - `extensions/plan/server.ts` — uses the same hook to empty a new branch's inherited plan in the commit that places its first input.

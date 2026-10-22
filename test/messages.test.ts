@@ -24,14 +24,14 @@ import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
 import { Metadata } from '../server/metadata.ts'
 import { emit, EventFeed } from '../server/events.ts'
-import board, { actions } from '../extensions/board/server.ts'
+import messagesExtension, { actions } from '../extensions/messages/server.ts'
 import pauseExtension, {
   actions as pauseActions,
   docs as pauseDocs,
 } from '../extensions/pause/server.ts'
-import { Board, MessageSent } from '../extensions/board/api.ts'
+import { Messages, MessageSent } from '../extensions/messages/api.ts'
 import { UserInputEvent } from '../shared/events.ts'
-import type { BoardService } from '../extensions/board/api.ts'
+import type { MessagesService } from '../extensions/messages/api.ts'
 import { BranchReceipts, Tally, rootOf, startBranch } from '../extensions/lineage/server.ts'
 import type { BranchInput } from '../extensions/lineage/server.ts'
 import { Branch, Roots } from '../extensions/lineage/api.ts'
@@ -45,7 +45,7 @@ afterEach(async () => {
   for (const home of homes.splice(0)) await removeTemp(home)
 })
 const anchor = defineTask<null, { phase: 'done' }, null>({
-  name: 'board-test.anchor',
+  name: 'messages-test.anchor',
   version: 1,
   initial: () => ({ phase: 'done' }),
   phases: {
@@ -80,9 +80,9 @@ async function fixture(
   /** Holds triage's model selection until it settles. */
   selecting?: Promise<void>,
 ) {
-  /** Services other extensions implement here, by API name, such as pause's `board.gate`. */
+  /** Services other extensions implement here, by API name, such as pause's `messages.gate`. */
   const provided = new Map<string, unknown>()
-  const home = await temp('ultimate-board-')
+  const home = await temp('ultimate-messages-')
   homes.push(home)
   await mkdir(join(home, 'agents'), { recursive: true })
   await writeFile(
@@ -91,7 +91,7 @@ async function fixture(
   )
   const prepared = await prepareHarness({ home, ultimateRoot: home, userHome: home, faux: true })
   let opened: OpenHost
-  let service!: BoardService
+  let service!: MessagesService
   const hold = gate()
   let holding = false
   const openers: (() => Promise<void>)[] = []
@@ -135,9 +135,9 @@ async function fixture(
     metadata: Metadata,
     emit,
     harness: () => opened.harness,
-    // Board also implements workspaces' handoff point; the tests call its own service.
-    implement: (api: { name: string }, value: BoardService) => {
-      if (api.name === 'board') service = value
+    // Messages also implements workspaces' handoff point; the tests call its own service.
+    implement: (api: { name: string }, value: MessagesService) => {
+      if (api.name === 'messages') service = value
     },
     want: provider,
     need: provider,
@@ -150,7 +150,7 @@ async function fixture(
     doc: (kind: string) =>
       kind === 'lineage.roots' ? Roots : kind === 'lineage.tally' ? Tally : undefined,
   } as unknown as ExtensionHost
-  let backend = board(host)
+  let backend = messagesExtension(host)
   if (sendGate)
     backend = {
       ...backend,
@@ -277,7 +277,7 @@ async function fixture(
   await opened!.harness.commit(async (tx) => {
     ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = ROOT_CONVERSATION_ID
   }, context)
-  const log = () => opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
+  const log = () => opened.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context)
   const action = () => ({ host, signal: new AbortController().signal }) as ActionContext
   const send = async (to: string, text = 'Hello', extra = {}) => {
     await (
@@ -659,7 +659,7 @@ it("ends @ultimate's run with its message to the user, unless it still owes a re
     [f.recipient.id, 1, 'Done'],
   ])
 })
-it('atomically admits only one answer-card reply through the Board service', async () => {
+it('atomically admits only one answer-card reply through the Messages service', async () => {
   const f = await fixture()
   await f.send('user', 'Keep it running?')
   const id = (await f.log())!.messages.at(-1)!.id
@@ -749,7 +749,7 @@ it('refuses self, unknown ids, tally roots and unknown names with valid names', 
 it('loads existing version-1 logs with the unused read mark', async () => {
   const f = await fixture()
   await f.opened.harness.commit(async (tx) => {
-    Object.assign(await tx.doc(Board, ROOT_CONVERSATION_ID), { readUpTo: 7 })
+    Object.assign(await tx.doc(Messages, ROOT_CONVERSATION_ID), { readUpTo: 7 })
   }, context)
   await f.opened.close()
   await f.open()
@@ -759,7 +759,7 @@ it('loads existing version-1 logs with the unused read mark', async () => {
 it('bounds the log and exposes no user posting action', async () => {
   const f = await fixture()
   await f.opened.harness.commit(async (tx) => {
-    const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
+    const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
     for (let id = 1; id <= 300; id++)
       log.messages.push({
         id,
@@ -824,21 +824,21 @@ it('queues a busy recipient as follow-up, or steers its current run; @ultimate s
   }
 })
 async function codemodeFixture() {
-  const home = await temp('ultimate-board-actions-')
+  const home = await temp('ultimate-messages-actions-')
   homes.push(home)
-  await mkdir(join(home, 'extensions/board'), { recursive: true })
+  await mkdir(join(home, 'extensions/messages'), { recursive: true })
   await mkdir(join(home, 'extensions/codemode'), { recursive: true })
   await mkdir(join(home, 'web'))
   await linkDependencies(home)
   await writeFile(
-    join(home, 'extensions/board/server.ts'),
-    `export { default, actions, docs } from ${JSON.stringify(resolve('extensions/board/server.ts'))}`,
+    join(home, 'extensions/messages/server.ts'),
+    `export { default, actions, docs } from ${JSON.stringify(resolve('extensions/messages/server.ts'))}`,
   )
   await writeFile(
     join(home, 'extensions/codemode/server.ts'),
     `export { default, docs } from ${JSON.stringify(resolve('extensions/codemode/server.ts'))}`,
   )
-  // Board needs the core's subagents and workspaces; stand-ins with no standing agents and no worktrees.
+  // Messages needs the core's subagents and workspaces; stand-ins with no standing agents and no worktrees.
   await mkdir(join(home, 'extensions/core-stand-ins'), { recursive: true })
   await writeFile(
     join(home, 'extensions/core-stand-ins/server.ts'),
@@ -856,7 +856,7 @@ export default (host) => {
     join(home, 'vite.config.ts'),
     "import { defineConfig } from 'vite-plus'; export default defineConfig({ root: 'web', optimizeDeps: { noDiscovery: true } })",
   )
-  await writeFile(join(home, 'web/index.html'), '<html>Board actions</html>')
+  await writeFile(join(home, 'web/index.html'), '<html>Messages actions</html>')
   return fauxServer({
     home: join(home, 'state'),
     ultimateRoot: home,
@@ -874,7 +874,7 @@ it('has no posting action at the installed codemode boundary', async () => {
         fauxAssistantMessage(
           [
             fauxToolCall('codemode', {
-              code: `return await ultimate.action('board', '${action}', {to:'user',text:'fake'});`,
+              code: `return await ultimate.action('messages', '${action}', {to:'user',text:'fake'});`,
             }),
           ],
           { stopReason: 'toolUse' },
@@ -887,7 +887,7 @@ it('has no posting action at the installed codemode boundary', async () => {
       const view = await server.root.viewState(context)
       try {
         const result = view.value.entries.findLast((e) => e.kind === 'pi.tool-result')!
-        expect(JSON.stringify(result)).toContain(`Unknown extension action: board/${action}`)
+        expect(JSON.stringify(result)).toContain(`Unknown extension action: messages/${action}`)
       } finally {
         view.dispose()
       }
@@ -931,7 +931,7 @@ it('keeps sequential and parallel message calls distinct within one codemode scr
     await (
       await server.root.submit({ type: 'input', content: 'Send four messages' }, context)
     ).wait(context)
-    const log = await server.harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
+    const log = await server.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context)
     expect(log?.messages.map((m) => m.text).toSorted()).toEqual([
       'Direct',
       'Parallel 1',
@@ -1362,7 +1362,7 @@ function pauser(f: Awaited<ReturnType<typeof fixture>>) {
       return resources.get(key) as T
     },
     onOpen: () => {},
-    // Pause fills Board's `board.gate` point; the fixture's `want` hands it to Board.
+    // Pause fills Messages’ `messages.gate` point; the fixture's `want` hands it to Messages.
     implement: (api: { name: string }, value: unknown) => void f.provided.set(api.name, value),
     conversations: () => [],
   } as unknown as ExtensionHost
@@ -1396,7 +1396,7 @@ it('reaches Paused · safe while a delivery waits for its held recipient to answ
 })
 /** Pause's own document on conversation 1, which the footer watches. */
 const PauseState = pauseDocs[0]
-/** #recipient messages @ultimate one-way, which Board triages with the summary model. */
+/** #recipient messages @ultimate one-way, which Messages triages with the summary model. */
 async function messageUltimate(f: Awaited<ReturnType<typeof fixture>>, text: string) {
   const recipient = await f.opened.harness.conversation(f.recipient.id, context)
   await (
@@ -1607,7 +1607,7 @@ it('acts on a reply to a question even after the log dropped the question', asyn
   await until(async () => (await held.log())!.messages.length === 2)
   // The bounded log drops the question before the reply is delivered.
   await held.opened.harness.commit(async (tx) => {
-    const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
+    const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
     log.messages = log.messages.filter((m) => m.re !== undefined)
   }, context)
   g.release()
@@ -1686,7 +1686,7 @@ it("delivers another Ultimate's message to @ultimate only, labelled as it, once 
   // Its answer goes back over the same route, as a reply to that key.
   await until(() => other.posted.length === 1)
   expect(other.posted[0]).toMatchObject({
-    path: '/api/extensions/board/actions/remoteReply',
+    path: '/api/extensions/messages/actions/remoteReply',
     body: { key: 'k1', failed: false },
   })
   expect((other.posted[0].body as { text: string }).text).toContain('Start a branch that adds X')
@@ -1747,7 +1747,7 @@ it('takes a late answer after the log dropped its message, and keys named like o
     .tell(ROOT_CONVERSATION_ID, { project: 'poe2-rust', text: 'Ping' }, context)
   // Later traffic pushed the message out of the bounded log.
   await f.opened.harness.commit(async (tx) => {
-    const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
+    const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
     log.messages = log.messages.filter((m) => m.id !== told.message)
   }, context)
   const key = (other.posted[0].body as { key: string }).key

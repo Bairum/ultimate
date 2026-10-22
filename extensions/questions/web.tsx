@@ -1,5 +1,5 @@
 import { defineWebExtension, provide } from '@/sdk'
-import { MessageAnswers } from '../board/ui.tsx'
+import { MessageAnswers } from '../messages/ui.tsx'
 import { MessageQuestions } from './card.tsx'
 
 export default defineWebExtension({

@@ -43,8 +43,8 @@ import { Branch, Branched, LineageApi, Rooted, Roots } from './api.ts'
 import { ConversationsApi, Release, Trees } from '../conversations/api.ts'
 import { Standing, Started, Subagents } from '../subagents/api.ts'
 
-/** The fields of a Board message the landed-branch check reads. */
-type BoardRow = { from: unknown; reply: boolean; state: string }
+/** The fields of a message the landed-branch check reads. */
+type MessageRow = { from: unknown; reply: boolean; state: string }
 import { CompactAction, ForgetAction, RecentAction, TallyDoc } from './refs.ts'
 import {
   applyMemoryOps,
@@ -642,10 +642,10 @@ function lineage(host: ExtensionHost) {
   /** Inside `tx`: whether `id` is busy or has input queued, waits on a reply it asked for, or has a subagent running. */
   async function keepsWorking(tx: Tx, id: ConversationId) {
     if ((await tx.doc(LiveDoc, id)).run || (await tx.doc(InboxDoc, id)).items.length) return true
-    // Read by kind: board needs lineage, so lineage cannot import board.
-    const board = host.doc('board')
+    // Read by kind: messages depends on lineage, so lineage cannot import messages.
+    const log = host.doc('board')
     const messages = (
-      board && ((await tx.doc(board, ROOT_CONVERSATION_ID)) as { messages?: BoardRow[] })
+      log && ((await tx.doc(log, ROOT_CONVERSATION_ID)) as { messages?: MessageRow[] })
     )?.messages
     if (
       messages?.some(

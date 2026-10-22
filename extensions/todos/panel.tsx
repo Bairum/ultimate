@@ -9,12 +9,12 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { api, cn, errorMessage, events, useDocOf, useNow, useUltimate } from '@/sdk'
-import { accentOf, Address, BoardDoc, emptyBoard, relativeTime } from '../board/ui.tsx'
+import { accentOf, Address, MessagesDoc, emptyMessages, relativeTime } from '../messages/ui.tsx'
 import { QuestionsDoc, waiting } from '../questions/ui.tsx'
 import { AddAction, DoneAction, ReopenAction, TodosDoc } from './refs.ts'
 import type { Todo } from './refs.ts'
 
-/** The fields of a waiting Board message a question row shows. */
+/** The fields of a waiting message a question row shows. */
 type Asked = {
   id: number
   from: number | 'user' | 'remote'
@@ -30,13 +30,13 @@ const owners: { id: Todo['owner']; label: string }[] = [
 ]
 
 /**
- * The project's to-dos: what waits on you (questions asked of you, read live from Board, then your own to-dos), what
+ * The project's to-dos: what waits on you (questions asked of you, read live from Messages, then your own to-dos), what
  * @ultimate is still on, a field to add one for either of you, and the done ones folded away. A question is answered
  * where it was asked: its row opens that conversation at the message, whose card has the choices and Dismiss.
  */
 export function Todos() {
   const items = useDocOf(1, TodosDoc)?.items ?? []
-  const questions = waiting((useDocOf(1, BoardDoc) ?? emptyBoard).messages)
+  const questions = waiting((useDocOf(1, MessagesDoc) ?? emptyMessages).messages)
   const now = useNow(60_000)
   const [error, setError] = useState<string>()
   const open = items.filter((todo) => !todo.done)
@@ -187,7 +187,7 @@ function QuestionRow({ message, now }: { message: Asked; now: number }) {
   const from = typeof message.from === 'number' ? message.from : undefined
   const open = () => {
     if (from === undefined) return
-    if (message.call) events.emit('board:open', { conversation: from, call: message.call })
+    if (message.call) events.emit('messages:open', { conversation: from, call: message.call })
     showSurface('agent')
     switchConversation(from)
   }

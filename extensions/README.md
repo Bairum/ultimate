@@ -45,7 +45,7 @@ with `{ "extensions": { "disable": ["hello"] } }` in `~/.ultimate/settings.json`
 `<project>/.ultimate/settings.json` (this project), and back on with `extensions.enable`. Settings layer defaults →
 machine → project; later layers win. Settings changes apply live without a restart; unknown names produce a notice.
 A core-tier extension (`export const tier = 'core'` in its `api.ts`, such as conversations, workspaces, subagents,
-lineage, board and sidebar) stays on whatever the settings say, and depends only on other core-tier extensions: an
+lineage, messages and sidebar) stays on whatever the settings say, and depends only on other core-tier extensions: an
 optional extension plugs into it through a point or an event, never the other way round (lint `core-tier-deps`; see
 [Core tier](../docs/extensions.md#core-tier)).
 
@@ -277,7 +277,7 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, toolLines, entries, link, messageActions, messageDetails, answerLabels, chat, intro, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, toolLines, entries, link, messageActions, messageDetails, answerLabels, compact, intro, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 ### Slots
@@ -407,7 +407,7 @@ shows each message's context and cost there.
 `answerLabels` contributes inline labels after the **Final answer** heading, only on stored final assistant messages
 (not streaming updates). Like `messageDetails`, it is an array of components receiving `{ entry: EntryRecord }`,
 rendered in discovery and contribution order, each behind an extension boundary. Return `null` when the entry has
-no relevant label. Keep labels brief and muted; the header wraps at narrow widths. Board uses it to show where an
+no relevant label. Keep labels brief and muted; the header wraps at narrow widths. Messages uses it to show where an
 answer was sent, or that a one-way message's answer was not sent.
 
 `toolLines` maps tool names to components receiving `{ call: ToolCallView }` that render the call as one short line
@@ -415,13 +415,13 @@ of plain text. A folded "worked · N steps" row lists its newest calls this way 
 line, the tool name when no facet provides one); the last facet providing a name wins. Coding tools give their verb and
 path or programs, codemode its one-line summary.
 
-`chat` makes conversations read as a chat: `{ when(conversation), tools? }` decides from a conversation's summary
+`compact` makes conversations use compact mode: `{ when(conversation), tools? }` decides from a conversation's summary
 (label, title, owner), and in a matching transcript each run of tool calls and thinking between inputs, messages and
 answers folds into one quiet "worked · N steps" row that expands to the usual rendering. Calls the listed `tools` keep
 stay visible and split the run: a tool name, or a test `(call, docs) => boolean` of a call; `docs` lists the kinds of
 the root conversation's documents the tests read, which the transcript follows and passes to them by kind. The tools
-and docs of every matching facet combine. Renderers check `useChat()`, that test for the shown conversation or
-`undefined`, to adapt to it. Board turns it on for @ultimate's conversation, keeping messages, branch starts,
+and docs of every matching facet combine. Renderers check `useCompact()`, that test for the shown conversation or
+`undefined`, to adapt to it. Messages turns it on for @ultimate's conversation, keeping messages, branch starts,
 workspace outcomes and scripts its log says messaged you, and shows its messages to you as bubbles. Revealing an entry
 in a folded run opens the run.
 
@@ -440,7 +440,7 @@ entries: { 'notes.pinned': ({ entry }) => <div className="text-muted-foreground"
 ```
 
 A renderer also gets `core`, the rendering of the same entry so far: return it for the entries you leave alone, wrap
-it, or return `null` to hide the entry. In a chat, a row can show only some content blocks of a response; `blocks`
+it, or return `null` to hide the entry. In compact mode, a row can show only some content blocks of a response; `blocks`
 lists their indexes then. Several extensions can render one kind: they compose in discovery order, each
 receiving the rendering of the one before it as `core`, down to the core's own. Each runs in its own error boundary,
 which falls back to its `core` when it throws. `self` renders `pi.system` entries that change the build section as a
