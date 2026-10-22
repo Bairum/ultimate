@@ -20,7 +20,7 @@ same durable flow as real replies without external model calls.
 
 Onboarding is scripted too: `onboarding.start` greets and shows applicable extensions, project and git `setup` cards,
 one at a time. Each `onboarding.choice` advances it; after the last it calls `read` on the project's README, then
-`seed_tally` with a canned summary including the user's instructions, and asks **What should we do first?** A subsequent
+`remember` with a canned project memory plus the user's instructions verbatim as a memory, and asks **What should we do first?** A subsequent
 input to @ultimate calls `branch` in shared mode (so the demo also works without Git). The demo does not initialize
 Git or invent project-specific integrations; the real agent's instructions cover those judgment calls.
 

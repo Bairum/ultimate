@@ -173,7 +173,7 @@ export default async function fauxExtension(host: ExtensionHost) {
             (card) => !choices.some((choice) => choice.startsWith(`Setup choice (${card}):`)),
           )
           const greeting = text.startsWith('Onboarding started.')
-            ? 'Hello! I’m @ultimate, your project’s standing agent.\nWe’ll choose your setup, then I’ll read the project and write its first tally.'
+            ? 'Hello! I’m @ultimate, your project’s standing agent.\nWe’ll choose your setup, then I’ll read the project and write its first memories.'
             : undefined
           return next
             ? tool('setup', { card: next }, greeting)
@@ -184,22 +184,43 @@ export default async function fauxExtension(host: ExtensionHost) {
             fauxText('Choose on the card above; I’ll continue when you’re ready.'),
           ])
         if (last?.role === 'toolResult' && last.toolName === 'read')
-          return tool('seed_tally', {
+          return tool('remember', {
             root,
-            text: `This project lives at ${host.projectRoot}. Its README is the starting point; check its scripts and tests before changing it. Keep setup in .ultimate/ and feature work in coordinator branches. Current state: initial onboarding reading complete.\n\n${start.includes('User instructions:\n') ? start.split('User instructions:\n')[1] : ''}`,
+            ops: [
+              {
+                op: 'add',
+                slug: 'project-overview',
+                kind: 'fact',
+                line: 'What this project is and where to start reading it',
+                body: `This project lives at ${host.projectRoot}. Its README is the starting point; check its scripts and tests before changing it. Keep setup in .ultimate/ and feature work in coordinator branches.`,
+              },
+              ...(start.includes('User instructions:\n')
+                ? [
+                    {
+                      op: 'add',
+                      slug: 'user-instructions',
+                      kind: 'decision',
+                      line: 'The user’s onboarding instructions, verbatim',
+                      body: start.split('User instructions:\n')[1],
+                    },
+                  ]
+                : []),
+            ],
           })
-        if (last?.role === 'toolResult' && last.toolName === 'seed_tally')
+        if (last?.role === 'toolResult' && last.toolName === 'remember')
           return fauxAssistantMessage([
-            fauxText('The first tally is ready. What should we do first?'),
+            fauxText(
+              last.isError
+                ? `The first memories could not be written: ${messageText(last.content)}`
+                : 'The first memories are written. What should we do first?',
+            ),
           ])
         if (
           last?.role === 'user' &&
           !text.startsWith('Message from') &&
           // A branch's report is no new task: branching on it would loop.
           !text.startsWith('Reply from') &&
-          since.some(
-            (message) => message.role === 'toolResult' && message.toolName === 'seed_tally',
-          )
+          since.some((message) => message.role === 'toolResult' && message.toolName === 'remember')
         )
           return tool('branch', {
             root,
@@ -429,11 +450,9 @@ export default async function fauxExtension(host: ExtensionHost) {
           .slice(asked)
           .filter((message) => message.role === 'toolResult')
         const branch = Number(
-          /Branch #(\d+) started/.exec(messageText(results[1]?.content))?.[1] ?? 1,
+          /Branch #(\d+) started/.exec(messageText(results[0]?.content))?.[1] ?? 1,
         )
         const steps = [
-          // A fresh instance's root is empty and takes no branch; on a second run this fails inside the folded work.
-          fauxToolCall('seed_tally', { root: 1, text: 'A faux project for previewing cards.' }),
           fauxToolCall('branch', { prompt: 'landing demo', isolated: false }),
           fauxToolCall('message', {
             to: `#${branch}`,
@@ -687,7 +706,7 @@ const demoMemories = [
     'roots-never-concluded',
     'fact',
     'Roots and standing agents are never concluded or cleared, only compacted',
-    'A root runs no turns; its tally is what every branch starts from. `compact_tally` reshapes it without deleting history.',
+    'A root runs no turns; branches start from its memory, and its history can be compacted without deleting anything.',
     undefined,
     200,
   ],

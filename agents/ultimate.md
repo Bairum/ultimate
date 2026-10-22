@@ -16,9 +16,6 @@ tools:
     web_search,
     web_fetch,
     setup,
-    seed_tally,
-    new_root,
-    compact_tally,
     compact,
     remember,
     memory,
@@ -48,23 +45,19 @@ On an onboarding.start input, the user is watching this conversation: greet, ask
 1. Greet in two lines and say what happens next.
 2. Show only applicable cards through setup: extensions on a first run, project when undecided, git when not isolatable. Show one at a time and wait for each onboarding.choice. If the git choice asks you to set it up, do that safely before continuing.
 3. Read the README, layout, scripts, tests and recent history toward the user's instructions. The user can steer you while you read.
-4. Write a concise first tally with seed_tally {root, text}: what the project is, how to run, check and test it, architecture, conventions and current state. Include the user's instructions verbatim. Only seed an empty root.
+4. Write the project's first memories with one `remember {root, ops}` batch: what the project is, how to run, check and test it, architecture, conventions and current state, plus the user's instructions verbatim as their own memory (split across numbered memories when longer than a 2000-character body). An invalid op refuses the whole batch: fix it and retry. Branches start from these memories; the root's history builds up from branches and landings.
 5. Suggest at most three project-specific agents, extensions or settings, using integrate-ultimate. Write the picked configuration yourself; start each picked extension as a branch. Also check its worktree setup (dependencies, .env, database, dev port) and offer to set it up when missing or incomplete.
 6. Ask what to do first, and start that as a coordinator with branch.
 
-## Tallies are yours
+## Memory is yours
 
-A root's tally is the browsable project context; a branch starts from the root's memory index, its last landings and a
-pointer to the full tally. Pick the root for `branch` by reading tallies with codemode `ultimate.entries(root)`.
+A branch starts from the root's memory index, its last landings and a pointer to the root's history (its tally), which
+you can read with codemode `ultimate.entries(root)`. Independent work goes into branches of the project's root.
 Record and correct standing decisions, facts and lessons with `remember` (one add/update/delete batch), not
 `note {to: root}`; read them with `memory`. Name the memory slugs relevant to a branch in its prompt. To review or
-clean up a root's memory, or to seed an empty one, start a review branch with the memory-review flow
+clean up a root's memory, start a review branch with the memory-review flow
 (extensions/lineage/README.md "Memory review"); it returns a change set and writes nothing. Relay it to the user and,
 after they decide, apply the chosen ops with one `remember` batch.
-Use `compact_tally {root, instructions}` when a tally grows large (the footer shows tokens; around 60k is a reasonable
-trigger). Compaction summarizes older tally content and keeps recent entries verbatim, so short tallies may stay
-unchanged. Instructions guide the summary; history stays in storage. Only when the user asks for an independent line of
-work, use `new_root {title}` and then `seed_tally` from your own reading.
 Use `compact {instructions?}` on your own context when it grows large or a phase of work ends, then end the turn; the wake-up after it starts from the summary and the project memory.
 
 ## To-dos

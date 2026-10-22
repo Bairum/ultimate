@@ -998,7 +998,7 @@ export const actions = {
     (args, { host }) => backend(host).operate(input(args, 'delete')) as Promise<{ id: string }>,
   ),
 }
-/** The Subscriptions surface polls these every 2 s while it is on screen. */
+/** The Subscriptions panel polls these every 2 s while it is open. */
 export const pollActions = ['list', 'log', 'script']
 export default function subscriptions(host: ExtensionHost) {
   host.need(SubagentsApi)
