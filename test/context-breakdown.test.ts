@@ -199,6 +199,23 @@ it('carries a fork the entries its source’s compaction kept before the marker'
   expect(breakdown.injected?.content).not.toContain('dropped')
 })
 
+it('carries only the newest summary after consecutive compactions', () => {
+  const kept = source(user('k'.repeat(35)))
+  const older = source(
+    entry('pi.compaction', { model: [{ role: 'user', content: 'old summary', timestamp: 0 }] }),
+  )
+  const newer = {
+    ...source(
+      entry('pi.compaction', { model: [{ role: 'user', content: 's'.repeat(70), timestamp: 0 }] }),
+    ),
+    head: kept.id,
+  } as EntryRecord
+  const own = user('mine')
+  const breakdown = breakdownAt([kept, older, newer, own], 3)
+  expect(breakdown.injected?.label).toBe('inherited history · 2 messages')
+  expect(breakdown.injected?.content).not.toContain('old summary')
+})
+
 it('replays without patches a go-back set aside: change, go back, change again shows a diff', () => {
   const baseline = system({ a: 'one' })
   const point = user('try it')

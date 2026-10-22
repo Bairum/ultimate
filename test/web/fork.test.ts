@@ -13,7 +13,29 @@ it('keeps paging a long fork until its oldest own entry and the inherited one be
   const window = [marker, ...own.slice(150)]
   expect(reachedFork(window, 9, marker.id)).toBe(false)
   expect(reachedFork([marker, ...own], 9, marker.id)).toBe(false)
-  expect(reachedFork([marker, row(50, 1), ...own], 9, marker.id)).toBe(true)
+  // The marker is the window's head, so it is not yet loaded as the context the fork carries in.
+  expect(reachedFork([marker, row(50, 1), ...own], 9, marker.id)).toBe(false)
+  expect(reachedFork([row(30, 1), marker, row(50, 1), ...own], 9)).toBe(true)
+})
+
+it('keeps paging a fork until the context it carries in is loaded', () => {
+  // Fork #9 of #1, no reset of its own: its first context is #1's from its last reset (10) on.
+  const reset = row(10, 1, 'pi.reset')
+  const inherited = Array.from({ length: 140 }, (_, index) => row(11 + index, 1))
+  const own = Array.from({ length: 10 }, (_, index) => row(200 + index, 9))
+  expect(reachedFork([...inherited, ...own], 9)).toBe(false)
+  expect(reachedFork([reset, ...inherited, ...own], 9)).toBe(true)
+})
+
+it('keeps paging back to the entries a compaction kept before its marker', () => {
+  const compaction = { ...row(40, 1, 'pi.compaction'), head: 20 } as EntryRecord
+  const own = row(100, 9)
+  expect(reachedFork([row(30, 1), compaction, row(50, 1), own], 9)).toBe(false)
+  expect(reachedFork([row(20, 1), row(30, 1), compaction, row(50, 1), own], 9)).toBe(true)
+})
+
+it('stops at the fork point when the fork starts its own context', () => {
+  expect(reachedFork([row(50, 1), row(100, 9, 'pi.reset'), row(101, 9)], 9)).toBe(true)
 })
 
 it('never stops a conversation that is not a fork', () => {
