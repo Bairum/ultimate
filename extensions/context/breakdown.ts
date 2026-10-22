@@ -118,11 +118,23 @@ function anchorOf(entries: readonly EntryRecord[], index: number, own: number) {
   return Math.max(at, own)
 }
 
-/** Whether the `pi.system` at `index` is its context's first: the breakdown above the context shows it instead. */
+/** The first `pi.system` at or after `from`, before the next context start; a remove-all and its re-add count as one. */
+function firstSystem(entries: readonly EntryRecord[], from: number) {
+  for (let at = from; at < entries.length; at++) {
+    if (at > from && startsContext(entries[at])) return -1
+    if (!systemOf(entries[at])) continue
+    return removesAll(entries[at]) && systemOf(entries[at + 1]) ? at + 1 : at
+  }
+  return -1
+}
+
+/**
+ * Whether the `pi.system` at `index` opens its context, alone or as the re-add after a remove-all: the breakdown above
+ * the context shows it instead.
+ */
 export function opensContext(entries: readonly EntryRecord[], index: number, own: number) {
   const anchor = anchorOf(entries, index, own)
-  for (let at = anchor; at < index; at++) if (systemOf(entries[at])) return false
-  return index >= anchor
+  return index >= anchor && firstSystem(entries, anchor) === index
 }
 
 const injectedLabel = (entry: EntryRecord) => {
@@ -197,14 +209,7 @@ export function breakdownAt(entries: readonly EntryRecord[], anchor: number): Br
       : start
         ? undefined
         : inherited(entries, anchor)
-  let systemIndex = -1
-  for (let at = start ? anchor + 1 : anchor; at < entries.length; at++) {
-    if (at > anchor && startsContext(entries[at])) break
-    if (systemOf(entries[at])) {
-      systemIndex = at
-      break
-    }
-  }
+  const systemIndex = firstSystem(entries, anchor)
   const prompt = systemIndex < 0 ? undefined : promptAt(entries, systemIndex)
   let model: Breakdown['model']
   for (let at = Math.max(systemIndex, anchor) + 1; at < entries.length && !model; at++) {

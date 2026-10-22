@@ -154,6 +154,20 @@ it('folds a remove-all patch into the re-add after it, so a reorder shows only r
   ])
 })
 
+it('takes a fork start’s snapshot after a remove-all and its reordered re-add', () => {
+  const inheritedBaseline = { ...system({ a: 'one', b: 'two' }, [read]), conversationId: 1 }
+  const own = user('go')
+  const removeAll = system({ a: null, b: null })
+  const reAdd = system({ b: 'two', a: 'one' })
+  const entries = [inheritedBaseline, own, removeAll, reAdd] as unknown as EntryRecord[]
+  const breakdown = breakdownAt(entries, 1)
+  expect(breakdown.system).toBe(reAdd)
+  expect(breakdown.prompt?.sections.map((section) => section.key)).toEqual(['b', 'a'])
+  expect(breakdown.prompt?.tools.map((tool) => tool.name)).toEqual(['read'])
+  expect(opensContext(entries, 3, 1)).toBe(true)
+  expect(opensContext(entries, 2, 1)).toBe(false)
+})
+
 it('finds where a fork’s own entries start', () => {
   const inherited = { ...user('root'), conversationId: 1 } as unknown as EntryRecord
   const own = user('mine')
