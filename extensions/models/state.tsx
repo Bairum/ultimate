@@ -56,9 +56,16 @@ export function usePickerTarget() {
   )
 }
 
-export function openPicker(actions: Pick<UltimateActions, 'open'> & { conversationId?: number }) {
-  pickerTarget = actions.conversationId
+function setPickerTarget(target: number | undefined) {
+  pickerTarget = target
   for (const listener of targetListeners) listener()
+}
+export function openPicker(actions: Pick<UltimateActions, 'open'> & { conversationId?: number }) {
+  setPickerTarget(actions.conversationId)
+  actions.open(dialogs.picker)
+}
+/** Back to the picker after a login, still configuring the conversation the login started from. */
+export function reopenPicker(actions: Pick<UltimateActions, 'open'>) {
   actions.open(dialogs.picker)
 }
 
@@ -71,7 +78,12 @@ export function nextThinking(current: ThinkingLevel | undefined, model: ModelInf
 /** Which provider the login dialog should open on; set just before it opens. */
 let loginProvider: string | undefined
 const listeners = new Set<() => void>()
-export function openLogin(actions: Pick<UltimateActions, 'open' | 'close'>, provider?: string) {
+/** `actions.conversationId` is the conversation a model picked after this login configures. */
+export function openLogin(
+  actions: Pick<UltimateActions, 'open' | 'close'> & { conversationId?: number },
+  provider?: string,
+) {
+  setPickerTarget(actions.conversationId)
   loginProvider = provider
   for (const listener of listeners) listener()
   actions.close(dialogs.picker)

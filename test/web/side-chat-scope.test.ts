@@ -69,7 +69,7 @@ import { ConversationScope } from '../../web/src/sdk/conversation-scope.tsx'
 import { actions } from '../../web/src/sdk/actions.ts'
 import { store, uiState } from '../../web/src/sdk/client.ts'
 import { ModelPicker } from '../../extensions/models/picker.tsx'
-import { dialogs } from '../../extensions/models/state.tsx'
+import { dialogs, reopenPicker } from '../../extensions/models/state.tsx'
 import models from '../../extensions/models/web.tsx'
 import sideChat from '../../extensions/side-chat/web.tsx'
 
@@ -190,6 +190,17 @@ it('points the model and thinking controls inside a scope at the scoped conversa
     '/api/conversations/17/configure',
     JSON.stringify({ model: { provider: 'faux', modelId: 'main-model' } }),
   ])
+  expect(calls().some(([url]) => url === '/api/conversations/1/configure')).toBe(false)
+
+  // A login started from the side chat's picker comes back to it: "Pick a model" still configures the side chat.
+  renderToStaticMarkup(h(ModelPicker))
+  harness.select.get('login')!()
+  expect(store.getState().ui.dialogs[dialogs.login]).toBe(true)
+  reopenPicker(actions)
+  renderToStaticMarkup(h(ModelPicker))
+  harness.select.get('faux/side-model')!()
+  await vi.advanceTimersByTimeAsync(10)
+  expect(calls().at(-1)?.[0]).toBe('/api/conversations/17/configure')
   expect(calls().some(([url]) => url === '/api/conversations/1/configure')).toBe(false)
 
   // Shift+Tab typed in the side chat cycles its level; typed in main, main's.
