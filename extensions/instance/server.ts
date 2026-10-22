@@ -33,7 +33,7 @@ import { ListAction } from './refs.ts'
 /** A preview keeps ordinary parent variables, but gets its own host identity and no inherited cloud settings. */
 export function previewEnv(
   parent: NodeJS.ProcessEnv,
-  options: { home: string; project: string; userHome: string; faux?: boolean; ownerPid: number },
+  options: { home: string; project: string; userHome: string; ownerPid: number },
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(
@@ -46,7 +46,6 @@ export function previewEnv(
             'ULTIMATE_PREVIOUS_BUILD',
             'ULTIMATE_HOME',
             'ULTIMATE_PORT',
-            'ULTIMATE_FAUX',
             'ULTIMATE_CLOUD_URL',
             'ULTIMATE_CLOUD_TOKEN',
             'ULTIMATE_CLOUD_MACHINE',
@@ -60,7 +59,6 @@ export function previewEnv(
     ULTIMATE_NO_OPEN: '1',
     ULTIMATE_INSTANCE_OWNER: String(options.ownerPid),
   }
-  if (options.faux) env.ULTIMATE_FAUX = '1'
   return env
 }
 
@@ -72,19 +70,17 @@ interface Instance {
   temporary: boolean
   /** The conversation whose workspace it previews, or which started it in the shared checkout. */
   conversationId: number
-  faux: boolean
   child: GroupProcess
   group: Group
   output: string
 }
 
-const info = ({ id, url, home, pid, conversationId, faux }: Instance) => ({
+const info = ({ id, url, home, pid, conversationId }: Instance) => ({
   id,
   url,
   home,
   pid,
   conversationId,
-  faux,
 })
 const live = (item: Instance) => item.child.exitCode === null && item.child.signalCode === null
 /** The instances this process runs, shared by the tool and the actions; shutdown stops them all and remembers them. */
@@ -100,12 +96,11 @@ function running(host: Pick<ExtensionHost, 'resource' | 'onClose' | 'home'>) {
   return instances
 }
 /** What `list` shows of a preview. */
-const listed = ({
+const listed = ({ id, url, conversationId }: Pick<Instance, 'id' | 'url' | 'conversationId'>) => ({
   id,
   url,
   conversationId,
-  faux,
-}: Pick<Instance, 'id' | 'url' | 'conversationId' | 'faux'>) => ({ id, url, conversationId, faux })
+})
 type Listed = ReturnType<typeof listed>
 const portOf = (url: string) => new URL(url).port
 /**
@@ -125,7 +120,7 @@ export const stopped = (host: Pick<ExtensionHost, 'resource' | 'home'>) =>
   })
 export function remember(
   host: Pick<ExtensionHost, 'resource' | 'home'>,
-  item: Pick<Instance, 'id' | 'url' | 'conversationId' | 'faux'>,
+  item: Pick<Instance, 'id' | 'url' | 'conversationId'>,
 ) {
   const byPort = stopped(host)
   byPort.delete(portOf(item.url))
@@ -251,21 +246,20 @@ export default function instanceExtension(
     sections: [
       section('test_core_changes', () =>
         ownSource
-          ? 'Before restarting after core changes, start a second instance, check its API and UI using browser/screenshot, then stop it. Use faux for token-free smoke tests. Instances are temporary and process-local.'
-          : "To check changes to this project's .ultimate/ extensions, agents or settings, start a second instance: it runs this Ultimate with your workspace as its project. Look at it with browser/screenshot, then stop it. Use faux for token-free checks. It does not run the project's own app.",
+          ? 'Before restarting after core changes, start a second instance, check its API and UI using browser/screenshot, then stop it. An instance runs the configured models and spends tokens; drive it with real prompts. Instances are temporary and process-local.'
+          : "To check changes to this project's .ultimate/ extensions, agents or settings, start a second instance: it runs this Ultimate with your workspace as its project. Look at it with browser/screenshot, then stop it. It runs the configured models and spends tokens. It does not run the project's own app.",
       ),
     ],
     tools: [
       defineTool({
         name: 'instance',
         description:
-          'Start, inspect logs, list or stop isolated standalone Ultimate test servers (maximum three). Defaults to the calling workspace; set subagent to preview an owned child worktree, or faux for token-free testing.',
+          'Start, inspect logs, list or stop isolated standalone Ultimate test servers (maximum three). Defaults to the calling workspace; set subagent to preview an owned child worktree. Instances run the configured models.',
         parameters: Type.Object({
           action: Type.Union(
             ['start', 'stop', 'logs', 'list'].map((action) => Type.Literal(action)),
           ),
           id: Type.Optional(Type.String()),
-          faux: Type.Optional(Type.Boolean()),
           home: Type.Optional(Type.String()),
           subagent: Type.Optional(Type.Integer({ minimum: 1 })),
         }),
@@ -358,7 +352,6 @@ export default function instanceExtension(
                 home,
                 project,
                 userHome: host.userHome,
-                faux: args.faux,
                 ownerPid: process.pid,
               })
               // No pid file: a preview exits by itself once its owner is gone (ULTIMATE_INSTANCE_OWNER).
@@ -376,7 +369,6 @@ export default function instanceExtension(
                 pid: child.pid ?? 0,
                 temporary: !args.home,
                 conversationId,
-                faux: args.faux === true,
                 child,
                 group,
                 output: '',

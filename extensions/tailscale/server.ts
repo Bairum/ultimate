@@ -53,7 +53,8 @@ export const actions: Record<string, ExtensionAction> = {
 
 export default function tailscale(host: ExtensionHost) {
   let status: Status = { state: 'disabled', allow: [] }
-  let cli = 'tailscale'
+  // TAILSCALE_COMMAND names another CLI; tests point it at a missing one so test servers stay off the tailnet.
+  let cli = process.env.TAILSCALE_COMMAND ?? 'tailscale'
   let ownedPort: number | undefined
   let localTarget: string | undefined
   let dnsName: string | undefined
@@ -286,9 +287,6 @@ export default function tailscale(host: ExtensionHost) {
     running ??= start().finally(() => (running = undefined))
     return (opening = running)
   }
-  // Faux servers are token-free demos and tests and never change the machine's Serve mappings, except a faux preview
-  // started by another Ultimate's `instance` tool: the user opens it on their tailnet, and it frees its port on close.
-  if (host.faux && !preview) return defineExtension({ name: 'tailscale' })
   host.onOpen(begin)
   retries.set(host, begin)
   host.implement(TailscaleApi, { status: () => status })

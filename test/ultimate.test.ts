@@ -251,7 +251,7 @@ it.concurrent('starts a lineage branch with a message input and caller attributi
     ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = []
   }, context)
   await ask(f.server, ultimate, 'BRANCH ' + JSON.stringify({ prompt: 'No roots', isolated: false }))
-  expect(f.requests.some((text) => text.includes('Choose a root. Roots: (none)'))).toBe(true)
+  await until(() => f.requests.some((text) => text.includes('Choose a root. Roots: (none)')))
 })
 
 it.concurrent('refreshes standing definitions for numeric-address deliveries', async () => {

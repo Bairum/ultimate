@@ -1,3 +1,4 @@
+import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 // First: helpers mocks the faux provider's token pacing, which must apply before the server modules load.
 import { eventHost, idleNeed, until, temp, removeTemp } from './helpers.ts'
 import { awaitWithContext } from '@earendil-works/chord/context'
@@ -77,7 +78,7 @@ async function fixture(
     ultimateRoot,
     userHome,
     home: join(ultimateRoot, 'home'),
-    faux: true,
+    faux: fauxProvider(),
   })
   prepared.registry.install(CodingTools)
   if (extension) prepared.registry.install(extension)

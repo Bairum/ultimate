@@ -9,6 +9,8 @@ process.env.PI_CODING_AGENT_DIR = agentDir
 // Every boot would otherwise run the machine's real `claude auth status` (about 170 ms of CPU each); tests that need
 // a Claude CLI stub their own.
 process.env.PI_CLAUDE_CODE_COMMAND = join(testTmpdir, 'no-claude')
+// Test servers, and the previews they start, must never publish on this machine's tailnet: they find no Tailscale CLI.
+process.env.TAILSCALE_COMMAND = join(testTmpdir, 'no-tailscale')
 // Instance startup sweeps must never inspect the machine's real preview homes during tests.
 const previousTmpdir = process.env.TMPDIR
 process.env.TMPDIR = testTmpdir

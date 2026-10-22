@@ -1,3 +1,4 @@
+import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import {
   cp,
   mkdir,
@@ -97,7 +98,7 @@ async function fixture(
     ...paths,
     userHome: paths.directory,
     ultimateRoot: paths.projectRoot,
-    faux: true,
+    faux: fauxProvider(),
   })
   let opened: Awaited<ReturnType<typeof prepared.open>>
   const resources = new Map<string, unknown>()
