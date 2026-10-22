@@ -25,7 +25,7 @@ import {
   Fold,
   MessageActions,
   Provided,
-  useChat,
+  useCompact,
   useConversation,
   useConversations,
   useDocOf,
@@ -35,7 +35,7 @@ import {
   UserText,
   UserView,
 } from '@/sdk'
-import type { ChatSummaryProps, ToolCallView } from '@/sdk'
+import type { CompactSummaryProps, ToolCallView } from '@/sdk'
 import { AgentMark, ConversationRef } from '../conversations/ui.tsx'
 import { openAgentSource, StandingDoc } from '../subagents/ui.tsx'
 import { useWorkspaceIndex } from '../workspaces/ui.tsx'
@@ -44,9 +44,9 @@ import {
   answerTo,
   answeredMessages,
   callFailed,
-  chatQuiet,
+  backgroundRow,
   counterparts,
-  emptyBoard,
+  emptyMessages,
   messageStatus,
   outgoingState,
   relativeTime,
@@ -55,12 +55,12 @@ import {
   sentStatus,
 } from './data.tsx'
 import { callerOf } from './caller.ts'
-import { BoardDoc } from './refs.ts'
-import type { BoardMessage, Remote } from './refs.ts'
+import { MessagesDoc } from './refs.ts'
+import type { Message, Remote } from './refs.ts'
 import { MessageAnswers } from './points.tsx'
 
 /** What an optional extension shows under a message to the user: questions' answer card. */
-const Answers = ({ message }: { message: BoardMessage }) => (
+const Answers = ({ message }: { message: Message }) => (
   <Provided input={message} point={MessageAnswers}>
     {(answers) => answers}
   </Provided>
@@ -118,7 +118,7 @@ export function Body({ text }: { text: string }) {
 }
 
 /** Who waits on whom, in words: an open question to the user stands out, other open requests stay amber-muted. */
-function Status({ message, perspective }: { message: BoardMessage; perspective: number | 'user' }) {
+function Status({ message, perspective }: { message: Message; perspective: number | 'user' }) {
   const status = messageStatus(message)
   if (status === 'yours')
     return (
@@ -144,12 +144,12 @@ function Status({ message, perspective }: { message: BoardMessage; perspective: 
 }
 
 /**
- * A message to you in a chat: a bubble on the left in the sender's accent, its text, and whether it waits on you.
+ * A message to you in compact mode: a bubble on the left in the sender's accent, its text, and whether it waits on you.
  * `children` mount beneath the text; that is where the answer card of a question goes. `running` is whether the call
  * that sends it is still running. With `entry`, the stored answer or the response that sent the message, its footer
  * carries the transcript's message actions: usage, time, copy, go back and a reference link.
  */
-export function ChatBubble({
+export function Bubble({
   from,
   message,
   text,
@@ -159,7 +159,7 @@ export function ChatBubble({
   children,
 }: {
   from: number
-  message: BoardMessage | undefined
+  message: Message | undefined
   text: string
   running: boolean
   entry?: EntryRecord
@@ -168,18 +168,18 @@ export function ChatBubble({
   children?: ReactNode
 }) {
   const now = useNow(60000)
-  const board = useDocOf(1, BoardDoc)
+  const log = useDocOf(1, MessagesDoc)
   const accent = accentOf(from)
   const status = sentStatus(message, running)
   const stored = entry?.model?.[0]
-  const answer = message && board ? answerTo(board.messages, message) : undefined
-  // In the chat, how a message was sent is no news: only what asks something of you, or went wrong, says so.
+  const answer = message && log ? answerTo(log.messages, message) : undefined
+  // In compact mode, how a message was sent is no news: only what asks something of you, or went wrong, says so.
   const shown =
     status === 'yours' || status === 'sending' || status === 'failed' || status === 'dismissed'
   return (
     <section
-      data-board-outgoing={message?.id}
-      data-chat-bubble
+      data-message-outgoing={message?.id}
+      data-compact-bubble
       className={cn(
         'group/bubble w-full min-w-0 rounded-md border border-l-2 border-border',
         accent.left,
@@ -233,12 +233,12 @@ export function ChatBubble({
  * Your answer to a question, attached under it as your side of the pair: in your colour, with when you said it. Its
  * arrow jumps to where the answer reached @ultimate.
  */
-function AttachedAnswer({ answer, question }: { answer: BoardMessage; question: BoardMessage }) {
+function AttachedAnswer({ answer, question }: { answer: Message; question: Message }) {
   const now = useNow(60000)
   const accent = accentOf('user')
   const dismissed = question.state === 'dismissed'
   return (
-    <div className="border-t border-border/60 px-3 py-2.5" data-chat-answer={answer.id}>
+    <div className="border-t border-border/60 px-3 py-2.5" data-compact-answer={answer.id}>
       <div className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
         <CornerDownRightIcon className={cn('size-3.5 shrink-0', accent.name)} />
         <span className={cn('font-semibold', accent.name)}>
@@ -264,7 +264,7 @@ function AttachedAnswer({ answer, question }: { answer: BoardMessage; question: 
 
 /** What one background row is, in a few words that its counterpart follows. */
 function backgroundWord(
-  { entry, calls }: ChatSummaryProps['rows'][number],
+  { entry, calls }: CompactSummaryProps['rows'][number],
   failed: (call: string) => boolean,
 ) {
   const words: Record<string, string> = {
@@ -289,18 +289,18 @@ function backgroundWord(
 }
 
 /** A background group's line: who it was with, how many updates, and the work between them. */
-export function BackgroundSummary({ rows, steps, working }: ChatSummaryProps) {
-  const board = useDocOf(1, BoardDoc) ?? emptyBoard
+export function BackgroundSummary({ rows, steps, working }: CompactSummaryProps) {
+  const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const transcript = useTranscript()
-  const shown = rows.filter((row) => chatQuiet(row, board) === true)
-  const who = [...new Set(shown.flatMap((row) => counterparts(row, board)))]
+  const shown = rows.filter((row) => backgroundRow(row, log) === true)
+  const who = [...new Set(shown.flatMap((row) => counterparts(row, log)))]
   const count = shown.length
   const what =
     count === 1
       ? backgroundWord(shown[0], (call) => callFailed(transcript, call))
       : `${count} updates ${who.length ? 'with' : 'between agents'}`
   return (
-    <span className="flex min-w-0 items-center gap-1.5" data-chat-background>
+    <span className="flex min-w-0 items-center gap-1.5" data-compact-background>
       <ArrowLeftRightIcon className="size-3 shrink-0 text-brand/80" />
       <span className="shrink-0">{what}</span>
       {who.slice(0, 2).map((id) => (
@@ -320,18 +320,17 @@ export function BackgroundSummary({ rows, steps, working }: ChatSummaryProps) {
 }
 
 /**
- * The `message` tool as the message it sent; a failed call keeps the generic card with its error. In a chat, a message
+ * The `message` tool as the message it sent; a failed call keeps the generic card with its error. In compact mode, a message
  * to you is a bubble.
  */
 export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
-  const board = useDocOf(1, BoardDoc)
+  const log = useDocOf(1, MessagesDoc)
   const { switchConversation, showSurface } = useUltimate()
-  const chat = useChat()
   const sender = useConversation((conversation) => conversation.id)
   const caller = useCaller(call.id)
   if (call.status === 'error' || call.status === 'interrupted') return core
   const sent = /^Message (\d+) sent\.$/.exec(call.output)
-  const message = sent ? board?.messages.find((m) => m.id === Number(sent[1])) : undefined
+  const message = sent ? log?.messages.find((m) => m.id === Number(sent[1])) : undefined
   const { to, text, reply, steer } = call.args as {
     to?: string
     text?: string
@@ -340,9 +339,9 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
   }
   const recipient = message?.to ?? (to === 'user' ? 'user' : undefined)
   const toUser = recipient === 'user'
-  if (chat && toUser && sender !== undefined)
+  if (toUser && sender !== undefined)
     return (
-      <ChatBubble
+      <Bubble
         entry={caller}
         from={sender}
         message={message}
@@ -350,7 +349,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
         text={text ?? ''}
       >
         {message && <Answers message={message} />}
-      </ChatBubble>
+      </Bubble>
     )
   const state = outgoingState(message, toUser, call.status !== 'done')
   const Icon = toUser ? InboxIcon : SendIcon
@@ -377,7 +376,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
       }
     >
       <section
-        data-board-outgoing={message?.id}
+        data-message-outgoing={message?.id}
         className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
       >
         <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
@@ -404,7 +403,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
             <button
               className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground"
               onClick={() => {
-                events.emit('board:open', { conversation: message.to, entry: message.entry })
+                events.emit('messages:open', { conversation: message.to, entry: message.entry })
                 showSurface('agent')
                 switchConversation(message.to as number)
               }}
@@ -428,13 +427,13 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
 
 /** The `branch` tool as the branch it started and the prompt it was given; a failed call keeps the generic card. */
 export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
-  const board = useDocOf(1, BoardDoc)
+  const log = useDocOf(1, MessagesDoc)
   const conversations = useConversations()
   const { switchConversation, showSurface } = useUltimate()
   if (call.status === 'error' || call.status === 'interrupted') return core
   const started = /^Branch #(\d+) started; message (\d+) sent\.$/.exec(call.output)
   const id = started ? Number(started[1]) : undefined
-  const message = started ? board?.messages.find((m) => m.id === Number(started[2])) : undefined
+  const message = started ? log?.messages.find((m) => m.id === Number(started[2])) : undefined
   const { prompt, root, isolated } = call.args as {
     prompt?: string
     root?: number
@@ -470,7 +469,7 @@ export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode
       }
     >
       <section
-        data-board-branch={id}
+        data-message-branch={id}
         className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
       >
         <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] whitespace-nowrap text-muted-foreground">
@@ -501,7 +500,7 @@ export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode
               className="ml-auto flex shrink-0 cursor-pointer items-center gap-1 hover:text-foreground"
               onClick={() => {
                 if (message?.entry !== undefined)
-                  events.emit('board:open', { conversation: id, entry: message.entry })
+                  events.emit('messages:open', { conversation: id, entry: message.entry })
                 showSurface('agent')
                 switchConversation(id)
               }}
@@ -527,7 +526,7 @@ export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode
  * a muted `FYI · no action`. Its reason shows on hover.
  */
 export function TriageStatus({ id }: { id: number }) {
-  const triage = useDocOf(1, BoardDoc)?.messages.find((m) => m.id === id)?.triage
+  const triage = useDocOf(1, MessagesDoc)?.messages.find((m) => m.id === id)?.triage
   if (!triage) return null
   if (triage.verdict === 'assessing')
     return (
@@ -561,11 +560,11 @@ export function TriageStatus({ id }: { id: number }) {
 
 /** The triage verdict's one-line reason, for the open card. */
 function TriageReason({ id }: { id: number }) {
-  const reason = useDocOf(1, BoardDoc)?.messages.find((m) => m.id === id)?.triage?.reason
+  const reason = useDocOf(1, MessagesDoc)?.messages.find((m) => m.id === id)?.triage?.reason
   return reason ? <span className="min-w-0 text-muted-foreground/70">{reason}</span> : null
 }
 
-export function BoardInput({ entry }: { entry: EntryRecord }) {
+export function MessageInput({ entry }: { entry: EntryRecord }) {
   const origin = entry.data as {
     id: number
     from: number | 'user' | 'remote'
@@ -577,15 +576,12 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
   }
   const receiver = useConversation((conversation) => conversation.id)
   const { switchConversation } = useUltimate()
-  const chat = useChat()
   const reply = entry.kind === 'board.reply'
   const accent = accentOf(origin.from)
-  if (chat && origin.from === 'user')
-    return <UserTurn entry={entry} id={origin.id} text={origin.text} />
+  if (origin.from === 'user') return <UserTurn entry={entry} id={origin.id} text={origin.text} />
   return (
     <Fold
       card={entry.id}
-      keep={origin.from === 'user'}
       summary={
         <>
           <MailIcon className={cn('size-3 shrink-0', accent.name)} />
@@ -601,7 +597,7 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
       }
     >
       <section
-        data-board-input={origin.id}
+        data-message-input={origin.id}
         className={cn(
           'group/bubble min-w-0 rounded-md border border-l-2 border-border',
           accent.left,
@@ -644,32 +640,21 @@ export function BoardInput({ entry }: { entry: EntryRecord }) {
         </header>
         <Body text={origin.text} />
         <InputImages entry={entry} />
-        {origin.from === 'user' && (
-          <footer className="border-t border-border/60 px-3 py-1.5">
-            <MessageActions
-              bubble
-              className="justify-end"
-              entry={entry}
-              text={origin.text}
-              timestamp={entry.model?.[0]?.role === 'user' ? entry.model[0].timestamp : 0}
-            />
-          </footer>
-        )}
       </section>
     </Fold>
   )
 }
 
 /**
- * What you said through the board, in a chat: a turn of yours like a typed one. An answer to a question that shows it
+ * What you said through messaging, in compact mode: a turn of yours like a typed one. An answer to a question that shows it
  * already is a one-line reference to that question instead.
  */
 function UserTurn({ entry, id, text }: { entry: EntryRecord; id: number; text: string }) {
-  const board = useDocOf(1, BoardDoc)
+  const log = useDocOf(1, MessagesDoc)
   const transcript = useTranscript()
-  const message = board?.messages.find((m) => m.id === id)
+  const message = log?.messages.find((m) => m.id === id)
   const question =
-    message?.re === undefined ? undefined : board?.messages.find((m) => m.id === message.re)
+    message?.re === undefined ? undefined : log?.messages.find((m) => m.id === message.re)
   // The response that asked it, where the question shows with your answer under it.
   const asked = question?.call && callerOf(transcript, question.call.split('/')[0])
   const input = entry.model?.[0]
@@ -677,7 +662,7 @@ function UserTurn({ entry, id, text }: { entry: EntryRecord; id: number; text: s
     return (
       <button
         className="ml-auto flex cursor-pointer items-center gap-1.5 font-mono text-[11px] text-muted-foreground/70 hover:text-muted-foreground"
-        data-chat-answer-ref={id}
+        data-compact-answer-ref={id}
         onClick={() =>
           events.emit('ultimate:reveal-entry', {
             conversationId: asked.conversationId,
@@ -719,10 +704,10 @@ function InputImages({ entry }: { entry: EntryRecord }) {
 }
 
 /**
- * In a chat, an answer that went back to the conversations that asked, not to you, folds to one line, and a `codemode`
+ * In compact mode, an answer that went back to the conversations that asked, not to you, folds to one line, and a `codemode`
  * script that messaged you shows each message as a bubble.
  */
-export function ChatAnswer({
+export function CompactAnswer({
   entry,
   core,
   blocks,
@@ -731,9 +716,9 @@ export function ChatAnswer({
   core: ReactNode
   blocks?: readonly number[]
 }) {
-  const chat = useChat()
+  const compact = useCompact()
   const message = entry.model?.[0]
-  if (!chat || message?.role !== 'assistant') return core
+  if (!compact || message?.role !== 'assistant') return core
   if (message.stopReason === 'stop') {
     const text = message.content
       .flatMap((block) => (block.type === 'text' && block.text.trim() ? [block.text] : []))
@@ -761,13 +746,13 @@ function ScriptMessages({
   core: ReactNode
   shown: readonly { id: string; name: string }[]
 }) {
-  const board = useDocOf(1, BoardDoc) ?? emptyBoard
+  const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const sent = shown.flatMap((block) =>
-    block.name === 'codemode' ? sentBy(board.messages, block.id) : [],
+    block.name === 'codemode' ? sentBy(log.messages, block.id) : [],
   )
   if (!sent.length) return core
   const bubbles = sent.map((message) => (
-    <ChatBubble
+    <Bubble
       entry={entry}
       from={entry.conversationId}
       key={message.id}
@@ -776,7 +761,7 @@ function ScriptMessages({
       text={message.text}
     >
       <Answers message={message} />
-    </ChatBubble>
+    </Bubble>
   ))
   if (shown.some((block) => block.name !== 'codemode'))
     return (
@@ -810,12 +795,12 @@ function ReplyFold({
   text: string
   at: number
 }) {
-  const board = useDocOf(1, BoardDoc) ?? emptyBoard
-  const answered = answeredMessages(board.messages, entry.conversationId, entry.id)
+  const log = useDocOf(1, MessagesDoc) ?? emptyMessages
+  const answered = answeredMessages(log.messages, entry.conversationId, entry.id)
   if (!answered.length || answered.some((m) => !m.reply || m.from === 'user'))
     // An answer to you is a bubble like its messages, not a final-answer card.
     return text ? (
-      <ChatBubble
+      <Bubble
         at={at}
         entry={entry}
         from={entry.conversationId}

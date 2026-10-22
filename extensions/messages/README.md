@@ -1,4 +1,4 @@
-# Board
+# Messages
 
 Durable messages between conversations, standing agents and the user. Built in and on by default.
 
@@ -76,12 +76,12 @@ Reply-expected agent messages to `user` also request question extraction in the 
 optional questions service. The sender's outgoing `message` card in its transcript shows extracted decisions
 under the message body while it is open: Yes/No or choice buttons with a recommended marker, plus Something
 else. The user-only questions `answer` action posts
-a normal user Board reply with `re` and Q/A text, waking the sender. Its admission atomically checks that the
+a normal user reply with `re` and Q/A text, waking the sender. Its admission atomically checks that the
 original message is still open, preventing duplicate replies.
 One-way messages and user replies never request extraction; see [Questions](../questions/README.md).
 
 In the sender's transcript a `message` call renders as an outgoing card: recipient, one-way or expects reply, and
-the message's live state from the board log (sending, delivered, awaiting reply, awaiting your reply, answered,
+the message's live state from the messages log (sending, delivered, awaiting reply, awaiting your reply, answered,
 failed), with an Open link to the recipient's entry. A `branch` call renders as a branch-start card: the branch's
 feature and title, its root, isolated or shared, working or reported back, an Open link to its first input, and
 the prompt. Failed calls of either tool keep the generic tool card with their error.
@@ -105,12 +105,12 @@ current definitions, including numeric-address messages and automatic replies.
 The deferred `branch { prompt, root?, isolated?: true }` tool is offered only to definitions that name it.
 It chooses the explicit root, otherwise the caller's tree root, otherwise the only root. Ambiguous or missing roots
 produce an error listing the available ids. It forks the root's tally tip through lineage, attributes the tally's branch
-line to the caller, and sends the first input as a board message with replies enabled. It returns the branch id and message id.
+line to the caller, and sends the first input as a message with replies enabled. It returns the branch id and message id.
 The branch's answer therefore wakes its caller as a normal `board.reply`.
 The tool records the caller in the branch's `board.started` document, so later answers reach it too. A later run, woken
 by a subagent, a notify, a lander report or steering, ends with a final answer nobody receives. After each such run, a
 background `board.route` task (one per generation, from an `onYield` hook) sends that answer to the starter as a one-way
-board message from the branch, with the usual outgoing and incoming cards. It skips the answer when the run answered the
+message from the branch, with the usual outgoing and incoming cards. It skips the answer when the run answered the
 starter's reply-enabled message (board.delivery replies to it), when the run itself called `message` to the starter, when only the starter's own replies woke it (the starter already knows what it answered), and when the answer is empty, failed or aborted. An answer whose last line is a question or a
 numbered option asks for a decision and wakes the starter as a follow-up; any other answer is a note, which wakes nothing.
 An answer to the starter's one-way message is routed like any other: it gets no reply, and may carry a decision.
@@ -136,17 +136,17 @@ instance end to end. Nothing else crosses: the sender cannot address any other c
 never the user's.
 
 - **Sender:** codemode `ultimate.tell({ project, text, reply? })` (@ultimate only) logs a message `to: 'remote'` with
-  `remote: { project, machine, key }`, a fresh random key, then posts the target's `board.remote` action, located as
+  `remote: { project, machine, key }`, a fresh random key, then posts the target's `messages.remote` action, located as
   codemode's `{ project }` reads are (`lib/remote.ts`: loopback, else the tailnet address from the cloud register; the
   target's own `Origin`, admitted by `tailscale.allow` on the tailnet). A failed post marks the message failed and the
   call throws a sentence naming the project and machine. Telling an Ultimate whose reply-expected message to you is
   still open is refused: answer it instead.
-- **Target:** `board.remote { key, text, reply, from: { project, machine } }` logs a message `from: 'remote'` to its
+- **Target:** `messages.remote { key, text, reply, from: { project, machine } }` logs a message `from: 'remote'` to its
   own primary agent, the only recipient it can reach, and delivers it like any other: as a steer, triaged, with
   receipts. The model reads `Message from @ultimate@<project> on <machine> (another project's Ultimate, not the
 user)`. The `board.remote` document maps each key to its message in the same commit, so a repeated post (a retry,
   a replay) returns the first id and delivers nothing new.
-- **One hop back:** with `reply`, the delivery's answer phase posts it to the sender's `board.remoteReply { key, text,
+- **One hop back:** with `reply`, the delivery's answer phase posts it to the sender's `messages.remoteReply { key, text,
 failed }` instead of a local conversation. The sender records it as a reply `from: 'remote'` with `re` and
   `reply: false`, delivered by the usual reply phase, so its answer goes nowhere. The sender keeps each reply-enabled
   tell in `board.remote` until its answer arrives (the log drops old messages), so a late answer still lands;
@@ -156,22 +156,22 @@ failed }` instead of a local conversation. The sender records it as a reply `fro
   posting leaves the message `sent`, never posted; telling again uses a new key.
 
 `remote` and `remoteReply` are user-only actions: only another instance's HTTP call reaches them, never an agent's
-`ultimate.action`. In the chat a remote sender is named `@ultimate@<project> on <machine>` with a globe mark and a
+`ultimate.action`. In compact mode a remote sender is named `@ultimate@<project> on <machine>` with a globe mark and a
 violet accent no conversation uses.
 
 ## Document and typed inputs
 
-`Board` (kind `board`, version 1) is exported on `ROOT_CONVERSATION_ID`:
+`Messages` (kind `board`, version 1) is exported on `ROOT_CONVERSATION_ID`:
 
 ```ts
-{ messages: BoardMessage[]; next: number }
+{ messages: Message[]; next: number }
 ```
 
 `next` starts at 1. The log keeps the newest 300 items; transcripts retain delivered inputs.
 Version 1 remains loadable: Pi documents do not validate object fields, so existing logs' unused `readUpTo` field needs no migration.
 
 ```ts
-type BoardMessage = {
+type Message = {
   id: number
   from: number | 'user' | 'remote'
   to: number | 'user' | 'remote'
@@ -201,25 +201,25 @@ Agents use the `message` tool. The prompt section is stable and lists resident n
 
 ## Service
 
-`host.want(BoardApi)` exposes `send`, a one-way message from a conversation (the lander's deploy
+`host.want(MessagesApi)` exposes `send`, a one-way message from a conversation (the lander's deploy
 handoff), and `answer`, the user's reply to an open message (the questions answer card). Landings and submissions
-append no log items. `BoardApi`, `BoardMessage` and the `Board` document live in `api.ts`.
+append no log items. `MessagesApi`, `Message` and the `Messages` document live in `api.ts`.
 
 ## UI
 
-There is no Board surface: the board is plumbing, and everything it carries renders in transcripts. You talk to
+There is no Messages surface: the extension is plumbing, and everything it carries renders in transcripts. You talk to
 @ultimate in its own conversation (the title bar's `@ultimate` button and the sidebar's top row, both in
 [conversations](../conversations/README.md), open it). Every sender has a stable accent (`accent.tsx`: you the
-brand colour, others a small palette by id) shown as a stripe, a faint fill and the sender name. Typed board
+brand colour, others a small palette by id) shown as a stripe, a faint fill and the sender name. Typed
 messages and replies render as compact transcript cards with Source / Return navigation, in the sender's accent.
 Incoming messages show whether they expect a reply or are one-way, plus their delivery mode (steered, follow-up or note) when recorded. Final answers name their reply
-destination, or say “not sent” for a one-way message. Answers that cover several board messages list each
-destination; unrelated answers show no board label.
+destination, or say “not sent” for a one-way message. Answers that cover several messages list each
+destination; unrelated answers show no messaging label.
 
-@ultimate's own conversation reads as a chat (the `chat` contribution): each run of tool calls and thinking folds into
+@ultimate's own conversation uses compact mode (the `compact` contribution): each run of tool calls and thinking folds into
 one “worked · N steps” row, while messages, branch starts, workspace outcomes, onboarding setup cards and answers stay. Its messages to you
 are bubbles on the left in its accent, their footer saying awaiting your reply, answered or one-way; an answer card
-mounts beneath the text (`ChatBubble` children). Each log message records the tool call that sent it (`call`: the
+mounts beneath the text (`Bubble` children). Each log message records the tool call that sent it (`call`: the
 `message` call's id, or `<script>/<n>` for a nested codemode call), so a message @ultimate sent from a `codemode`
 script is a bubble too, bound to that exact message, beneath a quiet “sent with codemode” line that opens the script.
 The script shows as soon as the log holds a message it sent, while it runs or after it was interrupted; messages from

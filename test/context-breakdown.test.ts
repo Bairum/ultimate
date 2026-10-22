@@ -1,6 +1,6 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
-import { setAsideIds } from '../web/src/app/chat.ts'
+import { setAsideIds } from '../web/src/app/compact.ts'
 import {
   breakdownAt,
   diffAt,

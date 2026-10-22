@@ -20,7 +20,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, cn, errorMessage, Provided, useDocOf, useUltimate } from '@/sdk'
 import { store } from '@/sdk/client'
-import { BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
+import { MessagesDoc, conversationState, emptyMessages } from '../messages/ui.tsx'
 import {
   AgentMark,
   agentTitle,
@@ -33,7 +33,7 @@ import type { Presence } from '../conversations/ui.tsx'
 import { Review } from '../workspaces/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import type { OverviewRow } from '../conversations/types.ts'
-import type { ConversationState } from '../board/ui.tsx'
+import type { ConversationState } from '../messages/ui.tsx'
 import { ago } from './lander.tsx'
 
 /** What a row's mark and state word say for each settled state; `working` and `idle` show no icon. */
@@ -476,7 +476,7 @@ function TaskedSubagentLine({
   task,
 }: ChildRowProps & { depth: number; task?: { chip: ReactNode; title: string } }) {
   const actions = useUltimate()
-  const board = useDocOf(1, BoardDoc) ?? emptyBoard
+  const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const state = conversationState(
     {
       id: conversation.id,
@@ -486,7 +486,7 @@ function TaskedSubagentLine({
       parked,
       primary,
     },
-    board,
+    log,
   )
   const working = state === 'working'
   const known = state in settled ? settled[state as keyof typeof settled] : undefined
@@ -545,7 +545,7 @@ function TaskedChildRow({
   task,
 }: ChildRowProps & { task?: { chip: ReactNode; title: string } }) {
   const actions = useUltimate()
-  const board = useDocOf(1, BoardDoc) ?? emptyBoard
+  const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const state = conversationState(
     {
       id: conversation.id,
@@ -555,7 +555,7 @@ function TaskedChildRow({
       parked,
       primary,
     },
-    board,
+    log,
   )
   const working = state === 'working'
   return (

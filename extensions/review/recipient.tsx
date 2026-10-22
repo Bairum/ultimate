@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn, useConversations, useDocOf } from '@/sdk'
-import { Address } from '../board/ui.tsx'
+import { Address } from '../messages/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 
 /** Who a review goes to: a button naming the conversation, opening standing agents and recent conversations. */

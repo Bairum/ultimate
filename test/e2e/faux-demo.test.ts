@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
-import { Board } from '../../extensions/board/api.ts'
-import { BoardQuestions } from '../../extensions/questions/server.ts'
+import { Messages } from '../../extensions/messages/api.ts'
+import { MessageQuestions } from '../../extensions/questions/server.ts'
 import { Workspaces } from '../../extensions/workspaces/workspaces.ts'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
@@ -68,7 +68,7 @@ it('derives faux summaries from the latest prompt and marks only the questions r
   expect(answered.feature).toBe('Demo')
 })
 
-it('sends the questions demo to the Board and extracts the two decisions', async () => {
+it('sends the questions demo through messages and extracts the two decisions', async () => {
   const home = await temp('ultimate-faux-questions-demo-')
   const ultimateRoot = await sourceCopy(home)
   const server = await fauxServer({ ultimateRoot, home, userHome: home })
@@ -82,13 +82,18 @@ it('sends the questions demo to the Board and extracts the two decisions', async
   await until(
     async () =>
       Object.keys(
-        (await server.harness.snapshot(BoardQuestions, ROOT_CONVERSATION_ID, context))?.asked ?? {},
+        (await server.harness.snapshot(MessageQuestions, ROOT_CONVERSATION_ID, context))?.asked ??
+          {},
       ).length === 1,
   )
-  const message = (await server.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!.messages[0]
+  const message = (await server.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context))!
+    .messages[0]
   expect(message).toMatchObject({ from: id, to: 'user', reply: true, state: 'delivered' })
-  const questions = (await server.harness.snapshot(BoardQuestions, ROOT_CONVERSATION_ID, context))!
-    .asked[String(message.id)]
+  const questions = (await server.harness.snapshot(
+    MessageQuestions,
+    ROOT_CONVERSATION_ID,
+    context,
+  ))!.asked[String(message.id)]
   expect(questions.map((question) => question.text)).toEqual([
     'Should we keep the preview running?',
     'Which layout should we use?',
@@ -107,7 +112,7 @@ it('sends the questions demo to the Board and extracts the two decisions', async
     args: { messageId: message.id, answers: [{ question: questions[0].text, answer: 'Yes' }] },
   })
   expect(reply.status).toBe(200)
-  const log = (await server.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))!
+  const log = (await server.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context))!
   expect(log.messages.find((item) => item.id === reply.data.result.id)).toMatchObject({
     from: 'user',
     to: id,

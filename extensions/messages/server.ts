@@ -39,8 +39,8 @@ import { LineageApi, Roots } from '../lineage/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
-import { Asked, Board, BoardApi, Gate, MessageSent, Triaged } from './api.ts'
-import type { BoardMessage } from './api.ts'
+import { Asked, Messages, MessagesApi, Gate, MessageSent, Triaged } from './api.ts'
+import type { Message } from './api.ts'
 import { callerOf } from './caller.ts'
 import { CallerAction } from './refs.ts'
 import type { Remote, Triage } from './refs.ts'
@@ -50,7 +50,7 @@ import type { Verdict } from './triage.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import type { Device } from '../../shared/events.ts'
-export const docs = [Board]
+export const docs = [Messages]
 
 /**
  * Which images to forward: `latest`, the newest entry in the sender's conversation with images (a pasted input or a
@@ -125,9 +125,9 @@ const Requests = defineDoc<{ ids: Record<string, number> }>({
   initial: () => ({ ids: {} }),
 })
 /** What this instance told another project's Ultimate, kept until its answer arrives, apart from the bounded log. */
-type Told = { message: BoardMessage; answer?: number }
+type Told = { message: Message; answer?: number }
 /**
- * Ultimate-to-Ultimate bookkeeping by message key, kept apart from the Board log, which drops old messages: `received`
+ * Ultimate-to-Ultimate bookkeeping by message key, kept apart from the Messages log, which drops old messages: `received`
  * maps each incoming key to its message so a repeated post delivers once; `told` holds each outgoing reply-enabled
  * message until its one answer arrives. Neither is pruned by count: these messages are few and small.
  */
@@ -154,7 +154,7 @@ const Started = defineDoc<{ by?: number; yielded?: number }>({
   initial: () => ({}),
 })
 /** A reply-enabled message to the user that the user has neither answered nor dismissed yet. */
-const openQuestion = (m: BoardMessage) => m.to === 'user' && m.reply && m.state === 'delivered'
+const openQuestion = (m: Message) => m.to === 'user' && m.reply && m.state === 'delivered'
 /** A question in one line: its decisions' topics, else its first line that asks something, else its first line, clipped. */
 export const gist = (text: string) => {
   const decisions = parseDecisions(text)
@@ -172,7 +172,7 @@ export const gist = (text: string) => {
  * open, so the agent treats them as unanswered. A per-input entry, not a system-prompt section, keeps the prompt cached.
  */
 export async function openQuestionsNote(tx: Tx, conversationId: ConversationId, now: number) {
-  const open = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.filter(
+  const open = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.filter(
     (m) => openQuestion(m) && m.from === conversationId,
   )
   if (!open.length) return undefined
@@ -197,8 +197,8 @@ export async function openQuestionsNote(tx: Tx, conversationId: ConversationId, 
     ],
   }
 }
-async function append(tx: Tx, input: Omit<BoardMessage, 'id' | 'at'>) {
-  const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
+async function append(tx: Tx, input: Omit<Message, 'id' | 'at'>) {
+  const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
   const message = { ...input, id: log.next++, at: Date.now() }
   log.messages.push(message)
   if (log.messages.length > 300) log.messages.splice(0, log.messages.length - 300)
@@ -266,7 +266,7 @@ async function triageModel(
 }
 /** Record message `id`'s verdict, emitting `board.triaged` once, when the log still holds it. */
 async function recordTriage(host: ExtensionHost, tx: Tx, id: number, triage: Triage) {
-  const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find((m) => m.id === id)
+  const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find((m) => m.id === id)
   if (!stored || (stored.triage && stored.triage.verdict !== 'assessing')) return
   stored.triage = triage
   if (
@@ -322,7 +322,7 @@ async function settleTriage(
   const decided = verdict
   // The verdict commits before the wake, so the row shows it while the run starts.
   await runtime.commit(async (tx) => {
-    const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+    const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
       (m) => m.id === input.id,
     )
     if (stored?.triage?.verdict === 'assessing')
@@ -357,15 +357,15 @@ function delivery(host: ExtensionHost) {
   }
   return defineTask<
     {
-      message: BoardMessage
+      message: Message
       steer: boolean
       note: boolean
       fromLabel: string
       toLabel: string
       /** Another project's Ultimate answered `message`: deliver only this reply. */
-      reply?: { message: BoardMessage; failed: boolean }
+      reply?: { message: Message; failed: boolean }
     },
-    { phase: 'deliver' } | { phase: 'reply'; message: BoardMessage; failed: boolean },
+    { phase: 'deliver' } | { phase: 'reply'; message: Message; failed: boolean },
     null
   >({
     name: 'board.delivery',
@@ -457,7 +457,7 @@ function delivery(host: ExtensionHost) {
           }
           const placement = await receipt.status(ctx)
           await runtime.commit(async (tx) => {
-            const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+            const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
               (item) => item.id === m.id,
             )
             if (stored) {
@@ -496,7 +496,7 @@ function delivery(host: ExtensionHost) {
                     ctx,
                   )
             await runtime.commit(async (tx) => {
-              const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+              const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
                 (item) => item.id === m.id,
               )
               if (stored && answer !== undefined) stored.answer = answer
@@ -511,7 +511,7 @@ function delivery(host: ExtensionHost) {
           const answer =
             settled.status === 'done' && settled.type === 'input' ? settled.answer : undefined
           if (!m.reply) {
-            const original = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+            const original = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
               (item) => item.id === m.id,
             )
             if (original && answer !== undefined) original.answer = answer
@@ -531,7 +531,7 @@ function delivery(host: ExtensionHost) {
           const error = failed
             ? `ended its turn without an answer (${settled.status === 'unanswered' ? settled.reason : settled.status})`
             : undefined
-          const original = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+          const original = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
             (item) => item.id === m.id,
           )
           if (original) {
@@ -564,7 +564,7 @@ function delivery(host: ExtensionHost) {
             if ('current' in target) throw new Error(`${m.remote!.project} is this project`)
             await postAction(
               target,
-              'board',
+              'messages',
               'remoteReply',
               { key: m.remote!.key, text: m.text, failed },
               runtime.signal,
@@ -574,7 +574,7 @@ function delivery(host: ExtensionHost) {
             error = `The reply did not reach ${remoteLabel(m.remote!)}: ${cause instanceof Error ? cause.message : String(cause)}`
           }
           await runtime.commit(async (tx) => {
-            const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+            const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
               (item) => item.id === m.id,
             )
             if (stored) {
@@ -656,7 +656,7 @@ function delivery(host: ExtensionHost) {
             )
         }
         await runtime.commit(async (tx) => {
-          const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+          const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
             (item) => item.id === m.id,
           )
           if (stored && !failed) stored.state = 'delivered'
@@ -727,7 +727,7 @@ function route(host: ExtensionHost) {
             return undefined
           const until = message.timestamp
           // Only tool calls count: an earlier run's routed answer can land after this run's input.
-          const messaged = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.some(
+          const messaged = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.some(
             (m) =>
               m.from === id &&
               m.to === by &&
@@ -876,7 +876,7 @@ async function send(
       return requests.ids[requestId]
     if (callId !== undefined && receipt?.ids[callId] !== undefined) return receipt.ids[callId]
     if (answerId !== undefined) {
-      const original = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+      const original = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
         (m) => m.id === answerId,
       )
       if (!original || !openQuestion(original))
@@ -890,10 +890,10 @@ async function send(
         : await resolveImages(tx, from as ConversationId, input.images)
     // Only a Reply answers a question to the user, and only the one it replies to; a dismissal closes it unanswered.
     if (from === 'user' && input.re !== undefined)
-      for (const m of (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages)
+      for (const m of (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages)
         if (openQuestion(m) && m.id === input.re) m.state = input.dismiss ? 'dismissed' : 'answered'
     if (from !== 'user' && input.reply !== false) {
-      const log = await tx.doc(Board, ROOT_CONVERSATION_ID)
+      const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
       const pending = log.messages.find(
         (m) =>
           m.to === from &&
@@ -981,7 +981,7 @@ async function tell(
   const reply = input.reply ?? true
   // An Ultimate answering another's question answers it; telling back would start a conversation between agents.
   const asking = (
-    (await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx))?.messages ?? []
+    (await host.harness().snapshot(Messages, ROOT_CONVERSATION_ID, ctx))?.messages ?? []
   ).find(
     (m) =>
       m.from === 'remote' &&
@@ -1018,16 +1018,18 @@ async function tell(
     })
     return message.id
   }, ctx)
-  const settle = (change: (stored: BoardMessage) => void) =>
+  const settle = (change: (stored: Message) => void) =>
     host.harness().commit(async (tx) => {
-      const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find((m) => m.id === id)
+      const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
+        (m) => m.id === id,
+      )
       if (stored) change(stored)
     }, ctx)
   let delivered: number
   try {
     delivered = (await postAction(
       target,
-      'board',
+      'messages',
       'remote',
       { key: remote.key, text: input.text, reply, from: self },
       signal,
@@ -1142,7 +1144,7 @@ export const actions = {
       const entry = told[key]
       if (entry.answer !== undefined) return entry.answer
       const original = entry.message
-      const stored = (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.find(
+      const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
         (m) => m.id === original.id,
       )
       if (stored) stored.state = failed ? 'failed' : 'answered'
@@ -1199,21 +1201,21 @@ const imagesParameter = Type.Union([Type.Literal('latest'), Type.Integer({ minim
   description:
     'Forward images from your conversation: "latest" for the newest input or tool result (screenshot) with images, or that entry\'s id.',
 })
-export default function board(host: ExtensionHost) {
+export default function messages(host: ExtensionHost) {
   // Core, always on; resolved where they are called, declared here so the catalogue lists them.
   host.need(LineageApi)
   host.need(SubagentsApi)
   host.need(WorkspacesApi)
-  // Board's own extension point, resolved where triage calls the model.
+  // The extension's own point, resolved where triage calls the model.
   host.want(Gate)
-  // The lander's deploy handoff, through workspaces' extension point, so workspaces depends on no board.
+  // The lander's deploy handoff, through workspaces' extension point, so workspaces does not depend on messages.
   host.implement(Handoff, {
     send: (from, input, requestId, ctx) =>
       send(host, from, input, ctx, undefined, undefined, requestId),
   })
-  host.implement(BoardApi, {
+  host.implement(MessagesApi, {
     answer: async (messageId, text, ctx, device) => {
-      const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx)
+      const log = await host.harness().snapshot(Messages, ROOT_CONVERSATION_ID, ctx)
       const message = log?.messages.find((m) => m.id === messageId)
       if (!message || !openQuestion(message)) throw new Error('These questions are no longer open')
       return send(
@@ -1230,7 +1232,7 @@ export default function board(host: ExtensionHost) {
       )
     },
     dismiss: async (messageId, ctx, device) => {
-      const log = await host.harness().snapshot(Board, ROOT_CONVERSATION_ID, ctx)
+      const log = await host.harness().snapshot(Messages, ROOT_CONVERSATION_ID, ctx)
       const message = log?.messages.find((m) => m.id === messageId)
       if (!message || !openQuestion(message)) throw new Error('These questions are no longer open')
       // A one-way note: the asker reads it with its next input, and no run starts for it.
@@ -1258,7 +1260,7 @@ export default function board(host: ExtensionHost) {
     tell: (from, input, ctx, signal) => tell(host, from, input, ctx, signal),
   })
   return defineExtension({
-    name: 'board',
+    name: 'messages',
     tasks: [delivery(host), route(host)],
     hooks: [
       hook(GenerationTask, {
@@ -1291,7 +1293,7 @@ export default function board(host: ExtensionHost) {
       }),
     ],
     sections: [
-      section('board', async (input, ctx) => {
+      section('messages', async (input, ctx) => {
         if (!input.agent.tools.some((tool) => tool.name === 'message')) return undefined
         const parent = await parentOf(host, input.conversationId, ctx)
         if (parent !== undefined)
@@ -1304,7 +1306,7 @@ export default function board(host: ExtensionHost) {
       defineTool({
         name: 'branch',
         deferred: true,
-        description: 'Start a lineage branch. Its answer returns to you as a board reply.',
+        description: 'Start a lineage branch. Its answer returns to you as a reply.',
         parameters: Type.Object({
           prompt: Type.String({ minLength: 1 }),
           root: Type.Optional(Type.Number()),
@@ -1400,7 +1402,7 @@ export default function board(host: ExtensionHost) {
             .harness()
             .commit(
               async (tx) =>
-                (await tx.doc(Board, ROOT_CONVERSATION_ID)).messages.some(
+                (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.some(
                   (m) =>
                     m.to === api.conversationId &&
                     m.reply &&

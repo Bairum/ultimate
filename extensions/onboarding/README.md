@@ -33,7 +33,7 @@ the agent should wait for an `onboarding.choice` input before continuing.
 The tool renderer shows a quiet, transcript-width card:
 
 - **Extensions:** recommended extensions as checkboxes, initially checked unless the user's settings disable them.
-  Core-tier extensions (`ExtensionInfo.core`, such as `subagents`, `board`, `lineage`, `onboarding` and `documents`)
+  Core-tier extensions (`ExtensionInfo.core`, such as `subagents`, `messages`, `lineage`, `onboarding` and `documents`)
   stay checked and disabled with "core, always on": the server keeps them enabled whatever the settings say. Dependencies are checked with their extension (`automations` needs
   `subagents`, `parallel` needs `secrets`).
   Continue applies user-global choices with `applyFirstRun`. Both checked and unchecked choices are saved explicitly;

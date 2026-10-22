@@ -46,8 +46,8 @@ import { ConversationsApi } from '../../extensions/conversations/api.ts'
 import type { ConversationsService } from '../../extensions/conversations/api.ts'
 import { Summaries } from '../../extensions/conversations/summary.ts'
 import self from '../../extensions/self/server.ts'
-import board from '../../extensions/board/server.ts'
-import { Board } from '../../extensions/board/api.ts'
+import messagesExtension from '../../extensions/messages/server.ts'
+import { Messages } from '../../extensions/messages/api.ts'
 import promptExtension, { order as promptOrder } from '../../extensions/prompt/server.ts'
 import subagents from '../../extensions/subagents/server.ts'
 import { Subagents } from '../../extensions/subagents/api.ts'
@@ -90,7 +90,7 @@ const noIdea: Answer = () => fauxAssistantMessage('no idea')
 async function fixture(
   commands: string[] = [],
   existing?: Awaited<ReturnType<typeof repository>>,
-  boardEnabled = false,
+  messagesEnabled = false,
 ) {
   const paths = existing ?? (await repository())
   const prepared = await prepareHarness({
@@ -158,7 +158,7 @@ async function fixture(
     }),
   )
   const service = workspaces(host)
-  if (boardEnabled) prepared.registry.install(board(host))
+  if (messagesEnabled) prepared.registry.install(messagesExtension(host))
   prepared.registry.install(workspaceExtension(host))
   prepared.registry.install(self(host))
   prepared.registry.install(subagents(host))
@@ -1084,15 +1084,15 @@ it.concurrent('notes the root of the submitter’s tree and skips a conversation
   expect(await rootNotes(f)).toHaveLength(0)
 })
 
-const boardMessages = async (f: Awaited<ReturnType<typeof fixture>>) =>
-  (await f.opened.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))?.messages ?? []
+const messageLog = async (f: Awaited<ReturnType<typeof fixture>>) =>
+  (await f.opened.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context))?.messages ?? []
 
 async function lander(
   settings: JsonObject,
   existing?: Awaited<ReturnType<typeof repository>>,
-  boardEnabled = false,
+  messagesEnabled = false,
 ) {
-  const f = await fixture([], existing, boardEnabled)
+  const f = await fixture([], existing, messagesEnabled)
   f.host.projectSettings = async () => ({ lander: settings })
   return f
 }
@@ -1126,7 +1126,7 @@ it.concurrent('lands and reports a submission without a lineage provider', async
   expect(await readFile(join(f.projectRoot, 'no-lineage.txt'), 'utf8')).toBe('no-lineage.txt')
   expect(await rootNotes(f)).toHaveLength(0)
 })
-it.concurrent('records neither the submission nor the landing report on the board', async () => {
+it.concurrent('records neither the submission nor the landing report in the message log', async () => {
   const f = await lander({}, undefined, true)
   const id = await f.create()
   await f.service.ready(id, context)
@@ -1135,7 +1135,7 @@ it.concurrent('records neither the submission nor the landing report on the boar
   await commit(workspace.path, 'second.txt')
   const result = await f.service.submit(id, 'None', context)
   await submitted(f, id)
-  expect(await boardMessages(f)).toEqual([])
+  expect(await messageLog(f)).toEqual([])
   const report = await f.opened.harness.commit(
     (tx) => tx.submissionByRequest(id, `lander:${result.id}`),
     context,
@@ -1166,7 +1166,7 @@ it.concurrent('hands matching landings to the deploy agent exactly once', async 
               ...task.definition.phases,
               report: async (...args: Parameters<typeof reportPhase>) => {
                 const [current, runtime, ctx] = args
-                // Crash after board admission but before recording the deploy step. The next run has no step or memo.
+                // Crash after messages admission but before recording the deploy step. The next run has no step or memo.
                 await expect(
                   reportPhase(
                     current,
@@ -1195,7 +1195,7 @@ it.concurrent('hands matching landings to the deploy agent exactly once', async 
   const tip = await commit(workspace.path, 'cloud/change.txt')
   const result = await f.service.submit(id, 'None', context)
   const [report] = await submitted(f, id)
-  const messages = await boardMessages(f)
+  const messages = await messageLog(f)
   const deploy = messages.filter((message) => message.text.includes('Please deploy'))
   expect(crashes).toBe(1)
   expect(deploy).toHaveLength(1)
@@ -1233,8 +1233,8 @@ const concludedIds = async (f: Awaited<ReturnType<typeof fixture>>) =>
  */
 async function concluding() {
   const f = await lander({}, undefined, true)
-  // As the server: documents by kind, here the board, which lineage reads open questions from.
-  f.host.doc = (kind: string) => (kind === 'board' ? Board : undefined)
+  // As the server: documents by kind, here the message log, which lineage reads open questions from.
+  f.host.doc = (kind: string) => (kind === 'board' ? Messages : undefined)
   const concluded = vi.fn<ConversationsService['concludeIn']>((tx, ids) =>
     concludeIn(f.host, tx, ids),
   )
@@ -1300,7 +1300,7 @@ it.concurrent('answers input from the report run before concluding', async () =>
 it.concurrent('leaves a landed branch open while it waits on a reply it asked for', async () => {
   const { f, id, concluded, release } = await concluding()
   await f.opened.harness.commit(async (tx) => {
-    const doc = await tx.doc(Board, ROOT_CONVERSATION_ID)
+    const doc = await tx.doc(Messages, ROOT_CONVERSATION_ID)
     doc.messages.push({
       id: doc.next++,
       from: id,
@@ -1327,7 +1327,7 @@ it.concurrent('reports a landing with a deploy warning when the handoff itself f
     join(f.directory, '.ultimate/agents/deploy-test.md'),
     '---\nname: deploy-test\ndescription: Deploys\nresident: true\n---\nDeploy.\n',
   )
-  // The board is there and the agent is resident, but delivery fails, as without a subagents service.
+  // The messaging extension is there and the agent is resident, but delivery fails, as without a subagents service.
   const service = f.host.want(Handoff)!
   service.send = async () => {
     throw new Error('subagents service unavailable')
@@ -1384,7 +1384,7 @@ it.concurrent.each([
     await f.service.submit(id, 'None', context)
     const [report] = await submitted(f, id)
     expect(report).toContain('landed as')
-    const messages = await boardMessages(f)
+    const messages = await messageLog(f)
     expect(messages.filter((message) => message.text.includes('Please deploy'))).toHaveLength(0)
     const steps = (await landerLog(f)).log.filter((line) => line.step?.startsWith('deploy'))
     expect(steps.map((line) => line.step)).toEqual(step ? [step] : [])
@@ -1393,14 +1393,14 @@ it.concurrent.each([
     expect(notices).toContain(step ?? (invalid ? 'deploy hook disabled' : ''))
   },
 )
-it.concurrent('does not record a failed landing on the board', async () => {
+it.concurrent('does not record a failed landing in the message log', async () => {
   const f = await lander({ checks: ['echo REJECTED; false'] }, undefined, true)
   const id = await f.create()
   await f.service.ready(id, context)
   await commit((await f.service.get(id, context))!.path)
   await f.service.submit(id, 'None', context)
   await submitted(f, id)
-  expect(await boardMessages(f)).toEqual([])
+  expect(await messageLog(f)).toEqual([])
 })
 it.concurrent('lands two submissions in order onto a moved target and reports both', async () => {
   const f = await lander({ checks: ['test -f base.txt'] })
@@ -1776,7 +1776,7 @@ it.concurrent('resumes a landing interrupted before its push: pushes and reports
   // The resumed task merged and checked nothing again: it pushed what had landed.
   const steps = result.steps.map((row) => row.step)
   expect(steps.slice(steps.lastIndexOf('started'))).toEqual(['started', 'pushing to origin'])
-  expect(await boardMessages(f)).toEqual([])
+  expect(await messageLog(f)).toEqual([])
 })
 it.concurrent('reports a local landing whose push retry conflicts as landed locally', async () => {
   const { paths, bare } = await withRemote()

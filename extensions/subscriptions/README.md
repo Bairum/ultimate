@@ -1,4 +1,4 @@
-Supervised background scripts that wake subscribed conversations when they print `FIRE`. An agent writes and repairs each script; model tokens are used for setup and recovery, not for waiting. Enabled by default as an optional extension; requires core `subagents` and `board`.
+Supervised background scripts that wake subscribed conversations when they print `FIRE`. An agent writes and repairs each script; model tokens are used for setup and recovery, not for waiting. Enabled by default as an optional extension; requires core `subagents` and `messages`.
 
 ## Agent and tool
 

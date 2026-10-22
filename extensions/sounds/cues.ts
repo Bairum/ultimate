@@ -1,4 +1,4 @@
-import type { BoardMessage } from '../board/refs.ts'
+import type { Message } from '../messages/refs.ts'
 import type { OverviewRow } from '../conversations/types.ts'
 
 export type Sound = 'input' | 'finished' | 'failed'
@@ -17,7 +17,7 @@ export type Watched = {
   /** The primary agent's conversation id, once it exists. */
   agent?: number
   row?: OverviewRow
-  messages: readonly Pick<BoardMessage, 'id' | 'from' | 'to' | 'reply'>[]
+  messages: readonly Pick<Message, 'id' | 'from' | 'to' | 'reply'>[]
 }
 
 /**

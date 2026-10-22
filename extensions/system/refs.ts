@@ -87,7 +87,7 @@ export type Lane = {
   spawn?: LaneSpawn
   runs: LaneRun[]
 }
-/** A Board message from one lane's conversation to another's, sent at `at` by tool call `call`. */
+/** A message from one lane's conversation to another's, sent at `at` by tool call `call`. */
 export type LaneLink = { from: number; to: number; call?: string; at: string; kind: 'message' }
 
 /**

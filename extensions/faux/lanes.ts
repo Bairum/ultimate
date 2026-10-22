@@ -10,7 +10,7 @@ import type { JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { EventContext } from '../../shared/events.ts'
-import { MessageSent } from '../board/api.ts'
+import { MessageSent } from '../messages/api.ts'
 import { Started, SubagentsApi } from '../subagents/api.ts'
 
 const OPUS = 'anthropic/claude-opus-4-5'

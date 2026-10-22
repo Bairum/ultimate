@@ -521,7 +521,7 @@ function MemorySource({ source }: { source: string }) {
         className="flex min-w-0 cursor-pointer items-center rounded-sm px-0.5 text-[11px] text-foreground hover:bg-accent"
         data-memory-source={source}
         onClick={() => {
-          if (entry !== undefined) events.emit('board:open', { conversation, entry })
+          if (entry !== undefined) events.emit('messages:open', { conversation, entry })
           showSurface('agent')
           switchConversation(conversation)
         }}

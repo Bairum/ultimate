@@ -2,7 +2,7 @@ import type { EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import {
   anchorSelector,
-  chatRows,
+  compactRows,
   groupAside,
   groupQuiet,
   isOpenIn,
@@ -13,8 +13,8 @@ import {
   setAsideIds,
   windowGaps,
   windowKey,
-} from '../../web/src/app/chat.ts'
-import type { ChatPart, QuietGroup, WorkRun } from '../../web/src/app/chat.ts'
+} from '../../web/src/app/compact.ts'
+import type { CompactPart, QuietGroup, WorkRun } from '../../web/src/app/compact.ts'
 
 let nextId = 1
 const entry = (kind: string, message?: object, data?: object) =>
@@ -37,15 +37,15 @@ const names = new Set(['message', 'branch'])
 const visible = (block: { name: string }) => names.has(block.name)
 
 /** Rows as ids: `n` a whole entry, `n:a,b` its blocks, `[…] ×steps` a folded run. */
-const shape = (rows: (ChatPart | WorkRun)[]) =>
+const shape = (rows: (CompactPart | WorkRun)[]) =>
   rows.map((row) => ('work' in row ? `[${row.work.map(part).join(' ')}] ×${row.steps}` : part(row)))
-const part = (row: ChatPart) =>
+const part = (row: CompactPart) =>
   row.blocks ? `${row.entry.id}:${row.blocks.join(',')}` : String(row.entry.id)
 
-describe('chat rows', () => {
+describe('compact rows', () => {
   it('folds a run of tool calls between an input and its answer, and leaves the answer whole', () => {
     nextId = 1
-    const rows = chatRows(
+    const rows = compactRows(
       [
         user('check the tests'),
         system(),
@@ -60,7 +60,7 @@ describe('chat rows', () => {
 
   it('keeps visible tool calls as rows that split a run, in their order', () => {
     nextId = 1
-    const rows = chatRows(
+    const rows = compactRows(
       [
         assistant('toolUse', thinking(), call('message')),
         assistant('toolUse', call('bash'), call('branch'), call('note'), call('read')),
@@ -74,7 +74,7 @@ describe('chat rows', () => {
 
   it('ends a run at messages and other entries, which stay visible', () => {
     nextId = 1
-    const rows = chatRows(
+    const rows = compactRows(
       [
         entry('board.message', undefined, { from: 4, text: 'Landed' }),
         assistant('toolUse', call('bash')),
@@ -90,7 +90,7 @@ describe('chat rows', () => {
 
   it('shows a run without steps as it is, and errors whole', () => {
     nextId = 1
-    const rows = chatRows(
+    const rows = compactRows(
       [
         user('hello'),
         system(),
@@ -104,14 +104,14 @@ describe('chat rows', () => {
 
   it('folds the open run at the end of a working conversation', () => {
     nextId = 1
-    const rows = chatRows([user('go'), assistant('toolUse', call('bash'))], visible)
+    const rows = compactRows([user('go'), assistant('toolUse', call('bash'))], visible)
     expect(shape(rows)).toEqual(['1', '[2] ×1'])
   })
 
   it('keeps the calls its test keeps, by more than their name', () => {
     nextId = 1
     const script = { ...call('codemode'), arguments: { sent: true } }
-    const rows = chatRows(
+    const rows = compactRows(
       [assistant('toolUse', call('codemode'), script), assistant('stop', text('Asked.'))],
       (block) => block.name === 'codemode' && block.arguments?.sent === true,
     )
@@ -119,10 +119,10 @@ describe('chat rows', () => {
   })
 })
 
-describe('revealing a chat entry', () => {
+describe('revealing a compact entry', () => {
   it('finds the folded run an entry first shows in, past its first entry and in split responses', () => {
     nextId = 1
-    const rows = chatRows(
+    const rows = compactRows(
       [
         user('check'),
         assistant('toolUse', call('bash')),
@@ -144,7 +144,7 @@ describe('revealing a chat entry', () => {
 
   it('opens the run when a split response starts with folded work', () => {
     nextId = 1
-    const rows = chatRows(
+    const rows = compactRows(
       [user('go'), assistant('toolUse', call('bash'), call('message'))],
       visible,
     )
@@ -217,24 +217,24 @@ describe('set-aside rows', () => {
       grouped.map((row) =>
         'aside' in row
           ? `aside ${row.aside.length} ×${row.steps}`
-          : String((row as ChatPart).entry.id),
+          : String((row as CompactPart).entry.id),
       ),
     ).toEqual(['1', 'aside 3 ×2', '5', '6'])
   })
 })
 
 /** Rows as ids, a quiet group as `{…} ×steps` around its rows. */
-const quietShape = (rows: (ChatPart | WorkRun | QuietGroup)[]): string[] =>
+const quietShape = (rows: (CompactPart | WorkRun | QuietGroup)[]): string[] =>
   rows.map((row) =>
     'quiet' in row ? `{${quietShape([...row.quiet]).join(' ')}} ×${row.steps}` : shape([row])[0],
   )
-const verdict = ({ entry: { kind } }: ChatPart) =>
+const verdict = ({ entry: { kind } }: CompactPart) =>
   kind === 'note' ? true : kind === 'wake' ? ('hidden' as const) : false
 
 describe('quiet groups', () => {
   it('folds a stretch of background with the work and hidden rows between it, but not work that ends it', () => {
     nextId = 1
-    const rows = chatRows(
+    const rows = compactRows(
       [
         user('go'),
         entry('note'),
@@ -258,7 +258,7 @@ describe('quiet groups', () => {
 
   it('leaves a stretch with nothing quiet that shows as it is, and opens a group to reveal its entries', () => {
     nextId = 1
-    const rows = chatRows(
+    const rows = compactRows(
       [user('go'), entry('wake'), assistant('toolUse', call('bash')), entry('note')],
       visible,
     )
@@ -275,9 +275,9 @@ describe('quiet groups', () => {
     nextId = 1
     const earlier = entry('note')
     const later = [entry('note'), assistant('toolUse', call('bash')), entry('note'), user('next')]
-    const before = groupQuiet(chatRows(later, visible), verdict)[0] as QuietGroup
+    const before = groupQuiet(compactRows(later, visible), verdict)[0] as QuietGroup
     const opened = openIn(new Set(), before, true)
-    const after = groupQuiet(chatRows([earlier, ...later], visible), verdict)[0] as QuietGroup
+    const after = groupQuiet(compactRows([earlier, ...later], visible), verdict)[0] as QuietGroup
     // Its first part, and so the key a group was known by, changed.
     expect(partsOf(after)[0].entry).toBe(earlier)
     expect(isOpenIn(opened, after)).toBe(true)
@@ -301,7 +301,7 @@ describe('quiet groups', () => {
 
   it('opens the run that holds an entry inside a group', () => {
     nextId = 1
-    const rows = chatRows(
+    const rows = compactRows(
       [user('go'), entry('wake'), assistant('toolUse', call('bash')), entry('note')],
       visible,
     )

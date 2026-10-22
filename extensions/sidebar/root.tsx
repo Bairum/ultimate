@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { cn, formatTokens, Provided, useAction, useDocOf, useEvents, useUltimate } from '@/sdk'
 import { MEMORY_PANEL, MemoryDoc, TallyDoc } from '../lineage/ui.tsx'
 import { Committed } from '../coding-tools/ui.tsx'
-import { BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
+import { MessagesDoc, conversationState, emptyMessages } from '../messages/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { CommitCount, ProgressAction, Review, useWorkspaceIndex } from '../workspaces/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
@@ -47,7 +47,7 @@ function useBranchState(
   parked = false,
 ) {
   const index = useWorkspaceIndex()
-  const board = useDocOf(1, BoardDoc) ?? emptyBoard
+  const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const runState = useOverview()[conversation.id]?.runState
   const primary = useDocOf(1, StandingDoc)?.ultimate
   const queued = index.queue.find((item) => item.conversationId === conversation.id)
@@ -58,7 +58,7 @@ function useBranchState(
   // The sidebar's one conversation state; `working` also counts its subagents' runs.
   const state = working
     ? 'working'
-    : conversationState({ id: conversation.id, kind: 'other', runState, primary }, board)
+    : conversationState({ id: conversation.id, kind: 'other', runState, primary }, log)
   if (state === 'working')
     return {
       label: phase && !phase.waiting ? phase.word : 'working',

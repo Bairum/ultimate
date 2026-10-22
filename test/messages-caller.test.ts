@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import type { JsonValue } from '@earendil-works/chord'
 import type { EntryRecord } from '@earendil-works/pi-durable'
-import { actions } from '../extensions/board/server.ts'
+import { actions } from '../extensions/messages/server.ts'
 import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 

@@ -6,7 +6,7 @@ import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterAll, expect, it } from 'vitest'
 import { context } from '../../server/harness.ts'
-import { Board } from '../../extensions/board/api.ts'
+import { Messages } from '../../extensions/messages/api.ts'
 import { fauxServer, post, removeTemp, sourceCopy, temp, until } from '../helpers.ts'
 
 type Server = Awaited<ReturnType<typeof fauxServer>>
@@ -59,7 +59,7 @@ async function ultimate(userHome: string, ultimateRoot: string, name: string) {
     })
   ).data.result as ConversationId
   const log = async () =>
-    (await server.harness.snapshot(Board, ROOT_CONVERSATION_ID, context))?.messages ?? []
+    (await server.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context))?.messages ?? []
   return { server, agent, seen, log }
 }
 
