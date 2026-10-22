@@ -6,13 +6,15 @@ for @ultimate and the dream branch, is in [DREAM.md](DREAM.md); this file is the
 1. The user presses **Dream** (Memory panel header or ⌘K "Dream…"). The modal shows `preflight`: conversations at work
    besides @ultimate block a start, as does a session still open.
 2. User-only `start` refuses the same way, records session N in `dream.sessions` on conversation 1 and submits a
-   `dream.started` input to @ultimate (request id `dream:start:N`, a follow-up when it is busy).
+   `dream.started` input to @ultimate (request id `dream.started:N`, a follow-up when it is busy). The input goes
+   through a `dream.deliver` task created in the session's own commit, so a crash cannot strand a session.
 3. @ultimate starts one branch that runs the five passes (memory, failures, tools, corrections, codify) as
    `dream-pass` subagents (`agents/dream-pass.md`), reporting each with `pass`. Its first report names it the
    session's `dreamer`.
 4. The branch files the journal with `journal`: exactly three `learned` lines, Markdown `text` and the proposals. It
-   writes once per session: a second call returns the filed journal. A passive `dream.journal` entry (request id
-   `dream:journal:N`) goes into @ultimate's conversation; its model text lists the proposal ids.
+   writes once per session: a second call, even after the session ended, returns the filed journal. A passive
+   `dream.journal` entry (request id `dream.journal:N`, delivered the same way) goes into @ultimate's conversation;
+   its model text lists the proposal ids.
 5. The branch answers @ultimate with a `Decisions:` block. @ultimate records each decision with `decide`: `approved`
    with the branch doing it, `applied` (a memory change it made with `remember`) or `rejected`.
 6. Reactor `dream/landed` marks approved proposals `landed` with the sha when their branch's submission lands. A
