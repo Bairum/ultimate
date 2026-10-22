@@ -12,16 +12,23 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn, defineWebExtension, Fold, useToolDuration, useUltimate } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
-import { Dot, Restore, states, useOpenSubscription, useSubscriptions, worst } from './parts.tsx'
+import {
+  Dot,
+  openSubscriptionsPanel,
+  states,
+  useOpenSubscription,
+  useSubscriptions,
+  worst,
+} from './parts.tsx'
 import type { State } from './parts.tsx'
 import { WatchingSection } from './sidebar.tsx'
-import { Subscriptions } from './surface.tsx'
+import { SubscriptionsPanel } from './panel.tsx'
 
 /** The status-line chip: how many subscriptions, coloured by the worst; gone while there are none. */
 function Chip() {
-  const { showSurface, surface } = useUltimate()
-  // Slow outside the surface: the chip only needs to notice a failure within a few seconds.
-  const { data } = useSubscriptions(surface === 'subscriptions' ? 2000 : 5000)
+  const shell = useUltimate()
+  // The chip only needs to notice a failure within a few seconds; the open panel polls faster for everyone.
+  const { data } = useSubscriptions(5000)
   const list = data ?? []
   const state = worst(list)
   if (!state) return null
@@ -37,7 +44,7 @@ function Chip() {
         (state === 'failed' || state === 'investigating') && states[state].text,
       )}
       data-subscriptions-chip={state}
-      onClick={() => showSurface('subscriptions')}
+      onClick={() => openSubscriptionsPanel(shell)}
       title={counts.join(' · ') || 'Subscriptions'}
       type="button"
     >
@@ -105,7 +112,7 @@ const card = (kind: Kind) =>
             <button
               className="ml-auto shrink-0 cursor-pointer text-muted-foreground hover:text-foreground hover:underline"
               onClick={() => open(id)}
-              title={`Show ${id} in Subscriptions`}
+              title={`Show ${id}'s agent and script`}
               type="button"
             >
               open {id}
@@ -136,7 +143,7 @@ const touched = (call: ToolCallView) =>
 function SubscriptionCall({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   const open = useOpenSubscription()
-  const { showSurface } = useUltimate()
+  const shell = useUltimate()
   const action = words(call.args.action) || '…'
   const id = touched(call)
   const ask = words(call.args.ask)
@@ -173,9 +180,9 @@ function SubscriptionCall({ call }: { call: ToolCallView }) {
         />
         <Button
           className="mr-1 h-6 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
-          onClick={() => (id ? open(id) : showSurface('subscriptions'))}
+          onClick={() => (id ? open(id) : openSubscriptionsPanel(shell))}
           size="sm"
-          title={id ? `Show ${id} in Subscriptions` : 'Show Subscriptions'}
+          title={id ? `Show ${id}'s agent and script` : 'Show Subscriptions'}
           variant="ghost"
         >
           <RadarIcon className="size-3" />
@@ -205,28 +212,26 @@ function SubscriptionCall({ call }: { call: ToolCallView }) {
 }
 
 export default defineWebExtension({
-  surfaces: [
+  panels: [
     {
       id: 'subscriptions',
       title: 'Subscriptions',
       icon: RadarIcon,
-      description:
-        'Background watches that wake conversations, and the agents that keep them running',
-      order: 40,
-      component: Subscriptions,
+      component: SubscriptionsPanel,
+      // A working tab after Activity; also opened from WATCHING, the status-line chip, cards and ⌘K.
+      order: 2.5,
     },
   ],
   commands: [
     {
       id: 'subscriptions.open',
-      title: 'Open Subscriptions',
-      run: (context) => context.showSurface('subscriptions'),
+      title: 'Subscriptions…',
+      run: openSubscriptionsPanel,
     },
   ],
   slots: {
     'statusline.right': [{ component: Chip, order: -2 }],
     'sidebar.top': [{ component: WatchingSection, order: -20 }],
-    overlay: [Restore],
   },
   tools: { subscription: SubscriptionCall },
   entries: {

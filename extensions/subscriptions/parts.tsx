@@ -1,5 +1,5 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react'
-import { api, cn, getState, useExtensionUiState, useUltimate } from '@/sdk'
+import { useEffect, useSyncExternalStore } from 'react'
+import { api, cn, useUltimate } from '@/sdk'
 import { ListAction } from './refs.ts'
 import type { Subscription, SubscriptionListItem } from './types.ts'
 
@@ -63,7 +63,7 @@ export function stateLine(sub: SubscriptionListItem, now: number) {
 
 type Polled = { data?: SubscriptionListItem[]; error?: unknown }
 /**
- * One list poll for the whole page: the chip, the sidebar and the surface share it, and it runs at the fastest rate
+ * One list poll for the whole page: the chip, the sidebar and the panel share it, and it runs at the fastest rate
  * any of them asks for.
  */
 const poll = {
@@ -117,84 +117,32 @@ export function useSubscriptions(ms: number | false): Polled {
   return useSyncExternalStore(listen, () => poll.state)
 }
 
-/**
- * Leaving the Subscriptions surface shows again the conversation the user was on when they entered it, but only while
- * the shell still shows an agent the surface itself opened this visit (`opened`; Back among them counts): anywhere
- * else the user navigated meanwhile stays.
- * `keepAgent` skips it once, for "open conversation", which goes to the agent. `pick` is a subscription chosen outside
- * the surface (sidebar, chip, card) that the surface opens once it is on screen.
- */
-let keepAgent = false
-const opened = new Set<number>()
-let pick: string | undefined
-/** Show agent conversation `id` on behalf of the surface, so leaving it may undo the switch. */
-export function showAgent(switchConversation: (id: number) => void, id: number) {
-  opened.add(id)
-  switchConversation(id)
-}
-/** The subscription picked from outside the surface, once: the surface consumes it. */
-export function takePick() {
-  const id = pick
-  pick = undefined
-  return id
-}
-/** The conversation the shell shows or is loading: set at once on a switch, unlike the loaded view. */
-const requested = () => getState().requested
-/** Leave the surface for the Agent surface and stay on the subscription's agent rather than restore. */
-export function useOpenAgent() {
-  const { showSurface } = useUltimate()
-  return () => {
-    keepAgent = true
-    showSurface('agent')
-  }
-}
-
-/** Mounted on every surface: remembers the conversation on entering Subscriptions and restores it on leaving. */
-export function Restore() {
-  const { surface, conversationId, switchConversation } = useUltimate()
-  // The conversation the other surfaces show, followed only while they are on screen, and the surface last seen.
-  const shown = useRef<number | undefined>(undefined)
-  const was = useRef<string | undefined>(undefined)
-  const returnTo = useRef<number | undefined>(undefined)
-  useEffect(() => {
-    if (surface !== 'subscriptions') shown.current = requested() ?? conversationId
-  }, [surface, conversationId])
-  useEffect(() => {
-    const before = was.current
-    was.current = surface
-    // The first render of a page has no previous surface: nothing was entered or left.
-    if (before === undefined || before === surface) return
-    if (surface === 'subscriptions') returnTo.current = shown.current
-    else if (before === 'subscriptions') {
-      const to = returnTo.current
-      const now = requested()
-      // Only undo what the surface did: a conversation picked on the way out (the @ultimate button) stays.
-      if (!keepAgent && now !== undefined && opened.has(now) && to !== undefined && to !== now)
-        switchConversation(to)
-      keepAgent = false
-      opened.clear()
-      returnTo.current = undefined
-    }
-    // Only a change of surface acts; the conversation is read at that moment.
-    // oxlint-disable-next-line react/exhaustive-deps -- conversationId is read, not followed
-  }, [surface])
-  return null
+/** Opens the Subscriptions panel, on the Agent surface: other surfaces, such as System, have no panels. */
+export function openSubscriptionsPanel(shell: {
+  showSurface: (id: string) => void
+  openPanel: (id?: string) => void
+}) {
+  shell.showSurface('agent')
+  shell.openPanel('subscriptions')
 }
 
 /**
- * Opens subscription `id` in the surface; the surface then shows its agent's conversation on top. The shown
- * conversation stays put until then, so leaving the surface returns to it.
+ * Opens subscription `id`: its agent's conversation in the middle and the Subscriptions panel beside it, which then
+ * shows its script. An id the list does not know yet (a card for a subscription just created) is looked up first;
+ * one that is gone opens the panel on the list.
  */
 export function useOpenSubscription() {
-  const [, setSelected] = useExtensionUiState<string | null>('selected', null)
-  const { showSurface, surface, switchConversation } = useUltimate()
+  const { switchConversation, ...shell } = useUltimate()
+  const agent = (id: string) => poll.state.data?.find((sub) => sub.id === id)?.conversationId
+  const show = (id: string) => {
+    const to = agent(id)
+    if (to !== undefined) switchConversation(to)
+    // After the switch, which closes an overlaid panel on a phone.
+    openSubscriptionsPanel(shell)
+  }
   return (id: string) => {
-    setSelected(id)
-    const agent = poll.state.data?.find((sub) => sub.id === id)?.conversationId
-    // Already on the surface (a card in its transcript, the chip): switch now; else the surface does on arrival.
-    if (surface === 'subscriptions' && agent !== undefined)
-      return showAgent(switchConversation, agent)
-    pick = id
-    showSurface('subscriptions')
+    if (agent(id) !== undefined) return show(id)
+    // oxlint-disable-next-line typescript/no-floating-promises -- refreshSubscriptions catches failures and publishes them in poll.state.error.
+    void refreshSubscriptions().then(() => show(id))
   }
 }

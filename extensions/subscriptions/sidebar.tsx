@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import { ChevronRightIcon } from 'lucide-react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { cn, useExtensionUiState, useNow } from '@/sdk'
+import { cn, useExtensionUiState, useNow, useUltimate } from '@/sdk'
 import { Dot, since, states, useOpenSubscription, useSubscriptions, worst } from './parts.tsx'
 import type { SubscriptionListItem } from './types.ts'
 
 const FIRST = 5
 const active = (sub: SubscriptionListItem) => sub.state !== 'stopped' && sub.state !== 'done'
 
-/** A few words of state for a row: fewer than the surface's line, since the sidebar is narrow. */
+/** A few words of state for a row: fewer than the panel's line, since the sidebar is narrow. */
 function short(sub: SubscriptionListItem, now: number) {
   if (sub.state === 'running')
     return sub.fires > 0
@@ -19,11 +19,15 @@ function short(sub: SubscriptionListItem, now: number) {
   return states[sub.state].word
 }
 
-/** The Agent sidebar's Watching section: active subscriptions, worst first; hidden while none is active. */
+/**
+ * The Agent sidebar's Watching section: active subscriptions, worst first; hidden while none is active. The heading
+ * folds it; its count opens the Subscriptions panel with every subscription, stopped ones included.
+ */
 export function WatchingSection() {
   const { data } = useSubscriptions(5000)
   const now = useNow(10_000)
   const open = useOpenSubscription()
+  const { openPanel } = useUltimate()
   const [expanded, setExpanded] = useExtensionUiState('sidebarOpen', true)
   const [all, setAll] = useState(false)
   const order = ['failed', 'investigating', 'writing', 'running']
@@ -41,18 +45,25 @@ export function WatchingSection() {
       onOpenChange={setExpanded}
       open={expanded}
     >
-      <CollapsibleTrigger className="group/watching mx-2 flex h-6 cursor-pointer items-center gap-1 rounded-md px-1 font-mono text-[9.5px] tracking-wider text-muted-foreground/70 uppercase outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
-        <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/watching:rotate-90" />
-        Watching
-        <span
+      <div className="mx-2 flex h-6 items-center gap-1">
+        <CollapsibleTrigger className="group/watching flex h-6 cursor-pointer items-center gap-1 rounded-md px-1 font-mono text-[9.5px] tracking-wider text-muted-foreground/70 uppercase outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
+          <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/watching:rotate-90" />
+          Watching
+        </CollapsibleTrigger>
+        <button
+          aria-label={`${list.length} watching: show all subscriptions`}
           className={cn(
-            'rounded-full bg-sidebar-accent px-1.5 text-[9.5px] leading-4 tracking-normal tabular-nums',
+            'cursor-pointer rounded-full bg-sidebar-accent px-1.5 font-mono text-[9.5px] leading-4 tabular-nums outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
             alarm ? states[state].text : 'text-foreground/80',
           )}
+          data-subscriptions-open
+          onClick={() => openPanel('subscriptions')}
+          title="Show all subscriptions"
+          type="button"
         >
           {list.length}
-        </span>
-      </CollapsibleTrigger>
+        </button>
+      </div>
       <CollapsibleContent className="flex flex-col gap-px">
         {(all ? list : list.slice(0, FIRST)).map((sub) => (
           <button
