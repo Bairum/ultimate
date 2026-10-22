@@ -12,6 +12,7 @@ import {
   useConversation,
   useConversations,
   useFold,
+  setAsideIds,
   useSystem,
   useTranscript,
 } from '@/sdk'
@@ -478,7 +479,12 @@ function SystemEntry({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   const entries = useTranscript()
   const id = useConversation((conversation) => conversation.id)
   const index = entries.findIndex((candidate) => candidate.id === entry.id)
-  const diff = useMemo(() => (index < 0 ? undefined : diffAt(entries, index)), [entries, index])
+  const diff = useMemo(() => {
+    if (index < 0) return undefined
+    // Patches a go-back set aside left the model's context; a set-aside one still shows what it changed back then.
+    const aside = setAsideIds(entries)
+    return diffAt(entries, index, aside.has(entries[index].id) ? undefined : aside)
+  }, [entries, index])
   if (!systemOf(entry) || !diff) return core
   if (opensContext(entries, index, Math.max(0, ownStart(entries, id)))) return null
   if (removesAll(entry) && systemOf(entries[index + 1])) return null

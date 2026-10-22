@@ -47,6 +47,8 @@ export {
 export { ExtensionBoundary } from '../app/boundary.tsx'
 /** A card that folds to one quiet line in a chat, and whether one is open; the reader's choice survives reloads. */
 export { Fold, useFold } from '../app/fold.tsx'
+/** The entries a go-back set aside, which the model's context leaves out. */
+export { setAsideIds } from '../app/chat.ts'
 /** A message's footer as the transcript shows it: details such as usage, time, copy, go back and a reference link. */
 export { MessageActions } from '../app/message-actions.tsx'
 /** A turn of the user's as the transcript shows a typed one; `text` gives the words a delivered message carries. */

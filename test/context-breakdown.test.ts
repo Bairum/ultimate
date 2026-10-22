@@ -1,5 +1,6 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
+import { setAsideIds } from '../web/src/app/chat.ts'
 import {
   breakdownAt,
   diffAt,
@@ -34,6 +35,8 @@ const user = (text: string) =>
   entry('pi.user', {
     model: [{ role: 'user', content: text, timestamp: 0 }],
   })
+/** An entry of the fork's source, #1. */
+const source = (fields: object) => ({ ...fields, conversationId: 1 }) as unknown as EntryRecord
 const read = { name: 'read', description: 'Read a file', parameters: { type: 'object' } }
 const bash = { name: 'bash', description: 'Run a command', parameters: { type: 'object' } }
 
@@ -182,7 +185,6 @@ it('shows the recorded model, and the configured one marked as such only before 
 })
 
 it('carries a fork the entries its source’s compaction kept before the marker', () => {
-  const source = (fields: object) => ({ ...fields, conversationId: 1 }) as unknown as EntryRecord
   const dropped = source(user('dropped by the compaction'))
   const kept = source(user('k'.repeat(35)))
   const compaction = source(
@@ -195,6 +197,21 @@ it('carries a fork the entries its source’s compaction kept before the marker'
   expect(breakdown.injected?.label).toBe('inherited history · 3 messages')
   expect(breakdown.injected?.tokens).toBe(20 + 10 + 10)
   expect(breakdown.injected?.content).not.toContain('dropped')
+})
+
+it('replays without patches a go-back set aside: change, go back, change again shows a diff', () => {
+  const baseline = system({ a: 'one' })
+  const point = user('try it')
+  const first = system({ a: 'two' })
+  const back = entry('lineage.rewound', { data: { setAside: point.id } })
+  const again = system({ a: 'two' })
+  const entries = [baseline, point, first, back, again]
+  const aside = setAsideIds(entries)
+  expect(aside.has(first.id)).toBe(true)
+  expect(diffAt(entries, 4).sections).toEqual([])
+  expect(
+    diffAt(entries, 4, aside).sections.map((section) => [section.key, section.change]),
+  ).toEqual([['a', 'changed']])
 })
 
 it('finds where a fork’s own entries start', () => {

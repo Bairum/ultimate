@@ -84,13 +84,21 @@ export const toolTokens = (tool: { name: string; description: string; parameters
     JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }),
   )
 
-/** The prompt replayed from the context start before `index` through `index`: `null` removes, re-adding appends. */
-export function promptAt(entries: readonly EntryRecord[], index: number): Prompt {
+/**
+ * The prompt replayed from the context start before `index` through `index`: `null` removes, re-adding appends. Entries
+ * in `aside`, which a go-back set aside (`setAsideIds`), left the model's context and do not count.
+ */
+export function promptAt(
+  entries: readonly EntryRecord[],
+  index: number,
+  aside: ReadonlySet<number> = new Set(),
+): Prompt {
   let from = index
   while (from >= 0 && !startsContext(entries[from])) from--
   const sections = new Map<string, string>()
   const tools = new Map<string, NonNullable<SystemMessage['toolsAdded']>[number]>()
   for (let at = from + 1; at <= index; at++) {
+    if (aside.has(entries[at].id)) continue
     const message = systemOf(entries[at])
     if (!message) continue
     for (const [key, value] of Object.entries(message.sections ?? {})) {
@@ -249,9 +257,13 @@ export function breakdownAt(entries: readonly EntryRecord[], anchor: number): Br
  * How the `pi.system` at `index` changed the prompt. A remove-all patch right before it belongs to it: the diff is
  * taken against the state before that one, so a reorder shows only what really changed.
  */
-export function diffAt(entries: readonly EntryRecord[], index: number): Diff {
-  const before = promptAt(entries, removesAll(entries[index - 1]) ? index - 2 : index - 1)
-  const after = promptAt(entries, index)
+export function diffAt(
+  entries: readonly EntryRecord[],
+  index: number,
+  aside: ReadonlySet<number> = new Set(),
+): Diff {
+  const before = promptAt(entries, removesAll(entries[index - 1]) ? index - 2 : index - 1, aside)
+  const after = promptAt(entries, index, aside)
   const sections: SectionChange[] = []
   const old = new Map(before.sections.map((section) => [section.key, section]))
   for (const section of after.sections) {
