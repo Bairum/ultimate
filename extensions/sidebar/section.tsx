@@ -6,21 +6,18 @@ import { useSidebarState } from './state.tsx'
 
 /**
  * A folding sidebar section: a quiet mono heading with a count bubble, as subscriptions' Watching and automations'
- * Scheduled sections draw theirs, and its rows. `inset` sits it under a row (the lander's Landed) instead of on its
- * own; `rule` closes it with the hairline the sidebar's groups end with. The fold state is kept per `id`.
+ * Scheduled sections draw theirs, and its rows. `rule` closes it with the hairline the sidebar's groups end with. The fold state is kept per `id`.
  */
 export function Section({
   id,
   label,
   count,
-  inset,
   rule,
   children,
 }: {
   id: string
   label: string
   count: number
-  inset?: boolean
   rule?: boolean
   children: ReactNode
 }) {
@@ -36,12 +33,7 @@ export function Section({
       }
       open={open}
     >
-      <CollapsibleTrigger
-        className={cn(
-          'group/section mx-2 flex h-6 cursor-pointer items-center gap-1 rounded-md px-1 font-mono text-[9.5px] tracking-wider text-muted-foreground/70 uppercase outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
-          inset && 'ml-[42px]',
-        )}
-      >
+      <CollapsibleTrigger className="group/section mx-2 flex h-6 cursor-pointer items-center gap-1 rounded-md px-1 font-mono text-[9.5px] tracking-wider text-muted-foreground/70 uppercase outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
         <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/section:rotate-90" />
         {label}
         <span className="rounded-full bg-sidebar-accent px-1.5 text-[9.5px] leading-4 tracking-normal text-foreground/80 tabular-nums">
@@ -58,19 +50,14 @@ export function More({
   hidden,
   all,
   onToggle,
-  inset,
 }: {
   hidden: number
   all: boolean
   onToggle: () => void
-  inset?: boolean
 }) {
   return (
     <button
-      className={cn(
-        'mx-2 h-5 cursor-pointer rounded-md text-left font-mono text-[10px] text-muted-foreground/70 outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
-        inset ? 'pl-[46px]' : 'pl-[26px]',
-      )}
+      className="mx-2 h-5 cursor-pointer rounded-md pl-[26px] text-left font-mono text-[10px] text-muted-foreground/70 outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
       onClick={onToggle}
       type="button"
     >

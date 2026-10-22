@@ -1,14 +1,8 @@
-import { EllipsisIcon, FoldVerticalIcon, MessageCircleIcon, ScrollTextIcon } from 'lucide-react'
+import { ScrollTextIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useEffect, useRef } from 'react'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { api, cn, formatTokens, Provided, useAction, useDocOf, useEvents, useUltimate } from '@/sdk'
-import { CompactAction, MEMORY_PANEL, MemoryDoc, TallyDoc } from '../lineage/ui.tsx'
+import { cn, formatTokens, Provided, useAction, useDocOf, useEvents, useUltimate } from '@/sdk'
+import { MEMORY_PANEL, MemoryDoc, TallyDoc } from '../lineage/ui.tsx'
 import { Committed } from '../coding-tools/ui.tsx'
 import { BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
@@ -305,19 +299,17 @@ const kinds = [
 
 /**
  * A root's project memory as one row: what every new branch starts from, counted by kind, with the brief's size; a
- * click opens the Memory panel. Its tally, the browsable history behind it, is a quiet `context` link beside it. A
- * root without memories yet shows its context's size and opens the context.
+ * click opens the Memory panel. Its tally, the browsable history behind it, is a quiet History link under it, whose
+ * footer compacts it. A root without memories yet shows its context's size and opens the context.
  */
 export function MemoryRow({
   conversation,
   shown,
   working,
-  onTalk,
 }: {
   conversation: ConversationSummary
   shown: boolean
   working?: 'self' | 'subagents'
-  onTalk: () => void
 }) {
   const actions = useUltimate()
   const id = conversation.id
@@ -334,10 +326,10 @@ export function MemoryRow({
     actions.switchConversation(id)
   }
   return (
-    <div className="group relative" data-conversation={id} data-root-row={id}>
+    <div data-conversation={id} data-root-row={id}>
       <button
         aria-label={`Project memory of #${id}`}
-        className="mx-2 flex h-11 w-[calc(100%-1rem)] min-w-0 cursor-pointer items-center gap-2.5 rounded-md pr-7 pl-2 text-left outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+        className="mx-2 flex h-11 w-[calc(100%-1rem)] min-w-0 cursor-pointer items-center gap-2.5 rounded-md pr-2 pl-2 text-left outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
         onClick={() => (memories.length ? actions.openPanel(MEMORY_PANEL) : openContext())}
         title={
           memories.length
@@ -384,31 +376,9 @@ export function MemoryRow({
         type="button"
       >
         <ScrollTextIcon className="size-3 shrink-0" />
-        <span className="truncate">Project context</span>
+        <span className="truncate">History</span>
         <span className="shrink-0 text-muted-foreground/50">#{id}</span>
       </button>
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger
-          aria-label="Root actions"
-          className="invisible absolute top-3 right-3 flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none group-focus-within:visible group-hover:visible pointer-coarse:visible hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:visible data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
-        >
-          <EllipsisIcon className="size-3.5" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-48 [&_[role=menuitem]]:cursor-pointer">
-          <DropdownMenuItem
-            className="text-[12.5px]"
-            disabled={tally?.since === undefined || working === 'self'}
-            onSelect={() => void api.action(CompactAction, { id })}
-          >
-            <FoldVerticalIcon />
-            Compact context
-          </DropdownMenuItem>
-          <DropdownMenuItem className="text-[12.5px]" onSelect={onTalk}>
-            <MessageCircleIcon />
-            Talk to @ultimate
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
     </div>
   )
 }

@@ -64,14 +64,14 @@ export function Landed({ landings, now }: { landings: readonly Landing[]; now: n
   const groups = groupLandings(landings)
   if (!groups.length) return null
   return (
-    <Section count={groups.length} id="landed" inset label="Landed">
+    <Section count={groups.length} id="landed" label="Landed">
       <ul className="flex flex-col">
         {(all ? groups : groups.slice(0, FIRST)).map((group) => (
           <LandedRow group={group} key={group.landings[0].entry} now={now} />
         ))}
       </ul>
       {groups.length > FIRST && (
-        <More all={all} hidden={groups.length - FIRST} inset onToggle={() => setAll(!all)} />
+        <More all={all} hidden={groups.length - FIRST} onToggle={() => setAll(!all)} />
       )}
     </Section>
   )
@@ -91,7 +91,7 @@ function LandedRow({ group, now }: { group: LandingGroup; now: number }) {
   }
   return (
     <li
-      className="mx-2 flex h-6 min-w-0 items-center gap-1.5 rounded-md pr-2 pl-[38px] font-mono text-[10px] text-muted-foreground hover:bg-sidebar-accent/50"
+      className="mx-2 flex h-6 min-w-0 items-center gap-1.5 rounded-md pr-2 pl-2.5 font-mono text-[10px] text-muted-foreground hover:bg-sidebar-accent/50"
       data-landed={latest.sha}
     >
       <button

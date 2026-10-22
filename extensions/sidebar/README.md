@@ -17,7 +17,7 @@ message. Clicking it opens @ultimate on the Agent surface through `subagents.sta
 its conversation exists. Below it, an Agents group lists the lander first, then the other ownerless top-level standing
 agents (label `agent`) by ID. These rows are never concluded or hidden and show no summary or feature:
 @lander shows its state (`landing`, `fixing`, `diagnosing`, `working` or `idle`), `queue N` while submissions wait,
-its latest landing's short sha (green) and feature tag (truncated, title on hover), and its age; other agents show `working` or `idle` and the age. Their menu only
+and the age of its latest landing (what landed is its Landed section's first row); other agents show `working` or `idle` and the age. Their menu only
 compacts the context; they are never renamed, cleared or concluded.
 
 The title bar's `@ultimate` button (`titlebar.left`, beside the surfaces, also on phones) opens @ultimate the same way
@@ -27,8 +27,8 @@ Every section of the sidebar folds the same way (`Section`, `section.tsx`): a qu
 a count bubble, open by default, its fold state kept per section in `ext.conversations.closedSections`; the Watching
 and Scheduled sections of the `sidebar.top` slot draw the same heading. Top to bottom:
 
-- **@ultimate**, then the **Agents** group: the lander first, with its **Landed · N** section folded under its row,
-  then other standing agents.
+- **@ultimate**, then the **Agents** group: the lander first, with its **Landed · N** section right under its row,
+  aligned with the other sections, then other standing agents.
 - **Landed**: the latest landings of every root (lineage's `recent {id, types: ['landed'], limit: 20}`), newest
   first, all landings of one feature folded into one row: its feature tag (its title when it has none), `×N` when it
   landed more than once, the commits summed, and the age of the newest. Clicking the row opens the branch that landed
@@ -40,10 +40,9 @@ and Scheduled sections of the `sidebar.top` slot draw the same heading. Top to b
 - **Memory**: one row per root (`MemoryRow`, `root.tsx`) with a brain mark, the brief's size (what every new branch
   starts from; the whole context's while it has no memories) and its memories counted by kind (`4 decisions · 5 facts
 · 3 lessons`). Clicking it opens lineage's **Memory** panel, grouped into decisions, facts and lessons; a root with
-  no memories yet opens its context instead. Below it, a quiet **Project context #id** line opens the root's tally,
-  the browsable history (every branch, abstract and landing). Its `…` menu offers Compact context (lineage
-  `compact {id}`, only for a root that has a context) and Talk to @ultimate; a root is never renamed, cleared or
-  concluded here.
+  no memories yet opens its context instead. Below it, a quiet **History #id** line opens the root's tally, the
+  browsable history (every branch, abstract and landing), whose footer offers Compact (lineage `compact {id}`) and
+  Talk to @ultimate. The row has no menu; a root is never renamed, cleared or concluded here.
 - The `sidebar.top` slot: background work that optional extensions contribute without the sidebar importing them,
   subscriptions' **Watching** and automations' **Scheduled**, each up to five compact rows with `+N more`, and its own
   bottom rule. Each hides while it has nothing active.

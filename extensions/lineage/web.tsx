@@ -37,7 +37,7 @@ import { store } from '@/sdk/client'
 import { ConversationRef, Unsummarized } from '../conversations/ui.tsx'
 import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open } from '../workspaces/ui.tsx'
-import { ForgetAction, MemoryDoc, TallyDoc } from './refs.ts'
+import { CompactAction, ForgetAction, MemoryDoc, TallyDoc } from './refs.ts'
 import type { MemoryItem } from './refs.ts'
 import { column, EmptyRoot, MEMORY_PANEL, useRoots } from './ui.tsx'
 import { GoBackAction, Rewound, RewoundDependent } from './rewind.tsx'
@@ -462,8 +462,21 @@ function TallyFooter({
               · {formatTokens((brief ?? tokens)!)} tokens
             </span>
           )}
+          {tokens !== undefined && (
+            <button
+              className="ml-auto shrink-0 cursor-pointer hover:text-foreground hover:underline"
+              onClick={() => void api.action(CompactAction, { id })}
+              title="Have @ultimate reshape this history into a shorter one; nothing is deleted"
+              type="button"
+            >
+              Compact
+            </button>
+          )}
           <button
-            className="ml-auto shrink-0 cursor-pointer text-brand hover:underline"
+            className={cn(
+              'shrink-0 cursor-pointer text-brand hover:underline',
+              tokens === undefined && 'ml-auto',
+            )}
             onClick={() => void talkToUltimate(actions)}
             type="button"
           >
@@ -654,7 +667,7 @@ const kindSections = [
 
 /**
  * The Memory panel: each root's project memory, what every new branch starts from, grouped into decisions, facts and
- * lessons, newest first, with the brief's size. A row unfolds its body and source; @ultimate maintains it.
+ * lessons, newest first. A row unfolds its body and source; @ultimate maintains it.
  */
 function MemoryPanel() {
   const roots = useRoots() ?? []
@@ -669,29 +682,13 @@ function MemoryPanel() {
 
 function RootMemory({ root, label }: { root: number; label: boolean }) {
   const memories = useDocOf(root, MemoryDoc)?.memories ?? {}
-  const tally = useDocOf(root, TallyDoc)
-  const actions = useUltimate()
   const now = useNow(60_000)
   const slugs = Object.keys(memories).toSorted(
     (a, b) => memories[b].updated - memories[a].updated || a.localeCompare(b),
   )
   return (
-    <section className="px-3 pt-3" data-lineage-memory={root}>
-      <div className="flex min-w-0 items-center gap-2 font-mono text-[11px] text-muted-foreground">
-        {label && <span className="shrink-0 text-foreground">#{root}</span>}
-        <span className="min-w-0 truncate">
-          {tally?.briefTokens !== undefined
-            ? `${formatTokens(tally.briefTokens)} tokens · every new branch starts here`
-            : 'Every new branch starts here'}
-        </span>
-        <button
-          className="ml-auto shrink-0 cursor-pointer text-brand hover:underline"
-          onClick={() => void talkToUltimate(actions)}
-          type="button"
-        >
-          Talk to @ultimate
-        </button>
-      </div>
+    <section className="px-3" data-lineage-memory={root}>
+      {label && <p className="pt-3 font-mono text-[11px] text-foreground">#{root}</p>}
       {slugs.length === 0 ? (
         <p className="py-6 text-xs text-muted-foreground">
           No memories yet. @ultimate keeps decisions, facts and lessons here as branches land.

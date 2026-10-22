@@ -42,7 +42,7 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   landings recorded `base` uses the landing before it, which is where the lander's serial queue left the target.
   Catch-up notes and abstracts are left out. The sidebar's root row shows the landings.
   Workspaces' `github` action gives the root page's landing cards the same range.
-  `compact` `{ id, instructions? }` → `{ taskId }` starts the same compaction as `compact_tally`, for the root row's menu
+  `compact` `{ id, instructions? }` → `{ taskId }` starts the same compaction as `compact_tally`, for the history footer's Compact
   and the palette's Compact command on a root.
 - **Tally**: conversation-scoped doc `lineage.tally` (latest history) holds
   `{ abstracts: Record<string, { anchor, at, text, title?, feature? }>, tokens: number, briefTokens?: number, since?: number }`:

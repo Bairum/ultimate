@@ -294,7 +294,6 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
         <MemoryRow
           conversation={conversation}
           key={conversation.id}
-          onTalk={() => void talkToUltimate(actions)}
           shown={shown}
           working={working.get(conversation.id)}
         />
