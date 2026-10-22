@@ -144,6 +144,12 @@ async function held(
       : 0,
   }
 }
+/** Whether the source lists the path as a worktree; throws when the source cannot tell, so callers never guess. */
+async function listedBySource(workspace: WorkspaceIndex['items'][string]) {
+  return (await git(workspace.source, 'worktree', 'list', '--porcelain'))
+    .split('\n\n')
+    .some((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+}
 async function registeredCheckout(workspace: WorkspaceIndex['items'][string]) {
   if (!(await onDisk(workspace.path))) return false
   const listed = await git(workspace.path, 'worktree', 'list', '--porcelain').catch(
@@ -444,14 +450,15 @@ export function workspaces(host: Host) {
   }
   /**
    * The checkout recorded for `id` that release would act on: a registered worktree, or the leftover folder of one Git
-   * already removed (ignored files such as `.wrangler/` after `git worktree remove`) while the record still claims it.
-   * Once the record is removed, an unregistered folder at its path is someone else's.
+   * already removed (ignored files such as `.wrangler/` after `git worktree remove`) while a ready record still claims
+   * it. Registration is read from the source, and a failure to read it throws, so a folder whose own `.git` is broken
+   * never counts as a leftover. A removed or failed record's unregistered folder may be someone else's.
    */
   async function recordedCheckout(id: ConversationId, context: Context) {
     const workspace = await presentCheckout(id, context)
     if (!workspace) return undefined
-    const registered = await registeredCheckout(workspace)
-    if (!registered && workspace.state === 'removed') return undefined
+    const registered = await listedBySource(workspace)
+    if (!registered && workspace.state !== 'ready') return undefined
     return { workspace, registered }
   }
   /** The commits and uncommitted changes of each ready worktree among `ids`, without their subagents'. */
@@ -486,7 +493,7 @@ export function workspaces(host: Host) {
   ) {
     let item: KeptWork = { id, uncommitted: 0, unlanded: 0 }
     try {
-      if (await registeredCheckout(workspace)) {
+      if (await listedBySource(workspace)) {
         item = await changes(id, workspace)
         if (item.uncommitted || item.unlanded) {
           await host.harness().commit(async (tx) => {
@@ -938,7 +945,7 @@ export function workspaces(host: Host) {
       if (!workspace) throw new Error('Conversation has no workspace')
       if (workspace.state === 'preparing') throw new Error('Workspace is preparing')
       if (workspace.state !== 'removed') {
-        if (await registeredCheckout(workspace))
+        if (await listedBySource(workspace))
           await git(workspace.source, 'worktree', 'remove', workspace.path)
         await host.harness().commit(async (tx) => {
           ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'removed'

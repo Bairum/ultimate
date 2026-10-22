@@ -2866,6 +2866,34 @@ it.concurrent('release keeps the unlanded branch of a worktree Git already remov
   expect(await git(f.projectRoot, 'rev-parse', workspace.branch)).toBe(tip)
   expect(await readFile(join(workspace.path, '.wrangler/state.json'), 'utf8')).toBe('{}')
 })
+it.concurrent('release never removes a registered checkout whose .git file is broken', async () => {
+  const f = await fixture()
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  await writeFile(join(workspace.path, 'precious.txt'), 'keep me')
+  await writeFile(join(workspace.path, '.git'), 'gitdir: /nowhere\n')
+  await expect(f.service.release([id], context)).rejects.toThrow('not a git repository')
+  expect(await readFile(join(workspace.path, 'precious.txt'), 'utf8')).toBe('keep me')
+})
+it.concurrent('release leaves a folder that a failed preparation found at the path', async () => {
+  const f = await fixture()
+  const id = await f.create()
+  const workspace = (await f.service.get(id, context))!
+  await mkdir(workspace.path, { recursive: true })
+  await writeFile(join(workspace.path, 'foreign.txt'), 'not ours')
+  await f.service.ready(id, context)
+  expect((await f.service.get(id, context))!.state).toBe('failed')
+  expect(await f.service.release([id], context)).toEqual([
+    {
+      id,
+      uncommitted: 0,
+      unlanded: 0,
+      reason: expect.stringContaining('not a registered checkout'),
+    },
+  ])
+  expect(await readFile(join(workspace.path, 'foreign.txt'), 'utf8')).toBe('not ours')
+})
 
 it.concurrent('the tool gate blocks a checkout removed after the provider request began', async () => {
   const f = await fixture()
