@@ -9,7 +9,14 @@ import {
   ChatAnswer,
   MessageCall,
 } from './cards.tsx'
-import { chatQuiet, emptyBoard, answeredMessages, scriptMessaged, ultimateChat } from './data.tsx'
+import {
+  answeredMessages,
+  callerOf,
+  chatQuiet,
+  emptyBoard,
+  scriptMessaged,
+  ultimateChat,
+} from './data.tsx'
 import { BoardDoc } from './refs.ts'
 import type { BoardData } from './refs.ts'
 
@@ -29,16 +36,21 @@ function BoardAnswerLabel({ entry }: { entry: EntryRecord }) {
   ))
 }
 
-/** Stay mounted across surfaces so an Open click can reveal after Agent mounts and loads. */
+/**
+ * Stay mounted across surfaces so an Open click can reveal after Agent mounts and loads. `board:open` names the entry,
+ * or the tool call that sent a message (`call`), which reveals the response that made it once loaded.
+ */
 function BoardNavigation() {
   const { id, entries, loading } = useConversation()
   const { surface } = useUltimate()
-  const [target, setTarget] = useState<{ conversation: number; entry: number }>()
+  const [target, setTarget] = useState<{ conversation: number; entry?: number; call?: string }>()
   useEvent('board:open', (value) => setTarget(value as NonNullable<typeof target>))
   useEffect(() => {
     if (!target || surface !== 'agent' || id !== target.conversation || loading) return undefined
+    const entry = target.entry ?? (target.call && callerOf(entries, target.call.split('/')[0])?.id)
     const frame = requestAnimationFrame(() => {
-      events.emit('ultimate:reveal-entry', { conversationId: id, entryId: target.entry })
+      // A call older than the loaded page just opens the conversation at its end.
+      if (entry) events.emit('ultimate:reveal-entry', { conversationId: id, entryId: entry })
       setTarget(undefined)
     })
     return () => cancelAnimationFrame(frame)

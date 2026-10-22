@@ -93,7 +93,7 @@ function Primary({ parked }: { parked?: ReadonlySet<number> }) {
                         aria-label={`${waiting} ${waiting === 1 ? 'question waits' : 'questions wait'} on you`}
                         className="-ml-1 flex h-5 shrink-0 items-center rounded-sm bg-amber-500/15 px-1.5 text-amber-700 transition-colors outline-none hover:bg-amber-500/25 focus-visible:ring-1 focus-visible:ring-ring dark:text-amber-300"
                         data-questions-count
-                        onClick={() => actions.openPanel('questions')}
+                        onClick={() => actions.openPanel('todos')}
                         type="button"
                       >
                         {waiting}
