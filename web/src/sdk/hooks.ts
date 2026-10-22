@@ -122,8 +122,14 @@ export function useConversation<T>(select?: (conversation: ConversationState) =>
     return select ? select(conversation) : conversation
   })
 }
-/** The shown conversation now, outside React: for commands and callbacks. Components use `useConversation()`. */
-export const getConversation = (): ConversationState => derive(store.getState().view)
+/**
+ * The shown conversation now, or the streamed conversation `id` (a command's `context.conversationId`), outside React:
+ * for commands and callbacks. Components use `useConversation()`.
+ */
+export const getConversation = (id?: number): ConversationState => {
+  const { view, viewsOf } = store.getState()
+  return derive(id === undefined || id === view?.conversation.id ? view : viewsOf[id])
+}
 /** The whole client state now, outside React (`useStore` inside). */
 export const getState = (): State => store.getState()
 export const useSystem = () => useStore((state) => state.system)

@@ -34,7 +34,7 @@ import {
 import type { ComposerTarget } from '@/sdk'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import { UnderUltimate } from '../sidebar/ui.tsx'
-import { endings, frontSide, openSides, togglesSideMode } from './logic.ts'
+import { createEndings, endings, frontSide, openSides, togglesSideMode } from './logic.ts'
 import { DiscardAction, InjectAction, OpenAction, SideChatDoc, SideChatsDoc } from './refs.ts'
 import type { SideChatIndex, SideChatSummary } from './refs.ts'
 
@@ -55,6 +55,9 @@ const useSideMode = () =>
     },
     () => sideMode,
   )
+
+/** Each side chat's ending in flight and its last failure. */
+const sideEndings = createEndings(errorMessage)
 
 /** The side chat in front of main, by id; durable UI state, so a reload brings the depth view back. */
 const useFront = () => useUiState<number | null>('ext.side-chat.front', null)
@@ -140,49 +143,52 @@ function SideComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
   }
   return (
     <div className="relative" data-side-mode={on ? 'side' : 'normal'} onKeyDownCapture={onKeyDown}>
-      <div className="mx-auto flex w-full max-w-[46rem] items-center justify-between gap-2 px-3 pb-1.5 sm:px-6">
-        <div className="flex min-w-0 items-center gap-3 font-mono text-[11px] text-muted-foreground/70">
-          {parked.map((item) => (
-            <button
-              className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground hover:text-foreground"
-              key={item.id}
-              onClick={() => setFront(item.id)}
-              title="Bring this side chat back to the front"
-              type="button"
-            >
-              <GitForkIcon className="size-3 text-brand" />
-              Side chat · {formatTime(item.openedAt)}
-              <span className="text-brand">show</span>
-            </button>
-          ))}
-          {parked.length === 0 && (
-            <span className="truncate pointer-coarse:hidden">
-              {on ? (
-                <>
-                  <span className="text-brand">↵</span> forks @ultimate · <Kbd>Tab</Kbd> back to
-                  normal
-                </>
-              ) : (
-                <>
-                  <Kbd>Tab</Kbd> side chat
-                </>
-              )}
-            </span>
-          )}
+      {/* Covered by a side chat in front, main's composer and its controls take no focus, typing or clicks. */}
+      <div data-main-composer inert={!!shown}>
+        <div className="mx-auto flex w-full max-w-[46rem] items-center justify-between gap-2 px-3 pb-1.5 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3 font-mono text-[11px] text-muted-foreground/70">
+            {parked.map((item) => (
+              <button
+                className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground hover:text-foreground"
+                key={item.id}
+                onClick={() => setFront(item.id)}
+                title="Bring this side chat back to the front"
+                type="button"
+              >
+                <GitForkIcon className="size-3 text-brand" />
+                Side chat · {formatTime(item.openedAt)}
+                <span className="text-brand">show</span>
+              </button>
+            ))}
+            {parked.length === 0 && (
+              <span className="truncate pointer-coarse:hidden">
+                {on ? (
+                  <>
+                    <span className="text-brand">↵</span> forks @ultimate · <Kbd>Tab</Kbd> back to
+                    normal
+                  </>
+                ) : (
+                  <>
+                    <Kbd>Tab</Kbd> side chat
+                  </>
+                )}
+              </span>
+            )}
+          </div>
+          <ModeSwitch on={on} onToggle={() => setSide(!on)} />
         </div>
-        <ModeSwitch on={on} onToggle={() => setSide(!on)} />
-      </div>
-      <div
-        className={cn(
-          'relative transition-[padding] duration-300 motion-reduce:transition-none',
-          on ? 'sm:pl-6' : 'pl-0',
-          '[&_form]:transition-[border-color] [&_form]:duration-300',
-          on &&
-            '[&_form]:border-dashed [&_form]:border-brand/60 [&_form]:focus-within:border-brand/80',
-        )}
-        style={{ transitionTimingFunction: ease }}
-      >
-        <ComposerRedirect to={target}>{core}</ComposerRedirect>
+        <div
+          className={cn(
+            'relative transition-[padding] duration-300 motion-reduce:transition-none',
+            on ? 'sm:pl-6' : 'pl-0',
+            '[&_form]:transition-[border-color] [&_form]:duration-300',
+            on &&
+              '[&_form]:border-dashed [&_form]:border-brand/60 [&_form]:focus-within:border-brand/80',
+          )}
+          style={{ transitionTimingFunction: ease }}
+        >
+          <ComposerRedirect to={target}>{core}</ComposerRedirect>
+        </div>
       </div>
       {shown && <MainBlocked onBack={() => setFront(null)} />}
     </div>
@@ -344,24 +350,17 @@ function SidePane({
   const state = useDoc(SideChatDoc) ?? undefined
   const busy = useConversation((conversation) => conversation.busy)
   const can = endings(state)
-  const [ending, setEnding] = useState<'discard' | 'inject'>()
-  const [error, setError] = useState<string>()
+  // By side chat: one's failed inject or spinner never shows on another, nor retries it.
+  const { ending, error } = useSyncExternalStore(sideEndings.subscribe, () => sideEndings.get(side))
   const openedAt = index?.sides.find((item) => item.id === side)?.openedAt
   // Coming forward puts the cursor in the side chat's composer, the copy you now type into.
   useEffect(() => {
     if (front) document.getElementById(`composer-input-${side}`)?.focus()
   }, [front, side])
-  const end = async (how: 'discard' | 'inject') => {
-    setEnding(how)
-    setError(undefined)
-    try {
-      await api.action(how === 'inject' ? InjectAction : DiscardAction, { id: side })
-    } catch (failure) {
-      setError(errorMessage(failure).replace(/^side-chat\/\w+: /, ''))
-    } finally {
-      setEnding(undefined)
-    }
-  }
+  const end = (how: 'discard' | 'inject') =>
+    sideEndings.end(side, how, () =>
+      api.action(how === 'inject' ? InjectAction : DiscardAction, { id: side }),
+    )
   return (
     <>
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 px-3">

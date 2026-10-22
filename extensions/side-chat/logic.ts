@@ -40,6 +40,40 @@ export const openSides = (index: SideChatIndex | undefined) =>
 export const frontSide = (front: number | null, index: SideChatIndex | undefined) =>
   openSides(index).find((side) => side.id === front)
 
+/** An ending in flight and the last failure of one side chat's Discard or Summarize & inject. */
+export type Ending = { ending?: 'discard' | 'inject'; error?: string }
+
+/**
+ * Endings by side chat id: switching side chats never shows one's failure or spinner on another, and coming back to
+ * one whose inject still runs keeps its buttons disabled.
+ */
+export function createEndings(describe: (failure: unknown) => string) {
+  const states = new Map<number, Ending>()
+  const listeners = new Set<() => void>()
+  const idle: Ending = {}
+  const set = (side: number, next: Ending) => {
+    states.set(side, next)
+    for (const listener of listeners) listener()
+  }
+  return {
+    get: (side: number) => states.get(side) ?? idle,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener)
+      return () => void listeners.delete(listener)
+    },
+    /** Run `call` as side chat `side`'s `how` ending; a failure stays on that side chat as its error. */
+    async end(side: number, how: 'discard' | 'inject', call: () => Promise<unknown>) {
+      set(side, { ending: how })
+      try {
+        await call()
+        set(side, {})
+      } catch (failure) {
+        set(side, { error: describe(failure).replace(/^side-chat\/\w+: /, '') })
+      }
+    },
+  }
+}
+
 /** How a side chat may end: Discard only while it changed nothing outside itself. */
 export function endings(side: Partial<SideChat> | undefined) {
   const live = side?.of !== undefined && side.ended === undefined
