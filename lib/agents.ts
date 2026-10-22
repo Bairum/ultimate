@@ -323,11 +323,16 @@ export interface DefinitionFields {
   model?: string
   thinking?: string
   tools?: string[]
+  denyTools?: string[]
   isolate?: 'none' | 'worktree'
   resident?: boolean
   onFailure?: 'diagnose' | 'fix'
   fast?: boolean
 }
+
+/** A flow list of tool names; in a flow list, commas and brackets end an item too. */
+const toolList = (tools: string[]) =>
+  `[${tools.map((tool) => (/^[\w.-]+$/.test(tool) ? scalar(tool) : JSON.stringify(tool))).join(', ')}]`
 
 /** A YAML scalar: plain when it reads back as the same string, else JSON, which YAML reads as a quoted string. */
 function scalar(value: string) {
@@ -350,12 +355,8 @@ export function serializeDefinition(
     `description: ${scalar(frontmatter.description.trim())}`,
     ...(frontmatter.model ? [`model: ${scalar(frontmatter.model)}`] : []),
     ...(frontmatter.thinking ? [`thinking: ${scalar(frontmatter.thinking)}`] : []),
-    // In a flow list, commas and brackets end an item too.
-    ...(frontmatter.tools
-      ? [
-          `tools: [${frontmatter.tools.map((tool) => (/^[\w.-]+$/.test(tool) ? scalar(tool) : JSON.stringify(tool))).join(', ')}]`,
-        ]
-      : []),
+    ...(frontmatter.tools ? [`tools: ${toolList(frontmatter.tools)}`] : []),
+    ...(frontmatter.denyTools?.length ? [`denyTools: ${toolList(frontmatter.denyTools)}`] : []),
     ...(frontmatter.isolate === 'worktree' ? ['isolate: worktree'] : []),
     ...(frontmatter.resident !== undefined ? [`resident: ${frontmatter.resident}`] : []),
     ...(frontmatter.onFailure ? [`onFailure: ${frontmatter.onFailure}`] : []),

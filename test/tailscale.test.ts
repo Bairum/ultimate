@@ -357,6 +357,15 @@ it('retries a failed start on request, one start at a time, and does nothing onc
   expect(await retry()).toEqual(first)
   expect(await f.invocations()).toHaveLength(calls)
 })
+it('treats a missing TAILSCALE_COMMAND as not installed, never falling back to another CLI', async () => {
+  const f = await fixture()
+  // The stub on PATH would publish; a named but missing CLI must win over it and over the macOS app.
+  vi.stubEnv('TAILSCALE_COMMAND', join(f.home, 'missing-tailscale'))
+  const app = await f.instance()
+  expect(await app.status()).toMatchObject({ state: 'not-installed' })
+  expect(app.notices).toEqual([])
+  expect(await f.invocations()).toEqual([])
+})
 it('reports not installed quietly without attempting Serve', async () => {
   const f = await fixture()
   vi.stubEnv('PATH', join(f.home, 'missing'))

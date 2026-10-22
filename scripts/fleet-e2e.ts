@@ -43,6 +43,8 @@ async function start(
     env: childEnv({
       ...cloud,
       ...model,
+      // Scratch machines stay off the tailnet: they find no Tailscale CLI.
+      TAILSCALE_COMMAND: join(o.user, 'no-tailscale'),
       HOME: o.user,
       ULTIMATE_PROJECT: o.project,
       ULTIMATE_HOME: o.home,
