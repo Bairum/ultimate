@@ -13,7 +13,7 @@ document, tools and model-facing text, where agents and stored entries already u
   line, `#<branch> started by <caller> from #<source>/<at>: <intent>`, where `intent` is the prompt's first 80
   characters on one line (also the branch's title until its summary names it); the prompt and its images stay in the
   branch's own first input, so later branches never inherit them. Nodes written before this carried the whole prompt;
-  they are not rewritten and shrink at the next `compact_tally`. `from` is present
+  they are not rewritten and shrink at the next compaction. `from` is present
   when the source is not the root; that source also gets a display-only marker. The forking commit emits the durable
   event `lineage.branched` `{ id, from, at, intent }` (`Branched` in `api.ts`); lineage's own `named` reactor (for it
   and `lineage.rooted`) has conversations mark the intent title as generated (`generatedTitle`). Lineage provides
@@ -21,15 +21,10 @@ document, tools and model-facing text, where agents and stored entries already u
   that places the branch's first input.
 - **Roots**: doc `lineage.roots` on conversation 1 (`{ roots }`, initially `[1]`) lists the roots. Clients stream it
   (`useRoots()` in `roots.tsx`). Root lookup walks owners and fork sources to a listed root; conversations outside
-  those trees have none. Deferred tool `new_root` `{ title }` → `{ id }` creates an empty, ownerless root in the
-  project checkout, using conversation 1's model and thinking level. It stores the title and emits `lineage.rooted` (`Rooted` in `api.ts`) in that commit.
-  A task receipt commits with creation and a memo records the id, so replay creates only one root.
-  Deferred tool `seed_tally` `{ root, text }` seeds an empty listed root from the caller's project reading. It
-  atomically writes a genesis `pi.reset` with `head: 'self'`, `data.lineage = { tally: true }`, and
-  `<tally from="#caller/latest-entry">` pointing at the reading, then sets `lineage.tally.since`.
-  It refuses the caller itself, non-roots, roots with entries and existing tallies. Replay recognises the committed
-  genesis with its memoised breadcrumb, so it writes only once. The genesis card links to that source reading.
-  An empty root has nothing to branch from: seed it first. Tallies refuse inputs and run no turns.
+  those trees have none. A project has one root; independent work goes into its branches.
+  The first branch of an empty root writes an empty `pi.reset` there to fork from, in the same commit making the root a
+  tally from that entry (`lineage.tally.since`); its history then builds up from branches and landings, while branches
+  start from its memory. Tallies refuse inputs and run no turns.
   `info` returns `{ roots }`, and with `{ id }` also its `root` and `branch` when present.
   `unlist` `{ id }` → `{ roots }` removes a root that never became a tally from the list: it refuses non-roots, the
   last root and tallies. The root and its branches then belong to no tree. Concluding only hides a conversation;
@@ -42,8 +37,8 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   landings recorded `base` uses the landing before it, which is where the lander's serial queue left the target.
   Catch-up notes and abstracts are left out. The sidebar's Landed section, under the lander, shows the landings.
   Workspaces' `github` action gives the root page's landing cards the same range.
-  `compact` `{ id, instructions? }` → `{ taskId }` starts the same compaction as `compact_tally`, for the history footer's Compact
-  and the palette's Compact command on a root.
+  `compact` `{ id, instructions? }` → `{ taskId }` compacts a root's tally (see Compaction), for the history footer's
+  Compact and the palette's Compact command on a root.
 - **Tally**: conversation-scoped doc `lineage.tally` (latest history) holds
   `{ abstracts: Record<string, { anchor, at, text, title?, feature? }>, tokens: number, briefTokens?: number, since?: number }`:
   each conversation's open abstract, estimated model-visible context tokens, estimated tokens of the memory brief
@@ -166,8 +161,8 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   inherited tally contents (or, with a brief, the memory index and where the full tally is), and how to follow `#conversation/entry` breadcrumbs with `ultimate.entries(id)` and
   `ultimate.search()`. Other top-level conversations get their own id and lookup guidance. No list of roots changes
   the prompt cache.
-- **Compaction**: deferred tool `compact_tally` `{ root, instructions? }` → `{ taskId }` starts the harness's
-  existing compaction on a listed tally root, refusing non-roots, non-tallies and roots already compacting.
+- **Compaction**: action `compact` `{ id, instructions? }` → `{ taskId }` starts the harness's existing compaction
+  on a listed tally root, refusing non-roots, non-tallies and roots already compacting.
   Compaction summarizes older tally content and keeps recent entries verbatim; a short tally may stay unchanged.
   Instructions guide that summary without deleting history. To correct a recent or standing decision, @ultimate
   changes the root's memory with `remember`. Its own model keeps the idea,
@@ -177,8 +172,8 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
 
 ## Memory review
 
-A root's memory is checked and cleaned up by a review branch that @ultimate starts; seeding an empty root's memory is
-its first review. The review coordinator reads the index and bodies (`memory`), the project context and old
+A root's first memories are written by @ultimate during onboarding with `remember`. Later, its memory is checked and
+cleaned up by a review branch that @ultimate starts. The review coordinator reads the index and bodies (`memory`), the project context and old
 conversations (codemode `ultimate.entries` and `ultimate.search`, with `{project}` for another project), the code and
 `git log`. It fact-checks each memory: still true, outdated (with evidence), or contradicted by a later decision; and
 proposes new memories, each with its source `#conversation/entry` and date. It never writes: it returns add, update
@@ -206,13 +201,13 @@ An empty root shows what the `EmptyRoot` point (`ui.tsx`) provides: onboarding's
 (`onboarding/survey.tsx`), an optional focus and **Set up with @ultimate**.
 This calls user action `onboarding.start` with that root and the focus verbatim as instructions, then opens @ultimate.
 Once started, it shows only a quiet **@ultimate is setting up this project · open** link from `onboarding.starts`.
-@ultimate reads the project and writes its first tally with `seed_tally` before starting work.
+@ultimate reads the project and writes its first memories with `remember` before starting work.
 
 Listed roots with a tally or existing history replace their composer through the SDK's `composer` renderer with a
 read-only footer: **Memory** with the brief's estimated tokens, "What every new branch starts from. The context
 above is the browsable history; @ultimate maintains both.", the memory fold, and **Talk to @ultimate**. A root
 without memories shows **Context** with the tally's tokens instead, since its branches start from the tally. There is no text input. @ultimate maintains standing decisions in memory with
-`remember` and the memory review, and reshapes tallies with `compact_tally`; on a root the palette's Compact runs lineage `compact` and its composer-focus
+`remember` and the memory review; on a root the palette's Compact runs lineage `compact` and its composer-focus
 command is hidden. A root's transcript shows no summary or assessment lines.
 
 Old stored notes and survey inputs still render quietly, without creation controls. Old brief resets still render;

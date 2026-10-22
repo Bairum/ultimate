@@ -775,15 +775,6 @@ const WokenReceipt = defineDocFamily<{ task?: number }, null>({
   initial: () => ({}),
 })
 
-// Commits with creation, closing the gap before the tool records its memo.
-const RootReceipts = defineDoc<{ roots: Record<string, number> }>({
-  kind: 'lineage.root-receipts',
-  checkpointWhen: () => false,
-  version: 1,
-  scope: 'task',
-  initial: () => ({ roots: {} }),
-})
-
 export const BranchReceipts = defineDoc<{ branches: Record<string, number> }>({
   kind: 'lineage.branch-receipts',
   checkpointWhen: () => false,
@@ -826,16 +817,14 @@ export async function startBranch(host: ExtensionHost, input: BranchInput, ctx: 
   const from = input.from as ConversationId
   const main = await head(host)
   const roots = await rootsOf(host, ctx)
-  // A first branch needs a stored entry to fork from. An empty root has none until it got familiar with the project.
+  // A first branch needs a stored entry to fork from. An empty root becomes a tally at that entry: its history builds
+  // up from branches and landings, while branches start from its memory.
   if (input.at === undefined)
     await host.harness().commit(async (tx) => {
       if (!(await tx.conversation(from))) throw new Error(`No conversation #${from}`)
       if ((await tx.scanEntries({ conversationId: from }, 1)).items.length) return
-      if (roots.includes(from))
-        throw new Error(
-          `#${from} is an empty root: let it get familiar with the project first, then branch from what it learned`,
-        )
-      await tx.appendEntry(from, { kind: 'pi.reset', head: 'self' })
+      const entry = await tx.appendEntry(from, { kind: 'pi.reset', head: 'self' })
+      if (roots.includes(from)) (await tx.doc(Tally, from)).since = entry.id
     }, ctx)
   const id = await host.harness().commit((tx) => forkBranch(host, tx, input, main, roots), ctx)
   host.harness().resume()
@@ -1306,7 +1295,7 @@ export const actions = {
     }, context)
     return withCompare(host.projectRoot, scanned.events, scanned.older)
   }),
-  /** `{id, instructions?}`: compact root tally `id`, as @ultimate's `compact_tally` does. */
+  /** `{id, instructions?}`: compact root tally `id`, for the history footer and the palette. */
   compact: implementAction(CompactAction, async (args, { host }) => {
     const id = conversationArg(args)
     const instructions = (args as { instructions?: unknown }).instructions
@@ -1607,58 +1596,6 @@ export default function lineageExtension(host: ExtensionHost) {
         },
       }),
       defineTool({
-        name: 'new_root',
-        deferred: true,
-        description:
-          'Create an empty project root with a title. Read the project, then write its first tally with seed_tally.',
-        parameters: Type.Object({ title: Type.String({ minLength: 1 }) }),
-        // The receipt commits with creation; the memo and receipt both reuse the root on replay.
-        replay: 'safe',
-        async execute({ title }, api, ctx) {
-          if (!title.trim()) throw new Error('A root needs a title')
-          let id = await api.memo<number>('root-id', ctx)
-          if (id === undefined) {
-            const agent = await (await host
-              .harness()
-              .conversation(ROOT_CONVERSATION_ID, ctx))!.agent(ctx)
-            const created = await api.commit(async (tx) => {
-              const receipt = await tx.doc(RootReceipts, api.taskId)
-              if (receipt.roots[api.callId] !== undefined) return receipt.roots[api.callId]
-              const roots = await tx.doc(Roots, ROOT_CONVERSATION_ID)
-              const root = await tx.createConversation({ ownership: { kind: 'ownerless' } })
-              await configure(tx, root.id, {
-                cwd: host.projectRoot,
-                ...(agent.model ? { model: agent.model } : {}),
-                ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}),
-              })
-              roots.roots.push(root.id)
-              // Called by its title until its summary names it, like a branch by its intent.
-              ;(await tx.doc(host.metadata, root.id)).title = intentLine(title)
-              await host.emit(tx, Rooted, { id: root.id, intent: title })
-              receipt.roots[api.callId] = root.id
-              return root.id
-            }, ctx)
-            id = await api.memo('root-id', created, ctx)
-          }
-          return { output: [{ type: 'text', text: JSON.stringify({ id }) }] }
-        },
-      }),
-      defineTool({
-        name: 'compact_tally',
-        deferred: true,
-        description:
-          'Summarize older content in a listed tally root, keeping recent entries verbatim; short tallies may stay unchanged. Use instructions to guide the summary. To record or correct a standing decision, use remember. Full history stays in storage. Returns the compaction task id.',
-        parameters: Type.Object({
-          root: Type.Integer({ minimum: 1 }),
-          instructions: Type.Optional(Type.String()),
-        }),
-        async execute({ root, instructions }, api, ctx) {
-          const taskId = await api.commit((tx) => compactTally(tx, root, instructions), ctx)
-          host.harness().resume()
-          return { output: [{ type: 'text', text: JSON.stringify({ taskId }) }] }
-        },
-      }),
-      defineTool({
         name: 'compact',
         deferred: true,
         description:
@@ -1678,52 +1615,6 @@ export default function lineageExtension(host: ExtensionHost) {
           const conversation = await host.harness().conversation(api.conversationId, ctx)
           const taskId = await conversation!.compact(instructions, ctx)
           return { output: [{ type: 'text', text: JSON.stringify({ taskId }) }] }
-        },
-      }),
-      defineTool({
-        name: 'seed_tally',
-        deferred: true,
-        description:
-          "Write an empty root's first tally from your reading of the project, with a breadcrumb to this conversation. Refuses roots with history.",
-        parameters: Type.Object({
-          root: Type.Integer({ minimum: 1 }),
-          text: Type.String({ minLength: 1 }),
-        }),
-        // The source is memoised before placement; the same genesis is recognised inside the write transaction.
-        replay: 'safe',
-        async execute({ root, text }, api, ctx) {
-          if (root === api.conversationId) throw new Error('A conversation cannot seed itself')
-          let at = await api.memo<number>('seed-source', ctx)
-          if (at === undefined) {
-            const latest = await api.commit(
-              async (tx) =>
-                (await tx.scanEntries({ conversationId: api.conversationId }, 1)).items[0]?.id,
-              ctx,
-            )
-            if (latest === undefined) throw new Error('The caller has no reading to seed from')
-            at = await api.memo('seed-source', latest, ctx)
-          }
-          const content = `<tally from="#${api.conversationId}/${at}">\n${text}\n</tally>`
-          await api.commit(async (tx) => {
-            const roots = await tx.doc(Roots, ROOT_CONVERSATION_ID)
-            if (!roots.roots.includes(root)) throw new Error(`#${root} is not a listed root`)
-            const id = root as ConversationId
-            const tally = await tx.doc(Tally, id)
-            const latest = (await tx.scanEntries({ conversationId: id }, 1)).items[0]
-            const genesis =
-              tally.since === undefined ? undefined : await tx.entry(tally.since as EntryId)
-            if (genesis?.kind === 'pi.reset' && genesis.model?.[0]?.content === content) return
-            if (tally.since !== undefined) throw new Error(`#${root} is already a tally`)
-            if (latest) throw new Error(`#${root} has entries; seed_tally needs an empty root`)
-            const entry = await tx.appendEntry(id, {
-              kind: 'pi.reset',
-              head: 'self',
-              data: { lineage: { tally: true } },
-              model: [{ role: 'user', content, timestamp: Date.now() }],
-            })
-            tally.since = entry.id
-          }, ctx)
-          return { output: [{ type: 'text', text: `Seeded the tally in #${root}.` }] }
         },
       }),
       defineTool({
