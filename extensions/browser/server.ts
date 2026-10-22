@@ -85,7 +85,7 @@ async function capture(page: Page, file: string, selector?: string, fullPage = f
 
 export default function browserExtension(host: ExtensionHost) {
   const state = host.resource('browser', () => {
-    const resource: { launched?: Promise<Browser> } = {}
+    const resource: { launched?: Promise<Browser>; browser?: Browser } = {}
     host.onClose(async () => {
       if (resource.launched) await (await resource.launched).close()
     })
@@ -240,6 +240,7 @@ export default function browserExtension(host: ExtensionHost) {
         const launched: Promise<Browser> = browserBinary()
           .then(async (executablePath) => {
             const browser = await chromium.launch({ executablePath, headless: true })
+            if (state.launched === launched) state.browser = browser
             browser.once('disconnected', () => {
               if (state.launched === launched) state.launched = undefined
             })
@@ -321,9 +322,12 @@ export default function browserExtension(host: ExtensionHost) {
       await within(closeTimeoutMs, isolated.close())
     } catch (error) {
       host.notice(`Closing a browser context failed (${String(error)}); relaunching the browser.`)
-      state.launched = undefined
       const browser = isolated.browser()
       if (!browser) return
+      if (state.browser === browser) {
+        state.launched = undefined
+        state.browser = undefined
+      }
       // Closing kills the process too; a browser that won't even do that is left to the host's shutdown.
       await within(closeTimeoutMs, browser.close()).catch((reason: unknown) =>
         host.notice(`Closing the wedged browser failed: ${String(reason)}`),
