@@ -6,7 +6,7 @@ import { api, events } from '@/sdk'
 import type { UltimateActions } from '@/sdk'
 import { StandingAction } from './refs.ts'
 
-export { DefinitionsAction, StandingAction, StandingDoc } from './refs.ts'
+export { DefinitionAction, DefinitionsAction, StandingAction, StandingDoc } from './refs.ts'
 
 /** Show the primary agent's standing conversation on the Agent surface: @ultimate starts branches and keeps tallies. */
 export async function talkToUltimate(

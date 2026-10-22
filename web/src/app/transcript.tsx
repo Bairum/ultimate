@@ -1,4 +1,4 @@
-import type { AssistantMessage, SystemMessage, ToolCall } from '@earendil-works/pi-ai'
+import type { AssistantMessage, ToolCall } from '@earendil-works/pi-ai'
 import type { EntryRecord, LiveState, ToolSlot } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
 import {
@@ -51,7 +51,7 @@ import {
 } from '../sdk/hooks.ts'
 import { entryRenderers, messageItems, toolLine } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
-import { ExtensionBoundary, Provided } from './boundary.tsx'
+import { ExtensionBoundary, Provided, Slot } from './boundary.tsx'
 import { ParkedRuns, RunStart } from '../sdk/types.ts'
 import type { ChatSummaryProps } from '../sdk/types.ts'
 import { MessageActions } from './message-actions.tsx'
@@ -71,7 +71,6 @@ import {
   windowGaps,
   windowKey,
 } from './chat.ts'
-import { useFold } from './fold.tsx'
 import type { AsideGroup, ChatPart, QuietGroup, WorkRun } from './chat.ts'
 import { readerLeft } from './follow.ts'
 import { column } from './layout.ts'
@@ -192,9 +191,19 @@ function TranscriptEntries() {
   // A windowed stream pages on from its oldest entry. A whole one after a head marker scans from its newest: retained
   // suffixes can precede discarded compaction markers, which a minimum-active-ID cursor would skip. A whole one without
   // a marker is the whole history.
-  const cursor = exhausted
-    ? undefined
-    : (before ?? older ?? (active[0]?.head === undefined ? undefined : active.at(-1)?.id))
+  // A fork's history before its own first entry is its source's and stays hidden: paging stops at the start of the
+  // context it carries in, where the model's view of it begins.
+  const loaded = [...active, ...history]
+  const own = loaded
+    .filter((entry) => entry.conversationId === id)
+    .toSorted((a, b) => a.id - b.id)[0]
+  const forked = loaded.some(
+    (entry) => entry.conversationId !== id && (startsContext(own) || startsContext(entry)),
+  )
+  const cursor =
+    exhausted || forked
+      ? undefined
+      : (before ?? older ?? (active[0]?.head === undefined ? undefined : active.at(-1)?.id))
   const request = useRef<AbortController | null>(null)
   const anchor = useRef<{
     entryId: number
@@ -494,7 +503,9 @@ function TranscriptEntries() {
   const slots = useMemo(() => slotsOf(live.tools), [live.tools])
   const partial = partialOf(live)
   const visible = entries.filter(
-    (entry) => !(entry.kind === 'pi.tool-result' && calls.has(toolCallId(entry) ?? '')),
+    (entry) =>
+      entry.conversationId === id &&
+      !(entry.kind === 'pi.tool-result' && calls.has(toolCallId(entry) ?? '')),
   )
   const chat = useChat()
   const keeps = (call: ToolCall) => !!chat?.(call)
@@ -650,6 +661,7 @@ function TranscriptEntries() {
         </div>
       )}
       {!loading && visible.length === 0 && !partial && <EmptyState />}
+      {!loading && visible.length > 0 && cursor === undefined && <Slot name="transcript.start" />}
       {grouped.map((item, index) => {
         const last = index === grouped.length - 1
         if (!('aside' in item)) return render(item, last)
@@ -690,6 +702,9 @@ function TranscriptEntries() {
     </TranscriptContext>
   )
 }
+
+const startsContext = (entry: EntryRecord | undefined) =>
+  entry?.kind === 'pi.reset' || entry?.kind === 'pi.compaction'
 
 /** A set-aside group is known by its first entry, so it stays open while later rows join it. */
 const asideKey = (group: AsideGroup) => partsOf(group.aside[0])[0].entry.id
@@ -1038,9 +1053,7 @@ function coreEntry(
         />
       ) : null
     case 'pi.system':
-      return message?.role === 'system' ? (
-        <SystemDivider entry={entry.id} message={message} />
-      ) : null
+      return message?.role === 'system' ? <Divider>system prompt changed</Divider> : null
     case 'pi.compaction':
       return <CompactionView entry={entry} />
     case 'pi.reset':
@@ -1193,53 +1206,6 @@ function Divider({ children, className }: { children: ReactNode; className?: str
     >
       {children}
     </div>
-  )
-}
-
-function SystemDivider({ entry, message }: { entry: number; message: SystemMessage }) {
-  // In a chat its open state is kept like a card's; elsewhere it opens and closes on its own.
-  const fold = useFold(entry)
-  const sections = Object.entries(message.sections ?? {})
-  const added = message.toolsAdded?.map((tool) => tool.name) ?? []
-  const removed = message.toolsRemoved?.map((tool) => tool.name) ?? []
-  const parts = [
-    sections.length ? `${sections.length} section${sections.length > 1 ? 's' : ''}` : '',
-    added.length ? `+${added.length} tool${added.length > 1 ? 's' : ''}` : '',
-    removed.length ? `−${removed.length} tool${removed.length > 1 ? 's' : ''}` : '',
-  ].filter(Boolean)
-  return (
-    <Collapsible
-      className="group/system"
-      {...(fold.folds && { open: fold.open, onOpenChange: fold.setOpen })}
-    >
-      <CollapsibleTrigger className="w-full">
-        <Divider className="hover:text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/system:rotate-90" />
-            system prompt{parts.length ? ` · ${parts.join(' · ')}` : ' changed'}
-          </span>
-        </Divider>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="mt-2 rounded-md border border-border/70 bg-card/40 px-3 py-2 font-mono text-[11.5px] text-muted-foreground">
-        {sections.map(([key, value]) => (
-          <div className="flex gap-3" key={key}>
-            <span className="w-32 shrink-0 text-foreground/80">{key}</span>
-            <span className="truncate">
-              {value === null ? 'removed' : `${value.length.toLocaleString()} chars`}
-            </span>
-          </div>
-        ))}
-        {added.length > 0 && (
-          <div className="flex gap-3">
-            <span className="w-32 shrink-0 text-foreground/80">tools</span>
-            <span>
-              {added.join(' ')}
-              {removed.length > 0 && ` · removed ${removed.join(' ')}`}
-            </span>
-          </div>
-        )}
-      </CollapsibleContent>
-    </Collapsible>
   )
 }
 
