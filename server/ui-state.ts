@@ -3,6 +3,7 @@ import type { JsonValue } from '@earendil-works/chord'
 
 export const UiState = defineDoc<Record<string, JsonValue>>({
   kind: 'ultimate.ui',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'rewindable',

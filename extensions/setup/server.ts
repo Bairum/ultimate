@@ -33,6 +33,7 @@ const LOGIN = { label: 'Log in', command: 'auth.login' }
 /** The warnings the primary agent last heard about, so its next input carries a line only when they change. */
 const Seen = defineDoc<{ key?: string }>({
   kind: 'setup.seen',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -416,7 +417,7 @@ export default function setup(host: ExtensionHost) {
     name: 'setup',
     hooks: [
       hook(GenerationTask, {
-        // Pi upstream: @earendil-works/pi-durable@1.3.0 — patched transactional beforeInput hook.
+        // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched transactional beforeInput hook.
         // Only the primary agent hears about setup, and only when its warnings change: a per-input note, never a
         // system-prompt section, keeps the prompt cached.
         beforeInput: async (_input, { tx, conversationId }) => {

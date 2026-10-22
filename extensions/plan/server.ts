@@ -35,6 +35,7 @@ export type Epic = {
 }
 export const Plan = defineDoc<{ next: number; epics: Record<string, Epic> }>({
   kind: PlanDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'rewindable',
@@ -51,6 +52,7 @@ export type TaskLink = {
 }
 export const TaskIndex = defineDoc<{ children: Record<string, TaskLink> }>({
   kind: TaskIndexDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -61,6 +63,7 @@ export const docs = [Plan, TaskIndex]
 // Commit the receipt with the edit, closing the crash window before api.memo stores the result.
 const Receipt = defineDoc<{ results: Record<string, string> }>({
   kind: 'ultimate.plan.receipt',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'task',
   initial: () => ({ results: {} }),
@@ -115,6 +118,7 @@ async function reindex(
 /** Set by a conversation's first run; a fork starts without it. */
 export const Started = defineDoc<{ started?: true }>({
   kind: 'plan.started',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -141,7 +145,7 @@ export default (host: ExtensionHost) => {
   return defineExtension({
     name: 'plan',
     hooks: [
-      // Pi upstream: @earendil-works/pi-durable@1.3.0 — patched transactional beforeInput hook.
+      // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched transactional beforeInput hook.
       // A lineage branch starts with an empty plan, not the one it forked with: emptied in the commit that places its
       // first input, so its first request never sees the inherited plan. A branch that answered before it was marked
       // started (one made before this hook) keeps its own.

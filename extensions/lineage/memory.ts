@@ -26,6 +26,7 @@ const BODY_CHARS = 2000
 /** A root's project memory. A fork starts empty: memories live on roots only. */
 export const Memory = defineDoc<{ memories: Record<string, MemoryItem> }>({
   kind: MemoryDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -39,6 +40,7 @@ export const Memory = defineDoc<{ memories: Record<string, MemoryItem> }>({
  */
 export const Memorized = defineDocFamily<{ task?: number }, null>({
   kind: 'lineage.memorize-receipt',
+  checkpointWhen: () => false,
   version: 1,
   family: true,
   scope: 'conversation',

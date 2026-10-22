@@ -68,7 +68,7 @@ export type EchoService = {
 export const EchoApi = defineApi<EchoService>()('echo')
 export { Repeated } from './refs.ts'
 /** The echo log. */
-export const Log = defineDoc<{ texts: string[] }>({ kind: 'echo.log', version: 1, scope: 'conversation', initial: () => ({ texts: [] }) })
+export const Log = defineDoc<{ texts: string[] }>({ kind: 'echo.log', checkpointWhen: () => false, version: 1, scope: 'conversation', initial: () => ({ texts: [] }) })
 `
 
 it('accepts an api.ts of documented contracts and rejects runtime code, node imports and missing docs', () => {

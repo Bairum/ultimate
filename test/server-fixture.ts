@@ -99,7 +99,7 @@ export async function fixture(extra = false, sources?: Record<string, string>, e
 const counterSource = `import { Type } from '@earendil-works/pi-ai'
 import { defineDoc, defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import { value } from './value.ts'
-export const Counter = defineDoc({ kind: 'test.counter', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({ count: 0 }) })
+export const Counter = defineDoc({ kind: 'test.counter', checkpointWhen: () => false, version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({ count: 0 }) })
 export const docs = [Counter]
 export default defineExtension({ name: 'counter', sections: [section('counter', () => value)], tools: [defineTool({ name: 'increment', description: 'Increment', parameters: Type.Object({}), execute: async (_args, api, context) => { await api.commit(async tx => { (await tx.doc(Counter, api.conversationId)).count++ }, context); return {} } })] })`
 

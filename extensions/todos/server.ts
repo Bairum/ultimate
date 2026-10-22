@@ -25,6 +25,7 @@ const TEXT_CHARS = 300
 
 export const Todos = defineDoc<{ next: number; items: Todo[] }>({
   kind: TodosDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -34,6 +35,7 @@ export const Todos = defineDoc<{ next: number; items: Todo[] }>({
 /** The open list @ultimate last heard, so it hears again only after a change. */
 const Seen = defineDoc<{ key?: string }>({
   kind: 'todos.seen',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -146,7 +148,7 @@ export default function todosExtension(_host: ExtensionHost) {
     name: 'todos',
     hooks: [
       hook(GenerationTask, {
-        // Pi upstream: @earendil-works/pi-durable@1.3.0 — patched transactional beforeInput hook.
+        // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched transactional beforeInput hook.
         // A per-input note when the list changed, never a system-prompt section, keeps the prompt cached.
         beforeInput: async (_input, { tx, conversationId }) =>
           (await standing(tx, conversationId))

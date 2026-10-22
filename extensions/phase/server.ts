@@ -39,6 +39,7 @@ export const question = {
 export type { Phase } from './types.ts'
 export const Phases = defineDoc<PhaseState>({
   kind: PhasesDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',

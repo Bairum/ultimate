@@ -39,6 +39,7 @@ import {
 
 export const Starts = defineDoc<{ roots: Record<string, number> }>({
   kind: StartsDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -47,6 +48,7 @@ export const Starts = defineDoc<{ roots: Record<string, number> }>({
 })
 const ChoiceRequests = defineDoc<{ payloads: Record<string, JsonObject> }>({
   kind: 'onboarding.choice-requests',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',

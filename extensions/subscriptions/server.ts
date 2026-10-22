@@ -47,6 +47,7 @@ export const Subscriptions = defineDoc<{
   subscriptions: Record<string, Subscription>
 }>({
   kind: 'ultimate.subscriptions',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'session',
   initial: () => ({ next: 1, subscriptions: {} }),
@@ -54,6 +55,7 @@ export const Subscriptions = defineDoc<{
 type Effect = { id: string; action: string; previousPid?: number }
 const Receipt = defineDoc<{ result?: JsonValue; effect?: Effect }>({
   kind: 'ultimate.subscription-receipt',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'task',
   initial: () => ({}),

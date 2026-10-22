@@ -24,6 +24,7 @@ export const BoardQuestions = defineDoc<{
   asked: Record<string, Question[]>
 }>({
   kind: QuestionsDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   history: 'latest',
   fork: 'initial',

@@ -14,6 +14,7 @@ afterAll(async () => {
 })
 
 const tokens = `
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { defineExtension } from '@earendil-works/pi-durable'
 import { defineApi } from '${resolve('shared/extension-api.ts')}'
 import { defineEvent } from '${resolve('shared/events.ts')}'
@@ -32,7 +33,7 @@ export const actions = { go: async (args, { host }) => host.need(Beta).ping(args
 export default (host) => {
   host.implement(Beta, {
     async ping(args) {
-      await host.harness().commit((tx) => host.emit(tx, Pinged, { n: args.n }), {})
+      await host.harness().commit((tx) => host.emit(tx, Pinged, { n: args.n }), BACKGROUND_CONTEXT)
       return 'pong'
     },
   })

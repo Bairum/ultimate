@@ -9,6 +9,7 @@ import type { OverviewRow, OverviewState } from './types.ts'
 
 export const Overview = defineDoc<OverviewState>({
   kind: OverviewDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',

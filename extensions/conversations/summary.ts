@@ -92,6 +92,7 @@ export type SummaryState = {
 }
 export const Summaries = defineDoc<SummaryState>({
   kind: 'ultimate.conversation-summaries',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',

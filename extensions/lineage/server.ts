@@ -88,6 +88,7 @@ export type TallyState = {
  */
 export const Tally = defineDoc<TallyState>({
   kind: TallyDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -734,6 +735,7 @@ function landingNote(landing: LandedData) {
  */
 export const Notified = defineDoc<{ answers: Record<string, number> }>({
   kind: 'lineage.notified',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -764,6 +766,7 @@ export type BranchInput = PromptInput & {
 /** Per manual compaction of @ultimate, keyed by its task: the wake-up task its hook created, so a replay creates none. */
 const WokenReceipt = defineDocFamily<{ task?: number }, null>({
   kind: 'lineage.woken-receipt',
+  checkpointWhen: () => false,
   version: 1,
   family: true,
   scope: 'conversation',
@@ -775,6 +778,7 @@ const WokenReceipt = defineDocFamily<{ task?: number }, null>({
 // Commits with creation, closing the gap before the tool records its memo.
 const RootReceipts = defineDoc<{ roots: Record<string, number> }>({
   kind: 'lineage.root-receipts',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'task',
   initial: () => ({ roots: {} }),
@@ -782,6 +786,7 @@ const RootReceipts = defineDoc<{ roots: Record<string, number> }>({
 
 export const BranchReceipts = defineDoc<{ branches: Record<string, number> }>({
   kind: 'lineage.branch-receipts',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'task',
   initial: () => ({ branches: {} }),
@@ -1121,7 +1126,7 @@ async function compactTally(tx: Tx, root: number, instructions?: string) {
   if ((await tx.doc(Tally, id)).since === undefined) throw new Error(`#${root} is not a tally`)
   if (await liveTask(tx, id, CompactionTask.definition.name))
     throw new Error(`#${root} is already compacting`)
-  // Pi upstream: @earendil-works/pi-durable@1.3.0 src/harness/compaction.ts — inline unexported createCompaction for atomic admission.
+  // Pi upstream: @earendil-works/pi-durable@1.4.0 src/harness/compaction.ts — inline unexported createCompaction for atomic admission.
   const created = await tx.createTask(
     CompactionTask,
     { reason: 'manual', instructions },

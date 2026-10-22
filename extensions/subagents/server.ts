@@ -114,16 +114,12 @@ function createReporter() {
         ? { phase: 'deliver' }
         : { phase: 'report', report: input.text, answer: input.answer },
     phases: {
-      retry: async (task, runtime, context) => {
-        await runtime.sleep(task.state.checkpoint.until, context)
-        await runtime.commit(
-          () => ({
-            status: 'running',
-            checkpoint: { phase: 'deliver', retryRequest: task.state.checkpoint.retryRequest },
-          }),
+      retry: (task, runtime, context) =>
+        runtime.sleepUntil(
+          task.state.checkpoint.until,
+          { phase: 'deliver', retryRequest: task.state.checkpoint.retryRequest },
           context,
-        )
-      },
+        ),
       deliver: async (task, runtime, context) => {
         try {
           const child = (await runtime.conversation(task.input.conversationId, context))!
@@ -944,7 +940,7 @@ export default function subagents(
                 ? '\nWarning: parent has uncommitted changes; they are not in the worktree.'
                 : ''
             const task = await api.getTask(api.taskId, context)
-            // Pi upstream: @earendil-works/pi-durable@1.3.0 src/harness/tool.ts — internal ToolTaskInput.assistant locates the calling assistant. Drop when ToolExecutionApi exposes the calling assistant entry ID.
+            // Pi upstream: @earendil-works/pi-durable@1.4.0 src/harness/tool.ts — internal ToolTaskInput.assistant locates the calling assistant. Drop when ToolExecutionApi exposes the calling assistant entry ID.
             const assistant = (task?.input as { assistant: EntryId } | undefined)?.assistant
             let forkAt: EntryId | undefined
             if (definition && args.fork) {

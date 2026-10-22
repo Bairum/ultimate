@@ -36,6 +36,7 @@ export type BoardMessage = {
 /** Every message between conversations and the user, on the root conversation. */
 export const Board = defineDoc<{ messages: BoardMessage[]; next: number }>({
   kind: BoardDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',

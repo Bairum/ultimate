@@ -106,6 +106,7 @@ async function resolveImages(tx: Tx, from: ConversationId, ref: ImagesRef) {
 // The receipt commits with the message, closing the gap before api.memo records its id.
 const Sent = defineDoc<{ ids: Record<string, number> }>({
   kind: 'board.sent-calls',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'task',
   initial: () => ({ ids: {} }),
@@ -113,6 +114,7 @@ const Sent = defineDoc<{ ids: Record<string, number> }>({
 // Pipeline requests outlive their calling task, so their receipts belong to the sender conversation.
 const Requests = defineDoc<{ ids: Record<string, number> }>({
   kind: 'board.requests',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -128,6 +130,7 @@ type Told = { message: BoardMessage; answer?: number }
  */
 const RemoteDoc = defineDoc<{ received: Record<string, number>; told: Record<string, Told> }>({
   kind: 'board.remote',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -140,6 +143,7 @@ const RemoteDoc = defineDoc<{ received: Record<string, number>; told: Record<str
  */
 const Started = defineDoc<{ by?: number; yielded?: number }>({
   kind: 'board.started',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -1233,7 +1237,7 @@ export default function board(host: ExtensionHost) {
     tasks: [delivery(host), route(host)],
     hooks: [
       hook(GenerationTask, {
-        // Pi upstream: @earendil-works/pi-durable@1.3.0 — patched transactional beforeInput hook.
+        // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched transactional beforeInput hook.
         beforeInput: (_input, api) => openQuestionsNote(api.tx, api.conversationId, Date.now()),
         onYield: async (_answer, api, ctx) => {
           const by = (await api.snapshot(Started, api.conversationId, ctx))?.by

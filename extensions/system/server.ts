@@ -524,6 +524,7 @@ export const pollActions = ['stream', 'lanes', 'tree', 'polls']
 /** The view the last `ui.navigated` recorded, `<surface>:<conversation>`, so repeats are dropped. */
 const LastView = defineDoc<{ key?: string }>({
   kind: 'system.last-view',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',

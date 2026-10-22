@@ -50,6 +50,7 @@ import type { Call } from './summary.ts'
 
 export const Store = defineDoc({
   kind: 'codemode.store',
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   fork: 'asOf',

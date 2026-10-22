@@ -30,6 +30,7 @@ export type LoginFlow = {
 /** The login flows started from a conversation, by flow id; the login dialog streams it with `useDoc`. */
 export const Logins = defineDoc<{ flows: Record<string, LoginFlow> }>({
   kind: LoginDoc.kind,
+  checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
   history: 'latest',
