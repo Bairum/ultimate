@@ -1,6 +1,6 @@
 // Pi upstream: @earendil-works/pi-durable@1.4.0 src/tools/bash.ts and src/tools/edit.ts — internal bash exit_code diagnostic message drives exitOf and untyped details.patch/details.diff drive Edit. Drop when Pi exports structured bash outcomes and structured diff rows for rendering.
 import { XIcon } from 'lucide-react'
-import { type SyntheticEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnsiOutput } from '@/components/ai/ansi-output'
 import { CodeBlock, languageFromPath } from '@/components/ai/code-block'
 import {
@@ -256,16 +256,10 @@ function BashSummary({ steps }: { steps: BashStep[] }) {
   )
 }
 
-/**
- * Cancel a running bash call: its command is killed and the model gets the output so far. A `span` with the button
- * role: it sits inside the header's trigger button, which cannot nest buttons.
- */
+/** Cancel a running bash call: its command is killed and the model gets the output so far. */
 function CancelCall({ callId }: { callId: string }) {
   const [sent, setSent] = useState(false)
-  const cancel = (event: SyntheticEvent) => {
-    event.stopPropagation()
-    event.preventDefault()
-    if (sent) return
+  const cancel = () => {
     setSent(true)
     api.action(CancelAction, { callId }).catch((error: unknown) => {
       setSent(false)
@@ -273,23 +267,16 @@ function CancelCall({ callId }: { callId: string }) {
     })
   }
   return (
-    <span
-      aria-disabled={sent}
+    <button
       aria-label="Cancel this command"
-      className={cn(
-        '-mx-1 flex size-5 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
-        sent && 'pointer-events-none opacity-40',
-      )}
+      className="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
+      disabled={sent}
       onClick={cancel}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') cancel(event)
-      }}
-      role="button"
-      tabIndex={0}
       title="Cancel this command; the agent gets the output so far"
+      type="button"
     >
       <XIcon className="size-3" />
-    </span>
+    </button>
   )
 }
 
@@ -331,9 +318,9 @@ function Bash({ call }: { call: ToolCallView }) {
               </span>
             )}
             {duration && <span>{duration}</span>}
-            {running && <CancelCall callId={call.id} />}
           </>
         }
+        action={running && <CancelCall callId={call.id} />}
         name="$"
         state={call.status}
         title={

@@ -19,10 +19,11 @@ an `install` or `migrate` word) is refused with a hint to split it, so a steer c
 
 Any running bash call can be cancelled from its card (the × next to its timer): the user-only action
 `cancel {callId}` (`refs.ts`) records the call in the conversation's durable `coding-tools.cancelled` document, which
-every bash call watches like the inbox above, so a cancel reaches a call across a reload. The call kills its command
-and returns the output so far followed by "[Cancelled by the user after 5m 09s; …]" as an ordinary result; the run
-goes on and the card shows `cancelled`. The call removes its mark when it ends; a cancel of a call that is not running
-fails and drops marks a Stop left behind.
+every bash call watches like the inbox above, so a cancel reaches a call started before an extension reload. The call
+kills its command and returns the output so far followed by "[Cancelled by the user after 5m 09s; …]" as an ordinary
+result; the run goes on and the card shows `cancelled`. A restart ends a running call anyway (Pi recovers it as
+interrupted). Calls never remove their own marks, since one can land as a call ends; each cancel drops the marks of
+calls no longer running, and a cancel of a call that is not running fails.
 
 Pi's `prepare` hook only changes the command, cwd, and environment, not the timeout, so one wrapper injects the
 default and formats execution timeout errors.

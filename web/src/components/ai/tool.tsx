@@ -57,12 +57,31 @@ export type ToolHeaderProps = Omit<ComponentProps<typeof CollapsibleTrigger>, 't
   title?: ReactNode
   /** Right-aligned facts: duration, size, exit code. */
   meta?: ReactNode
+  /** A control after the toggle, such as a cancel button: outside the trigger, so it can be a real button. */
+  action?: ReactNode
 }
 
-export const ToolHeader = ({ className, name, state, title, meta, ...props }: ToolHeaderProps) => (
+export const ToolHeader = ({ action, ...props }: ToolHeaderProps) =>
+  action ? (
+    <div className="flex items-center pr-1.5">
+      <ToolTrigger {...props} />
+      {action}
+    </div>
+  ) : (
+    <ToolTrigger {...props} />
+  )
+
+const ToolTrigger = ({
+  className,
+  name,
+  state,
+  title,
+  meta,
+  ...props
+}: Omit<ToolHeaderProps, 'action'>) => (
   <CollapsibleTrigger
     className={cn(
-      'flex h-8 w-full items-center gap-2 px-2.5 text-left transition-colors hover:bg-accent/40',
+      'flex h-8 w-full min-w-0 items-center gap-2 px-2.5 text-left transition-colors hover:bg-accent/40',
       className,
     )}
     {...props}

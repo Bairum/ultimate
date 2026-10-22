@@ -89,7 +89,10 @@ export function changes(command: string) {
   )
 }
 
-/** The bash calls the user cancelled that may still run (`CancelAction`), by call id → when. */
+/**
+ * The bash calls the user cancelled (`CancelAction`), by call id → when. Durable, so a call started before an extension
+ * reload sees a cancel made after it. A restart ends a running call anyway: Pi recovers it as interrupted.
+ */
 const Cancelled = defineDoc<{ calls: Record<string, number> }>({
   kind: CancelledDoc.kind,
   checkpointWhen: () => false,
@@ -164,13 +167,7 @@ async function untilStopped(
       structuredOutput: { output: retained.text, truncated: retained.truncated, exitCode: 130 },
     }
   } finally {
-    const marked = cancelled.value?.calls[api.callId] !== undefined
     await Promise.all([cancelled.stop(), inbox?.stop()])
-    // A mark that arrived as the command ended is dropped too; after a Stop the run's next cancel cleans up instead.
-    if (marked && !context.abortSignal?.aborted)
-      await api.commit(async (tx) => {
-        delete (await tx.doc(Cancelled, id)).calls[api.callId]
-      }, context)
   }
 }
 
@@ -191,8 +188,8 @@ export const actions = {
       )
       if (!running.has(callId)) throw new Error('That bash call is not running')
       const calls = (await tx.doc(Cancelled, id)).calls
-      // Drop marks of calls a Stop ended before they could remove them.
-      for (const stale of Object.keys(calls)) if (!running.has(stale)) delete calls[stale]
+      // Calls never remove their own marks (one could land as a call ends); each cancel drops those of ended calls.
+      for (const ended of Object.keys(calls)) if (!running.has(ended)) delete calls[ended]
       calls[callId] = Date.now()
     }, BACKGROUND_CONTEXT)
     return null
