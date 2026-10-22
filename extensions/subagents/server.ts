@@ -998,11 +998,33 @@ export default function subagents(
             // Capture identities before cancellation; replay must leave later reuse alone.
             const live = await api.snapshot(LiveDoc, id, context)
             const state = await api.snapshot(Subagents, api.conversationId, context)
+            const watchdogs = await api.commit(async (tx) => {
+              const tasks = []
+              let cursor: Cursor | undefined
+              do {
+                const page = await tx.scanTasks(
+                  { conversationId: api.conversationId, kind: 'watchdog.failure' },
+                  500,
+                  cursor,
+                )
+                tasks.push(
+                  ...page.items.filter(
+                    (task) => (task.input as { conversation?: number }).conversation === id,
+                  ),
+                )
+                cursor = page.next
+              } while (cursor)
+              return tasks.map((task) => ({
+                task: task.id,
+                request: `watchdog-retry:${(task.input as { failedTask: number }).failedTask}`,
+              }))
+            }, context)
             const target = await api.memo(
               'stopTarget',
               {
                 run: live?.run?.taskId ?? null,
                 inputs: live?.run?.inputs ?? [],
+                watchdogs,
                 reporters: Object.values(state?.actions ?? {}).flatMap((action) =>
                   action.conversationId === id ? [action.reporter] : [],
                 ),
@@ -1010,15 +1032,20 @@ export default function subagents(
               context,
             )
             // Join delivery invocations before inspecting admissions that may have raced stop.
-            for (const reporter of target.reporters) {
+            // Capture watchdog identities too: Stop must not restart the child after its delay.
+            for (const reporter of [
+              ...target.reporters,
+              ...target.watchdogs.map((task) => task.task),
+            ]) {
               await host.harness().abortTask(reporter, context)
               await api.waitForTask(reporter, context)
             }
             const submissions = await api.commit(async (tx) => {
               return Promise.all(
-                target.reporters.map((reporter) =>
-                  tx.submissionByRequest(id, `subagent:${reporter}`),
-                ),
+                [
+                  ...target.reporters.map((reporter) => `subagent:${reporter}`),
+                  ...target.watchdogs.map((task) => task.request),
+                ].map((request) => tx.submissionByRequest(id, request)),
               )
             }, context)
             for (const submission of submissions)

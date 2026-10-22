@@ -19,13 +19,20 @@ import {
   MemoryStorage,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, EntryRecord, TaskId, Task } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  EntryRecord,
+  TaskId,
+  Task,
+  ToolExecutionApi,
+} from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import watchdog from '../extensions/watchdog/server.ts'
 import { idleNote } from '../extensions/watchdog/idle.ts'
 import { Messages } from '../extensions/messages/api.ts'
 import { Branch } from '../extensions/lineage/api.ts'
-import { Standing } from '../extensions/subagents/api.ts'
+import { Standing, Subagents } from '../extensions/subagents/api.ts'
+import subagents from '../extensions/subagents/server.ts'
 import { Workspaces } from '../extensions/workspaces/workspaces.ts'
 import { Metadata } from '../server/metadata.ts'
 import { UiState } from '../server/ui-state.ts'
@@ -55,7 +62,12 @@ const Anchor = defineTask<null, { phase: 'done' }, null>({
 async function fixture(
   respond?: FauxResponseFactory,
   install = true,
-  effectGate?: { phase: 'retry' | 'report'; entered: boolean; promise: Promise<void> },
+  effectGate?: {
+    phase: 'retry' | 'report'
+    entered: boolean
+    promise: Promise<void>
+    before?: boolean
+  },
 ) {
   let now = 1_000_000
   const registry = createRegistry()
@@ -117,11 +129,15 @@ async function fixture(
                       get(target, key) {
                         if (key !== 'submit') return Reflect.get(target, key)
                         return async (...input: Parameters<typeof handle.submit>) => {
-                          const receipt = await handle.submit(...input)
-                          if (!effectGate.entered) {
-                            effectGate.entered = true
-                            await awaitWithContext(effectGate.promise, ctx)
+                          const pause = async () => {
+                            if (!effectGate.entered) {
+                              effectGate.entered = true
+                              await awaitWithContext(effectGate.promise, ctx)
+                            }
                           }
+                          if (effectGate.before) await pause()
+                          const receipt = await handle.submit(...input)
+                          if (!effectGate.before) await pause()
                           return receipt
                         }
                       },
@@ -170,6 +186,13 @@ async function fixture(
       })
       await configure(tx, child.id, { model })
       Object.assign(await tx.doc(Metadata, child.id), { title })
+      if (owner !== undefined)
+        (await tx.doc(Subagents, owner)).agents[String(child.id)] = {
+          conversationId: child.id,
+          agent: 'scout',
+          background: true,
+          reported: [],
+        }
       return child.id
     }, context)
   }
@@ -215,6 +238,34 @@ async function fixture(
     submit,
     held: () => entered,
     release: hold.resolve,
+    stop: async (id: ConversationId, parent: ConversationId) => {
+      const backendForStop = subagents({
+        ...host,
+        implement: () => {},
+        onOpen: () => {},
+        onClose: () => {},
+        need: () => ({ get: async () => undefined }),
+      } as unknown as Parameters<typeof subagents>[0])
+      const tool = backendForStop.tools!.find((candidate) => candidate.name === 'subagent')!
+      const memos = new Map<string, unknown>()
+      return tool.execute(
+        { action: 'stop', id },
+        {
+          conversationId: parent,
+          callId: 'stop-test',
+          snapshot: harness.snapshot.bind(harness),
+          commit: harness.commit.bind(harness),
+          waitForTask: harness.waitForTask.bind(harness),
+          details: async () => {},
+          memo: async (key: string, value: unknown) => {
+            if (value === context) return memos.get(key)
+            if (!memos.has(key)) memos.set(key, value)
+            return memos.get(key)
+          },
+        } as unknown as ToolExecutionApi,
+        context,
+      )
+    },
     open,
     install: async () => {
       registry.install(backend)
@@ -304,6 +355,84 @@ it('ignores user Stop', async () => {
   expect(await f.tasks()).toHaveLength(0)
   expect(await f.entries()).toHaveLength(0)
 })
+
+it.each([false, true])(
+  'subagent Stop cancels a delayed watchdog retry across reopen: %s',
+  async (reopen) => {
+    const seen: string[] = []
+    const f = await fixture((transcript) => {
+      const text = inputText(transcript)
+      seen.push(text)
+      return text === 'fail' ? error('not logged in') : fauxAssistantMessage('ok')
+    })
+    const parent = await f.conversation('Coordinator')
+    const child = await f.conversation('Scout', parent)
+    await (await f.submit(child, 'fail')).wait(context)
+    await f.sleeping()
+    if (reopen) await f.reopen()
+    await f.stop(child, parent)
+    await f.reopen()
+    f.advance(60_000)
+    await until(async () => (await f.tasks()).every((task) => task.state.status === 'terminal'))
+    expect(seen).toEqual(['fail'])
+    expect(await f.entries(parent)).toHaveLength(0)
+    expect(
+      (await f.host.scanSubmissions({ conversationId: child }, 100, undefined, context)).items.some(
+        (input) => input.requestId?.startsWith('watchdog-retry:'),
+      ),
+    ).toBe(false)
+  },
+)
+
+it.each(['queued', 'running'] as const)(
+  'subagent Stop cancels a %s watchdog continuation',
+  async (state) => {
+    const barrier = Promise.withResolvers<void>()
+    const admission = {
+      phase: 'retry' as const,
+      entered: false,
+      promise: barrier.promise,
+      before: true,
+    }
+    const f = await fixture(
+      (transcript) => {
+        const text = inputText(transcript)
+        if (text === 'fail') return error('not logged in')
+        return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
+      },
+      true,
+      state === 'queued' ? admission : undefined,
+    )
+    const parent = await f.conversation('Coordinator')
+    const child = await f.conversation('Scout', parent)
+    await (await f.submit(child, 'fail')).wait(context)
+    await f.sleeping()
+    f.advance(60_000)
+    if (state === 'queued') {
+      await until(async () => admission.entered)
+      await f.submit(child, 'hold')
+      await until(async () => f.held())
+      barrier.resolve()
+    }
+    await until(async () => (await f.tasks()).every((task) => task.state.status === 'terminal'))
+    await until(async () =>
+      (await f.host.scanSubmissions({ conversationId: child }, 100, undefined, context)).items.some(
+        (input) => input.requestId?.startsWith('watchdog-retry:'),
+      ),
+    )
+    await f.stop(child, parent)
+    f.release()
+    const inputs = (
+      await f.host.scanSubmissions({ conversationId: child }, 100, undefined, context)
+    ).items
+    expect(inputs.find((input) => input.requestId?.startsWith('watchdog-retry:'))).toMatchObject({
+      status: 'unanswered',
+      reason: 'aborted',
+    })
+    expect((await f.harness.snapshot(LiveDoc, child, context))?.run).toBeUndefined()
+    expect(await f.entries(parent)).toHaveLength(0)
+  },
+)
 
 it.each([false, true])('waits 60 s, retries once; retry failure: %s', async (retryFails) => {
   const seen: string[] = []
