@@ -390,6 +390,53 @@ it('creates a project subscription in the checkout with a committed manifest', a
       caller.id,
     ),
   ).rejects.toThrow('Subscription ship-prs already exists')
+  // The identical create (as a replay would send it) cannot reset a record that has been used either.
+  await expect(
+    app.extensions.invoke(
+      'subscriptions',
+      'create',
+      {
+        ask: 'Poll ship PRs',
+        title: 'Ship PRs',
+        once: false,
+        scope: 'project',
+        secrets: ['GH_TOKEN'],
+      },
+      new AbortController().signal,
+      caller.id,
+    ),
+  ).rejects.toThrow('Subscription ship-prs already exists')
+  expect((await list(app))[0]).toMatchObject({ subscribers: [caller.id], state: 'writing' })
+
+  // A discovered, unused record with the same manifest is adopted with its agent; inherited object keys are no slugs.
+  await committed(root, 'ship-prs-2', 'true')
+  const discovered = (await list(app)).find((s) => s.id === 'ship-prs-2')!
+  const adopted = (await app.extensions.invoke(
+    'subscriptions',
+    'create',
+    {
+      ask: 'Poll ship/* PRs',
+      title: 'Ship PRs',
+      once: false,
+      scope: 'project',
+      slug: 'ship-prs-2',
+    },
+    new AbortController().signal,
+    caller.id,
+  )) as Subscription
+  expect(adopted).toMatchObject({
+    conversationId: discovered.conversationId,
+    subscribers: [caller.id],
+  })
+  await expect(
+    app.extensions.invoke(
+      'subscriptions',
+      'create',
+      { ask: 'x', scope: 'project', slug: 'constructor' },
+      new AbortController().signal,
+      caller.id,
+    ),
+  ).rejects.toThrow('not be an object key')
 })
 
 it('waits for a SIGTERM-ignoring script to die before stop returns and removes its pid file', async () => {

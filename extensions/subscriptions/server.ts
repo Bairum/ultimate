@@ -47,7 +47,8 @@ import {
   SubscribeAction,
   UnsubscribeAction,
 } from './refs.ts'
-import { doneText, fireText, ID, SLUG, trimLog } from './types.ts'
+import { doneText, fireText, isId, isSlug, trimLog } from './types.ts'
+import { writeJson } from '../../lib/json-file.ts'
 import type { Args, Manifest, Subscription, SubscriptionListItem } from './types.ts'
 
 export const Subscriptions = defineDoc<{
@@ -85,10 +86,22 @@ function required(value: unknown, name: string): string {
 }
 function validId(value: unknown): string {
   const id = required(value, 'id')
-  if (!ID.test(id)) throw new Error('id must be S<n> or a project subscription slug')
+  if (!isId(id)) throw new Error('id must be S<n> or a project subscription slug')
   return id
 }
 const MANIFEST = 'subscription.json'
+/** A project record discovery made and nobody has used yet: never started, no subscribers or fires. */
+const pristine = (sub: Subscription) =>
+  sub.scope === 'project' &&
+  sub.state === 'stopped' &&
+  !sub.startedAt &&
+  !sub.fires &&
+  !sub.subscribers.length
+const exists = (path: string) =>
+  access(path).then(
+    () => true,
+    () => false,
+  )
 /** A project subscription's committed manifest, or undefined when the file is missing or malformed. */
 function manifest(value: unknown): Manifest | undefined {
   if (!value || typeof value !== 'object') return undefined
@@ -163,7 +176,7 @@ function backend(host: ExtensionHost) {
         throw error
       }
       for (const entry of entries) {
-        if (!entry.isDirectory() || !SLUG.test(entry.name)) continue
+        if (!entry.isDirectory() || !isSlug(entry.name)) continue
         let text: string
         try {
           text = await readFile(join(projectDir(entry.name), MANIFEST), 'utf8')
@@ -191,24 +204,32 @@ function backend(host: ExtensionHost) {
      */
     async function discover() {
       const found = await manifests()
+      // A slug whose create is in flight belongs to that create: discovery neither adds nor forgets it.
+      for (const slug of creating) found.delete(slug)
+      const gone = (s: Subscription) =>
+        s.scope === 'project' && !found.has(s.id) && !creating.has(s.id)
       const differs = (subs: Record<string, Subscription>) =>
-        [...found].some(
-          ([id, m]) =>
-            !subs[id] ||
-            (subs[id].scope === 'project' &&
-              JSON.stringify([subs[id].title, subs[id].ask, subs[id].once, subs[id].secrets]) !==
-                JSON.stringify([m.title, m.ask, m.once, m.secrets])),
-        ) || Object.values(subs).some((s) => s.scope === 'project' && !found.has(s.id))
-      const current = (await host.harness().snapshot(Subscriptions, BACKGROUND_CONTEXT))
-        ?.subscriptions
-      if (!differs(current ?? {})) return
-      // A new subscription gets its agent now, idle under @ultimate, so every record has one.
-      const prepared = [...found.keys()].some((id) => !current?.[id]) ? await agentFor() : undefined
+        [...found].some(([id, m]) => {
+          const sub = subs[id]
+          return (
+            !sub ||
+            (sub.scope === 'project' &&
+              JSON.stringify([sub.title, sub.ask, sub.once, sub.secrets]) !==
+                JSON.stringify([m.title, m.ask, m.once, m.secrets]))
+          )
+        }) || Object.values(subs).some(gone)
+      const current =
+        (await host.harness().snapshot(Subscriptions, BACKGROUND_CONTEXT))?.subscriptions ?? {}
+      if (!differs(current)) return
+      // A new subscription gets its idle agent conversation now, so every record has one.
+      const prepared = [...found.keys()].some((id) => !current[id]) ? await agentFor() : undefined
+      const trust = await trusted()
       const removed = await host.harness().commit(async (tx) => {
         const state = await tx.doc(Subscriptions)
         const stops: Effect[] = []
         const now = Date.now()
         for (const [id, m] of found) {
+          if (creating.has(id)) continue
           const sub = state.subscriptions[id]
           if (!sub && prepared)
             state.subscriptions[id] = {
@@ -229,7 +250,9 @@ function backend(host: ExtensionHost) {
           }
         }
         for (const sub of Object.values(state.subscriptions)) {
-          if (sub.scope !== 'project' || found.has(sub.id)) continue
+          if (!gone(sub)) continue
+          // The scan may predate a create that has since published its manifest: forget only what is still gone.
+          if (trust && (await exists(join(projectDir(sub.id), MANIFEST)))) continue
           delete state.subscriptions[sub.id]
           stops.push({ id: sub.id, action: 'stop', ...(sub.pid ? { previousPid: sub.pid } : {}) })
         }
@@ -237,6 +260,8 @@ function backend(host: ExtensionHost) {
       }, BACKGROUND_CONTEXT)
       for (const stop of removed) await apply(stop)
     }
+    /** Project slugs whose create runs between publishing the manifest and committing the record. */
+    const creating = new Set<string>()
     /** Create, inside `tx`, the ownerless conversation of subscription `id`'s agent. */
     async function agentConversation(
       tx: Tx,
@@ -257,7 +282,7 @@ function backend(host: ExtensionHost) {
       })
       return child.id
     }
-    /** The agent a new subscription conversation is configured from, and its parent: the caller, else @ultimate. */
+    /** The agent a new subscription conversation is configured from, and whose model and tools it copies: the caller, else @ultimate. */
     async function agentFor(caller?: number): Promise<Prepared> {
       const profile = (
         await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
@@ -662,26 +687,50 @@ function backend(host: ExtensionHost) {
             .replace(/^[^a-z]+|-+$/g, '')
             .slice(0, 40)
             .replace(/-+$/, '')
-        if (typeof slug !== 'string' || !SLUG.test(slug))
-          throw new Error('slug must match ^[a-z][a-z0-9-]*$ (at most 63 characters)')
+        if (typeof slug !== 'string' || !isSlug(slug))
+          throw new Error(
+            'slug must match ^[a-z][a-z0-9-]*$ (at most 63 characters) and not be an object key',
+          )
         const committed: Manifest = {
           title: args.title?.trim() ?? required(args.ask, 'ask').slice(0, 80),
           ask: required(args.ask, 'ask'),
           once: args.once ?? true,
           ...(args.secrets?.length ? { secrets: args.secrets } : {}),
         }
-        const text = `${JSON.stringify(committed, null, 2)}\n`
         const path = join(projectDir(slug), MANIFEST)
-        // Written before the record commits. A replay finds its own identical manifest and adopts it; a different
+        // Published before the record commits. A replay finds its own equal manifest and adopts it; a different
         // one is another subscription.
-        const existing = await readFile(path, 'utf8').catch((error: NodeJS.ErrnoException) => {
-          if (error.code !== 'ENOENT') throw error
-          return undefined
-        })
-        if (existing !== undefined && existing !== text)
-          throw new Error(`Subscription ${slug} already exists; pass another slug`)
-        await mkdir(projectDir(slug), { recursive: true })
-        await writeFile(path, text)
+        if (creating.has(slug)) throw new Error(`Subscription ${slug} is being created`)
+        creating.add(slug)
+        try {
+          const existing = await readFile(path, 'utf8').then(
+            (text) => {
+              try {
+                return manifest(JSON.parse(text)) ?? null
+              } catch {
+                // An unreadable manifest is someone's broken subscription, not ours to overwrite.
+                return null
+              }
+            },
+            (error: NodeJS.ErrnoException) => {
+              if (error.code !== 'ENOENT') throw error
+              return undefined
+            },
+          )
+          if (
+            existing !== undefined &&
+            JSON.stringify(existing) !== JSON.stringify(manifest(committed))
+          )
+            throw new Error(`Subscription ${slug} already exists; pass another slug`)
+          const record = (await host.harness().snapshot(Subscriptions, BACKGROUND_CONTEXT))
+            ?.subscriptions[slug]
+          if (record && !pristine(record))
+            throw new Error(`Subscription ${slug} already exists; pass another slug`)
+          if (existing === undefined) await writeJson(path, committed)
+        } catch (error) {
+          creating.delete(slug)
+          throw error
+        }
         return { ...(await agentFor(caller)), slug }
       }
       if (args.action === 'list') {
@@ -734,6 +783,13 @@ function backend(host: ExtensionHost) {
           })),
         }
       if (args.action === 'create') {
+        // Only a record discovery made from this create's own manifest (crash, replay) is adopted, with its agent.
+        if (
+          prepared.slug &&
+          state.subscriptions[prepared.slug] &&
+          !pristine(state.subscriptions[prepared.slug])
+        )
+          throw new Error(`Subscription ${prepared.slug} already exists; pass another slug`)
         const id = prepared.slug ?? `S${state.next++}`
         const title = args.title?.trim() ?? required(args.ask, 'ask').slice(0, 80)
         // A concurrent list may already have discovered the manifest written in prepare: adopt its agent.
@@ -825,9 +881,14 @@ function backend(host: ExtensionHost) {
       const receipt = await host
         .harness()
         .commit(async (tx) => json(await change(tx, args, prepared, caller)), BACKGROUND_CONTEXT)
+        .finally(() => settle(prepared))
       await apply(receipt.effect)
       if (args.action === 'start') return json(await snapshot(required(args.id, 'id')))
       return receipt.result
+    }
+    /** A project create's record is committed (or failed): discovery owns its slug again. */
+    const settle = (prepared: Prepared) => {
+      if (prepared.slug) creating.delete(prepared.slug)
     }
     async function status(id: string): Promise<SubscriptionListItem> {
       if (!validId(id).startsWith('S')) await discover()
@@ -854,7 +915,7 @@ function backend(host: ExtensionHost) {
       }
       // Sweep files, not ledger records: stop/delete may have committed just before a crash.
       for (const entry of folders) {
-        if (!entry.isDirectory() || !ID.test(entry.name)) continue
+        if (!entry.isDirectory() || !isId(entry.name)) continue
         const pid = await readPid(entry.name)
         if (pid) await cleanup(entry.name, pid, runs.get(entry.name))
       }
@@ -871,7 +932,7 @@ function backend(host: ExtensionHost) {
         }
       }
     }
-    return { Deliver, operate, status, prepare, change, apply, open, close, runPath }
+    return { Deliver, operate, status, prepare, change, settle, apply, open, close, runPath }
   })
 }
 
@@ -915,11 +976,9 @@ export const actions = {
   ),
   // Outside the reload-stable supervisor: a read needs no process state, and stays current on reload.
   script: implementAction(ScriptAction, async (args, { host }) => {
-    const id = validId(input(args, 'script').id)
-    const state = await host.harness().snapshot(Subscriptions, BACKGROUND_CONTEXT)
-    const sub = state?.subscriptions[id]
-    if (!sub) throw new Error(`Unknown subscription: ${id}`)
-    const path = backend(host).runPath(sub)
+    const api = backend(host)
+    // status discovers project subscriptions first, so a new, removed or untrusted slug reads like list shows it.
+    const path = api.runPath(await api.status(validId(input(args, 'script').id)))
     try {
       const text = await readFile(path, 'utf8')
       return { path, text: text.length > 65536 ? `${text.slice(0, 65536)}\n…` : text }
@@ -1000,12 +1059,14 @@ export default function subscriptions(host: ExtensionHost) {
           let receipt = saved
           if (saved.result === undefined) {
             const prepared = await api.prepare(args, tool.conversationId)
-            receipt = await tool.commit(async (tx) => {
-              const value = await tx.doc(Receipt, tool.taskId)
-              if (value.result === undefined)
-                Object.assign(value, await api.change(tx, args, prepared, tool.conversationId))
-              return json(value)
-            }, context)
+            receipt = await tool
+              .commit(async (tx) => {
+                const value = await tx.doc(Receipt, tool.taskId)
+                if (value.result === undefined)
+                  Object.assign(value, await api.change(tx, args, prepared, tool.conversationId))
+                return json(value)
+              }, context)
+              .finally(() => api.settle(prepared))
           }
           await api.apply(receipt.effect)
           return tool.memo(

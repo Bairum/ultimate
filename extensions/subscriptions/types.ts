@@ -45,9 +45,12 @@ export type Args = Partial<CreateArgs> & {
 
 /** The committed `subscription.json` of a project subscription. */
 export type Manifest = { title: string; ask: string; once: boolean; secrets?: string[] }
-/** Lowercase, so a slug never collides with a user subscription's `S<n>`. */
-export const SLUG = /^[a-z][a-z0-9-]{0,62}$/
-export const ID = /^(?:S[1-9]\d*|[a-z][a-z0-9-]{0,62})$/
+/**
+ * A project subscription's slug: lowercase, so it never collides with a user `S<n>`, and never an inherited object
+ * key such as `constructor`, so records stay plain lookups.
+ */
+export const isSlug = (id: string) => /^[a-z][a-z0-9-]{0,62}$/.test(id) && !(id in Object.prototype)
+export const isId = (id: string) => /^S[1-9]\d*$/.test(id) || isSlug(id)
 
 /** Only stdout has a protocol; progress on stderr never fires a subscription. */
 export function fireText(line: string, stdout: boolean): string | undefined {
