@@ -12,14 +12,21 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn, defineWebExtension, Fold, useToolDuration, useUltimate } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
-import { Dot, states, useOpenSubscription, useSubscriptions, worst } from './parts.tsx'
+import {
+  Dot,
+  openSubscriptionsPanel,
+  states,
+  useOpenSubscription,
+  useSubscriptions,
+  worst,
+} from './parts.tsx'
 import type { State } from './parts.tsx'
 import { WatchingSection } from './sidebar.tsx'
 import { SubscriptionsPanel } from './panel.tsx'
 
 /** The status-line chip: how many subscriptions, coloured by the worst; gone while there are none. */
 function Chip() {
-  const { openPanel } = useUltimate()
+  const shell = useUltimate()
   // The chip only needs to notice a failure within a few seconds; the open panel polls faster for everyone.
   const { data } = useSubscriptions(5000)
   const list = data ?? []
@@ -37,7 +44,7 @@ function Chip() {
         (state === 'failed' || state === 'investigating') && states[state].text,
       )}
       data-subscriptions-chip={state}
-      onClick={() => openPanel('subscriptions')}
+      onClick={() => openSubscriptionsPanel(shell)}
       title={counts.join(' · ') || 'Subscriptions'}
       type="button"
     >
@@ -136,7 +143,7 @@ const touched = (call: ToolCallView) =>
 function SubscriptionCall({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   const open = useOpenSubscription()
-  const { openPanel } = useUltimate()
+  const shell = useUltimate()
   const action = words(call.args.action) || '…'
   const id = touched(call)
   const ask = words(call.args.ask)
@@ -173,7 +180,7 @@ function SubscriptionCall({ call }: { call: ToolCallView }) {
         />
         <Button
           className="mr-1 h-6 shrink-0 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
-          onClick={() => (id ? open(id) : openPanel('subscriptions'))}
+          onClick={() => (id ? open(id) : openSubscriptionsPanel(shell))}
           size="sm"
           title={id ? `Show ${id}'s agent and script` : 'Show Subscriptions'}
           variant="ghost"
@@ -219,7 +226,7 @@ export default defineWebExtension({
     {
       id: 'subscriptions.open',
       title: 'Subscriptions…',
-      run: (context) => context.openPanel('subscriptions'),
+      run: openSubscriptionsPanel,
     },
   ],
   slots: {

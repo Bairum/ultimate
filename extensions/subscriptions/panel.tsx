@@ -54,6 +54,8 @@ export function SubscriptionsPanel() {
   const shown = useStore((state) => state.requested) ?? conversationId
   // "All subscriptions" from an agent: the list, until the shell shows another conversation.
   const [listing, setListing] = useState<number>()
+  // Another conversation ends it, so coming back to the agent shows its script again.
+  if (listing !== undefined && listing !== shown) setListing(undefined)
   const list = data ?? []
   const current = list.find((sub) => sub.conversationId === shown)
   const open = (sub: SubscriptionListItem) => {

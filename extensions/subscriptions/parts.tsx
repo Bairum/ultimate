@@ -117,19 +117,28 @@ export function useSubscriptions(ms: number | false): Polled {
   return useSyncExternalStore(listen, () => poll.state)
 }
 
+/** Opens the Subscriptions panel, on the Agent surface: other surfaces, such as System, have no panels. */
+export function openSubscriptionsPanel(shell: {
+  showSurface: (id: string) => void
+  openPanel: (id?: string) => void
+}) {
+  shell.showSurface('agent')
+  shell.openPanel('subscriptions')
+}
+
 /**
  * Opens subscription `id`: its agent's conversation in the middle and the Subscriptions panel beside it, which then
  * shows its script. An id the list does not know yet (a card for a subscription just created) is looked up first;
  * one that is gone opens the panel on the list.
  */
 export function useOpenSubscription() {
-  const { openPanel, switchConversation } = useUltimate()
+  const { switchConversation, ...shell } = useUltimate()
   const agent = (id: string) => poll.state.data?.find((sub) => sub.id === id)?.conversationId
   const show = (id: string) => {
     const to = agent(id)
     if (to !== undefined) switchConversation(to)
     // After the switch, which closes an overlaid panel on a phone.
-    openPanel('subscriptions')
+    openSubscriptionsPanel(shell)
   }
   return (id: string) => {
     if (agent(id) !== undefined) return show(id)
