@@ -386,6 +386,20 @@ it('runs root -> forked review lead -> parallel leaves -> lead -> root with scop
   expect(await f.opened.harness.snapshot(Subagents, omittedId, context)).toBeUndefined()
 })
 
+it('names the definitions when start omits agent, for every argument shape seen in the trace', async () => {
+  const f = await fixture()
+  for (const shape of [
+    {},
+    { background: true },
+    { background: true, isolate: 'none' },
+    { background: true, fork: true, isolate: 'worktree' },
+  ]) {
+    const result = await call(f.opened, { action: 'start', task: 'Review', ...shape })
+    expect(result.text).toContain('Unknown agent: undefined. Pass agent: one of scout')
+  }
+  expect(await children(f.opened)).toHaveLength(0)
+})
+
 it('routes asynchronous leaf reports only to their lead, not the root', async () => {
   const f = await fixture()
   await writeFile(

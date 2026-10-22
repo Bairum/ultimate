@@ -802,7 +802,9 @@ export default function subagents(
             Type.Literal('land'),
             Type.Literal('discard'),
           ]),
-          agent: Type.Optional(Type.String()),
+          agent: Type.Optional(
+            Type.String({ description: 'Required for start: an Available definitions name.' }),
+          ),
           task: Type.Optional(Type.String()),
           background: Type.Optional(Type.Boolean()),
           fork: Type.Optional(Type.Boolean()),
@@ -853,7 +855,7 @@ export default function subagents(
               )
             const parent = await api.agent(context)
             const existingAction = index.actions[api.callId]
-            const definition =
+            const definitions =
               args.action === 'start' && !existingAction
                 ? (
                     await discoverAgents(
@@ -862,10 +864,13 @@ export default function subagents(
                       host.userHome,
                       host.modelRuntime,
                     )
-                  ).definitions.find((agent) => agent.name === args.agent)
+                  ).definitions
                 : undefined
-            if (args.action === 'start' && !existingAction && !definition)
-              throw new Error(`Unknown agent: ${args.agent}`)
+            const definition = definitions?.find((agent) => agent.name === args.agent)
+            if (definitions && !definition)
+              throw new Error(
+                `Unknown agent: ${args.agent}. Pass agent: one of ${definitions.map((agent) => agent.name).join(', ')}`,
+              )
             if (definition?.tools?.some((name) => !parent.tools.some((tool) => tool.name === name)))
               throw new Error('Definition tools must be a subset of parent tools')
             const isolated =
