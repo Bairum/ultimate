@@ -3,7 +3,6 @@ import {
   CopyIcon,
   ExternalLinkIcon,
   LoaderCircleIcon,
-  NetworkIcon,
   RefreshCwIcon,
   ShieldCheckIcon,
   TriangleAlertIcon,
@@ -11,9 +10,18 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api, cn, defineWebExtension, errorMessage, useAction, useSystem, useUltimate } from '@/sdk'
+import {
+  api,
+  cn,
+  defineWebExtension,
+  errorMessage,
+  events,
+  useAction,
+  useEvent,
+  useSystem,
+} from '@/sdk'
 import { encode } from 'uqr'
 import { SetExtensionAction } from '../onboarding/ui.tsx'
 import { RetryAction, StatusAction } from './refs.ts'
@@ -121,6 +129,9 @@ function Ready({ url, allow }: { url: string; allow: string[] }) {
   const { copied, copy } = useCopy()
   return (
     <>
+      <div className="mt-3">
+        <QrCode text={url} />
+      </div>
       <p className="mt-2.5 rounded-md border border-border/80 bg-background px-2.5 py-2 font-mono text-[12.5px] leading-snug break-all text-foreground">
         {url}
       </p>
@@ -283,8 +294,9 @@ const quiet = (label: string) => (
   </span>
 )
 
-function TailscalePanel() {
-  const { data, error, refetch } = useStatus()
+/** Everything about the tailnet in one place: the address to scan, or what to fix, or the switch to turn it on. */
+function Details({ status }: { status: ReturnType<typeof useStatus> }) {
+  const { data, error, refetch } = status
   const state = data?.state
   const meta =
     state === 'ready' ? (
@@ -303,7 +315,7 @@ function TailscalePanel() {
       </span>
     ) : undefined
   return (
-    <section className="px-3 pt-3 pb-3.5">
+    <section className="px-3 pt-3 pb-3.5 font-sans">
       <Heading meta={meta}>Tailnet</Heading>
       {error && !data && (
         <p className="mt-2.5 font-mono text-[11px] leading-snug text-error">
@@ -349,40 +361,54 @@ function QrCode({ text }: { text: string }) {
   )
 }
 
-/** "tailnet" with a dot while this Ultimate is reachable there; opens the panel. Hover for its URL as a QR code. */
+/**
+ * "tailnet" in the title bar: a green dot while this Ultimate is reachable there, amber while it needs a fix. A click
+ * opens the details beneath it. Off or starting, it stays out of the bar; `Tailscale…` in the palette opens the details
+ * anchored where it would be.
+ */
 function Indicator() {
-  const { data } = useStatus()
-  const ui = useUltimate()
-  if (data?.state !== 'ready' || !data.url) return null
+  const status = useStatus()
+  const [open, setOpen] = useState(false)
+  useEvent('tailscale:open', () => setOpen(true))
+  const state = status.data?.state
+  const trouble = state !== undefined && state in problems
+  const shown = (state === 'ready' && !!status.data?.url) || trouble
+  if (!shown && !open) return null
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          className="-mx-1 flex items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent hover:text-foreground"
-          onClick={() => ui.openPanel('tailscale')}
-          type="button"
-        >
-          {dot('bg-success')}
-          tailnet
-        </button>
-      </TooltipTrigger>
-      <TooltipContent className="font-mono text-[11px]" side="bottom">
-        <QrCode text={data.url} />
-        <div className="mt-1.5">{data.url}</div>
-        <div className="text-muted-foreground">only {data.allow.join(', ')}</div>
-      </TooltipContent>
-    </Tooltip>
+    <Popover onOpenChange={setOpen} open={open}>
+      <PopoverTrigger asChild>
+        {shown ? (
+          <button
+            className={cn(
+              '-mx-1 flex items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground',
+              trouble && 'text-warning',
+            )}
+            data-tailnet={state}
+            title={trouble ? 'Tailnet needs a fix' : 'Reachable on your tailnet'}
+            type="button"
+          >
+            {dot(trouble ? 'bg-warning' : 'bg-success')}
+            tailnet
+          </button>
+        ) : (
+          // Off or starting there is nothing to show in the bar; the palette's details hang from here.
+          <span aria-hidden className="h-4 w-0" />
+        )}
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 max-w-[calc(100vw-1rem)] p-0" side="bottom">
+        <Details status={status} />
+      </PopoverContent>
+    </Popover>
   )
 }
 
 export default defineWebExtension({
   slots: { 'titlebar.right': [Indicator] },
-  panels: [{ id: 'tailscale', title: 'Tailscale', icon: NetworkIcon, component: TailscalePanel }],
   commands: [
     {
       id: 'tailscale.panel',
       title: 'Tailscale…',
-      run: (context) => context.openPanel('tailscale'),
+      run: () => events.emit('tailscale:open', undefined),
     },
   ],
 })
