@@ -11,7 +11,7 @@ import type { ReactNode } from 'react'
 import { MentionText } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
 import { api, definePoint, Fold, Provided, useConversations, useUltimate } from '@/sdk'
-import { FeatureTag } from '../conversations/ui.tsx'
+import { FeatureTag, useStandingName } from '../conversations/ui.tsx'
 import { GithubAction } from './refs.ts'
 import type { ConversationSubject } from '../conversations/types.ts'
 
@@ -133,9 +133,18 @@ export function CommitCount({
   )
 }
 
+/**
+ * What a submission lands as the feature its conversation had at submit time; a standing agent is only ever its
+ * `@name`, whatever branch work it last submitted.
+ */
+function useSubject(from: number, subject?: ConversationSubject) {
+  const agent = useStandingName(from)
+  return agent ? { title: agent } : subject
+}
+
 /** The feature a submission lands, as one line: its feature tag and title, then `#id`. */
 export function Subject({
-  subject,
+  subject: given,
   from,
   className,
 }: {
@@ -144,6 +153,7 @@ export function Subject({
   className?: string
 }) {
   const { switchConversation } = useUltimate()
+  const subject = useSubject(from, given)
   return (
     <span className={cn('flex min-w-0 items-center gap-1.5', className)}>
       {subject?.feature && <FeatureTag className="shrink-0" feature={subject.feature} />}
@@ -199,6 +209,7 @@ export function LandingCard({
   children?: ReactNode
 }) {
   const [border, color, Icon, label] = tones[tone]
+  const named = useSubject(from, subject)
   return (
     <Fold
       card={card}
@@ -206,11 +217,9 @@ export function LandingCard({
         <>
           <Icon className={cn('size-3 shrink-0', color)} />
           <span className={cn('shrink-0', color)}>{label}</span>
-          {subject?.feature && <FeatureTag className="shrink-0" feature={subject.feature} />}
-          <span className="min-w-0 truncate text-foreground/80">
-            {subject?.title ?? `#${from}`}
-          </span>
-          {subject?.title && <span className="shrink-0">#{from}</span>}
+          {named?.feature && <FeatureTag className="shrink-0" feature={named.feature} />}
+          <span className="min-w-0 truncate text-foreground/80">{named?.title ?? `#${from}`}</span>
+          {named?.title && <span className="shrink-0">#{from}</span>}
           {sha && <span className="shrink-0">· {sha.slice(0, 7)}</span>}
         </>
       }

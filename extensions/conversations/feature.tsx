@@ -38,6 +38,12 @@ export function FeatureTag({ feature, className }: { feature: string; className?
   )
 }
 
+/** A standing agent's `@name`, the only name it goes by: titles and feature tags passed along with it go stale. */
+export function useStandingName(id: number) {
+  const live = useConversations().find((conversation) => conversation.id === id)
+  return live?.label === 'agent' ? live.title : undefined
+}
+
 /**
  * A conversation as a person recognises it: a standing agent by its `@name`; else its feature tag and `title`, else
  * its live title; then `#id` in gray. Only
@@ -54,11 +60,11 @@ export function ConversationRef({
   className?: string
 }) {
   const overview = useOverview()
-  const live = useConversations().find((conversation) => conversation.id === id)
+  const live = useConversations().find((conversation) => conversation.id === id)?.title
   // A standing agent is always itself: a feature tag would be stale, the work of whichever branch named it last.
-  const agent = live?.label === 'agent' ? live.title : undefined
+  const agent = useStandingName(id)
   const feature = agent ? undefined : overview[id]?.feature
-  const name = agent ?? title ?? (feature ? undefined : live?.title)
+  const name = agent ?? title ?? (feature ? undefined : live)
   return (
     <span
       className={cn('inline-flex max-w-full min-w-0 items-center gap-1.5', className)}
