@@ -39,8 +39,8 @@ and Scheduled sections of the `sidebar.top` slot draw the same heading. Top to b
   entry does.
 - **Memory**: one row per root (`MemoryRow`, `root.tsx`) with a brain mark, the brief's size (what every new branch
   starts from; the whole context's while it has no memories) and its memories counted by kind (`4 decisions · 5 facts
-· 3 lessons`). Clicking it opens lineage's **Memory** panel, grouped into decisions, facts and lessons; a root with
-  no memories yet opens its context instead. Below it, a quiet **History #id** line opens the root's tally, the
+· 3 lessons`). Clicking it opens lineage's **Memory** panel, grouped into decisions, facts and lessons (empty until
+  @ultimate remembers something). Below it, a quiet **History #id** line opens the root's tally, the
   browsable history (every branch, abstract and landing), whose footer offers Compact (lineage `compact {id}`) and
   Talk to @ultimate. The row has no menu; a root is never renamed, cleared or concluded here.
 - The `sidebar.top` slot: background work that optional extensions contribute without the sidebar importing them,
@@ -50,7 +50,8 @@ and Scheduled sections of the `sidebar.top` slot draw the same heading. Top to b
   until it is concluded or it landed after its latest input (the lander's results, or a root landing note from it;
   a landed branch that gets new work is open again). Each shows its title, its feature tag, a state (`submitted` or
   `landing` while the lander has it, the working phase while it works, amber `awaiting @ultimate` while a
-  reply-enabled message it sent @ultimate is open, red `failed`, else `idle`) and its age; clicking opens it. A branch
+  reply-enabled message it sent @ultimate is open, red `failed`, else `idle`) and its age; clicking opens it, and its `…` menu is the same as an Earlier row's (Rename, Compact
+  context, Conclude with the pending-work check). A branch
   with a worktree also shows its work so far on a quiet line below (workspaces' `progress`): `N commits` not yet on
   its target, opening `branch:<name>` in Review, and `+ N edits` (uncommitted changed paths), opening
   `uncommitted:<id>`. A fresh worktree, or a branch without one, shows nothing. All rows are read in one call, again

@@ -40,7 +40,7 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   `{ branch, intent }`, compactions, and the genesis (`started`), each with its `entry` and `at`. With a GitHub
   `origin`, a landing's `compare` is `https://diffshub.com/<owner>/<repo>/compare/<base>...<sha>` (DiffsHub's view of the GitHub range); a note from before
   landings recorded `base` uses the landing before it, which is where the lander's serial queue left the target.
-  Catch-up notes and abstracts are left out. The sidebar's root row shows the landings.
+  Catch-up notes and abstracts are left out. The sidebar's Landed section, under the lander, shows the landings.
   Workspaces' `github` action gives the root page's landing cards the same range.
   `compact` `{ id, instructions? }` → `{ taskId }` starts the same compaction as `compact_tally`, for the history footer's Compact
   and the palette's Compact command on a root.
@@ -98,8 +98,8 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   extensions. The root's context footer folds them to `Memory · N` (open state in UI state `ext.lineage.memoryOpen`),
   newest first: kind, slug, line and age per row; a row expands to its Markdown body and source chip, and a trash icon
   (always visible on touch) calls `forget`. The **Memory** panel (`MEMORY_PANEL` in `ui.tsx`, which the sidebar's
-  Memory row opens) shows every root's memory with the same rows, grouped into Decisions, Facts and Lessons, with the
-  brief's size; `ui.tsx` also re-exports `MemoryDoc` for the sidebar's counts.
+  Memory row opens) shows every root's memory with the same rows, grouped into Decisions, Facts and Lessons (the brief's
+  size is on the sidebar row); `ui.tsx` also re-exports `MemoryDoc` for the sidebar's counts.
   **Brief**: a branch forked from a root that has memories does not start from the tally. Its fork gets a
   `pi.reset` (`head: 'self'`, `data.lineage.brief: {tally}`, the root tip it covers) right after the fork point,
   before its prompt, whose model text is `<project_memory root="#R">` with the index, the root's last 10 landings (`<sha7> <feature: title> (#conv)`) and

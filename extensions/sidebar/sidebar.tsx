@@ -533,7 +533,12 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
         )}
         {/* What watches or runs in the background, from optional extensions; each section brings its own rule. */}
         <Slot name="sidebar.top" />
-        <InFlight flights={flights} now={now} shownId={shownId} />
+        <InFlight
+          flights={flights}
+          now={now}
+          onConclude={(id, conclude) => void requestConclude(id, conclude)}
+          shownId={shownId}
+        />
       </nav>
       {summary &&
         (summary.summary ||
