@@ -1032,7 +1032,7 @@ export default function subagents(
                 request: `watchdog-retry:${(task.input as { failedTask: number }).failedTask}`,
               }))
             }, context)
-            const target = await api.memo(
+            const saved = await api.memo(
               'stopTarget',
               {
                 run: live?.run?.taskId ?? null,
@@ -1044,6 +1044,8 @@ export default function subagents(
               },
               context,
             )
+            // A stop interrupted before the watchdog saved no watchdogs; it captured none, so it cancels none.
+            const target = { ...saved, watchdogs: saved.watchdogs ?? [] }
             // Join delivery invocations before inspecting admissions that may have raced stop.
             // Capture watchdog identities too: Stop must not restart the child after its delay.
             for (const reporter of [
