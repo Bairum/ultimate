@@ -53,6 +53,13 @@ async function bash(command: string, dir = cwd) {
     outputWindow: undefined,
     retainedOutput: () => ({ text: output, truncated: false }),
     diagnostic: () => {},
+    // These calls exercise commit recording without user cancellation.
+    snapshot: async () => ({ calls: {} }),
+    watchDoc: async () => ({
+      value: { calls: {} },
+      start: () => {},
+      stop: async () => {},
+    }),
     commit: async (change: (tx: never) => unknown) => change(undefined as never),
   } as unknown as ToolExecutionApi
   const result = await tool.execute({ command }, api, context)
