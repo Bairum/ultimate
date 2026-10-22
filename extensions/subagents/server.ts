@@ -626,7 +626,8 @@ export default function subagents(
         )
         if (sibling?.status === 'done' && sibling.answer === submission.answer) messaged = false
       }
-      if (!messaged) {
+      // Watchdog continuations also answer failed one-way messages, which have no reporter action.
+      if (!messaged && !submission.requestId?.startsWith('watchdog-retry:')) {
         const action = childActions.at(-1)
         const interrupted = action?.status === 'interrupted'
         if (action?.status !== 'unanswered' && action?.status !== 'failed' && !interrupted) return

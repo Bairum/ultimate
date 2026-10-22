@@ -532,6 +532,76 @@ async function reports(opened: OpenHost) {
 }
 
 describe('provider error recovery', () => {
+  it.each([false, true])(
+    'delivers a successful watchdog retry of a finished child’s one-way message once (offline: %s)',
+    async (offlineAnswer) => {
+      const f = await fixture(undefined, undefined, undefined, (transcript) =>
+        transcript.messages.at(-1)?.role === 'user' &&
+        transcript.messages.at(-1)?.content === 'one-way failure'
+          ? fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'not logged in' })
+          : undefined,
+      )
+      await call(f.opened, { action: 'start', agent: 'scout', task: 'initial answer' })
+      const [child] = await children(f.opened)
+      const handle = (await f.opened.harness.conversation(child.conversationId, context))!
+      await (
+        await handle.submit(
+          {
+            type: 'input',
+            content: 'one-way failure',
+            entry: {
+              kind: 'board.message',
+              data: { from: f.opened.root.id, reply: false },
+            },
+          },
+          context,
+        )
+      ).wait(context)
+      expect(
+        Object.values(
+          (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!.actions,
+        ).map((action) => action.status),
+      ).toEqual(['done'])
+      const before = (await reports(f.opened)).length
+      let opened = f.opened
+      if (offlineAnswer) {
+        await opened.close()
+        hosts.splice(hosts.indexOf(opened), 1)
+        opened = await f.prepared.open()
+        hosts.push(opened)
+      }
+      await (
+        await (await opened.harness.conversation(child.conversationId, context))!.submit(
+          {
+            type: 'input',
+            content: 'recovered one-way answer',
+            requestId: 'watchdog-retry:one-way',
+          },
+          context,
+        )
+      ).wait(context)
+      if (!offlineAnswer) {
+        await until(async () => (await reports(opened)).length === before + 1)
+        await opened.harness.waitForIdle(context)
+      }
+      await opened.close()
+      hosts.splice(hosts.indexOf(opened), 1)
+      const resumed = await f.reopen()
+      await until(async () => (await reports(resumed)).length === before + 1)
+      await resumed.harness.waitForIdle(context)
+      expect(
+        (await reports(resumed)).filter((entry) =>
+          JSON.stringify(entry.model).includes('recovered one-way answer'),
+        ),
+      ).toHaveLength(1)
+      expect((await children(resumed))[0].reported).toHaveLength(2)
+      await resumed.close()
+      hosts.splice(hosts.indexOf(resumed), 1)
+      const again = await f.reopen()
+      await again.harness.waitForIdle(context)
+      expect(await reports(again)).toHaveLength(before + 1)
+    },
+  )
   it('sends one watchdog card to the actual parent without a reporter failure', async () => {
     const f = await fixture(
       undefined,
