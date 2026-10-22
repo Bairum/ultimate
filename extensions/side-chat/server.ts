@@ -344,6 +344,16 @@ export function tracksEffect(name: string, args: Record<string, unknown>) {
   ].includes(name)
 }
 
+/** Read ahead of the user's first words in a side chat; agents/ultimate.md describes side chats the same way. */
+export function sideReminder(side: number, main: number, at: Date) {
+  return [
+    `You are in a side chat (#${side}): a temporary copy of @ultimate (#${main}), forked at ${at.toTimeString().slice(0, 5)}. Main keeps running without you.`,
+    'It is for quick lookups and small side tasks. Answer here, in place.',
+    'Persistent actions (branch, message, note, notify, remember, todo, subscription changes, setup, restart, edit, write) remove Discard for good and count as main’s, so their replies land in main. Use them only when the user clearly wants a lasting change.',
+    'When the user is done, they choose Discard or Summarize & inject. There is no side chat inside a side chat.',
+  ].join('\n')
+}
+
 export default (host: ExtensionHost) =>
   defineExtension({
     name: 'side-chat',
@@ -365,7 +375,7 @@ export default (host: ExtensionHost) =>
                 model: [
                   {
                     role: 'user',
-                    content: `You are side chat #${conversationId}, a temporary copy of @ultimate #${side.of} forked at entry ${side.at}. Answer the user here; messages to @ultimate still go to main. You cannot open another side chat.`,
+                    content: sideReminder(conversationId, side.of, new Date()),
                     timestamp: Date.now(),
                   },
                 ],

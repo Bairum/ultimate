@@ -176,13 +176,15 @@ describe('side chats', () => {
     const fork = (await f.server.harness.conversation(side, context))!
     const sideEntries = await entries(f.server, side)
     expect(sideEntries.some((entry) => entry.id === unfinished.id)).toBe(false)
-    expect(
-      sideEntries.find(
-        (entry) =>
-          entry.kind === 'conversations.identity' &&
-          JSON.stringify(entry.model).includes(`You are side chat #${side}`),
-      ),
-    ).toBeDefined()
+    const own = sideEntries.filter((entry) => entry.conversationId === side)
+    const reminder = own.findIndex(
+      (entry) =>
+        entry.kind === 'conversations.identity' &&
+        JSON.stringify(entry.model).includes(`You are in a side chat (#${side})`),
+    )
+    expect(reminder).toBeGreaterThanOrEqual(0)
+    // The reminder is read before the user's first words.
+    expect(own.findIndex((entry) => entry.kind === 'pi.user')).toBeGreaterThan(reminder)
     expect(f.requests.at(-1)!.system).toBe(mainBefore.system)
     expect(mainBefore.system).toContain('codemode')
     expect(await f.server.harness.snapshot(AgentDoc, side, context)).toEqual(
