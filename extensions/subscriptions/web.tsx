@@ -211,9 +211,8 @@ export default defineWebExtension({
       title: 'Subscriptions',
       icon: RadarIcon,
       component: SubscriptionsPanel,
-      order: 8,
-      // Opened from the sidebar's WATCHING section, the status-line chip, cards and ⌘K.
-      tab: false,
+      // A working tab after Activity; also opened from WATCHING, the status-line chip, cards and ⌘K.
+      order: 2.5,
     },
   ],
   commands: [
