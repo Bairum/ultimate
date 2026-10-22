@@ -1,0 +1,284 @@
+// Pi upstream: @earendil-works/pi-durable@1.3.0 src/harness/prompt.ts — internal remove-all pi.system entry immediately precedes a reordered re-add, folded into the re-add's diff here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
+import type { ImageContent, SystemMessage, TextContent } from '@earendil-works/pi-ai'
+import {
+  estimateMessageTokens,
+  estimateTextAndImageContentTokens,
+  estimateTextTokens,
+} from '@earendil-works/pi-ai/utils/estimate'
+import type { EntryRecord } from '@earendil-works/pi-durable'
+
+/** A prompt section as the model saw it, with its estimated tokens. */
+export interface Section {
+  key: string
+  text: string
+  tokens: number
+}
+/** A tool declaration as the model saw it; its tokens estimate the declaration's JSON. */
+export interface Tool {
+  name: string
+  description: string
+  parameters: unknown
+  tokens: number
+}
+/** The system prompt and tools in effect at an entry, in request order. */
+export interface Prompt {
+  sections: Section[]
+  tools: Tool[]
+}
+/** What a context start put in front of the model before its prompt: a memory brief, a tally, a summary, a handoff. */
+export interface Injected {
+  label: string
+  entry?: EntryRecord
+  content: string | readonly (TextContent | ImageContent)[]
+  tokens: number
+}
+/** What the model saw before the first input of a context, part by part. */
+export interface Breakdown {
+  /** The context's start marker; absent for a conversation's own start. */
+  start?: EntryRecord
+  injected?: Injected
+  /** The first system prompt of the context; absent until its first request. */
+  system?: EntryRecord
+  prompt?: Prompt
+  /** The model and thinking level of the context's first response. */
+  model?: { provider: string; model: string; thinking?: string }
+  tokens: { prompt: number; tools: number; injected: number; total: number }
+}
+export interface SectionChange {
+  key: string
+  change: 'added' | 'changed' | 'removed'
+  /** The new text, or the removed one. */
+  text: string
+  delta: number
+}
+export interface ToolChange {
+  name: string
+  change: 'added' | 'changed' | 'removed'
+  tool: Tool
+  delta: number
+}
+/** How a `pi.system` patch changed the prompt and tools, against the state before it. */
+export interface Diff {
+  sections: SectionChange[]
+  tools: ToolChange[]
+  delta: number
+}
+
+export const systemOf = (entry: EntryRecord | undefined): SystemMessage | undefined => {
+  const message = entry?.model?.[0]
+  return entry?.kind === 'pi.system' && message?.role === 'system' ? message : undefined
+}
+
+/** A reset or compaction: the model's context starts again here. */
+export const startsContext = (entry: EntryRecord) =>
+  entry.kind === 'pi.reset' || entry.kind === 'pi.compaction'
+
+/** A patch removing every section, which Pi Durable writes right before re-adding them in a new order. */
+export function removesAll(entry: EntryRecord | undefined) {
+  const values = Object.values(systemOf(entry)?.sections ?? {})
+  return values.length > 0 && values.every((value) => value === null)
+}
+
+export const toolTokens = (tool: { name: string; description: string; parameters: unknown }) =>
+  estimateTextTokens(
+    JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }),
+  )
+
+/** The prompt replayed from the context start before `index` through `index`: `null` removes, re-adding appends. */
+export function promptAt(entries: readonly EntryRecord[], index: number): Prompt {
+  let from = index
+  while (from >= 0 && !startsContext(entries[from])) from--
+  const sections = new Map<string, string>()
+  const tools = new Map<string, NonNullable<SystemMessage['toolsAdded']>[number]>()
+  for (let at = from + 1; at <= index; at++) {
+    const message = systemOf(entries[at])
+    if (!message) continue
+    for (const [key, value] of Object.entries(message.sections ?? {})) {
+      if (value === null) sections.delete(key)
+      else sections.set(key, value)
+    }
+    for (const tool of message.toolsRemoved ?? []) tools.delete(tool.name)
+    for (const tool of message.toolsAdded ?? []) tools.set(tool.name, tool)
+  }
+  return {
+    sections: [...sections].map(([key, text]) => ({ key, text, tokens: estimateTextTokens(text) })),
+    tools: [...tools.values()].map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      tokens: toolTokens(tool),
+    })),
+  }
+}
+
+/** Where the context of `index` starts: its reset or compaction, or `own`, the conversation's first entry, if later. */
+function anchorOf(entries: readonly EntryRecord[], index: number, own: number) {
+  let at = index
+  while (at >= 0 && !startsContext(entries[at])) at--
+  return Math.max(at, own)
+}
+
+/** Whether the `pi.system` at `index` is its context's first: the breakdown above the context shows it instead. */
+export function opensContext(entries: readonly EntryRecord[], index: number, own: number) {
+  const anchor = anchorOf(entries, index, own)
+  for (let at = anchor; at < index; at++) if (systemOf(entries[at])) return false
+  return index >= anchor
+}
+
+const injectedLabel = (entry: EntryRecord) => {
+  if (entry.kind === 'pi.compaction') return 'compaction summary'
+  const lineage = (entry.data as { lineage?: { brief?: unknown; tally?: unknown } } | undefined)
+    ?.lineage
+  if (lineage?.brief) return 'memory brief'
+  if (lineage?.tally) return 'tally'
+  return 'handoff'
+}
+
+const sum = (items: readonly { tokens: number }[] = []) =>
+  items.reduce((total, item) => total + item.tokens, 0)
+
+/** The text of a message as one block, for history a fork inherited into its context. */
+function plain(entry: EntryRecord) {
+  const message = entry.model?.[0]
+  if (!message || message.role === 'system') return ''
+  const blocks = typeof message.content === 'string' ? [message.content] : message.content
+  const text = blocks
+    .flatMap((block) =>
+      typeof block === 'string'
+        ? [block]
+        : block.type === 'text'
+          ? [block.text]
+          : block.type === 'toolCall'
+            ? [`${block.name}(${JSON.stringify(block.arguments)})`]
+            : block.type === 'image'
+              ? ['[image]']
+              : [],
+    )
+    .join('\n')
+  return text && `${message.role}: ${text}`
+}
+
+/**
+ * The history a fork carries into its first context: its source's entries from their last context start up to `own`,
+ * the fork's first entry. Empty when the fork starts its own context.
+ */
+function inherited(entries: readonly EntryRecord[], own: number): Injected | undefined {
+  if (own <= 0 || startsContext(entries[own])) return undefined
+  let from = own - 1
+  while (from > 0 && !startsContext(entries[from])) from--
+  const carried = entries.slice(from, own).filter((entry) => {
+    const role = entry.model?.[0]?.role
+    return role !== undefined && role !== 'system'
+  })
+  if (carried.length === 0) return undefined
+  return {
+    label: `inherited history · ${carried.length} messages`,
+    content: carried.map(plain).filter(Boolean).join('\n\n'),
+    tokens: carried.reduce((total, entry) => total + estimateMessageTokens(entry.model![0]), 0),
+  }
+}
+
+/**
+ * The breakdown of the context that starts at `anchor`, a reset or compaction, or the conversation's first entry:
+ * what it injected, the first system prompt after it, and the model of its first response. A fork's own first entry
+ * that starts no context of its own carries its source's history in, which counts as injected.
+ */
+export function breakdownAt(entries: readonly EntryRecord[], anchor: number): Breakdown {
+  const start = entries[anchor] && startsContext(entries[anchor]) ? entries[anchor] : undefined
+  const message = start?.model?.[0]
+  const injected =
+    start && message?.role === 'user'
+      ? {
+          label: injectedLabel(start),
+          entry: start,
+          content: message.content,
+          tokens: estimateTextAndImageContentTokens(message.content),
+        }
+      : start
+        ? undefined
+        : inherited(entries, anchor)
+  let systemIndex = -1
+  for (let at = start ? anchor + 1 : anchor; at < entries.length; at++) {
+    if (at > anchor && startsContext(entries[at])) break
+    if (systemOf(entries[at])) {
+      systemIndex = at
+      break
+    }
+  }
+  const prompt = systemIndex < 0 ? undefined : promptAt(entries, systemIndex)
+  let model: Breakdown['model']
+  for (let at = Math.max(systemIndex, anchor) + 1; at < entries.length && !model; at++) {
+    if (startsContext(entries[at])) break
+    const response = entries[at].model?.[0]
+    if (entries[at].kind === 'pi.assistant' && response?.role === 'assistant')
+      model = {
+        provider: response.provider,
+        model: response.model,
+        ...(response.thinkingLevel ? { thinking: response.thinkingLevel } : {}),
+      }
+  }
+  const tokens = {
+    prompt: sum(prompt?.sections),
+    tools: sum(prompt?.tools),
+    injected: injected?.tokens ?? 0,
+    total: 0,
+  }
+  tokens.total = tokens.prompt + tokens.tools + tokens.injected
+  return {
+    ...(start ? { start } : {}),
+    ...(injected ? { injected } : {}),
+    ...(systemIndex >= 0 ? { system: entries[systemIndex], prompt } : {}),
+    ...(model ? { model } : {}),
+    tokens,
+  }
+}
+
+/**
+ * How the `pi.system` at `index` changed the prompt. A remove-all patch right before it belongs to it: the diff is
+ * taken against the state before that one, so a reorder shows only what really changed.
+ */
+export function diffAt(entries: readonly EntryRecord[], index: number): Diff {
+  const before = promptAt(entries, removesAll(entries[index - 1]) ? index - 2 : index - 1)
+  const after = promptAt(entries, index)
+  const sections: SectionChange[] = []
+  const old = new Map(before.sections.map((section) => [section.key, section]))
+  for (const section of after.sections) {
+    const previous = old.get(section.key)
+    old.delete(section.key)
+    if (previous?.text === section.text) continue
+    sections.push({
+      key: section.key,
+      change: previous ? 'changed' : 'added',
+      text: section.text,
+      delta: section.tokens - (previous?.tokens ?? 0),
+    })
+  }
+  for (const section of old.values())
+    sections.push({
+      key: section.key,
+      change: 'removed',
+      text: section.text,
+      delta: -section.tokens,
+    })
+  const tools: ToolChange[] = []
+  const offered = new Map(before.tools.map((tool) => [tool.name, tool]))
+  for (const tool of after.tools) {
+    const previous = offered.get(tool.name)
+    offered.delete(tool.name)
+    if (previous && JSON.stringify(previous) === JSON.stringify(tool)) continue
+    tools.push({
+      name: tool.name,
+      change: previous ? 'changed' : 'added',
+      tool,
+      delta: tool.tokens - (previous?.tokens ?? 0),
+    })
+  }
+  for (const tool of offered.values())
+    tools.push({ name: tool.name, change: 'removed', tool, delta: -tool.tokens })
+  const delta = [...sections, ...tools].reduce((total, change) => total + change.delta, 0)
+  return { sections, tools, delta }
+}
+
+/** The index of the shown conversation's first own entry; a fork's earlier entries are its source's history. */
+export const ownStart = (entries: readonly EntryRecord[], id: number | undefined) =>
+  entries.findIndex((entry) => entry.conversationId === id)

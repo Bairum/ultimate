@@ -1,23 +1,13 @@
-import { ChevronRightIcon, RotateCwIcon, TriangleAlertIcon, ZapIcon } from 'lucide-react'
+import { RotateCwIcon, TriangleAlertIcon, ZapIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Shimmer } from '@/components/ai/shimmer'
 import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/components/ai/tool'
 import { Button } from '@/components/ui/button'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import {
-  cn,
-  defineWebExtension,
-  formatTime,
-  useRestart,
-  useSystem,
-  useToolDuration,
-  useFold,
-  useTranscript,
-} from '@/sdk'
-import type { EntryRecord, ToolCallView } from '@/sdk'
+import { cn, defineWebExtension, formatTime, useRestart, useSystem, useToolDuration } from '@/sdk'
+import type { ToolCallView } from '@/sdk'
 
 const short = (id: string | undefined) => id?.slice(0, 7)
 
@@ -288,132 +278,8 @@ function HotReloaded() {
   )
 }
 
-interface BuildLine {
-  id: string
-  generation?: number
-  changed: string[]
-}
-/** The prompt's build section: `Ultimate build <id> · generation <n> …` and `Changed in this build: …`. */
-function parseBuild(section: string | null | undefined): BuildLine | undefined {
-  if (typeof section !== 'string') return undefined
-  const id = /Ultimate build (\w+)/.exec(section)?.[1]
-  if (!id) return undefined
-  const generation = /generation (\d+)/.exec(section)?.[1]
-  const changed = /Changed in this build: (.+)/.exec(section)?.[1]
-  return {
-    id,
-    generation: generation === undefined ? undefined : Number(generation),
-    changed: changed ? changed.split(',').map((item) => item.trim()) : [],
-  }
-}
-const systemOf = (entry: EntryRecord | undefined) => {
-  const message = entry?.model?.[0]
-  return entry?.kind === 'pi.system' && message?.role === 'system' ? message : undefined
-}
-
-/** A core restart that kept the same code: only the generation in the build section changed. */
-function Restarted({ from, to }: { from: number; to: number }) {
-  return (
-    <div className="flex items-center gap-3 font-mono text-[11px] text-muted-foreground/60 before:h-px before:flex-1 before:bg-border/50 after:h-px after:flex-1 after:bg-border/50">
-      <span className="flex items-center gap-1.5">
-        <RotateCwIcon className="size-3" />
-        Restarted · gen {from} → {to} · same build
-      </span>
-    </div>
-  )
-}
-
-/**
- * A `pi.system` entry that changes the build section is a hot reload: show it as one marker with what changed. A
- * remove-all entry that Pi Durable writes right before a reordered re-add belongs to that marker and shows nothing.
- */
-// Pi upstream: @earendil-works/pi-durable@1.3.0 src/harness/prompt.ts — internal remove-all pi.system entry immediately precedes a reordered re-add, hidden here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
-function SystemEntry({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
-  const entries = useTranscript()
-  const system = useSystem()
-  // In a chat its open state is kept like a card's; elsewhere it opens and closes on its own.
-  const fold = useFold(entry.id)
-  const message = systemOf(entry)
-  if (!message?.sections) return core
-  const index = entries.findIndex((candidate) => candidate.id === entry.id)
-  const values = Object.values(message.sections)
-  if (values.length > 0 && values.every((value) => value === null) && systemOf(entries[index + 1]))
-    return null
-  const current = parseBuild(message.sections.build)
-  let previous: BuildLine | undefined
-  for (let at = index - 1; at >= 0 && !previous; at--)
-    previous = parseBuild(systemOf(entries[at])?.sections?.build)
-  if (!current || !previous) return core
-  if (previous.id === current.id)
-    return previous.generation !== undefined &&
-      current.generation !== undefined &&
-      previous.generation !== current.generation ? (
-      <Restarted from={previous.generation} to={current.generation} />
-    ) : (
-      core
-    )
-  // Builds the conversation did not see in between still count: union their changes from the history.
-  const history = system?.build.history ?? []
-  const from = history.findIndex((item) => item.id === previous.id)
-  const to = history.findIndex((item) => item.id === current.id)
-  // When the previous build fell out of the history (20 builds), everything kept since is a lower bound: mark it "…".
-  const since = to >= 0 && from < to ? history.slice(from + 1, to + 1) : undefined
-  const changed = since
-    ? [...new Set(since.flatMap((item) => item.changed))].toSorted()
-    : current.changed
-  const partial = since !== undefined && from < 0
-  const sections = Object.entries(message.sections).filter(([, value]) => value !== null)
-  const added = message.toolsAdded?.map((tool) => tool.name) ?? []
-  const removed = message.toolsRemoved?.map((tool) => tool.name) ?? []
-  return (
-    <Collapsible
-      className="group/reload"
-      {...(fold.folds && { open: fold.open, onOpenChange: fold.setOpen })}
-    >
-      <CollapsibleTrigger className="w-full">
-        <div className="flex items-center gap-3 font-mono text-[11px] text-muted-foreground/80 before:h-px before:flex-1 before:bg-brand/25 after:h-px after:flex-1 after:bg-brand/25 hover:text-muted-foreground">
-          <span className="flex min-w-0 items-center gap-1.5">
-            <ChevronRightIcon className="size-3 shrink-0 transition-transform group-data-[state=open]/reload:rotate-90" />
-            <RotateCwIcon className="size-3 shrink-0 text-brand" />
-            <span className="text-brand">Reloaded</span>
-            <span className="truncate">
-              · build {short(previous.id)} →{' '}
-              <span className="text-foreground/80">{short(current.id)}</span>
-              {previous.generation !== undefined &&
-                current.generation !== undefined &&
-                previous.generation !== current.generation &&
-                ` · gen ${previous.generation} → ${current.generation}`}
-              {changed.length > 0 && ` · changed: ${changed.join(', ')}${partial ? ', …' : ''}`}
-            </span>
-          </span>
-        </div>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="mt-2 rounded-md border border-border/70 bg-card/40 px-3 py-2 font-mono text-[11.5px] text-muted-foreground">
-        <div className="mb-1 text-foreground/80">The agent's prompt and tools changed here:</div>
-        {sections.map(([key, value]) => (
-          <div className="flex gap-3" key={key}>
-            <span className="w-32 shrink-0 text-foreground/80">{key}</span>
-            <span className="truncate">{(value ?? '').length.toLocaleString()} chars</span>
-          </div>
-        ))}
-        {(added.length > 0 || removed.length > 0) && (
-          <div className="flex gap-3">
-            <span className="w-32 shrink-0 text-foreground/80">tools</span>
-            <span className="min-w-0 break-words">
-              {added.length > 0 && `re-declared ${added.join(' ')}`}
-              {removed.filter((name) => !added.includes(name)).length > 0 &&
-                ` · removed ${removed.filter((name) => !added.includes(name)).join(' ')}`}
-            </span>
-          </div>
-        )}
-      </CollapsibleContent>
-    </Collapsible>
-  )
-}
-
 export default defineWebExtension({
   tools: { restart: RestartCall },
-  entries: { 'pi.system': SystemEntry },
   slots: {
     // Discovery order puts `self` before `status-line`: the item sits just left of `live · gen N`.
     'statusline.right': [CoreStale, { component: Build, order: 1 }],
