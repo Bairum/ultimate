@@ -8,6 +8,7 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxContentBlock, FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
+import type { SystemMessage } from '@earendil-works/pi-ai'
 import type { ConversationId, EntryId, JsonObject } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -1125,6 +1126,102 @@ export const actions = {
       })
     }, BACKGROUND_CONTEXT)
     return { seeded: codemodeSteps.length }
+  },
+  /**
+   * Faux only: `{ from }` → a reviewer subagent of `from` whose first request carries 15 of `from`'s real prompt
+   * sections and two of its tools, and in `from` a mid-conversation prompt patch (a changed, an added and a removed
+   * section; a changed and a removed tool) followed by a turn. Previews the context header and the patch diff.
+   */
+  async seedContext(args: JsonValue, { host }: ActionContext) {
+    if (!host.faux) throw new Error('seedContext runs only under faux')
+    const { from } = (args ?? {}) as { from?: unknown }
+    if (typeof from !== 'number') throw new Error('from must be a conversation id')
+    const id = from as ConversationId
+    return host.harness().commit(async (tx) => {
+      const page = await tx.scanEntries({ conversationId: id, order: 'descending' }, 1000)
+      const baseline = page.items
+        .map((entry) => entry.model?.[0])
+        .find(
+          (message): message is SystemMessage =>
+            message?.role === 'system' && Object.keys(message.sections ?? {}).length >= 15,
+        )
+      if (!baseline?.sections || !baseline.toolsAdded)
+        throw new Error(`#${from} has no full system prompt yet; send it a message first`)
+      const at = Date.now()
+      const skip = new Set(['workspace_workflow', 'board', 'codemode', 'lineage', 'subagents'])
+      const sections = Object.fromEntries(
+        Object.entries(baseline.sections).filter(([key]) => !skip.has(key)),
+      )
+      sections.instructions =
+        '<instructions>\n# Reviewer\n\nYou review one immutable commit range for correctness, simplicity and conventions. Read the diff and the code around it, run the checks that cover it, and return one verdict with findings at file:line, ranked by severity. Never edit files.\n</instructions>'
+      const tools = baseline.toolsAdded.filter(
+        (declared) => declared.name === 'read' || declared.name === 'bash',
+      )
+      const child = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+      Object.assign(await tx.doc(host.metadata, child.id), {
+        title: 'Review the context header range',
+        label: 'reviewer',
+      })
+      const task =
+        'Review the range a2fa594..HEAD: the context header, its breakdown model and the reload diff.'
+      await tx.appendEntry(child.id, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: task, timestamp: at }],
+      })
+      await tx.appendEntry(child.id, {
+        kind: 'pi.system',
+        model: [{ role: 'system', content: '', sections, toolsAdded: tools, timestamp: at }],
+      })
+      await tx.appendEntry(child.id, {
+        kind: 'pi.assistant',
+        model: [
+          fauxAssistantMessage([fauxText('**Verdict:** ship it. No findings above P3.')], {
+            timestamp: at + 40_000,
+          }),
+        ],
+      })
+      const instructions = baseline.sections.instructions ?? ''
+      const restart = baseline.toolsAdded.find((declared) => declared.name === 'restart')
+      const read = baseline.toolsAdded.find((declared) => declared.name === 'read')
+      await tx.appendEntry(id, {
+        kind: 'pi.system',
+        model: [
+          {
+            role: 'system',
+            content: '',
+            sections: {
+              instructions: instructions.replace(
+                /\n<\/instructions>$/,
+                '\n\n## Review\nBefore reporting, ask the review team for one verdict on the whole range.\n</instructions>',
+              ),
+              environment: null,
+              review:
+                '<review>\nThe review team: reviewer-correctness, reviewer-simplicity, reviewer-architecture.\n</review>',
+            },
+            toolsRemoved: [{ name: 'read' }, ...(restart ? [{ name: 'restart' }] : [])],
+            ...(read && {
+              toolsAdded: [
+                { ...read, description: `${read.description} Binary files show as their size.` },
+              ],
+            }),
+            timestamp: at,
+          },
+        ],
+      })
+      await tx.appendEntry(id, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: 'review it before you report', timestamp: at + 1000 }],
+      })
+      await tx.appendEntry(id, {
+        kind: 'pi.assistant',
+        model: [
+          fauxAssistantMessage([fauxText(`Asked a reviewer: #${child.id}.`)], {
+            timestamp: at + 2000,
+          }),
+        ],
+      })
+      return { subagent: child.id }
+    }, BACKGROUND_CONTEXT)
   },
   async seedHistory(args: JsonValue, { host }: ActionContext) {
     if (!host.faux) throw new Error('seedHistory runs only under faux')
