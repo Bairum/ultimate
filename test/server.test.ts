@@ -436,6 +436,37 @@ export default host => { host.resource('cleanup.process',()=>{
       409,
     )
   })
+  it('stops the run but keeps queued follow-ups, delivering them before the next input', async () => {
+    const { server } = await fixture()
+    await post(server, '/api/conversations/1/submit', { text: 'start' })
+    const run = (await server.harness.snapshot(LiveDoc, server.root.id, context))?.run?.taskId
+    expect(run).toBeDefined()
+    await post(server, '/api/conversations/1/submit', { text: 'queued', whenBusy: 'followUp' })
+    expect((await post(server, '/api/conversations/1/abort')).status).toBe(200)
+    expect((await server.harness.getTask(run!, context))?.state.status).toBe('terminal')
+    expect((await server.harness.snapshot(LiveDoc, server.root.id, context))?.run).toBeUndefined()
+    expect(
+      (await server.harness.snapshot(InboxDoc, server.root.id, context))?.items.map(
+        (item) => item.mode !== 'write' && item.content,
+      ),
+    ).toEqual(['queued'])
+    await post(server, '/api/conversations/1/submit', { text: 'next' })
+    expect((await server.harness.snapshot(InboxDoc, server.root.id, context))?.items).toEqual([])
+    const view = await server.root.viewState(context)
+    try {
+      const users = view.value.entries.flatMap((entry) =>
+        entry.model?.[0]?.role === 'user' ? [JSON.stringify(entry.model[0].content)] : [],
+      )
+      expect(users.slice(-3).map((text) => /start|queued|next/.exec(text)?.[0])).toEqual([
+        'start',
+        'queued',
+        'next',
+      ])
+    } finally {
+      view.dispose()
+    }
+    await server.root.abort(context)
+  })
   it('records each typed input as one user.input event with its device and never its text', async () => {
     const { server } = await fixture()
     const submit = (text: string, whenBusy?: string) =>
