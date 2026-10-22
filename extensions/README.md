@@ -29,6 +29,13 @@ as fallback. These renderers can use `useTranscript()` for the shown conversatio
 Lineage uses this to show a root's read-only context footer, or an empty root's Start here card, instead of a composer.
 `switchConversation(id, { replace: true })` takes the current history entry instead of adding one, as a redirect does.
 
+Wrap `<Conversation/>` in `<ConversationScope id={id}>` (both from `@/sdk`) to render another live conversation without
+switching the shell. `useConversation(select?)`, `useTranscript`, `useDoc`/`useDocKind`, `useUltimate().conversationId`,
+`useIntro`, `useCompact`/`useCompactQuiet`, and `useAction` follow the nearest scope, as do transcript/composer
+contributions. Scopes of the same id share a stream; the last unmount releases it. Outside a scope these hooks keep
+their existing behaviour. Explicit `useDocOf` ids, root UI state, shell navigation, commands, `getConversation()` and
+the imperative `api` stay global: callbacks using `api` must pass the scoped id explicitly when acting on it.
+
 ## Where extensions live
 
 Ultimate looks for extension folders in three places. When two have the same folder name, the later place wins and

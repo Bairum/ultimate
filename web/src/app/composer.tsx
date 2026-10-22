@@ -1,7 +1,7 @@
 import type { AgentState, InboxItem } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
 import { CornerDownRightIcon, ListPlusIcon, LoaderCircleIcon, XIcon } from 'lucide-react'
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useContext, useEffect, useState, useSyncExternalStore } from 'react'
 import { ImagePreviews, useImagePaste } from '@/components/image-paste'
 import type { KeyboardEvent, ReactNode } from 'react'
 import {
@@ -13,6 +13,7 @@ import {
 } from '@/components/ai/prompt-input'
 import { Kbd } from '@/components/ui/kbd'
 import { api } from '../sdk/client.ts'
+import { ConversationIdContext } from '../sdk/conversation-scope.tsx'
 import { errorMessage } from '../sdk/format.ts'
 import { events } from '../sdk/events.ts'
 import {
@@ -189,6 +190,7 @@ function clearDraft(
 
 function ConversationComposer({ dock }: { dock?: boolean }) {
   const { id, agent, busy, loading, inbox } = useConversation()
+  const scoped = useContext(ConversationIdContext)
   const intro = useIntro()
   const draft = getDraft(id)
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
@@ -263,7 +265,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
           autoFocus={!touchKeyboard()}
           readOnly={loading || sending}
           onPaste={(event) => void paste(event)}
-          id="composer-input"
+          id={scoped === undefined ? 'composer-input' : `composer-input-${scoped}`}
           onChange={(event) => update(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder={
@@ -296,7 +298,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
               <PromptInputSubmit
                 mode="stop"
                 onClick={() =>
-                  void api.abort().catch((failure: Error) => setError(failure.message))
+                  void api.abort(id).catch((failure: Error) => setError(failure.message))
                 }
                 title="Stop (Esc)"
               />
