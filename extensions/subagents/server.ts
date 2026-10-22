@@ -360,11 +360,11 @@ export const actions = {
   }),
   /**
    * The definitions without their instructions and the files that failed to parse, and for the config view the main
-   * conversation's model and tools (a definition may list a subset), where each scope saves, and whether the
-   * project's setup is local, which the project scope needs.
+   * conversation's model and tools (a definition may list a subset), where each scope saves, and the project setup
+   * decision, which the project scope needs.
    */
   definitions: implementAction(DefinitionsAction, async (_args, { host }) => {
-    const { definitions, errors } = await discoverAgents(
+    const { definitions, errors, projectSetup } = await discoverAgents(
       host.ultimateRoot,
       host.projectRoot,
       host.userHome,
@@ -373,9 +373,6 @@ export const actions = {
     const main = await (await host
       .harness()
       .conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT))!.agent(BACKGROUND_CONTEXT)
-    const local = agentRoots(host.ultimateRoot, host.projectRoot, host.userHome).some(
-      (root) => root.source === 'project',
-    )
     return {
       definitions: definitions.map(({ instructions: _instructions, ...definition }) => definition),
       errors,
@@ -390,7 +387,7 @@ export const actions = {
         user: join(host.userHome, '.ultimate/agents'),
         project: join(host.projectRoot, '.ultimate/agents'),
       },
-      projectLocal: local,
+      projectSetup,
     }
   }),
   /** `{name}`: the definition that applies, its source and path, the raw file, and the scopes with a file of that name. */

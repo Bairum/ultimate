@@ -1760,11 +1760,11 @@ describe('subagents', () => {
     await expect(actions.saveDefinition(override, ctx)).rejects.toThrow(
       "Choose this project's local setup",
     )
-    expect(await actions.definitions(null, ctx)).toMatchObject({ projectLocal: false })
+    expect(await actions.definitions(null, ctx)).toMatchObject({ projectSetup: 'undecided' })
     new ProjectTrustStore(join(userHome, '.ultimate')).set(prepared.projectRoot, true)
     const listed = await actions.definitions(null, ctx)
     expect(listed).toMatchObject({
-      projectLocal: true,
+      projectSetup: 'trusted',
       scopes: { user: join(userHome, '.ultimate/agents'), project },
       definitions: [{ name: 'scout', source: 'builtin' }],
     })

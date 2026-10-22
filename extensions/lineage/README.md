@@ -86,7 +86,8 @@ compare? }` (`commits` counts the note's listed commits plus `more`), other note
   the memory as the batch leaves it first (fields, add of an existing slug, update or delete of a missing one, the cap
   after the batch, a listed root) and throws before writing anything, so a batch is all or nothing; it returns a short
   summary. Deferred tool `remember {root?, ops}` (named in @ultimate's definition) writes one batch, defaulting to the
-  caller's tree root; it refuses any caller but the standing `ultimate` agent, since a branch can find a deferred tool
+  caller's tree root, or outside a tree (@ultimate) to the project's only root; with none or several it names them
+  and asks for one. It refuses any caller but the standing `ultimate` agent, since a branch can find a deferred tool
   with `tool_search`. Tool `memory {read?, root?}`, offered to every agent, returns the index, one
   `slug [kind] — line (updated YYYY-MM-DD)` per memory, or with `read` one memory's body and source. User-only
   `forget {root, slug}` (`ForgetAction`) deletes one through the same path, as does `LineageApi.remember` for other
