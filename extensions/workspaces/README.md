@@ -27,8 +27,8 @@ The existing `workspace_workflow` prompt section starts and waits for the same d
 on creation; setup commands run again before the model can use tools.
 Failed setup keeps its output tail and never force-removes dirty output. The conversation's next tool call retries it (checkout and setup again), so fixing the cause, such as a PATH without `pnpm`, takes effect in the same conversation; until it succeeds every tool call is blocked with the setup's error.
 
-The Workspaces panel shows the lander queue, statistics over every checkout, and the shown conversation's checkout,
-read-only: landing goes through agents. Concluding a conversation can release its clean, landed checkout.
+Info's Workspace section (`Workspaces` in `ui.tsx`) shows the lander queue, the shown conversation's checkout and
+statistics over every checkout, read-only: landing goes through agents. Concluding a conversation can release its clean, landed checkout.
 `isolation` says why the project cannot be isolated, if it cannot; `info {id}` reads the record and current tips; `create {cwd?, title?}` returns a new conversation ID.
 `github` returns `https://github.com/<owner>/<repo>` of the project's `origin`, or null off GitHub; landing cards and
 the root row link commit ranges with it.

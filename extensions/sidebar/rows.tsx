@@ -288,7 +288,7 @@ function PhasedRow({
                 onSelect={() =>
                   (afterMenu.current = () => {
                     actions.switchConversation(conversation.id)
-                    actions.openPanel('workspaces')
+                    actions.openPanel('info')
                   })
                 }
               >

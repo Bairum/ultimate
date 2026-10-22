@@ -499,7 +499,7 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
               <Button
                 aria-label="Workspaces"
                 className="ml-auto size-7 cursor-pointer text-muted-foreground hover:text-foreground"
-                onClick={() => actions.openPanel('workspaces')}
+                onClick={() => actions.openPanel('info')}
                 size="icon"
                 variant="ghost"
               >
