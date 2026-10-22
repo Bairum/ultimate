@@ -6,7 +6,7 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { chromium } from 'playwright-core'
 import { afterEach, expect, it } from 'vitest'
 import { browserBinary } from '../../extensions/browser/server.ts'
-import { Board } from '../../extensions/board/api.ts'
+import { Messages } from '../../extensions/messages/api.ts'
 import { context } from '../../server/harness.ts'
 import { fauxServer, post, removeTemp, temp, until } from '../helpers.ts'
 
@@ -35,8 +35,8 @@ it('answers a decisions card with letters, arrows and Enter', async () => {
   await (
     await conversation.submit({ type: 'input', content: 'decisions demo' }, context)
   ).wait(context)
-  const board = () => server.harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
-  const ask = async () => (await board())?.messages.findLast((m) => m.to === 'user' && m.reply)
+  const log = () => server.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context)
+  const ask = async () => (await log())?.messages.findLast((m) => m.to === 'user' && m.reply)
   await until(async () => !!(await ask()))
   const asked = (await ask())!
 
@@ -67,7 +67,7 @@ it('answers a decisions card with letters, arrows and Enter', async () => {
   await page.keyboard.press('Enter')
   await page.keyboard.press('Enter')
   const answer = async () =>
-    (await board())?.messages.find((m) => m.re === asked.id && m.from === 'user')
+    (await log())?.messages.find((m) => m.re === asked.id && m.from === 'user')
   await until(async () => !!(await answer()))
   expect((await answer())!.text).toBe(
     "1c. Branch starts in the context: leave as is\n\n2a. Boxer's copied agents/ultimate.md: assess a way to add tools without forking it\n\n3b. Land it: no, change something first",
@@ -86,7 +86,7 @@ it('answers a decisions card with letters, arrows and Enter', async () => {
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.press('Enter')
   const picked = async () =>
-    (await board())?.messages.find((m) => m.re === second.id && m.from === 'user')
+    (await log())?.messages.find((m) => m.re === second.id && m.from === 'user')
   await until(async () => !!(await picked()))
   expect((await picked())!.text).toMatch(/^1a\. .+\n\n2a\. .+\n\n3a\. Land it: yes$/)
 })

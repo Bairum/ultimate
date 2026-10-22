@@ -1,5 +1,5 @@
 /**
- * Board: messages between conversations and the user, delivered as inputs or notes. Other extensions send one-way
+ * Messages: messages between conversations and the user, delivered as inputs or notes. Other extensions send one-way
  * messages and answer the user's open questions here.
  */
 import type { Context } from '@earendil-works/chord'
@@ -7,11 +7,11 @@ import { defineDoc } from '@earendil-works/pi-durable'
 import type { EntryId } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
 import type { Device } from '../../shared/events.ts'
-import { BoardDoc } from './refs.ts'
+import { MessagesDoc } from './refs.ts'
 import type { Remote, Triage } from './refs.ts'
 
-/** One Board message as the `board` document stores it. */
-export type BoardMessage = {
+/** One message as the log stores it. */
+export type Message = {
   id: number
   /** `remote`: another project's Ultimate, named by `remote`. */
   from: number | 'user' | 'remote'
@@ -34,8 +34,8 @@ export type BoardMessage = {
   remote?: Remote
 }
 /** Every message between conversations and the user, on the root conversation. */
-export const Board = defineDoc<{ messages: BoardMessage[]; next: number }>({
-  kind: BoardDoc.kind,
+export const Messages = defineDoc<{ messages: Message[]; next: number }>({
+  kind: MessagesDoc.kind,
   checkpointWhen: () => false,
   version: 1,
   scope: 'conversation',
@@ -44,13 +44,13 @@ export const Board = defineDoc<{ messages: BoardMessage[]; next: number }>({
   initial: () => ({ messages: [], next: 1 }),
 })
 
-export type BoardService = {
+export type MessagesService = {
   /**
-   * Reply `text` from the user to open Board message `messageId`, from browser `device`; returns the reply's message
+   * Reply `text` from the user to open message `messageId`, from browser `device`; returns the reply's message
    * id. Records a `user.input` event.
    */
   answer(messageId: number, text: string, ctx: Context, device?: Device): Promise<number>
-  /** Close open Board message `messageId` unanswered; its sender gets a one-way note. Returns the note's message id. */
+  /** Close open message `messageId` unanswered; its sender gets a one-way note. Returns the note's message id. */
   dismiss(messageId: number, ctx: Context, device?: Device): Promise<number>
   /** Send a one-way message from conversation `from` to `to` (`#id`, `@name` or `user`), once per `requestId`. */
   send(
@@ -73,9 +73,9 @@ export type BoardService = {
 }
 export { Asked, MessageSent, Triaged } from './refs.ts'
 /** Messages between conversations; core, so `need` it. */
-export const BoardApi = defineApi<BoardService>()('board')
+export const MessagesApi = defineApi<MessagesService>()('messages')
 
-/** What gates the model calls Board makes inside its tasks; an optional extension (pause) fills it. */
+/** What gates the model calls Messages makes inside its tasks; an optional extension (pause) fills it. */
 export type GateService = {
   /**
    * Run `work`, a model call of task `task` in conversation `conversationId` described by `what`: start it only once
@@ -87,6 +87,6 @@ export type GateService = {
     signal: AbortSignal,
   ): Promise<T>
 }
-/** Board's gate for in-task model calls, an extension point; `want` it: without a provider, work runs at once. */
-export const Gate = defineApi<GateService>()('board.gate')
+/** Messages’ gate for in-task model calls, an extension point; `want` it: without a provider, work runs at once. */
+export const Gate = defineApi<GateService>()('messages.gate')
 export const tier = 'core'

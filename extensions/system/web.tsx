@@ -15,7 +15,7 @@ import {
   useNow,
   useUltimate,
 } from '@/sdk'
-import { BoardDoc, conversationState, emptyBoard } from '../board/ui.tsx'
+import { MessagesDoc, conversationState, emptyMessages } from '../messages/ui.tsx'
 import { useOverview } from '../conversations/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { LaneTree } from './hierarchy.tsx'
@@ -40,7 +40,7 @@ function useLive() {
 
 /** Each lane's conversation state, the same the sidebar shows: only the primary agent can wait on you. */
 function useStates(parked: ReadonlySet<number>) {
-  const board = useDocOf(1, BoardDoc) ?? emptyBoard
+  const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const overview = useOverview()
   const conversations = useConversations()
   const primary = useDocOf(1, StandingDoc)?.ultimate
@@ -56,7 +56,7 @@ function useStates(parked: ReadonlySet<number>) {
         parked: parked.has(id),
         primary,
       },
-      board,
+      log,
     )
     return laneState(lane, state, overview[id] !== undefined)
   }

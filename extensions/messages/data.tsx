@@ -1,5 +1,5 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
-import type { BoardData, BoardMessage, Remote } from './refs.ts'
+import type { MessagesData, Message, Remote } from './refs.ts'
 
 /** How another project's Ultimate is named; the server says the same in its model text. */
 export const remoteLabel = (remote: Pick<Remote, 'project' | 'machine'>) =>
@@ -13,14 +13,14 @@ export const callFailed = (entries: readonly EntryRecord[], call: string) =>
   })
 
 /** Only incoming requests belong to an answer, never the outgoing reply log item. */
-export function answeredMessages(messages: BoardMessage[], conversation: number, entry: number) {
+export function answeredMessages(messages: Message[], conversation: number, entry: number) {
   return messages.filter((message) => message.to === conversation && message.answer === entry)
 }
 
-export const emptyBoard: BoardData = { messages: [], next: 1 }
+export const emptyMessages: MessagesData = { messages: [], next: 1 }
 /** What waits on the user: each question to the user they have neither answered nor dismissed. */
-export const waitingOnUser = (board: BoardData) =>
-  board.messages.filter(
+export const waitingOnUser = (log: MessagesData) =>
+  log.messages.filter(
     (message) => message.to === 'user' && message.reply && message.state === 'delivered',
   ).length
 
@@ -57,15 +57,15 @@ export function conversationState(
     /** The primary agent's conversation, which a branch's open question waits on. */
     primary?: number
   },
-  board: BoardData,
+  log: MessagesData,
 ): ConversationState {
   const { id, kind, runState } = conversation
   if (conversation.parked) return 'paused'
   if (conversation.busy || runState === 'working' || runState === 'queued') return 'working'
-  if (kind === 'primary' && waitingOnUser(board) > 0) return 'waits'
+  if (kind === 'primary' && waitingOnUser(log) > 0) return 'waits'
   if (
     kind !== 'subagent' &&
-    board.messages.some(
+    log.messages.some(
       (message) => message.from === id && message.to === conversation.primary && isOpen(message),
     )
   )
@@ -97,8 +97,8 @@ type Conversation = {
   parentConversationId?: number
   ownerTaskId?: number
 }
-/** The primary standing agent's conversation, which reads as a chat with the user: @ultimate's. */
-export const ultimateChat = (conversation: Conversation) =>
+/** The primary standing agent's conversation, which uses compact mode with the user: @ultimate's. */
+export const ultimateCompact = (conversation: Conversation) =>
   conversation.label === 'agent' &&
   conversation.title === '@ultimate' &&
   conversation.parentConversationId === undefined &&
@@ -108,7 +108,7 @@ export const ultimateChat = (conversation: Conversation) =>
  * The messages to you that tool call `call` sent, itself or through a script's nested calls, in the order sent (the log
  * keeps id order). Messages from before the log recorded calls match nothing.
  */
-export const sentBy = (messages: readonly BoardMessage[], call: string) =>
+export const sentBy = (messages: readonly Message[], call: string) =>
   messages.filter(
     (message) =>
       message.to === 'user' &&
@@ -119,10 +119,10 @@ export const sentBy = (messages: readonly BoardMessage[], call: string) =>
 /** Whether a `codemode` call messaged you, from the log alone: a script interrupted before its result counts too. */
 export const scriptMessaged = (
   call: { id: string; name: string },
-  board: Readonly<BoardData> | null | undefined,
-) => call.name === 'codemode' && sentBy(board?.messages ?? [], call.id).length > 0
+  log: Readonly<MessagesData> | null | undefined,
+) => call.name === 'codemode' && sentBy(log?.messages ?? [], call.id).length > 0
 
-/** Entries that render nothing in a chat: they join a background group without counting in it. */
+/** Entries that render nothing in compact mode: they join a background group without counting in it. */
 const hiddenKinds = new Set([
   'board.wake',
   'board.open',
@@ -130,7 +130,7 @@ const hiddenKinds = new Set([
   'questions.asked',
   'questions.answers',
 ])
-/** Entries between agents that are background to the user's chat with @ultimate. */
+/** Entries between agents that are background to the user's conversation with @ultimate. */
 const backgroundKinds = new Set([
   'lineage.note',
   'lineage.finished',
@@ -142,17 +142,17 @@ const backgroundKinds = new Set([
 ])
 
 /**
- * Whether a row of @ultimate's chat is background, the traffic between agents that folds into groups: messages and
+ * Whether a row of @ultimate's compact transcript is background, the traffic between agents that folds into groups: messages and
  * replies from other conversations, notes, reports and landings, branches it starts, messages it sends them, and the
- * answers that went back to them. What the user says and what @ultimate says to the user is the chat itself; so is any
+ * answers that went back to them. What the user says and what @ultimate says to the user is the conversation itself; so is any
  * kind not named here, so nothing new hides by default.
  */
-export function chatQuiet(
+export function backgroundRow(
   {
     entry,
     calls,
   }: { entry: EntryRecord; calls: readonly { id: string; name: string; arguments: unknown }[] },
-  board: Readonly<BoardData> | null | undefined,
+  log: Readonly<MessagesData> | null | undefined,
 ): boolean | 'hidden' {
   if (hiddenKinds.has(entry.kind)) return 'hidden'
   if (landed(entry)) return false
@@ -169,7 +169,7 @@ export function chatQuiet(
           (call.arguments as { to?: unknown } | undefined)?.to !== 'user'),
     )
   if (message.stopReason !== 'stop') return false
-  const answered = answeredMessages(board?.messages ?? [], entry.conversationId, entry.id)
+  const answered = answeredMessages(log?.messages ?? [], entry.conversationId, entry.id)
   return answered.length > 0 && answered.every((m) => m.reply && m.from !== 'user')
 }
 
@@ -178,7 +178,7 @@ const idOf = (value: unknown): (number | 'remote')[] =>
 
 /**
  * Whether an entry says work landed: the lander's landing note, or its report of a landing. Landings are news you wait
- * for, so they stay in the chat and split background around them; a failed report stays background.
+ * for, so they stay in the compact transcript and split background around them; a failed report stays background.
  */
 function landed(entry: EntryRecord) {
   const data = entry.data as { source?: unknown; outcome?: { outcome?: unknown } } | undefined
@@ -192,7 +192,7 @@ export function counterparts(
     entry,
     calls,
   }: { entry: EntryRecord; calls: readonly { id: string; name: string; arguments: unknown }[] },
-  board: Readonly<BoardData>,
+  log: Readonly<MessagesData>,
 ): (number | 'remote' | 'lander')[] {
   const data = (entry.data ?? {}) as {
     from?: unknown
@@ -217,26 +217,24 @@ export function counterparts(
   }
   if (calls.length)
     return calls.flatMap((call) => {
-      const sent = board.messages.find((m) => m.call === call.id)
+      const sent = log.messages.find((m) => m.call === call.id)
       if (sent) return idOf(sent.to)
       const to = /^#(\d+)$/.exec(String((call.arguments as { to?: unknown } | undefined)?.to))
       return to ? [Number(to[1])] : []
     })
-  return answeredMessages(board.messages, entry.conversationId, entry.id).flatMap((m) =>
-    idOf(m.from),
-  )
+  return answeredMessages(log.messages, entry.conversationId, entry.id).flatMap((m) => idOf(m.from))
 }
 
 /** The user's answer to a question they were asked, once it has one. */
-export const answerTo = (messages: readonly BoardMessage[], question: BoardMessage) =>
+export const answerTo = (messages: readonly Message[], question: Message) =>
   messages.find((m) => m.from === 'user' && m.re === question.id)
 
 /** A reply-enabled message still waiting for its answer. */
-export const isOpen = (message: BoardMessage) =>
+export const isOpen = (message: Message) =>
   message.reply && (message.state === 'sent' || message.state === 'delivered')
 
 /** Who waits on whom for one message; `yours` is an open question to the user. */
-export function messageStatus(message: BoardMessage) {
+export function messageStatus(message: Message) {
   if (message.state === 'failed') return 'failed'
   if (message.state === 'answered') return 'answered'
   if (message.state === 'dismissed') return 'dismissed'
@@ -246,18 +244,14 @@ export function messageStatus(message: BoardMessage) {
 }
 
 /**
- * A message in its sender's chat: its status while the log holds it, `sending` while the call runs, and nothing once the
+ * A message in its sender's transcript: its status while the log holds it, `sending` while the call runs, and nothing once the
  * call is done and the bounded log has dropped it.
  */
-export const sentStatus = (message: BoardMessage | undefined, running: boolean) =>
+export const sentStatus = (message: Message | undefined, running: boolean) =>
   message ? messageStatus(message) : running ? 'sending' : undefined
 
 /** Where an outgoing message stands, in the sender's words; nothing once the log has dropped a sent one. */
-export function outgoingState(
-  message: BoardMessage | undefined,
-  toUser: boolean,
-  running: boolean,
-) {
+export function outgoingState(message: Message | undefined, toUser: boolean, running: boolean) {
   if (!message) return running ? 'sending' : undefined
   if (message.state === 'failed') return 'failed'
   if (message.state === 'answered') return 'answered'

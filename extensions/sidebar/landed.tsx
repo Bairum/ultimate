@@ -85,7 +85,7 @@ function LandedRow({ group, now }: { group: LandingGroup; now: number }) {
   const from = latest.from !== undefined && latest.from !== latest.root ? latest.from : undefined
   const open = () => {
     if (from === undefined)
-      events.emit('board:open', { conversation: latest.root, entry: latest.entry })
+      events.emit('messages:open', { conversation: latest.root, entry: latest.entry })
     actions.showSurface('agent')
     actions.switchConversation(from ?? latest.root)
   }

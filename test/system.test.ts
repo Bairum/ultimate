@@ -367,12 +367,12 @@ it('links each lane to its parent and the call that spawned it, exact or inferre
     { kind: 'tool', caller: 'agent', callee: 'codemode', name: 'codemode', conversationId: 8 },
     () =>
       f.trace.run(
-        { kind: 'action', caller: 'codemode', callee: 'board', name: 'board/send' },
+        { kind: 'action', caller: 'codemode', callee: 'messages', name: 'messages/send' },
         () => 1,
       ),
     null,
   )
-  const action = f.trace.reader.query({ limit: 1000 }).find((row) => row.name === 'board/send')!
+  const action = f.trace.reader.query({ limit: 1000 }).find((row) => row.name === 'messages/send')!
   events.push(
     // From before the window (ids follow time): no link.
     event(0, 'board.sent', -5000, { message: 5, from: 7, to: 8, reply: false, steer: false }),

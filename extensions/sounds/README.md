@@ -6,7 +6,7 @@ button for each; the choices live in `ext.sounds.muted` and `ext.sounds.off`.
 
 Only the primary standing agent sounds, read from the root's documents:
 
-- **Needs input:** its reply-expected `message` to the user (`board`); every question goes that way.
+- **Needs input:** its reply-expected `message` to the user (`messages`); every question goes that way.
 - **Finished:** its one-way `message` to the user, or its answer to your typed input.
 - **Failed:** its run ended in an error (`ultimate.conversation-overview`); a stop or a reset does not.
 

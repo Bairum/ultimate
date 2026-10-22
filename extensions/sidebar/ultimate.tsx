@@ -1,14 +1,14 @@
 import type { ReactNode } from 'react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn, ParkedRuns, Provided, useDocOf, useStore, useTasks, useUltimate } from '@/sdk'
-import { BoardDoc, emptyBoard, waitingOnUser } from '../board/ui.tsx'
+import { MessagesDoc, emptyMessages, waitingOnUser } from '../messages/ui.tsx'
 import { AgentMark, ConversationPhase, useOverview } from '../conversations/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import { primaryLabel } from './label.ts'
 
 /** Renders with how many questions wait on the user's answer or dismissal. */
 export function WaitingOnUser({ children }: { children: (waiting: number) => ReactNode }) {
-  return children(waitingOnUser(useDocOf(1, BoardDoc) ?? emptyBoard))
+  return children(waitingOnUser(useDocOf(1, MessagesDoc) ?? emptyMessages))
 }
 
 /** A busy standing agent's word: its classified phase, lower case like its idle line, else "working". */

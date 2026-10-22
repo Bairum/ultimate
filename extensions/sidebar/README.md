@@ -1,7 +1,7 @@
 The Agent surface's sidebar and the title bar's @ultimate button: talk to @ultimate, see each root's tree with what
 is in flight and what landed, and switch, rename, compact, conclude and resume conversations. It is the UI that brings
 the core together, so it sits at the top of the core tier: it reads conversations, workspaces, subagents, lineage and
-board, and shows what optional extensions provide through points (`conversations/ui.tsx`: a working phase, a plan task).
+messages, and shows what optional extensions provide through points (`conversations/ui.tsx`: a working phase, a plan task).
 Its UI state keeps the keys it had as part of conversations (`ext.conversations.*`).
 
 Every standing agent's row leads with its mark (conversations' `AgentMark`): a small tinted tile with a glyph — a brand
@@ -11,7 +11,7 @@ waits on you). Then a fixed display name (`Ultimate`, `Lander`, else the name ca
 `@name` small and muted. The same mark sits in the title bar's button and before standing senders in chat bubbles.
 
 @ultimate has its own section at the very top: its row shows `working`, `idle` or an amber
-`N waiting on you` (reply-enabled board messages to you still waiting on your answer, plus one for its current final
+`N waiting on you` (reply-enabled messages to you still waiting on your answer, plus one for its current final
 answer when that asks you questions), and the age of its latest
 message. Clicking it opens @ultimate on the Agent surface through `subagents.standing {name: 'ultimate'}`, also before
 its conversation exists. Below it, an Agents group lists the lander first, then the other ownerless top-level standing
@@ -70,7 +70,7 @@ since you last looked at it. Actual foreground tasks and live run boundaries det
 lagging title/timestamp list.
 A solid purple dot means an unread reply, not ongoing work; only the pulsing dot means working.
 
-Every row reads one state from board's `conversationState`, the same the System surface shows: working;
+Every row reads one state from messages’ `conversationState`, the same the System surface shows: working;
 **waits on you** (only the primary agent, @ultimate: an open question to the user);
 **awaiting @ultimate** (amber question mark, never on a subagent: an open reply-expected message the conversation sent
 the primary agent); **done** (green check, subagents only: it answered, and its answer went to its parent);
@@ -98,7 +98,7 @@ disabled while the conversation works), and Conclude. Before concluding, the UI 
 When a conversation or its subagents have uncommitted files or unlanded commits, a confirmation dialog names the
 work and explains that its checkout is kept until the work lands or is discarded. Otherwise it concludes at once.
 Concluded rows and their branches/subagents sit in a collapsed "Concluded · N" group at the bottom.
-Resume brings them back. Any input that starts a run in a concluded conversation (typed input, a board message or
+Resume brings them back. Any input that starts a run in a concluded conversation (typed input, a message or
 reply, a subagent report, an automation's message) resumes it and its concluded ancestors in the commit that places
 the input, through the patched `GenerationTask.beforeInput` hook. Notes and other writes start no run and resume nothing.
 Concluding the shown subtree shows another live conversation when one exists.

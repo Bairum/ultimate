@@ -107,7 +107,7 @@ type Target = { conversation: number; entry?: number }
 function useOpen() {
   const actions = useUltimate()
   return ({ conversation, entry }: Target) => {
-    if (entry !== undefined) events.emit('board:open', { conversation, entry })
+    if (entry !== undefined) events.emit('messages:open', { conversation, entry })
     actions.showSurface('agent')
     actions.switchConversation(conversation)
   }

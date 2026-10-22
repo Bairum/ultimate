@@ -39,7 +39,7 @@ import type { ActionContext } from '../../server/actions.ts'
 import { READ_BYTES, READS, readProject } from './projects.ts'
 import type { Read } from './projects.ts'
 import { ConversationsApi } from '../conversations/api.ts'
-import { BoardApi } from '../board/api.ts'
+import { MessagesApi } from '../messages/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
 import { Summarized } from './refs.ts'
@@ -328,7 +328,7 @@ function globals(
           throw new Error('reply must be a boolean')
         if (machine !== undefined && (typeof machine !== 'string' || !machine))
           throw new Error('machine must be nonempty')
-        return host.need(BoardApi).tell(
+        return host.need(MessagesApi).tell(
           conversationId,
           {
             project,

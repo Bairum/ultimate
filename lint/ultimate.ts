@@ -595,8 +595,9 @@ export default {
               callee.name === 'defineEvent' &&
               !(
                 typeof name === 'string' &&
-                name.startsWith(`${own}.`) &&
-                name.length > own.length + 1
+                ((name.startsWith(`${own}.`) && name.length > own.length + 1) ||
+                  (own === 'messages' &&
+                    ['board.asked', 'board.sent', 'board.triaged'].includes(name)))
               )
             )
               context.report({

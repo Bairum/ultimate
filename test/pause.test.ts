@@ -344,7 +344,7 @@ it('leaves no note when the run handed over during the drain and its successor w
 /** A task record as `running()` reads it: it decides by task kind and checkpoint phase only. */
 const at = (kind: string, phase: string) => ({ kind, state: { checkpoint: { phase } } })
 
-it('treats board deliveries as passive: their triage model call counts through the gate', () => {
+it('treats message deliveries as passive: their triage model call counts through the gate', () => {
   expect(passive(at('board.delivery', 'deliver'))).toBe(true)
   expect(passive(at('board.delivery', 'reply'))).toBe(true)
   expect(passive(at('ultimate.subagent-reporter', 'deliver'))).toBe(true)

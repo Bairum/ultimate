@@ -32,7 +32,7 @@ import {
   useUltimate,
   useViewport,
 } from '@/sdk'
-import { Address } from '../board/ui.tsx'
+import { Address } from '../messages/ui.tsx'
 import { compareUrl } from '../../lib/compare.ts'
 import { useGithubRepo } from '../workspaces/ui.tsx'
 import { Composer, DraftCard } from './comment.tsx'

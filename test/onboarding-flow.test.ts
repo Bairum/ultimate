@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
-import { Board } from '../extensions/board/api.ts'
+import { Messages } from '../extensions/messages/api.ts'
 import { Tally } from '../extensions/lineage/server.ts'
 import { Starts } from '../extensions/onboarding/server.ts'
 import { context } from '../server/harness.ts'
@@ -92,9 +92,9 @@ it('onboards once per root with facts, choices, reading, a seeded tally and a co
     )
     await server.harness.waitForIdle(context)
     await until(async () => {
-      const board = await server.harness.snapshot(Board, ROOT_CONVERSATION_ID, context)
+      const log = await server.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context)
       return (
-        board?.messages.some(
+        log?.messages.some(
           (message) =>
             message.from === id &&
             message.text === 'Explore a first feature' &&

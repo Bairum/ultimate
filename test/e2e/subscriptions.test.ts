@@ -4,7 +4,7 @@ import { basename, join, resolve } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { JsonValue } from '@earendil-works/chord'
 import type { ConversationId } from '@earendil-works/pi-durable'
-import { Board } from '../../extensions/board/api.ts'
+import { Messages } from '../../extensions/messages/api.ts'
 import { launchHandshake, Subscriptions } from '../../extensions/subscriptions/server.ts'
 import { Done, Exited } from '../../extensions/subscriptions/refs.ts'
 import type { Subscription } from '../../extensions/subscriptions/types.ts'
@@ -59,7 +59,7 @@ function call(app: NonNullable<typeof server>, action: string, id: string) {
   return app.extensions.invoke('subscriptions', action, { id }, new AbortController().signal)
 }
 
-it('delivers FIRE once, investigates exits only in the owning agent, recovers, and escalates through Board', async () => {
+it('delivers FIRE once, investigates exits only in the owning agent, recovers, and escalates through Messages', async () => {
   const { root, userHome, home, options, app: initial } = await fixture()
   let app = initial
   const caller = await app.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
@@ -127,7 +127,7 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
   await invoke('escalate', { id: third.id, reason: 'No access to the remote system' })
   await until(async () => (await entries(caller.id, 'subscriptions.escalated')).length === 1)
   expect(await get(third.id)).toMatchObject({ state: 'failed', enabled: false })
-  const messages = (await app.harness.snapshot(Board, 1 as ConversationId, context))!.messages
+  const messages = (await app.harness.snapshot(Messages, 1 as ConversationId, context))!.messages
   expect(
     messages.filter(
       (m) => m.from === third.conversationId && m.text.includes('No access to the remote system'),

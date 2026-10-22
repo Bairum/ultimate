@@ -674,7 +674,7 @@ export default function subagents(
       const childActions = Object.values(state.actions).filter(
         (candidate) => candidate.conversationId === submission.conversationId,
       )
-      // A one-way Board message from the parent has no reporter and no Board reply: without this,
+      // A one-way message from the parent has no reporter and no reply: without this,
       // the answer it starts never reaches the parent, which stays idle. A pending reporter
       // whose input was answered in the same run delivers that answer itself.
       const input = await tx.entry(submission.entry)
