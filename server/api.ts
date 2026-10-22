@@ -564,10 +564,26 @@ export async function createApi(
               json(202, { submissionId: submission.id })
               break
             }
-            case 'abort':
-              await conversation.abort(context)
+            case 'abort': {
+              // Stop aborts the conversation's own tasks (each cascades to the work it owns) instead of calling
+              // Conversation.abort(), which also withdraws queued inputs: queued follow-ups stay, and Pi places them
+              // with the next input, ahead of it. Repeated, since a run ending meanwhile starts the next with them.
+              for (;;) {
+                const own = (await harness.inspect(context)).tasks.filter(
+                  ({ record }) =>
+                    record.conversationId === conversation.id &&
+                    !record.owner &&
+                    !record.background,
+                )
+                if (own.length === 0) break
+                for (const { record } of own) {
+                  await harness.abortTask(record.id, context)
+                  await harness.waitForTask(record.id, context)
+                }
+              }
               json(200, { ok: true })
               break
+            }
             case 'configure': {
               const configure: ConfigureRequest = {}
               if (data.model !== undefined) {
