@@ -10,10 +10,20 @@ Each event is one quiet line with an icon for its kind, what happened and its ag
 - **Root** (`lineage.rooted`): the new root by its title.
 - **Notice** (`ultimate.notice`): the extension and its message, amber for warnings, wrapping to two lines. It opens the
   conversation it happened in when the event's trace context names one.
+- **Check** (`workspaces.check`): a lander check that failed, timed out or was flaky, with its command. Passed checks
+  stay out.
+- **Backup** (`cloud.backup`): a finished or failed backup, with the Worker's sentence for a refused one. Started
+  backups stay out.
+- **Escalation** (`subscriptions.escalated`): the subscription and its reason.
 
-Data comes from `useEvents({ events })` with the owners' tokens (`SubmissionLanded` from workspaces, `Branched` and
-`Rooted` from lineage, `NoticeEvent` from `shared/events.ts`), which streams the root's `ultimate.event-feed` document
-(the latest 100 events); other kinds stay out until they get a row. The
+Errors (failed checks and backups, escalations, error notices) get a red edge and tint, warnings (flaky checks,
+warning notices) an amber one, and the header counts them with a link to the Problems filter.
+
+Chips filter by kind (all, landed, branches, problems) and a range keeps the last 24h, 7d (default) or all; both are
+kept in UI state. Rows come from `useEvents({ events })`, which streams the root's `ultimate.event-feed` document
+(the latest 100 events of every kind, so a busy hour leaves few of these). **Load older** pages back from the oldest
+live one with this extension's `page { kinds, before?, since?, limit? }` action, 50 at a time, over the durable event
+log; `cloud` and `subscriptions` events are named by string, so Activity loads without those extensions. The
 right panel is the place for it because the feed is project-wide, like Tasks and Agents, while the sidebar's root rows
 already show each tree's own landings. `Show recent activity` in the command palette opens it.
 
