@@ -14,13 +14,16 @@ import { tmpdir } from 'node:os'
 import { basename, join, resolve as resolvePath } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
+import type { Context } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Subagents } from '../subagents/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
+import type { WorkspaceService } from '../workspaces/api.ts'
 import { cleanPreview, sweepPreviews } from './cleanup.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { spawnGroup, stopGroup } from '../../lib/process-group.ts'
@@ -191,6 +194,27 @@ export const actions: Record<string, ExtensionAction> = {
   }),
 }
 
+/**
+ * The workspace a preview of conversation `id` serves: its own, else the nearest owner's (a subagent without an isolate
+ * works in its parent's worktree, at any depth); undefined means the host checkout.
+ */
+export async function previewWorkspace(
+  host: Pick<ExtensionHost, 'harness'>,
+  workspaces: Pick<WorkspaceService, 'get'>,
+  id: ConversationId,
+  context: Context,
+) {
+  let current: ConversationId | undefined = id
+  while (current !== undefined) {
+    const workspace = await workspaces.get(current, context)
+    if (workspace) return workspace
+    const at: ConversationId = current
+    current = (await host.harness().commit((tx) => tx.conversation(at), context))?.owner
+      ?.conversationId
+  }
+  return undefined
+}
+
 export default function instanceExtension(
   host: Pick<
     ExtensionHost,
@@ -276,7 +300,10 @@ export default function instanceExtension(
                 if (!child) throw new Error(`Unknown subagent: ${args.subagent}`)
                 conversationId = child.conversationId
               }
-              const workspace = await workspaces.get(conversationId, context)
+              const workspace =
+                args.subagent === undefined
+                  ? await previewWorkspace(host, workspaces, conversationId, context)
+                  : await workspaces.get(conversationId, context)
               if (args.subagent !== undefined && !workspace)
                 throw new Error('Subagent must have an active worktree isolate')
               if (workspace) {

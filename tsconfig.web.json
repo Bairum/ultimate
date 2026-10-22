@@ -42,6 +42,7 @@
     "extensions/pause/lasted.ts",
     "extensions/pause/parked.ts",
     "extensions/sidebar/work.ts",
+    "extensions/sidebar/landings.ts",
     "extensions/sidebar/label.ts",
     "extensions/system/feed.ts",
     "extensions/system/layout.ts",
