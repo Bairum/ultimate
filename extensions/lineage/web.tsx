@@ -754,7 +754,7 @@ export default defineWebExtension({
   messageActions: [GoBackAction],
   composer: RootComposer,
   panels: [
-    { id: MEMORY_PANEL, title: 'Memory', icon: BrainIcon, component: MemoryPanel, order: -6 },
+    { id: MEMORY_PANEL, title: 'Memory', icon: BrainIcon, component: MemoryPanel, order: 6 },
   ],
   slots: { overlay: [Roots] },
   // A root runs no turns and gets no summaries: its tally speaks for it.
