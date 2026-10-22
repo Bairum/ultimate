@@ -61,8 +61,6 @@ Entry/search limits default to 100 and must be 1–1000. Pagination of raw entri
 
 **Crash window:** Pi Durable 1.0 has no result-transaction callback. Store writes use a separate `api.commit()` immediately before returning success. A crash between that commit and durable tool settlement retains the writes while the model may be told the script was **interrupted**. Do not treat store updates as atomic receipts of external side effects.
 
-With `ULTIMATE_FAUX=1`, submit `codemode demo` to see nested read/bash progress and the final result without a model account.
-
 ## Summaries
 
 Every finished or failed codemode call gets one past-tense line saying what it did, such as "Concluded 6 conversations (#190416, #190537, …)" or "Read the conversations extension's contract". `details.calls` lists the `ultimate.*` helper calls next to the `tools.*` calls, so the line can name them; they stream as `✓ ultimate.<name> …` lines too.
@@ -71,8 +69,6 @@ Every finished or failed codemode call gets one past-tense line saying what it d
 - **Summary model:** any other script starts a background `codemode.summary` task, in its own commit just before the call returns; a call already labelled or still pending (`codemode.summaries-pending`, which a fork starts empty) gets no second one. It asks `summaryModel` (through the conversations service, as messages triage does) with only each call's name, status and arguments, clipped, plus a failure's error, as untrusted data. The script and every result stay home, since the summary model can be another provider and tool output can hold anything; values under secret-looking keys are dropped, and every string is scrubbed before serializing (`scrub`): an allowlist keeps only plain words (names, ids, paths, prose) and replaces anything else (quotes, `=`, braces, a word after `bearer`, known token prefixes, long opaque runs, `user:pass@` URLs) with `[…]`. The answer is `{ line, effect }`: a change (an action that concludes, creates, pauses or configures, a message, a write or edit) leads the line and sets `effect`, also when a later call failed. The task marks the request before sending it and memoizes the response, so a restart never asks twice: a restart between the two gives no line. Its usage is accounted to the conversation. Without a model, or when the answer does not parse, no line is written and the card keeps the script header. A yielded script gets no line.
 - **Storage:** the line lives in the conversation document `codemode.summaries` (`{ calls: { [toolCallId]: { line, effect? } } }`, the newest 1000; `api.ts` holds its token) and is recorded as the event `codemode.summarized { conversation, call, line, effect }` in the same commit, which the System surface shows.
 - **Cost:** on this host about 120 codemode calls a day, a third of them fixed labels; the model call costs about $0.00005, so under one cent a day.
-
-With `ULTIMATE_FAUX=1`, the faux `seedCodemode {conversation}` action (or the prompt `seed codemode`) writes a run of @ultimate's real codemode calls with their lines; `codemode steps demo` runs live calls and the faux summary model.
 
 ## UI
 

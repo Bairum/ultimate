@@ -26,5 +26,3 @@ live one with this extension's `page { kinds, before?, since?, limit? }` action,
 log; `cloud` and `subscriptions` events are named by string, so Activity loads without those extensions. The
 right panel is the place for it because the feed is project-wide, like Tasks and Agents, while the sidebar's root rows
 already show each tree's own landings. `Show recent activity` in the command palette opens it.
-
-Under faux, the `seedEvents {from}` action of the `faux` extension emits a realistic mix to preview it.

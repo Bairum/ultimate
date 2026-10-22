@@ -2,8 +2,7 @@ Inline setup choices, the first-run prerequisites, and the Extensions panel that
 
 ## First run
 
-The first run has only **Get ready**: connect a provider and choose an available model. The faux demo model also
-counts as ready. Continue waits for both, starts onboarding with @ultimate through `onDone`, then records `firstRunDone`;
+The first run has only **Get ready**: connect a provider and choose an available model. Continue waits for both, starts onboarding with @ultimate through `onDone`, then records `firstRunDone`;
 there is no second page. Escape or the close button records completion without changing settings. Closing returns
 focus to the composer. An automated browser (`navigator.webdriver`) does not get this dialog.
 
@@ -22,7 +21,6 @@ so Start here can show **@ultimate is setting up this project · open** across r
 with the user able to steer. It writes the root's first memories with `remember` (the user's instructions verbatim among them), suggests at most three useful
 project-specific agents, extensions or settings, and builds only what the user chooses. The first feature becomes a
 coordinator through `branch`. Roots stay read-only while @ultimate handles setup.
-Under faux the same flow is scripted without model tokens (see `faux/README.md`).
 
 ## Setup cards
 

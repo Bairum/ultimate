@@ -39,9 +39,9 @@ Instructions and reports are stored as `subagents.instruction` and `subagents.re
 
 Source and foreground Open offer a header Return button back to the receiving conversation and its message when known. Transcript entry anchors and the core `ultimate:reveal-entry {conversationId, entryId}` web event cancel auto-follow before revealing a row, so a long answer cannot pull the view back to its end. This one-hop navigation is local to the browser session; ordinary conversation switching remains unchanged. Missing sender summaries keep the ID visible and disable Source with an explanatory tooltip.
 
-### Token-free preview
+### Preview
 
-Start a faux instance, accept its project setup, send `delegate to worker`, and use the foreground card's Open button to inspect the attributed child instruction.
+Start an instance, accept its project setup, ask it to delegate a small task to a worker, and use the foreground card's Open button to inspect the attributed child instruction.
 
 ## Queued agent inputs
 

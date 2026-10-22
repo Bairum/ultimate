@@ -21,5 +21,3 @@ Automation fires are scheduler tasks, so the hold stops them. Timers that start 
 - Under the composer while paused: `Paused — your message runs on Play`.
 - ⌘K: **Pause** and **Play**.
 - The Play note shows as one amber divider in the transcript.
-
-Try it with faux: send `phases demo`, pause during its `sleep 4` bash call, and watch it go from Pausing… to Paused · safe.

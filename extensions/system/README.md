@@ -22,7 +22,6 @@ Hovering a lane, or opening one of its runs, lights its chain (ancestors and des
 its messages as faint vertical lines between sender and recipient. On a phone only the indentation and guides show. A block opens its calls
 and a call its trace tree; a lane's name opens the conversation, its filter button narrows the stream to it. Below,
 **All events**: the stream with source chips, errors only, a conversation filter and text, each row opening its trace
-tree, older pages loading at the end. Both poll every 2 s while the surface is on screen. Under faux, the `seedLanes`
-action of `faux` writes demo lanes.
+tree, older pages loading at the end. Both poll every 2 s while the surface is on screen.
 
 Uses two read methods of the core: `host.trace.page()` (calls by write position with the filters above and a `since`/`until` start-time window) and `host.eventLog.recent({ before, order })`.
