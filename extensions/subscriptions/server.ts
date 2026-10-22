@@ -700,6 +700,8 @@ function backend(host: ExtensionHost) {
         const path = join(projectDir(slug), MANIFEST)
         // Published before the record commits. A replay finds its own equal manifest and adopts it; a different
         // one is another subscription.
+        // Resolved before reserving the slug: only the guarded block below may leave it reserved.
+        const agent = await agentFor(caller)
         if (creating.has(slug)) throw new Error(`Subscription ${slug} is being created`)
         creating.add(slug)
         try {
@@ -731,7 +733,7 @@ function backend(host: ExtensionHost) {
           creating.delete(slug)
           throw error
         }
-        return { ...(await agentFor(caller)), slug }
+        return { ...agent, slug }
       }
       if (args.action === 'list') {
         await discover()

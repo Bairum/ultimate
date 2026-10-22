@@ -347,6 +347,16 @@ it('discovers a committed project subscription by slug only in a chosen project,
 it('creates a project subscription in the checkout with a committed manifest', async () => {
   const { root, app } = await fixture()
   const caller = await app.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
+  // A create that fails before it has an agent leaves the slug free for the retry.
+  await expect(
+    app.extensions.invoke(
+      'subscriptions',
+      'create',
+      { ask: 'Poll ship PRs', title: 'Ship PRs', scope: 'project' },
+      new AbortController().signal,
+      999_999,
+    ),
+  ).rejects.toThrow('Unknown caller #999999')
   const sub = (await app.extensions.invoke(
     'subscriptions',
     'create',
