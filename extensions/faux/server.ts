@@ -209,7 +209,11 @@ export default async function fauxExtension(host: ExtensionHost) {
           })
         if (last?.role === 'toolResult' && last.toolName === 'remember')
           return fauxAssistantMessage([
-            fauxText('The first memories are written. What should we do first?'),
+            fauxText(
+              last.isError
+                ? `The first memories could not be written: ${messageText(last.content)}`
+                : 'The first memories are written. What should we do first?',
+            ),
           ])
         if (
           last?.role === 'user' &&
