@@ -283,6 +283,11 @@ describe('side chats', () => {
     const side = await f.open()
     await f.call(side, 'todo', { action: 'list' })
     expect((await f.server.harness.snapshot(Side, side, context))!.effects).toBe(false)
+    // A side chat keeps @ultimate's to-dos as main.
+    await f.call(side, 'todo', { action: 'add', text: 'from the side', owner: 'user' })
+    expect(JSON.stringify(await entries(f.server, side))).toContain(
+      'Added 1 for user: from the side',
+    )
     await f.call(side, 'message', { to: 'user', text: 'must fail' })
     expect((await f.server.harness.snapshot(Side, side, context))!.effects).toBe(true)
     expect(JSON.stringify(await entries(f.server, side))).toContain(
