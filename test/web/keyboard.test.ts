@@ -43,9 +43,9 @@ it('respects typing, dialogs, sequences, timeout, composition and listener teard
   }
   class Textarea extends Element {
     override tagName = 'TEXTAREA'
-    composer = false
+    composer: false | 'conversation' | 'scope' = false
     closest(selector: string) {
-      return selector === '[data-composer-target]' && this.composer ? {} : null
+      return selector === `[data-composer-target="${this.composer}"]` ? {} : null
     }
   }
   const window = new EventTarget()
@@ -98,7 +98,10 @@ it('respects typing, dialogs, sequences, timeout, composition and listener teard
   expect(runCommand).toHaveBeenCalledTimes(calls)
   const composer = new Textarea()
   expect(send('Tab', composer, { shiftKey: true })).toBe(false)
-  composer.composer = true
+  // A scoped composer, such as a side chat's, types for another conversation: Escape and Shift+Tab act on the shown one.
+  composer.composer = 'scope'
+  expect(send('Tab', composer, { shiftKey: true })).toBe(false)
+  composer.composer = 'conversation'
   composer.id = 'composer-input'
   expect(send('Tab', composer, { shiftKey: true })).toBe(true)
   expect(runCommand).toHaveBeenLastCalledWith('thinking')

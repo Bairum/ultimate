@@ -1,4 +1,12 @@
-Side chats are temporary, ownerless copies of the standing @ultimate conversation. The user opens one to explore a tangent, then discards it or sends a summary back without waking main. This extension supplies the server contract only; it adds no UI.
+Side chats are temporary, ownerless copies of the standing @ultimate conversation. The user opens one to explore a tangent, then discards it or sends a summary back without waking main.
+
+## UI (`web.tsx`)
+
+- **Tab** in @ultimate's composer toggles side chat mode (`togglesSideMode`, `logic.ts`): a bare Tab, not while a popup owns it, never in a side chat's composer (one level only); Shift+Tab stays the thinking level. A Normal / Side chat switch above the composer shows the mode and toggles it by click; the prompt turns dashed brand and its placeholder says main keeps running. Enter sends through the core's `ComposerRedirect` to `open`, then the new side chat comes to the front and the mode returns to normal.
+- **Depth view** (`conversation.overlay`): main's transcript and composer slide left, scale to 0.88 and dim, and keep streaming; its composer is covered by "Typing goes to the side chat · Back to main". The side chat comes forward as a sheet: a live `<Conversation/>` in a `ConversationScope`, under a cut marker ("forked from @ultimate at HH:MM · knows everything up to here"). The core transcript already hides a fork's inherited history. On a phone main recedes behind a bottom sheet with a "show main" strip; with `prefers-reduced-motion` both only fade. The id in front is the UI state `ext.side-chat.front`, so a reload restores the view; minimize parks the chat (it stays open in the sidebar and as a "Side chat · HH:MM show" chip above main's composer).
+- **Ending:** Discard and Summarize & inject in the sheet's footer. Once `effects` is set, Discard is gone and one quiet line says why. A failed inject shows the model error and turns into Retry summary.
+- **`sidechat.summary`** renders as a card in main, like an agent report, with a link to the side chat.
+- **Sidebar:** open side chats are rows under @ultimate (the sidebar's `sidebar.under-ultimate` point); a row brings its chat to the front, or parks it when it is already there. Ended chats are not listed; the sidebar keeps `side-chat` labels out of its branch, Earlier and Concluded lists.
 
 ## Web contract
 

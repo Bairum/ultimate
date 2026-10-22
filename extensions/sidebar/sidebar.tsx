@@ -48,6 +48,8 @@ import type { KeptWork } from '../conversations/types.ts'
 import { ago, LanderState } from './lander.tsx'
 import { StandingPhase, WaitingOnUser } from './ultimate.tsx'
 import { useSidebarState } from './state.tsx'
+import { topLevelRows } from './listed.ts'
+import { UnderUltimate } from './ui.tsx'
 
 /** The shown conversation, also while its snapshot is still on the way. */
 const useShownId = () => useStore((state) => state.view?.conversation.id ?? state.requested)
@@ -136,9 +138,7 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
       : undefined
   const [expanded, setExpanded] = useSidebarState<number[]>('expanded', [])
   const working = workingByTop(conversations)
-  const topLevel = conversations.filter(
-    (conversation) => conversation.parentConversationId === undefined,
-  )
+  const topLevel = topLevelRows(conversations)
   // @ultimate first, then the lander and other standing agents: pinned above the rest and never concluded.
   const standingIds = useDocOf(1, StandingDoc)
   const ultimateId = standingIds?.ultimate
@@ -509,6 +509,9 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
       <nav aria-label="Conversations" className="flex flex-col gap-px">
         <div className="mb-1 border-b border-border/60 pb-1">
           {ultimate ? tree(ultimate) : standingRow(undefined)}
+          <Provided input={ultimateId} point={UnderUltimate}>
+            {(rows) => rows}
+          </Provided>
         </div>
         {agents.length > 0 && (
           <div

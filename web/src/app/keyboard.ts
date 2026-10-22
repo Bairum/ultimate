@@ -35,7 +35,7 @@ export function useShortcuts() {
       const typing = editable(event.target)
       const composer =
         event.target instanceof HTMLTextAreaElement &&
-        !!event.target.closest('[data-composer-target]')
+        !!event.target.closest('[data-composer-target="conversation"]')
       const emptyPalette =
         store.getState().ui.paletteOpen &&
         event.target instanceof HTMLInputElement &&
