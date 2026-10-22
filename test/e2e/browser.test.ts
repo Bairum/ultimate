@@ -7,6 +7,43 @@ import browserExtension from '../../extensions/browser/server.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { removeTemp, temp } from '../helpers.ts'
 
+it('times out a hung step, closes its page and keeps later calls working', async () => {
+  const directory = await temp('ultimate-browser-timeout-')
+  const closers: (() => Promise<void>)[] = []
+  const notices: string[] = []
+  const host = {
+    home: join(directory, 'home'),
+    projectRoot: directory,
+    resource: <T>(_name: string, create: () => T) => create(),
+    onClose: (close: () => Promise<void>) => closers.push(close),
+    notice: (message: string) => notices.push(message),
+    system: () => ({ process: { url: 'http://127.0.0.1:1/' } }),
+  } as unknown as ExtensionHost
+  const browser = browserExtension(host).tools!.find((tool) => tool.name === 'browser')!
+  const api = { output() {} } as unknown as ToolExecutionApi
+  const url = 'data:text/html,<title>Hang</title>'
+  const drive = async (steps: unknown[], timeoutMs?: number) => {
+    const started = Date.now()
+    const result = await browser.execute({ url, steps, screenshot: false, timeoutMs }, api, context)
+    return { result, text: JSON.stringify(result.output), ms: Date.now() - started }
+  }
+  try {
+    for (const hang of ['new Promise(() => {})', 'for (;;) {}']) {
+      const hung = await drive([{ eval: '1 + 1' }, { eval: hang }], 1000)
+      expect(hung.result.isError).toBe(true)
+      expect(hung.text).toContain('Step 1: OK 2')
+      expect(hung.text).toContain('Step 2: TimeoutError: timed out after 1s')
+      expect(hung.ms).toBeLessThan(15_000)
+      const next = await drive([{ eval: 'document.title' }])
+      expect(next.result.isError).toBeFalsy()
+      expect(next.text).toContain('Step 1: OK \\"Hang\\"')
+    }
+  } finally {
+    for (const close of closers) await close()
+    await removeTemp(directory)
+  }
+})
+
 it('saves screenshots at the given path, relative to the conversation cwd, creating parents', async () => {
   const directory = await temp('ultimate-browser-path-')
   const closers: (() => Promise<void>)[] = []

@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
 import { formatDimensionNote, resizeImage } from '@earendil-works/pi-coding-agent'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
-import { chromium, type Browser, type Page } from 'playwright-core'
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
 export async function browserBinary() {
@@ -41,6 +41,26 @@ export function screenshotFile(home: string, cwd: string, path?: string) {
       `path is where the PNG is saved and must end in .png, not ${JSON.stringify(path)}; pass the page to load as url, such as /?conversation=1.`,
     )
   return resolve(cwd, path)
+}
+
+/** Each page operation's limit unless a call passes timeoutMs; a call as a whole gets four of them plus its explicit waits. */
+const stepTimeoutMs = 30_000
+/** How long closing a context, or the browser after it, may take before it counts as wedged. */
+const closeTimeoutMs = 5_000
+
+function timeout(ms: number) {
+  return Object.assign(new Error(`timed out after ${ms / 1000}s`), { name: 'TimeoutError' })
+}
+
+/** `work`, unless `ms` pass first; a promise Playwright never settles (evaluate has no timeout) cannot hang the call. */
+function within<T>(ms: number, work: Promise<T>, error = timeout(ms)) {
+  let timer: NodeJS.Timeout | undefined
+  return Promise.race([
+    work,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(error), Math.max(0, ms))
+    }),
+  ]).finally(() => clearTimeout(timer))
 }
 
 async function capture(page: Page, file: string, selector?: string, fullPage = false) {
@@ -81,6 +101,9 @@ export default function browserExtension(host: ExtensionHost) {
           'Where to save the PNG; relative to your cwd, parent directories are created. Default: a new file in the home.',
       }),
     ),
+    timeoutMs: Type.Optional(
+      Type.Integer({ minimum: 1, description: 'Limit per step, load and capture; default 30000.' }),
+    ),
   }
   return defineExtension({
     name: 'browser',
@@ -95,7 +118,7 @@ export default function browserExtension(host: ExtensionHost) {
       defineTool({
         name: 'screenshot',
         description:
-          'Look at a browser page; save a full-resolution PNG and return a compact image with loading errors.',
+          'Look at a browser page; save a full-resolution PNG and return a compact image with loading errors. Loading and capturing each time out after 30 s.',
         // A fresh isolated page only observes the UI and writes the screenshot again; it performs no interactions.
         replay: 'safe',
         parameters: Type.Object({
@@ -108,16 +131,17 @@ export default function browserExtension(host: ExtensionHost) {
           theme: Type.Optional(Type.Union([Type.Literal('light'), Type.Literal('dark')])),
         }),
         async execute(args, api, context) {
-          return run(args, api, context, async (page, _outcomes, png) => {
-            await page.waitForTimeout(args.waitMs ?? 1500)
-            return capture(page, png, args.selector, args.fullPage)
+          const waitMs = args.waitMs ?? 1500
+          return run(args, waitMs, api, context, async (page, _outcomes, png, guard) => {
+            await guard(page.waitForTimeout(waitMs), waitMs)
+            return guard(capture(page, png, args.selector, args.fullPage))
           })
         },
       }),
       defineTool({
         name: 'browser',
         description:
-          'Drive a fresh browser page with clicks, fills, keys, waits and JavaScript; report outcomes and optionally an image.',
+          'Drive a fresh browser page with clicks, fills, keys, waits and JavaScript; report outcomes and optionally an image. Each step times out after 30 s.',
         parameters: Type.Object({
           ...base,
           steps: Type.Array(
@@ -138,19 +162,24 @@ export default function browserExtension(host: ExtensionHost) {
           screenshot: Type.Optional(Type.Boolean()),
         }),
         async execute(args, api, context) {
-          return run(args, api, context, async (page, outcomes, png) => {
+          const waits = args.steps.reduce(
+            (sum, step) => sum + ('wait' in step && typeof step.wait === 'number' ? step.wait : 0),
+            0,
+          )
+          return run(args, waits, api, context, async (page, outcomes, png, guard) => {
             for (const [index, step] of args.steps.entries()) {
               context.abortSignal?.throwIfAborted()
               api.output(`Step ${index + 1}: ${JSON.stringify(step)}\n`)
               try {
                 let value: unknown
-                if ('click' in step) await page.locator(step.click).click()
-                else if ('fill' in step) await page.locator(step.fill[0]).fill(step.fill[1])
-                else if ('press' in step) await page.keyboard.press(step.press)
+                if ('click' in step) await guard(page.locator(step.click).click())
+                else if ('fill' in step) await guard(page.locator(step.fill[0]).fill(step.fill[1]))
+                else if ('press' in step) await guard(page.keyboard.press(step.press))
                 else if ('wait' in step) {
-                  if (typeof step.wait === 'number') await page.waitForTimeout(step.wait)
-                  else await page.locator(step.wait).waitFor()
-                } else value = await page.evaluate(step.eval)
+                  if (typeof step.wait === 'number')
+                    await guard(page.waitForTimeout(step.wait), step.wait)
+                  else await guard(page.locator(step.wait).waitFor())
+                } else value = await guard(page.evaluate(step.eval))
                 outcomes.push(
                   `Step ${index + 1}: OK${value === undefined ? '' : ` ${JSON.stringify(value)}`}`,
                 )
@@ -159,7 +188,7 @@ export default function browserExtension(host: ExtensionHost) {
                 throw error
               }
             }
-            return args.screenshot === false ? undefined : capture(page, png)
+            return args.screenshot === false ? undefined : guard(capture(page, png))
           })
         },
       }),
@@ -172,13 +201,16 @@ export default function browserExtension(host: ExtensionHost) {
       width?: number
       height?: number
       theme?: 'light' | 'dark'
+      timeoutMs?: number
     },
+    waits: number,
     api: { output(text: string): void; env?: { cwd: string } },
     context: { abortSignal?: AbortSignal },
     action: (
       page: Page,
       outcomes: string[],
       png: string,
+      guard: <T>(work: Promise<T>, extraMs?: number) => Promise<T>,
     ) => Promise<
       | {
           image?: { type: 'image'; mimeType: string; data: string }
@@ -189,38 +221,48 @@ export default function browserExtension(host: ExtensionHost) {
     >,
   ) {
     const outcomes: string[] = []
-    let page: Page | undefined
-    const abort = () => {
-      void page
-        ?.context()
-        .close()
-        .catch((error: unknown) =>
-          host.notice(`Closing aborted browser context failed: ${String(error)}`),
-        )
+    let isolated: BrowserContext | undefined
+    const stepMs = args.timeoutMs ?? stepTimeoutMs
+    const totalMs = 4 * stepMs + waits
+    const deadline = Date.now() + totalMs
+    /** `work` within one step's limit (plus a wait it asks for) and what is left of the call's. */
+    const guard = <T>(work: Promise<T>, extraMs = 0) => {
+      const left = deadline - Date.now()
+      return left < stepMs + extraMs
+        ? within(left, work, timeout(totalMs))
+        : within(stepMs + extraMs, work)
     }
+    const abort = () => void close(isolated)
     try {
       const png = screenshotFile(host.home, api.env?.cwd ?? host.projectRoot, args.path)
       context.abortSignal?.throwIfAborted()
-      state.launched ??= browserBinary()
-        .then(async (executablePath) => {
-          const browser = await chromium.launch({ executablePath, headless: true })
-          browser.once('disconnected', () => {
-            state.launched = undefined
+      if (!state.launched) {
+        const launched: Promise<Browser> = browserBinary()
+          .then(async (executablePath) => {
+            const browser = await chromium.launch({ executablePath, headless: true })
+            browser.once('disconnected', () => {
+              if (state.launched === launched) state.launched = undefined
+            })
+            return browser
           })
-          return browser
-        })
-        .catch((error) => {
-          state.launched = undefined
-          throw error
-        })
-      const browser = await state.launched
+          .catch((error) => {
+            if (state.launched === launched) state.launched = undefined
+            throw error
+          })
+        state.launched = launched
+      }
+      const browser = await guard(state.launched)
       context.abortSignal?.throwIfAborted()
-      const isolated = await browser.newContext({
-        viewport: { width: args.width ?? 1440, height: args.height ?? 900 },
-        colorScheme: args.theme,
-      })
-      page = await isolated.newPage()
+      isolated = await guard(
+        browser.newContext({
+          viewport: { width: args.width ?? 1440, height: args.height ?? 900 },
+          colorScheme: args.theme,
+        }),
+      )
       context.abortSignal?.addEventListener('abort', abort, { once: true })
+      const page = await guard(isolated.newPage())
+      page.setDefaultTimeout(stepMs)
+      page.setDefaultNavigationTimeout(stepMs)
       context.abortSignal?.throwIfAborted()
       page.on('console', (message) => {
         if (message.type() === 'error') outcomes.push(`Console error: ${message.text()}`)
@@ -228,15 +270,14 @@ export default function browserExtension(host: ExtensionHost) {
       page.on('pageerror', (error) => outcomes.push(`Page error: ${error.message}`))
       const url = new URL(args.url ?? '', host.system().process.url).href
       if (args.theme && new URL(url).origin === new URL(host.system().process.url).origin) {
-        await page.addInitScript(
-          (theme) => localStorage.setItem('ultimate.theme', theme),
-          args.theme,
+        await guard(
+          page.addInitScript((theme) => localStorage.setItem('ultimate.theme', theme), args.theme),
         )
       }
       api.output(`Loading ${url}\n`)
-      await page.goto(url, { waitUntil: 'domcontentloaded' })
-      const result = await action(page, outcomes, png)
-      const title = await page.title()
+      await guard(page.goto(url, { waitUntil: 'domcontentloaded' }))
+      const result = await action(page, outcomes, png, guard)
+      const title = await guard(page.title())
       context.abortSignal?.throwIfAborted()
       return {
         structuredContent: {
@@ -269,7 +310,24 @@ export default function browserExtension(host: ExtensionHost) {
       }
     } finally {
       context.abortSignal?.removeEventListener('abort', abort)
-      await page?.context().close()
+      await close(isolated)
+    }
+  }
+
+  /** Closes a call's context within a bounded time; a context that won't close takes the shared browser with it, so the next call launches a fresh one. */
+  async function close(isolated: BrowserContext | undefined) {
+    if (!isolated) return
+    try {
+      await within(closeTimeoutMs, isolated.close())
+    } catch (error) {
+      host.notice(`Closing a browser context failed (${String(error)}); relaunching the browser.`)
+      state.launched = undefined
+      const browser = isolated.browser()
+      if (!browser) return
+      // Closing kills the process too; a browser that won't even do that is left to the host's shutdown.
+      await within(closeTimeoutMs, browser.close()).catch((reason: unknown) =>
+        host.notice(`Closing the wedged browser failed: ${String(reason)}`),
+      )
     }
   }
 }
