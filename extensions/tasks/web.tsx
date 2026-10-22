@@ -6,6 +6,7 @@ import {
   api,
   cn,
   defineWebExtension,
+  errorMessage,
   formatDuration,
   provide,
   RunStart,
@@ -17,6 +18,7 @@ import {
   useUiState,
 } from '@/sdk'
 import type { TaskGraph, TaskGraphNode } from '@/sdk'
+import { store } from '@/sdk/client'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import { useWorkspaceConversations as useConversations } from '../workspaces/ui.tsx'
 import { FeatureTag, hiddenConversationIds, useOverview } from '../conversations/ui.tsx'
@@ -203,9 +205,15 @@ export function RetryButton({ id }: { id: number }) {
       className="flex shrink-0 items-center gap-1 rounded-sm border border-border/80 px-1.5 py-0.5 font-sans text-[11px] text-foreground/85 transition-colors hover:bg-accent disabled:opacity-50"
       data-retry={id}
       disabled={busy}
-      onClick={() => {
+      onClick={async () => {
         setBusy(true)
-        void api.action(RetryAction, { id }).finally(() => setBusy(false))
+        try {
+          await api.action(RetryAction, { id })
+        } catch (error) {
+          store.notify({ level: 'error', message: errorMessage(error) })
+        } finally {
+          setBusy(false)
+        }
       }}
       title="Run this task again"
       type="button"

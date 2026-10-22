@@ -4,22 +4,26 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi } from 'vitest'
 import type { ConversationId, TaskGraphNode, TaskId } from '@earendil-works/pi-durable'
 
-const { action } = vi.hoisted(() => ({
+const { action, notify, setState } = vi.hoisted(() => ({
   action: vi.fn<(...args: unknown[]) => Promise<null>>(() => Promise.resolve(null)),
+  notify: vi.fn<(notice: { level: string; message: string }) => void>(),
+  setState: vi.fn<(value: unknown) => void>(),
 }))
 vi.mock('react', async (original) => ({
   ...(await original<typeof import('react')>()),
   // Lets the test call a component outside a render to reach its click handler.
-  useState: <T>(initial: T) => [initial, () => {}],
+  useState: <T>(initial: T) => [initial, setState],
 }))
 vi.mock('@/sdk', () => ({
   api: { action },
   cn: (...names: unknown[]) => names.filter(Boolean).join(' '),
   defineWebExtension: (extension: unknown) => extension,
+  errorMessage: (error: unknown) => String(error),
   formatDuration: (ms: number) => `${ms}ms`,
   provide: () => ({}),
   RunStart: {},
 }))
+vi.mock('@/sdk/client', () => ({ store: { notify } }))
 vi.mock('@/components/ai/tool', () => ({
   ToolStatusIcon: ({ state }: { state: string }) => createElement('i', { 'data-state': state }),
 }))
@@ -65,8 +69,21 @@ it('names another blocked reason without offering Retry, which only runs parked 
   expect(html).not.toContain('data-retry')
 })
 
-it('Retry calls the retry action with the task id', () => {
-  const button = RetryButton({ id: 7 }) as ReactElement<{ onClick: () => void }>
-  button.props.onClick()
+it('Retry calls the retry action with the task id', async () => {
+  const button = RetryButton({ id: 7 }) as ReactElement<{ onClick: () => Promise<void> }>
+  await button.props.onClick()
   expect(action).toHaveBeenCalledWith(RetryAction, { id: 7 })
+})
+
+it('reports a failed Retry and clears its busy state', async () => {
+  action.mockRejectedValueOnce(new Error('Task is no longer parked'))
+  setState.mockClear()
+  notify.mockClear()
+  const button = RetryButton({ id: 7 }) as ReactElement<{ onClick: () => Promise<void> }>
+  await button.props.onClick()
+  expect(notify).toHaveBeenCalledWith({
+    level: 'error',
+    message: 'Error: Task is no longer parked',
+  })
+  expect(setState.mock.calls).toEqual([[true], [false]])
 })
