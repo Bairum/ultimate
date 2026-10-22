@@ -1349,12 +1349,21 @@ async function refuseTally(tx: Tx, id: ConversationId) {
 }
 
 export default function lineageExtension(host: ExtensionHost) {
-  /** The listed root whose memory a tool call reads or writes: `root` when given, else the caller's tree root. */
+  /**
+   * The listed root whose memory a tool call reads or writes: `root` when given, else the caller's tree root, else
+   * (for a standing agent, in no tree) the project's only root.
+   */
   const memoryRoot = async (caller: ConversationId, root: number | undefined, ctx: Context) => {
-    const id = root ?? (await rootOf(host, caller, ctx))
-    if (id === undefined) throw new Error(`#${caller} is in no tree; name a root`)
-    if (!(await rootsOf(host, ctx)).includes(id as ConversationId))
-      throw new Error(`#${id} is not a listed root`)
+    const roots = await rootsOf(host, ctx)
+    const id =
+      root ?? (await rootOf(host, caller, ctx)) ?? (roots.length === 1 ? roots[0] : undefined)
+    if (id === undefined)
+      throw new Error(
+        roots.length === 0
+          ? `#${caller} is in no tree and the project has no root yet`
+          : `#${caller} is in no tree and the project has several roots; name one of ${roots.map((r) => `#${r}`).join(', ')}`,
+      )
+    if (!roots.includes(id as ConversationId)) throw new Error(`#${id} is not a listed root`)
     return id
   }
   /**
@@ -1620,7 +1629,7 @@ export default function lineageExtension(host: ExtensionHost) {
       defineTool({
         name: 'memory',
         description:
-          "Read your project's memory, kept in your tree's root: without `read`, the index (one line per memory); with `read: slug`, that memory in full with its source. `root` reads another root's.",
+          "Read your project's memory, kept in your tree's root: without `read`, the index (one line per memory); with `read: slug`, that memory in full with its source. Outside a tree it reads the project's only root; `root` reads another root's.",
         parameters: Type.Object({
           read: Type.Optional(Type.String({ minLength: 1 })),
           root: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -1652,7 +1661,7 @@ export default function lineageExtension(host: ExtensionHost) {
         name: 'remember',
         deferred: true,
         description:
-          "Change a root's project memory in one atomic batch: ops are {op:'add', slug, kind: 'decision'|'fact'|'lesson', line, body, source?}, {op:'update', slug, kind?, line?, body?, source?} and {op:'delete', slug}. Slugs are kebab-case, lines one line of at most 120 characters, bodies at most 2000, source `#<conversation>/<entry>`; at most 150 memories. Any invalid op refuses the whole batch. `root` defaults to your tree's root.",
+          "Change a root's project memory in one atomic batch: ops are {op:'add', slug, kind: 'decision'|'fact'|'lesson', line, body, source?}, {op:'update', slug, kind?, line?, body?, source?} and {op:'delete', slug}. Slugs are kebab-case, lines one line of at most 120 characters, bodies at most 2000, source `#<conversation>/<entry>`; at most 150 memories. Any invalid op refuses the whole batch. `root` defaults to your tree's root, or outside a tree to the project's only root.",
         parameters: Type.Object({
           root: Type.Optional(Type.Integer({ minimum: 1 })),
           ops: Type.Array(Type.Object({}, { additionalProperties: true }), { minItems: 1 }),

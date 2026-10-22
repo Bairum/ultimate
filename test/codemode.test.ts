@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
+import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import {
@@ -602,6 +603,28 @@ it('lists conversations with their title and cwd, since the prompt no longer doe
     title: 'Old work',
     concluded: true,
   })
+})
+
+it("lists project agents once the project's setup is trusted, and says when it is not", async () => {
+  const { server, options } = await fixture()
+  await mkdir(join(options.projectRoot, '.ultimate/agents'), { recursive: true })
+  await writeFile(
+    join(options.projectRoot, '.ultimate/agents/writer.md'),
+    '---\nname: writer\ndescription: Polishes posts\n---\n\nPolish.\n',
+  )
+  const agents = async () => {
+    const result = await run(
+      server,
+      `const a = await ultimate.agents(); return { setup: a.projectSetup, project: a.definitions.filter((d) => d.source === 'project').map((d) => d.name) }`,
+    )
+    expect(result.data.isError).toBe(false)
+    return result.data.details.value
+  }
+  // The faux fixture trusts its project; declining it hides the project's definitions and says why.
+  const trust = new ProjectTrustStore(join(options.userHome, '.ultimate'))
+  expect(await agents()).toEqual({ setup: 'trusted', project: ['writer'] })
+  trust.set(options.projectRoot, false)
+  expect(await agents()).toEqual({ setup: 'declined', project: [] })
 })
 
 it('reads stored history and documents from before a reset', async () => {
