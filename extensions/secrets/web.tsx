@@ -56,6 +56,7 @@ function useSecrets() {
   useEffect(() => {
     if (signature === seen.current) return
     seen.current = signature
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     void refetch()
   }, [signature, refetch])
   useEvent('secrets:changed', () => void refetch())
@@ -144,6 +145,7 @@ function ValueInput({
             if (event.nativeEvent.isComposing) return
             if (event.key === 'Enter') {
               event.preventDefault()
+              // oxlint-disable-next-line typescript/no-floating-promises -- save catches secret write failures and displays them with setError.
               void save()
             }
             if (event.key === 'Escape') {

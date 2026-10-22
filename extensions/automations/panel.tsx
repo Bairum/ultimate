@@ -274,6 +274,7 @@ function AutomationRow({
   }
   const toggle = (enabled: boolean) => {
     setPending(enabled)
+    // oxlint-disable-next-line typescript/no-floating-promises -- act displays action errors; useAction's refetch handles its own failures.
     void act(() => api.action(enabled ? ResumeAction : PauseAction, { id: automation.id })).finally(
       () => setPending(undefined),
     )
@@ -281,10 +282,12 @@ function AutomationRow({
   const runNow = () => {
     setBusy('run')
     onExpand(true)
+    // oxlint-disable-next-line typescript/no-floating-promises -- act displays action errors; useAction's refetch handles its own failures.
     void act(() => api.action(RunAction, { id: automation.id })).finally(() => setBusy(undefined))
   }
   const remove = () => {
     setBusy('delete')
+    // oxlint-disable-next-line typescript/no-floating-promises -- act displays action errors; useAction's refetch handles its own failures.
     void act(async () => {
       await api.action(DeleteAction, { id: automation.id })
       onDeleted()

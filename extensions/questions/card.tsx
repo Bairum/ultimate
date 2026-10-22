@@ -135,6 +135,7 @@ function Card({
         // Once every question has an answer (after Accept picks, say), Enter sends from anywhere.
         if (current < questions.length - 1 && answered.length < questions.length)
           setCurrent(current + 1)
+        // oxlint-disable-next-line typescript/no-floating-promises -- send delegates to run, which catches and displays submission failures.
         else void send()
       }
     }
@@ -149,6 +150,7 @@ function Card({
         data-questions-card={card}
         onSubmit={(event) => {
           event.preventDefault()
+          // oxlint-disable-next-line typescript/no-floating-promises -- run catches reply failures and displays them with setError.
           if (text.trim()) void run(() => reply(text.trim()))
         }}
       >

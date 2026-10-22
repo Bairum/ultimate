@@ -1,6 +1,7 @@
 import { TriangleAlertIcon, XIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { api, defineWebExtension, resumed, useReady, useStore } from '@/sdk'
+import { api, defineWebExtension, errorMessage, resumed, useReady, useStore } from '@/sdk'
+import { store } from '@/sdk/client'
 import { StatusAction } from '../onboarding/ui.tsx'
 import { Electric } from './electric.tsx'
 
@@ -160,6 +161,7 @@ function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
     })
     intro.push(clock)
     // Still loading once all of it has played: the rule says so.
+    // oxlint-disable-next-line typescript/no-floating-promises -- finished uses allSettled to consume animation cancellations; rule starts only a synchronous animation.
     void finished([...intro, ...flair]).then(() => {
       if (!committed) rule()
     })
@@ -212,6 +214,7 @@ function play(overlay: HTMLElement, still: boolean, release: () => void): Show {
       if (signature || committed || still) return
       signature = true
       for (const animation of [...intro, ...flair]) animation.updatePlaybackRate(signatureRate)
+      // oxlint-disable-next-line typescript/no-floating-promises -- finished uses allSettled to consume animation cancellations; rule starts only a synchronous animation.
       void finished(intro).then(() => rule())
     },
     reveal() {
@@ -365,9 +368,15 @@ function Splash({ replay }: { replay?: () => void }) {
 
   useEffect(() => {
     if (gone || !ready || rehearsal !== null) return
-    void show.current?.reveal().then((done) => {
-      if (done) setGone(true)
-    })
+    void show.current
+      ?.reveal()
+      .then((done) => {
+        if (done) setGone(true)
+      })
+      .catch((error: unknown) => {
+        store.notify({ level: 'error', message: errorMessage(error) })
+        setGone(true)
+      })
   }, [gone, ready])
 
   if (gone) return timedOut ? <Late /> : null

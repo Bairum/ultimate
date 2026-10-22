@@ -107,6 +107,7 @@ export function useSubscriptions(ms: number | false): Polled {
     const key = Symbol()
     poll.rates.set(key, ms === false ? Infinity : ms)
     reschedule()
+    // oxlint-disable-next-line typescript/no-floating-promises -- refreshSubscriptions catches failures and publishes them in poll.state.error.
     void refreshSubscriptions()
     return () => {
       poll.rates.delete(key)

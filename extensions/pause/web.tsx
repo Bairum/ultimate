@@ -7,6 +7,7 @@ import {
   cn,
   defineWebExtension,
   formatDuration,
+  errorMessage,
   getState,
   ParkedRuns,
   provide,
@@ -17,6 +18,7 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
+import { store } from '@/sdk/client'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { lasted } from './lasted.ts'
 import { parkedConversations } from './parked.ts'
@@ -43,6 +45,7 @@ function usePauseState() {
     { onError: () => {} },
   )
   useEffect(() => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     void refetch()
   }, [doc, graph, refetch])
   return data
@@ -203,7 +206,10 @@ function Play() {
       disabled={busy}
       onClick={() => {
         setBusy(true)
-        void api.action(PlayAction).finally(() => setBusy(false))
+        void api
+          .action(PlayAction)
+          .catch((error: unknown) => store.notify({ level: 'error', message: errorMessage(error) }))
+          .finally(() => setBusy(false))
       }}
       type="button"
     >

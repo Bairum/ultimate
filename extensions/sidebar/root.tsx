@@ -282,6 +282,7 @@ function useFlightWork(branches: ConversationSummary[]) {
       first.current = false
       return
     }
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     if (ids.length > 0) void refetch()
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- a changed id set refetches in useAction itself
   }, [commit, runs, refetch])
@@ -341,6 +342,7 @@ export function RootRow({
       first.current = false
       return
     }
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     void refetch()
   }, [tokens, refetch])
   // A hardcoded name: the root's summary title described its pre-context history, not what it holds now.

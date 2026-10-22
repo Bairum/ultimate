@@ -325,7 +325,10 @@ function boot(previousBuild?: BuildInfo): Core {
       return
     }
     if (message.type === 'swap') {
-      if (core === active) void swap(core, message.requestId, message.build)
+      if (core === active)
+        void swap(core, message.requestId, message.build).catch((error: unknown) =>
+          display.log('error', 'supervisor', `Core swap failed: ${String(error)}`),
+        )
       return
     }
     core.messages.push(message)
@@ -336,7 +339,9 @@ function boot(previousBuild?: BuildInfo): Core {
       active = undefined
       display.lifecycle('crashed')
       display.log('error', 'supervisor', `Core ${core.generation} exited unexpectedly`)
-      void recover()
+      void recover().catch((error: unknown) =>
+        display.log('error', 'supervisor', `Core recovery failed: ${String(error)}`),
+      )
     }
   })
   return core
@@ -444,7 +449,10 @@ async function swap(old: Core, requestId: string, previousBuild?: BuildInfo) {
       display.lifecycle('ready', { generation: active.generation, pid: active.child.pid })
       for (const report of active.reports.values()) display.report(report)
     }
-    if (!active && !stopping) void recover()
+    if (!active && !stopping)
+      void recover().catch((error: unknown) =>
+        display.log('error', 'supervisor', `Core recovery failed: ${String(error)}`),
+      )
   }
 }
 let recovering = false
@@ -481,7 +489,9 @@ const retry = () => {
   if (crashPage && !recovering && !stopping) {
     failures = 0
     crashPage = false
-    void recover()
+    void recover().catch((error: unknown) =>
+      display.log('error', 'supervisor', `Core recovery failed: ${String(error)}`),
+    )
   }
 }
 const watchers = ['server', 'shared', 'extensions'].map((directory) =>
@@ -511,10 +521,12 @@ async function shutdown() {
   display.close()
   process.exit(0)
 }
-process.on('SIGINT', () => {
-  void shutdown()
-})
-process.on('SIGTERM', () => {
-  void shutdown()
-})
+const stop = () => {
+  void shutdown().catch((error: unknown) => {
+    display.log('error', 'supervisor', `Shutdown failed: ${String(error)}`)
+    process.exit(1)
+  })
+}
+process.on('SIGINT', stop)
+process.on('SIGTERM', stop)
 await recover()

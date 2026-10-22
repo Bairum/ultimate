@@ -18,6 +18,7 @@ import {
   cn,
   defineWebExtension,
   events,
+  errorMessage,
   Fold,
   provide,
   Provided,
@@ -31,6 +32,7 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
+import { store } from '@/sdk/client'
 import { ConversationRef, Unsummarized } from '../conversations/ui.tsx'
 import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open } from '../workspaces/ui.tsx'
@@ -609,8 +611,12 @@ function MemoryRow({
               disabled={forgetting}
               onClick={() => {
                 setForgetting(true)
-                // A failure becomes a notice, as every unhandled action error does.
-                void api.action(ForgetAction, { root, slug }).finally(() => setForgetting(false))
+                void api
+                  .action(ForgetAction, { root, slug })
+                  .catch((error: unknown) =>
+                    store.notify({ level: 'error', message: errorMessage(error) }),
+                  )
+                  .finally(() => setForgetting(false))
               }}
               type="button"
             >

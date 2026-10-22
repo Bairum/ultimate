@@ -24,7 +24,11 @@ function recordingApi() {
       payloads.push((await options?.onPayload?.({ model: model.id }, model)) ?? { model: model.id })
       stream.push({ type: 'done', reason: 'stop', message: answer })
       stream.end(answer)
-    })()
+    })().catch((error: unknown) => {
+      const failed = { ...answer, stopReason: 'error' as const, errorMessage: String(error) }
+      stream.push({ type: 'error', reason: 'error', error: failed })
+      stream.end(failed)
+    })
     return stream
   }
   return { payloads, api: { streamSimple } as unknown as ProviderStreams }

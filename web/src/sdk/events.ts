@@ -5,7 +5,7 @@ import { useEffect, useRef } from 'react'
 const channels = new Map<string, Set<(data: unknown) => Promise<void>>>()
 export const events: EventBus = {
   emit: (channel, data) => {
-    // oxlint-disable-next-line unicorn/no-useless-spread -- snapshot listeners, as Node's emitter does
+    // oxlint-disable-next-line unicorn/no-useless-spread, typescript/no-floating-promises -- snapshot listeners; on wraps each handler with a catch that logs failures.
     for (const handler of [...(channels.get(channel) ?? [])]) void handler(data)
   },
   on: (channel, handler) => {

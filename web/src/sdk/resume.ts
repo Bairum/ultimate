@@ -85,7 +85,11 @@ function uncover() {
   else
     void shown
       .animate([{ opacity: 1 }, { opacity: 0 }], { duration: 240, easing: 'ease-out' })
-      .finished.then(() => shown.remove())
+      // Cancellation also ends the cover; do not leave its rejected finished promise floating.
+      .finished.then(
+        () => shown.remove(),
+        () => shown.remove(),
+      )
 }
 
 /**

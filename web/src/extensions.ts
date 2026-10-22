@@ -45,10 +45,12 @@ window.__getReactRefreshIgnoredExports = ({ id }) => (extensionName(id) ? ['defa
 
 if (import.meta.hot) {
   import.meta.hot.accept('virtual:ultimate/web-facets', (next) => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- setLoaders settles loaders and records each facet's error in the registry.
     if (next) void loadExtensions(next.loaders)
   })
   // A folder was added or removed, or a facet could not refresh in place: load the new map.
   import.meta.hot.accept((next) => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- setLoaders settles loaders and records each facet's error in the registry.
     if (next) void loadExtensions(next.loaders as Record<string, ExtensionLoader>)
   })
   // A facet refreshed in place: install its new contributions (commands, slots, renderers) too.

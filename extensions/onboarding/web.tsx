@@ -31,10 +31,12 @@ function useIsolation() {
   const { refetch } = isolation
   const wasBusy = useRef(busy)
   useEffect(() => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     if (wasBusy.current && !busy && workspaces) void refetch()
     wasBusy.current = busy
   }, [busy, refetch, workspaces])
   useEvent('onboarding:git', () => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     if (workspaces) void refetch()
   })
   return workspaces ? isolation.data : undefined

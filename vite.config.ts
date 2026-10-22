@@ -14,6 +14,7 @@ export default defineConfig({
       'import/no-cycle': 'error',
       'typescript/no-unsafe-type-assertion': 'off',
       'promise/always-return': 'off',
+      'typescript/no-floating-promises': ['error', { ignoreVoid: false }],
       'import/no-unassigned-import': ['error', { allow: ['**/*.css'] }],
     },
     overrides: [

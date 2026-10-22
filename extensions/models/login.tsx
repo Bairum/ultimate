@@ -25,6 +25,7 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { AuthEvent, AuthPrompt } from '@/sdk'
+import { store } from '@/sdk/client'
 import { authLabel, dialogs, openPicker, useLoginProvider } from './state.tsx'
 import type { ProviderInfo } from './state.tsx'
 import { AnswerAction, CancelAction, LoginAction, LoginDoc, LogoutAction } from './refs.ts'
@@ -57,11 +58,14 @@ function CopyButton({ value, label = 'Copy' }: { value: string; label?: string }
     <Button
       className="h-7 gap-1.5 px-2 font-mono text-[11.5px]"
       onClick={() => {
-        void navigator.clipboard.writeText(value).then(() => {
-          setCopied(true)
-          clearTimeout(timer.current)
-          timer.current = setTimeout(() => setCopied(false), 1200)
-        })
+        void navigator.clipboard
+          .writeText(value)
+          .then(() => {
+            setCopied(true)
+            clearTimeout(timer.current)
+            timer.current = setTimeout(() => setCopied(false), 1200)
+          })
+          .catch((error: unknown) => store.notify({ level: 'error', message: errorMessage(error) }))
       }}
       size="sm"
       variant="outline"
@@ -292,6 +296,7 @@ function FlowView({
   const failure = error ?? flow?.error
   useEffect(() => onRunning(status === 'running' ? flowId : undefined), [flowId, onRunning, status])
   useEffect(() => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- refreshModels catches fetch failures and retries on the next system event.
     if (status === 'complete') void refreshModels()
   }, [status])
   return (
@@ -434,6 +439,7 @@ function Chooser({
     api.action(LogoutAction, { provider: provider.id }).then(
       () => {
         setBusy(undefined)
+        // oxlint-disable-next-line typescript/no-floating-promises -- refreshModels catches fetch failures and retries on the next system event.
         void refreshModels()
       },
       (failure: unknown) => {
@@ -578,6 +584,7 @@ export function LoginDialog() {
       )
   }
   const close = () => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- cancel catches failures when a flow has already ended.
     if (running) void cancel(running)
     setOpen(false)
     setState(undefined)

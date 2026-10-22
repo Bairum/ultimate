@@ -113,7 +113,9 @@ export function extensionModules(
           const module = server.moduleGraph.getModuleById(id)
           if (module) {
             server.moduleGraph.invalidateModule(module)
-            void server.reloadModule(module)
+            void server
+              .reloadModule(module)
+              .catch((error: unknown) => console.error(`Reloading ${id} failed:`, error))
           }
         }
       }

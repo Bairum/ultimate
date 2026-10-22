@@ -565,7 +565,7 @@ describe('provider error recovery', () => {
       context,
     )
     let deadline: number | undefined
-    const repaired = gate()
+    const repaired = Promise.withResolvers<void>()
     const unsubscribe = f.opened.harness.subscribeCommits((publication) => {
       for (const change of publication.changes) {
         if (
@@ -585,7 +585,7 @@ describe('provider error recovery', () => {
               }),
             context,
           )
-          .then(() => repaired.release())
+          .then(() => repaired.resolve(), repaired.reject)
       }
     })
     held.release()

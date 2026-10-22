@@ -213,6 +213,7 @@ function AgentPicker({ value, onChange }: { value: string; onChange: (agent: str
   useEvent('subagents:definition-closed', () => {
     if (!opened.current) return
     opened.current = false
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     void refetch()
     requestAnimationFrame(() => configure.current?.focus())
   })
@@ -378,6 +379,7 @@ export function AutomationForm({
           className="flex min-h-0 flex-1 flex-col"
           onSubmit={(event) => {
             event.preventDefault()
+            // oxlint-disable-next-line typescript/no-floating-promises -- save catches failures and displays them with setError.
             void save()
           }}
         >
@@ -409,6 +411,7 @@ export function AutomationForm({
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
                     event.preventDefault()
+                    // oxlint-disable-next-line typescript/no-floating-promises -- save catches failures and displays them with setError.
                     void save()
                   }
                 }}

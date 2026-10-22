@@ -20,9 +20,11 @@ import {
 } from '@/components/ai/tool'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { store } from '@/sdk/client'
 import {
   cn,
   defineWebExtension,
+  errorMessage,
   formatTime,
   provide,
   useAction,
@@ -197,10 +199,13 @@ function CopyLink({
         const url = new URL(location.origin)
         url.searchParams.set('conversation', String(coordinator))
         url.searchParams.set('task', id)
-        void navigator.clipboard.writeText(url.href).then(() => {
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1200)
-        })
+        void navigator.clipboard
+          .writeText(url.href)
+          .then(() => {
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1200)
+          })
+          .catch((error: unknown) => store.notify({ level: 'error', message: errorMessage(error) }))
       }}
       size="xs"
       title={`Copy a link to ${id}`}

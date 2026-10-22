@@ -157,6 +157,7 @@ export const actions = {
             const cleanup = () => {
               for (const item of signals) item.removeEventListener('abort', abort)
               delete flow.answer
+              // oxlint-disable-next-line typescript/no-floating-promises -- update catches and logs document write failures.
               void update((state) => delete state.prompt)
             }
             const abort = () => {
@@ -175,6 +176,7 @@ export const actions = {
               item.addEventListener('abort', abort, { once: true })
             }
             const { signal: _signal, ...wire } = prompt
+            // oxlint-disable-next-line typescript/no-floating-promises -- update catches and logs document write failures.
             void update((state) => {
               state.prompt = json(wire)
             })
@@ -195,6 +197,7 @@ export const actions = {
           if (status === 'error') state.error = 'Login failed'
         })
       })
+      .catch(() => host.notice('Login flow finalization failed'))
     return { flowId }
   }),
   /** Answer the flow's pending prompt; an empty answer is allowed. */

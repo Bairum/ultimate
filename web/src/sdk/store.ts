@@ -145,6 +145,7 @@ export function createStore(options: StoreOptions = {}) {
           (state.system.process.pid !== system.process.pid ||
             state.system.process.generation !== system.process.generation)
         set({ system })
+        // oxlint-disable-next-line typescript/no-floating-promises -- refreshModels catches fetch failures and retries on the next system event.
         if (!state.models || restarted) void refreshModels()
         break
       }

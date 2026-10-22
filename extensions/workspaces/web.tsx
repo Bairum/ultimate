@@ -148,6 +148,7 @@ function WorkspaceCard({ conversation }: { conversation: ConversationSummary }) 
   }, [shown])
   const { refetch } = info
   useEffect(() => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     if (open) void refetch()
   }, [recorded.state, recorded.landed, conversation.busy, open, refetch])
   const ahead = info.data?.ahead
@@ -274,11 +275,14 @@ function Stats() {
     .map(([id, workspace]) => `${id}:${workspace.state}:${workspace.landed ?? ''}`)
     .join()
   useEffect(() => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     void refetch()
   }, [states, refetch])
   useEffect(() => {
     const refresh = () => {
+      // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
       void refetch()
+      // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
       void refetchDisk()
     }
     window.addEventListener('focus', refresh)

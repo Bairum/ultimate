@@ -492,6 +492,7 @@ export function useAction<Args, T>(
   }, [key, extension, name])
   const enabled = options.enabled !== false
   useEffect(() => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     if (enabled) void call()
     // Disabled too: a `refetch` in flight must not outlive the component or its args.
     // oxlint-disable-next-line react/exhaustive-deps -- abort the call in flight at cleanup, possibly a later refetch
