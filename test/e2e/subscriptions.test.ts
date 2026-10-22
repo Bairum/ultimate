@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { JsonValue } from '@earendil-works/chord'
@@ -18,7 +18,7 @@ afterEach(async () => {
   await app?.close()
 })
 
-async function fixture() {
+async function fixture(localSetup = true) {
   const root = await temp('ultimate-subscriptions-')
   const userHome = join(root, 'user')
   const home = join(root, 'project-state')
@@ -29,7 +29,7 @@ async function fixture() {
       join(definitions, `${name}.md`),
       `---\nname: ${name}\ndescription: Subscription test\nmodel: faux/faux-1\ntools: []\n${name === 'ultimate' ? 'resident: true\n' : ''}---\nKeep answers short.\n`,
     )
-  const options = { ultimateRoot: resolve('.'), projectRoot: root, userHome, home }
+  const options = { ultimateRoot: resolve('.'), projectRoot: root, userHome, home, localSetup }
   server = await fauxServer(options)
   return {
     root,
@@ -257,6 +257,196 @@ it('stops a recurring script that prints DONE and exits 0 without waking anyone;
       'investigating',
   )
   expect(await done()).toHaveLength(2)
+})
+
+/** A recurring project subscription committed in `root`'s `.ultimate/subscriptions/<slug>/`. */
+async function committed(root: string, slug: string, script: string) {
+  const dir = join(root, '.ultimate/subscriptions', slug)
+  await mkdir(dir, { recursive: true })
+  await writeFile(
+    join(dir, 'subscription.json'),
+    JSON.stringify({ title: 'Ship PRs', ask: 'Poll ship/* PRs', once: false }),
+  )
+  await writeFile(join(dir, 'run'), `#!/bin/sh\n${script}\n`)
+  await chmod(join(dir, 'run'), 0o700)
+}
+async function list(app: NonNullable<typeof server>) {
+  return (await app.extensions.invoke(
+    'subscriptions',
+    'list',
+    null,
+    new AbortController().signal,
+  )) as Subscription[]
+}
+
+it('discovers a committed project subscription by slug only in a chosen project, and starts, stops and DONEs it there', async () => {
+  // Not chosen as local: the committed folder is ignored and cannot be addressed.
+  const untrusted = await fixture(false)
+  await committed(untrusted.root, 'prs', 'echo FIRE never')
+  expect(await list(untrusted.app)).toEqual([])
+  await expect(call(untrusted.app, 'start', 'prs')).rejects.toThrow('Unknown subscription: prs')
+  await untrusted.app.close()
+  server = undefined
+
+  const { root, app, folder } = await fixture()
+  // It runs in the project checkout and keeps state in the machine-local folder.
+  await committed(
+    root,
+    'prs',
+    'pwd > "$SUBSCRIPTION_STATE/cwd"; echo 1 > "$SUBSCRIPTION_STATE/n"; echo FIRE 1; sleep 60',
+  )
+  const [found] = await list(app)
+  expect(found).toMatchObject({
+    id: 'prs',
+    scope: 'project',
+    title: 'Ship PRs',
+    once: false,
+    state: 'stopped',
+    enabled: false,
+    subscribers: [],
+  })
+  // Discovery never starts it; its agent conversation exists, idle.
+  expect(found.pid).toBeUndefined()
+  expect(
+    await app.harness.conversation(found.conversationId as ConversationId, context),
+  ).toBeDefined()
+  expect((await list(app)).map((s) => s.conversationId)).toEqual([found.conversationId])
+
+  const get = async () => (await app.harness.snapshot(Subscriptions, context))!.subscriptions.prs
+  const started = (await call(app, 'start', 'prs')) as Subscription
+  expect(started).toMatchObject({ state: 'running', enabled: true })
+  await until(async () => (await get()).fires === 1)
+  expect(await readFile(join(folder('prs'), 'state/cwd'), 'utf8')).toBe(`${root}\n`)
+  expect(await readFile(join(folder('prs'), 'output.log'), 'utf8')).toContain('FIRE 1')
+  await expect(
+    readFile(join(root, '.ultimate/subscriptions/prs/output.log')),
+  ).rejects.toMatchObject({ code: 'ENOENT' })
+  await call(app, 'stop', 'prs')
+  await until(async () => !!(await get()).exitedAt)
+  expect(await get()).toMatchObject({ state: 'stopped', enabled: false })
+  await expect(readFile(join(folder('prs'), 'pid'))).rejects.toMatchObject({ code: 'ENOENT' })
+
+  // An edited run is picked up on the next start, with its state kept; DONE then exit 0 stops it cleanly.
+  await committed(
+    root,
+    'prs',
+    'n=$(($(cat "$SUBSCRIPTION_STATE/n") + 1)); echo $n > "$SUBSCRIPTION_STATE/n"; echo FIRE $n; echo DONE nothing left',
+  )
+  await call(app, 'start', 'prs')
+  await until(async () => (await get()).fires === 2 && (await get()).state === 'stopped')
+  expect(await get()).toMatchObject({ enabled: false, exitCode: 0 })
+  expect((await get()).error).toBeUndefined()
+  const done = await eventHost(() => app.harness, 'test').eventLog.recent({ events: [Done] })
+  expect(done.map((e) => e.data)).toEqual([{ id: 'prs', text: 'nothing left' }])
+
+  // A removed folder forgets the record.
+  await rm(join(root, '.ultimate/subscriptions/prs'), { recursive: true })
+  expect(await list(app)).toEqual([])
+})
+
+it('creates a project subscription in the checkout with a committed manifest', async () => {
+  const { root, app } = await fixture()
+  const caller = await app.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
+  // A create that fails before it has an agent leaves the slug free for the retry.
+  await expect(
+    app.extensions.invoke(
+      'subscriptions',
+      'create',
+      { ask: 'Poll ship PRs', title: 'Ship PRs', scope: 'project' },
+      new AbortController().signal,
+      999_999,
+    ),
+  ).rejects.toThrow('Unknown caller #999999')
+  const sub = (await app.extensions.invoke(
+    'subscriptions',
+    'create',
+    {
+      ask: 'Poll ship PRs',
+      title: 'Ship PRs',
+      once: false,
+      scope: 'project',
+      secrets: ['GH_TOKEN'],
+    },
+    new AbortController().signal,
+    caller.id,
+  )) as Subscription
+  expect(sub).toMatchObject({
+    id: 'ship-prs',
+    scope: 'project',
+    state: 'writing',
+    subscribers: [caller.id],
+  })
+  expect(
+    JSON.parse(
+      await readFile(join(root, '.ultimate/subscriptions/ship-prs/subscription.json'), 'utf8'),
+    ),
+  ).toEqual({ title: 'Ship PRs', ask: 'Poll ship PRs', once: false, secrets: ['GH_TOKEN'] })
+  // Discovery keeps the created record and its agent.
+  const listed = (await app.extensions.invoke(
+    'subscriptions',
+    'list',
+    null,
+    new AbortController().signal,
+  )) as Subscription[]
+  expect(listed).toMatchObject([
+    { id: 'ship-prs', conversationId: sub.conversationId, state: 'writing' },
+  ])
+  await expect(
+    app.extensions.invoke(
+      'subscriptions',
+      'create',
+      { ask: 'Again', title: 'Ship PRs', scope: 'project' },
+      new AbortController().signal,
+      caller.id,
+    ),
+  ).rejects.toThrow('Subscription ship-prs already exists')
+  // The identical create (as a replay would send it) cannot reset a record that has been used either.
+  await expect(
+    app.extensions.invoke(
+      'subscriptions',
+      'create',
+      {
+        ask: 'Poll ship PRs',
+        title: 'Ship PRs',
+        once: false,
+        scope: 'project',
+        secrets: ['GH_TOKEN'],
+      },
+      new AbortController().signal,
+      caller.id,
+    ),
+  ).rejects.toThrow('Subscription ship-prs already exists')
+  expect((await list(app))[0]).toMatchObject({ subscribers: [caller.id], state: 'writing' })
+
+  // A discovered, unused record with the same manifest is adopted with its agent; inherited object keys are no slugs.
+  await committed(root, 'ship-prs-2', 'true')
+  const discovered = (await list(app)).find((s) => s.id === 'ship-prs-2')!
+  const adopted = (await app.extensions.invoke(
+    'subscriptions',
+    'create',
+    {
+      ask: 'Poll ship/* PRs',
+      title: 'Ship PRs',
+      once: false,
+      scope: 'project',
+      slug: 'ship-prs-2',
+    },
+    new AbortController().signal,
+    caller.id,
+  )) as Subscription
+  expect(adopted).toMatchObject({
+    conversationId: discovered.conversationId,
+    subscribers: [caller.id],
+  })
+  await expect(
+    app.extensions.invoke(
+      'subscriptions',
+      'create',
+      { ask: 'x', scope: 'project', slug: 'constructor' },
+      new AbortController().signal,
+      caller.id,
+    ),
+  ).rejects.toThrow('not be an object key')
 })
 
 it('waits for a SIGTERM-ignoring script to die before stop returns and removes its pid file', async () => {
