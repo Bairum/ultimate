@@ -26,7 +26,11 @@ export function DreamDialog() {
   const [open, setOpen] = useDialog(dreamDialog)
   return (
     <Dialog onOpenChange={setOpen} open={open}>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[30rem]" data-dream-dialog>
+      {/* One column that may shrink: an implicit `auto` grid column would grow to a long blocker title's width. */}
+      <DialogContent
+        className="max-h-[calc(100dvh-2rem)] grid-cols-[minmax(0,1fr)] gap-0 overflow-y-auto p-0 sm:max-w-[30rem]"
+        data-dream-dialog
+      >
         {open && <Body onClose={() => setOpen(false)} />}
       </DialogContent>
     </Dialog>
@@ -99,7 +103,7 @@ function Body({ onClose }: { onClose: () => void }) {
           Each one you approve becomes an ordinary branch that is reviewed and lands as usual.{' '}
           <span className="text-foreground">Nothing changes code or memory by itself.</span>
         </p>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 border-t border-border/60 pt-3 text-[12px]">
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 border-t border-border/60 pt-3 text-[12px]">
           <dt className="text-muted-foreground">Takes</dt>
           <dd>about 30–60 minutes</dd>
           <dt className="text-muted-foreground">Costs</dt>
