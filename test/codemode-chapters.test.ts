@@ -8,6 +8,7 @@ import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { context, prepareHarness } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
+import { UiState } from '../server/ui-state.ts'
 import { temp } from './helpers.ts'
 
 it('reads closed chapter records exactly like live fork-aware history, with titles and read validation', async () => {
@@ -66,6 +67,29 @@ it('reads closed chapter records exactly like live fork-aware history, with titl
       { before: (filtered as { id: number }[])[0].id },
     ])
     const search = await read('search', ['chapter-needle'])
+    // The live listing as the host builds it: summaries from the harness, and fork concluded in the UI state.
+    const records = await opened.harness.commit(
+      (tx) => tx.scanConversations({}, 100, undefined),
+      context,
+    )
+    const listing = await Promise.all(
+      records.items.map(async (record) => {
+        const found = (await opened.harness.conversation(record.id, context))!
+        const metadata = await opened.harness.snapshot(Metadata, record.id, context)
+        const title = metadata?.title ?? metadata?.inputTitle
+        return {
+          ...record,
+          ...(title !== undefined && { title }),
+          ...(metadata?.label !== undefined && { label: metadata.label }),
+          cwd: (await found.agent(context)).cwd,
+          busy: false,
+          ...(record.id === fork.id && { concluded: true }),
+        }
+      }),
+    )
+    await opened.harness.commit(async (tx) => {
+      ;(await tx.doc(UiState, opened.root.id))['ext.conversations.concluded'] = [fork.id]
+    }, context)
     // Naming the active chapter reads the harness too.
     expect(await read('entries', [fork.id, { chapter: 'next' }])).toEqual(live)
     await opened.close()
@@ -84,9 +108,8 @@ it('reads closed chapter records exactly like live fork-aware history, with titl
       ]),
     ).toEqual(before)
     expect(await read('search', ['chapter-needle', { chapter: 'next' }])).toEqual(search)
-    expect(await read('conversations', [{ chapter: 'next' }])).toContainEqual(
-      expect.objectContaining({ id: parent.id, title: 'After' }),
-    )
+    expect(listing).toContainEqual(expect.objectContaining({ id: parent.id, title: 'After' }))
+    expect(await read('conversations', [{ chapter: 'next' }])).toEqual(listing)
     expect(await readFile(database)).toEqual(bytes)
     await expect(read('entries', [fork.id])).rejects.toThrow('Unknown conversation')
     await expect(read('entries', [fork.id, { chapter: 'next', limit: 0 }])).rejects.toThrow(

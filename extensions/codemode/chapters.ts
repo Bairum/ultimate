@@ -73,33 +73,53 @@ export function readChapter(database: string, op: HistoryRead, args: unknown[]) 
         record = conversation(record.parent.conversationId)
       }
     }
+    /** The latest value of conversation document `kind` on `owner`: its last base with later deltas applied. */
+    const doc = (kind: string, owner: number) => {
+      const document = db
+        .prepare(
+          "SELECT id FROM documents WHERE kind = ? AND scope_kind = 'conversation' AND owner_id = ? AND family = 0 AND retired_at IS NULL ORDER BY created_at DESC LIMIT 1",
+        )
+        .get(JSON.stringify(kind), owner)
+      if (!document) return undefined
+      const base = db
+        .prepare(
+          "SELECT seq, content FROM document_revisions WHERE document_id = ? AND kind = 'base' ORDER BY seq DESC LIMIT 1",
+        )
+        .get(document.id)
+      if (!base) throw new Error(`Document ${String(document.id)} is missing a required base`)
+      let value = JSON.parse(String(base.content)) as JsonObject
+      for (const revision of db
+        .prepare(
+          'SELECT content FROM document_revisions WHERE document_id = ? AND seq > ? ORDER BY seq',
+        )
+        .iterate(document.id, base.seq))
+        value = apply(value, JSON.parse(String(revision.content)))
+      return value
+    }
     if (op === 'conversations') {
+      // The same listing as the live read: summary fields, busy from live foreground tasks, concluded from the UI state.
+      const concluded = doc('ultimate.ui', 1)?.['ext.conversations.concluded']
+      const done = new Set(Array.isArray(concluded) ? concluded : [])
+      const busy = new Set(
+        db
+          .prepare(
+            "SELECT DISTINCT conversation_id AS id FROM tasks WHERE status != 'terminal' AND background = 0",
+          )
+          .all()
+          .map((row) => Number(row.id)),
+      )
       return conversations().map((record) => {
-        const document = db
-          .prepare(
-            "SELECT id FROM documents WHERE kind = ? AND scope_kind = 'conversation' AND owner_id = ? AND family = 0 AND retired_at IS NULL ORDER BY created_at DESC LIMIT 1",
-          )
-          .get(JSON.stringify('ultimate.metadata'), record.id)
-        if (!document) return record
-        const base = db
-          .prepare(
-            "SELECT seq, content FROM document_revisions WHERE document_id = ? AND kind = 'base' ORDER BY seq DESC LIMIT 1",
-          )
-          .get(document.id)
-        if (!base) throw new Error(`Document ${String(document.id)} is missing a required base`)
-        let metadata = JSON.parse(String(base.content)) as JsonObject
-        for (const revision of db
-          .prepare(
-            'SELECT content FROM document_revisions WHERE document_id = ? AND seq > ? ORDER BY seq',
-          )
-          .iterate(document.id, base.seq))
-          metadata = apply(metadata, JSON.parse(String(revision.content)))
+        const metadata = doc('ultimate.metadata', record.id) ?? {}
+        const cwd = doc('pi.agent', record.id)?.cwd
         const title = metadata.title ?? metadata.inputTitle
         return {
           ...record,
-          ...(title && { title }),
-          ...(metadata.label && { label: metadata.label }),
+          ...(title !== undefined && { title }),
+          ...(metadata.label !== undefined && { label: metadata.label }),
+          ...(cwd !== undefined && { cwd }),
+          busy: busy.has(record.id),
           ...(metadata.inputAt !== undefined && { inputAt: metadata.inputAt }),
+          ...(done.has(record.id) && { concluded: true }),
         }
       })
     }

@@ -10,8 +10,9 @@ import { backUp, backupPath, classify, Conflict, readBackup } from '../extension
 import { BackupEvent } from '../extensions/cloud/refs.ts'
 import { uploadSnapshot } from '../extensions/cloud/snapshot.ts'
 import { git } from '../lib/git.ts'
-import { chapterFiles, FIRST_CHAPTER, readChapters } from '../lib/chapters.ts'
-import { prepareHarness } from '../server/harness.ts'
+import { chapterFiles, FIRST_CHAPTER, readChapters, requestChapter } from '../lib/chapters.ts'
+import { context, prepareHarness } from '../server/harness.ts'
+import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { acquireLock } from '../server/lock.ts'
 import { findProject, main, restore } from '../scripts/restore.ts'
 import { cloudStub } from './cloud-stub.ts'
@@ -24,11 +25,12 @@ const cloud = { url: 'ws://127.0.0.1:8787', token: 'dev', secret: 'snapshot secr
 beforeAll(() => vi.stubGlobal('fetch', stub.fetch))
 afterAll(() => vi.unstubAllGlobals())
 
-/** A project checkout named `app` and its home holding `notes` rows. */
+/** A project checkout named `app` and its home: a Pi store, as every backup is, holding `notes` rows. */
 async function machine(notes: string[]) {
   const projectRoot = join(await temp('ultimate-backup-project-'), 'app')
   await git(await temp(), 'init', '-q', '-b', 'main', projectRoot)
   const home = await temp('ultimate-backup-home-')
+  await (await openNodeSqliteStorage(join(home, 'state.sqlite'))).close(context)
   const db = new DatabaseSync(join(home, 'state.sqlite'))
   db.exec('CREATE TABLE notes (body TEXT)')
   for (const note of notes) db.prepare('INSERT INTO notes VALUES (?)').run(note)
@@ -280,6 +282,25 @@ it('restores into a home: moves the old state aside, installs the backup and rec
   expect(await readBackup(target.home, other)).toEqual({ key: other, parent: done.id, last: done })
 })
 
+it('refuses to restore while a chapter switch is pending, and moves nothing', async () => {
+  const source = await machine(['a'])
+  const other = own()
+  const done = await back(source, 'desk', { key: other })
+  const target = await machine(['kept'])
+  await requestChapter(target.home, 'next')
+  await expect(
+    restore({
+      ...cloud,
+      key: other,
+      id: done.id,
+      home: target.home,
+      projectRoot: source.projectRoot,
+      backups: await temp(),
+    }),
+  ).rejects.toThrow('A chapter switch is pending')
+  expect(notes(target.home)).toEqual(['kept'])
+})
+
 it.each(['ultimate.lock', 'storage.lock'])(
   'refuses to restore while Ultimate holds the home’s %s, and moves nothing',
   async (name) => {
@@ -328,9 +349,11 @@ it('refuses a backup taken of a checkout at another path, before writing anythin
     `app was backed up from ${source.projectRoot}; restore it into a checkout at that path (paths in conversations and worktrees are absolute)`,
   )
   expect(notes(target.home)).toEqual(['mine'])
-  expect((await readdir(target.home)).filter((file) => !file.includes('.lock'))).toEqual([
-    'state.sqlite',
-  ])
+  expect(
+    (await readdir(target.home)).filter(
+      (file) => !file.includes('.lock') && !/-(wal|shm)$/.test(file),
+    ),
+  ).toEqual(['state.sqlite'])
 })
 
 /** A checkout of `project` with a commit, as `pnpm restore` needs to read its identity. */

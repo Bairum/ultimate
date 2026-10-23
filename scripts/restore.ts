@@ -19,7 +19,9 @@ import {
   chapterFiles,
   chapterName,
   CHAPTERS_FILE,
+  continueChapterIds,
   FIRST_CHAPTER,
+  PENDING_CHAPTER,
   readChapters,
 } from '../lib/chapters.ts'
 import { downloadSnapshot } from '../extensions/cloud/snapshot.ts'
@@ -120,6 +122,10 @@ export async function restore(o: RestoreOptions) {
           ? `A restore into ${o.home} was interrupted; run pnpm restore again to finish it`
           : `A reset of ${o.home} was interrupted; finish it with pnpm reset first`,
       )
+    if (existsSync(join(o.home, PENDING_CHAPTER)))
+      throw new Error(
+        `A chapter switch is pending in ${o.home}; start Ultimate once to finish it, then restore`,
+      )
     const chapter = chapterName(o.chapter ?? (await readChapters(o.home)).active)
     const files = chapterFiles(o.home, chapter)
     await mkdir(files.dir, { recursive: true })
@@ -192,6 +198,8 @@ async function install(home: string, journal: RestoreJournal) {
     chapters.active = chapter
     await writeJson(join(home, CHAPTERS_FILE), chapters)
   }
+  // The backup may predate conversations of the chapters kept here: ids continue after theirs.
+  await continueChapterIds(home, chapter)
   await rm(join(home, JOURNAL))
   return { backup, moves, dir, database }
 }

@@ -103,22 +103,32 @@ export async function finishChapterSwitch(
   if (!pending) return undefined
   const to = chapterName(pending.to)
   const chapters = await readChapters(home)
-  const target = chapterFiles(home, to).database
-  if (!chapters.chapters.some((chapter) => chapter.name === to)) {
-    await mkdir(chapterFiles(home, to).dir, { recursive: true })
-    await create(target)
-    chapters.chapters.push({ name: to, createdAt: Date.now() })
+  const target = chapterFiles(home, to)
+  const known = chapters.chapters.some((chapter) => chapter.name === to)
+  // A new chapter, or a listed one without its database (a restore lists the first chapter it never installed).
+  if (!known || !existsSync(target.database)) {
+    await mkdir(target.dir, { recursive: true })
+    await create(target.database)
   }
-  continueIds(
-    chapters.chapters
-      .filter((chapter) => chapter.name !== to)
-      .map((chapter) => chapterFiles(home, chapter.name).database),
-    target,
-  )
+  if (!known) chapters.chapters.push({ name: to, createdAt: Date.now() })
+  continueIds(otherDatabases(home, chapters, to), target.database)
   chapters.active = to
   await writeJson(join(home, CHAPTERS_FILE), chapters)
   await rm(join(home, PENDING_CHAPTER))
   return to
+}
+
+const otherDatabases = (home: string, chapters: Chapters, name: string) =>
+  chapters.chapters
+    .filter((chapter) => chapter.name !== name)
+    .map((chapter) => chapterFiles(home, chapter.name).database)
+
+/** Raise chapter `name`'s next record id past every other chapter's, as a switch does; for a restore. */
+export async function continueChapterIds(home: string, name: string) {
+  continueIds(
+    otherDatabases(home, await readChapters(home), name),
+    chapterFiles(home, name).database,
+  )
 }
 
 /** Raise `to`'s next record id to the highest of `from`'s. */

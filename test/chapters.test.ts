@@ -1,6 +1,6 @@
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir } from 'node:fs/promises'
+import { copyFile, mkdir, readdir, rename, rm } from 'node:fs/promises'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -8,6 +8,7 @@ import { expect, it } from 'vitest'
 import {
   activeChapter,
   chapterName,
+  continueChapterIds,
   finishChapterSwitch,
   FIRST_CHAPTER,
   inFlight,
@@ -138,6 +139,38 @@ it('refuses to switch into a chapter with foreground work in flight', async () =
     `Chapter ${FIRST_CHAPTER} has work in flight in ${FIRST_CHAPTER}#${first}`,
   )
   expect(existsSync(join(home, 'pending-chapter.json'))).toBe(false)
+})
+
+it('creates a listed chapter that has no database yet when switching to it', async () => {
+  const home = await temp('ultimate-chapters-')
+  const prepared = await prepare(home)
+  // What a restore of a later chapter into an empty home leaves: the first chapter listed, never installed.
+  await requestChapter(home, 'restored')
+  const restored = await conversationIn(prepared)
+  await rm(join(home, 'state.sqlite'), { force: true })
+  expect(existsSync(join(home, 'state.sqlite'))).toBe(false)
+
+  await requestChapter(home, FIRST_CHAPTER)
+  expect(await conversationIn(prepared)).toBeGreaterThan(restored)
+  expect((await activeChapter(home)).name).toBe(FIRST_CHAPTER)
+})
+
+it('raises a chapter past the others ids, as a restore of an older backup needs', async () => {
+  const home = await temp('ultimate-chapters-')
+  const prepared = await prepare(home)
+  await conversationIn(prepared)
+  // An older copy of the first chapter, as a restore installs it.
+  await copyFile(join(home, 'state.sqlite'), join(home, 'older.sqlite'))
+  await requestChapter(home, 'next')
+  const later = await conversationIn(prepared)
+  await requestChapter(home, FIRST_CHAPTER)
+  await (await prepared.open(false)).close()
+  for (const suffix of ['', '-wal', '-shm'])
+    await rm(join(home, `state.sqlite${suffix}`), { force: true })
+  await rename(join(home, 'older.sqlite'), join(home, 'state.sqlite'))
+
+  await continueChapterIds(home, FIRST_CHAPTER)
+  expect(await conversationIn(prepared)).toBeGreaterThan(later)
 })
 
 it('refuses names that are not slugs', () => {
