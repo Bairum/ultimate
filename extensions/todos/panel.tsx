@@ -3,6 +3,7 @@ import {
   CheckIcon,
   ChevronRightIcon,
   MessageCircleQuestionIcon,
+  PlayIcon,
   PlusIcon,
 } from 'lucide-react'
 import { useState } from 'react'
@@ -11,6 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { api, cn, errorMessage, events, useDocOf, useNow, useUltimate } from '@/sdk'
 import { Address, MessagesDoc, emptyMessages, relativeTime, useAccentOf } from '../messages/ui.tsx'
 import { QuestionsDoc, waiting } from '../questions/ui.tsx'
+import { StandingAction } from '../subagents/ui.tsx'
 import { AddAction, DoneAction, ReopenAction, TodosDoc } from './refs.ts'
 import type { Todo } from './refs.ts'
 
@@ -57,6 +59,22 @@ export function Todos() {
   }
   const toggle = (todo: Todo) =>
     void run(api.action(todo.done ? ReopenAction : DoneAction, { id: todo.id }))
+  const { showSurface, switchConversation } = useUltimate()
+  // Sent as the user, like typing it into @ultimate's composer; a busy @ultimate takes it after its current run.
+  const start = (todo: Todo) =>
+    void run(
+      (async () => {
+        const id = await api.action(StandingAction, { name: 'ultimate' })
+        events.emit('ultimate:sent', { conversationId: id })
+        await api.submit(
+          `${todo.owner === 'user' ? 'Help me with' : 'Work on'} to-do #${todo.id}: ${todo.text}`,
+          'followUp',
+          id,
+        )
+        showSurface('agent')
+        switchConversation(id)
+      })(),
+    )
 
   return (
     <div className="py-2" data-todos>
@@ -86,12 +104,12 @@ export function Todos() {
               <QuestionRow key={`q${message.id}`} message={message} now={now} />
             ))}
             {yours.map((todo) => (
-              <TodoRow key={todo.id} todo={todo} now={now} toggle={toggle} />
+              <TodoRow key={todo.id} todo={todo} now={now} toggle={toggle} start={start} />
             ))}
           </Section>
           <Section title="For @ultimate" owner="ultimate" empty={!ultimate.length}>
             {ultimate.map((todo) => (
-              <TodoRow key={todo.id} todo={todo} now={now} toggle={toggle} />
+              <TodoRow key={todo.id} todo={todo} now={now} toggle={toggle} start={start} />
             ))}
           </Section>
         </>
@@ -137,13 +155,28 @@ function Section({
   )
 }
 
-/** One to-do: a check, its text and its age; ticking a done one reopens it. */
-function TodoRow({ todo, now, toggle }: { todo: Todo; now: number; toggle: (todo: Todo) => void }) {
+/**
+ * One to-do: a check, its text and its age; ticking a done one reopens it. An open one also offers, on hover or focus,
+ * to send @ultimate to work on it.
+ */
+function TodoRow({
+  todo,
+  now,
+  toggle,
+  start,
+}: {
+  todo: Todo
+  now: number
+  toggle: (todo: Todo) => void
+  start?: (todo: Todo) => void
+}) {
   const at = todo.done ?? todo.at
   const age = relativeTime(at, now)
+  const label =
+    todo.owner === 'user' ? 'Ask @ultimate to help with this' : 'Have @ultimate work on this'
   return (
-    <li data-todo={todo.id}>
-      <label className="flex cursor-pointer items-start gap-2.5 rounded px-2 py-1.5 hover:bg-muted/50">
+    <li className="group/todo flex items-start rounded hover:bg-muted/50" data-todo={todo.id}>
+      <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 py-1.5 pl-2">
         <Checkbox
           aria-label={todo.done ? `Reopen: ${todo.text}` : `Done: ${todo.text}`}
           checked={!!todo.done}
@@ -171,6 +204,20 @@ function TodoRow({ todo, now, toggle }: { todo: Todo; now: number; toggle: (todo
           {age}
         </time>
       </label>
+      {start && !todo.done ? (
+        <button
+          aria-label={`${label}: ${todo.text}`}
+          className="mt-1 mr-2 ml-1 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground opacity-0 group-hover/todo:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          data-todo-start
+          onClick={() => start(todo)}
+          title={label}
+          type="button"
+        >
+          <PlayIcon className="size-3" />
+        </button>
+      ) : (
+        <span className="w-2 shrink-0" />
+      )}
     </li>
   )
 }
