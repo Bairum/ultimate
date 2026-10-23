@@ -141,6 +141,7 @@ function chapterText(host: ExtensionHost, seed: Seed) {
     `Carried: ${Object.entries(seed.counts)
       .map(([kind, count]) => `${count} ${kind}`)
       .join(', ')}.`,
+    'Greet the user in one or two lines and say you are ready. They check you next in a side chat: what this project is, what is open, what the rules are and who you work with.',
   ].join('\n')
 }
 
@@ -177,8 +178,10 @@ export async function applySeed(host: ExtensionHost) {
           })),
       ]
       for (const item of carried) todos.items.push({ ...item, id: todos.next++, at: Date.now() })
+      // A real chapter wakes @ultimate with it: its first turn is what the wake-up side chat forks from. The gate's
+      // preview only writes it, so no model runs there.
       await deliver(host, tx, ultimate, {
-        type: 'write',
+        type: seed.gate ? 'write' : 'input',
         session: seed.session,
         kind: 'dream.chapter',
         data: {
