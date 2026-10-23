@@ -477,7 +477,8 @@ function delivery(host: ExtensionHost) {
             const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
               (item) => item.id === m.id,
             )
-            if (stored) {
+            // A recipient that answered with a message before this commit has moved it past delivered already.
+            if (stored?.state === 'sent') {
               stored.state = placement.status === 'unanswered' ? 'failed' : 'delivered'
               if ('entry' in placement && placement.entry !== undefined)
                 stored.entry = placement.entry
@@ -527,13 +528,15 @@ function delivery(host: ExtensionHost) {
         await runtime.commit(async (tx) => {
           const answer =
             settled.status === 'done' && settled.type === 'input' ? settled.answer : undefined
+          const original = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
+            (item) => item.id === m.id,
+          )
           if (!m.reply) {
-            const original = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
-              (item) => item.id === m.id,
-            )
             if (original && answer !== undefined) original.answer = answer
-            return { status: 'terminal', outcome: { status: 'completed', result: null } }
+            return terminal
           }
+          // The recipient answered with a message; its final answer stays where it is.
+          if (original?.state === 'answered') return terminal
           const model =
             answer === undefined ? undefined : (await tx.entry(AssistantEntry, answer))?.model?.[0]
           const text =
@@ -548,9 +551,6 @@ function delivery(host: ExtensionHost) {
           const error = failed
             ? `ended its turn without an answer (${settled.status === 'unanswered' ? settled.reason : settled.status})`
             : undefined
-          const original = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
-            (item) => item.id === m.id,
-          )
           if (original) {
             original.state = failed ? 'failed' : 'answered'
             if (answer !== undefined) original.answer = answer
@@ -630,6 +630,10 @@ function delivery(host: ExtensionHost) {
             }, ctx)
           // The harness handle, not the task runtime's: triage writes context first, which only it accepts.
           const sender = await host.harness().conversation(m.to as ConversationId, ctx)
+          // Entries never change, so a replayed reply attaches the same images.
+          const images = m.images
+            ? imagesOf(await host.harness().commit((tx) => tx.entry(m.images!.entry), ctx))
+            : []
           const entry = {
             kind: 'board.reply',
             data: {
@@ -638,10 +642,12 @@ function delivery(host: ExtensionHost) {
               from: m.from,
               text: m.text,
               failed,
+              ...(images.length ? { images: images.length } : {}),
               ...(m.remote ? { remote: m.remote } : {}),
             },
           }
-          const content = `Reply from ${task.input.toLabel} to your message ${m.re}${failed ? ' (failed)' : ''}:\n${m.text}`
+          const body = `Reply from ${task.input.toLabel} to your message ${m.re}${failed ? ' (failed)' : ''}:\n${m.text}`
+          const content = images.length ? [{ type: 'text' as const, text: body }, ...images] : body
           const requestId = `board-reply:${m.id}`
           if (sender && triager) {
             await sender.submit(
@@ -925,10 +931,45 @@ async function send(
           m.reply &&
           (m.state === 'sent' || m.state === 'delivered'),
       )
-      if (pending)
+      // Still queued, it is unread: answering it would answer what the agent has not seen.
+      if (pending && (to === 'user' || pending.state === 'sent'))
         throw new Error(
           `Your answer to ${toLabel}'s message ${pending.id} is sent back automatically. Answer instead of messaging.`,
         )
+      // An agent messaging a sender whose message it has read and owes an answer is answering: this becomes the reply,
+      // and that message's delivery, seeing it answered, keeps the final answer local.
+      if (pending) {
+        pending.state = 'answered'
+        const response = await append(tx, {
+          from,
+          to,
+          text: input.text,
+          reply: false,
+          re: pending.id,
+          state: 'sent',
+          ...(callId === undefined ? {} : { call: callId }),
+          ...(images ? { images } : {}),
+        })
+        await tx.createTask(
+          delivery(host),
+          {
+            message: pending,
+            steer: false,
+            note: false,
+            fromLabel: toLabel,
+            toLabel: fromLabel,
+            reply: { message: response, failed: false },
+          },
+          {
+            conversationId: ROOT_CONVERSATION_ID,
+            ownership: { kind: 'conversation' },
+            background: true,
+          },
+        )
+        if (receipt && callId !== undefined) receipt.ids[callId] = response.id
+        if (requests && requestId !== undefined) requests.ids[requestId] = response.id
+        return response.id
+      }
     }
     const message = await append(tx, {
       from,
@@ -1322,7 +1363,7 @@ export default function messages(host: ExtensionHost) {
         if (parent !== undefined)
           return `Use message only to update #${parent}, the conversation that started you, while you work; your final answer reaches it anyway. One-way updates (reply: false) reach #${parent} as notes it reads with its next input; ask with reply: true when you need its answer to continue.`
         const agents = await host.need(SubagentsApi).residents(ctx)
-        return `Use message to contact #id or @name. Only @ultimate messages user; send it updates with reply: false to relay. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
+        return `Use message to contact #id or @name. Only @ultimate messages user; send it updates with reply: false to relay. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply. A message to an agent whose message you still owe an answer becomes that answer and ends your run; use it only to attach images.\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
     ],
     tools: [
@@ -1428,7 +1469,7 @@ export default function messages(host: ExtensionHost) {
       defineTool({
         name: 'message',
         description:
-          'Send a message to #id or @name (only @ultimate may send to user). Returns immediately; the answer comes back as a reply. A busy recipient gets it after its current run, or during it with steer: true (the default for @ultimate).',
+          'Send a message to #id or @name (only @ultimate may send to user). Returns immediately; the answer comes back as a reply. A busy recipient gets it after its current run, or during it with steer: true (the default for @ultimate). To an agent whose message you owe an answer, it is that answer (with its images) and ends your run.',
         parameters: Type.Object({
           to: Type.String(),
           text: Type.String({ minLength: 1 }),
@@ -1457,12 +1498,18 @@ export default function messages(host: ExtensionHost) {
               ),
               ctx,
             ))
-          if (from !== api.conversationId && input.reply !== false) {
-            const sent = (await host
-              .harness()
-              .snapshot(Messages, ROOT_CONVERSATION_ID, ctx))!.messages.find(
-              (message) => message.id === id,
-            )!
+          const sent = (await host
+            .harness()
+            .snapshot(Messages, ROOT_CONVERSATION_ID, ctx))!.messages.find(
+            (message) => message.id === id,
+          )
+          // It answered a message the recipient is waiting on: the answer is given, so the run ends here.
+          if (sent?.re !== undefined)
+            return {
+              output: [{ type: 'text', text: `Sent as your answer to message ${sent.re}.` }],
+              control: { terminate: true as const },
+            }
+          if (from !== api.conversationId && input.reply !== false && sent) {
             await host
               .need(LineageApi)
               .leaveNote(

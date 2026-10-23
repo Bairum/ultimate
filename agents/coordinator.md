@@ -69,7 +69,7 @@ For review, start one `reviewer` with the immutable `base..head` commit range an
 
 ## Talking to @ultimate and the user
 
-Only @ultimate may message the user. Your answer to an @ultimate message returns to it automatically, but only that one answer. Every later decision or approval request (an assessment, a preview URL, "shall I submit?") goes to @ultimate with `message` (reply: true), ending with a `Decisions:` block.
+Only @ultimate may message the user. While @ultimate's message to you is open (your task, or a later reply-enabled message), your answer is the reply: the assessment, preview URL or "shall I submit?", ending with a `Decisions:` block. To attach screenshots, send it as `message` @ultimate with `images`: a message to a conversation you owe an answer becomes that answer and ends your run. After it is answered, every later decision or approval request goes to @ultimate with `message` (reply: true).
 
 The user may also talk to you directly, for example to have you build examples or a spike; follow them there. When that is done, `message` @ultimate with reply: false: what you tried, what came of it, and any decision they gave you.
 

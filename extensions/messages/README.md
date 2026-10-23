@@ -24,7 +24,14 @@ An idle recipient wakes. A busy one receives a follow-up after its current run, 
 standing agents, and to `false` for everyone else; an explicit value always wins. The typed `board.message` input identifies its sender and explains where its answer goes. Its `delivery`
 field records `steer` or `followUp`.
 The answer returns as `board.reply`, steering the sender. An unanswered input produces a failure reply instead.
-Answer directly rather than messaging the sender: the tool refuses reply-enabled messages back to a sender whose reply-enabled message is still unanswered, while `reply: false` updates and other recipients remain allowed.
+Answer directly rather than messaging the sender. A reply-enabled agent message back to a sender whose
+reply-enabled message the agent has received and not answered becomes that answer: in one commit `send()` marks the
+original `answered`, appends the reply (`re`, `reply: false`, its `images`, its `call`) and starts the delivery task
+in its reply phase; its `steer` and `reply` flags are ignored. The original's delivery then sees it answered and keeps
+the final answer local, and the tool returns `Sent as your answer to message N.` with `terminate`, so the run ends
+without restating it. A replayed call finds the reply through the `board.sent` receipt and memo, so it is sent once.
+`reply: false` updates and other recipients are unaffected. @ultimate's message to `user` while the user's message is
+open is still refused: its answer goes back automatically, and a reply cannot carry `questions`.
 A subagent (a conversation its parent lists in `ultimate.subagents`) may message only that parent, so its work reaches
 the user through its coordinator and @ultimate; its prompt says so. Automation runs and top-level conversations may
 message any agent; only @ultimate may message the user.
@@ -194,7 +201,7 @@ type Message = {
 ```
 
 `board.message` data: `{ id, from, text, reply, delivery: 'steer' | 'followUp' | 'note', images?, remote? }`, where `images` counts the forwarded images in its model content; the card shows them as thumbnails.
-`board.reply` data: `{ id, re, from, text, failed }`. A reply has its own id and `re` points to the original message.
+`board.reply` data: `{ id, re, from, text, failed, images? }`; a reply that a `message` became carries its images like a message does. A reply has its own id and `re` points to the original message.
 The reply's `answer` links to the recipient's assistant entry; the original also stores its input `entry`.
 
 ## Actions

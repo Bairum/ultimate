@@ -16,7 +16,9 @@ approval, and one approval covers one round.
 3. **Seed it like a user**: open @ultimate (the first row of the sidebar) and send real prompts until the state the user should
    judge exists: a long transcript, a running tool, a skill run, an error. Never fake state by writing entries.
 4. **Look first yourself**: follow the `verify-ui` skill. Fix what is off before you ask anyone.
-5. **Ask for approval**: `message` @ultimate with reply: true: the URL (the tailnet URL when the preview chip shows
+5. **Ask for approval**: while @ultimate's message to you is open (your task or a later question), your answer is
+   the request; otherwise `message` @ultimate with reply: true. To send screenshots, `message` it with
+   `images: "latest"`: to an open message that is your answer and ends your run. Include the URL (the tailnet URL when the preview chip shows
    one), what changed, a short numbered "what to try" naming the conversation you seeded, and a `Decisions:` block
    (approve as is, or change something).
 6. **Iterate**: each change is a new commit and a new round; keep the same preview running.
