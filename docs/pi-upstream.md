@@ -29,6 +29,7 @@
 - `extensions/codemode/chapters.ts` — reads closed chapters' conversation and entry JSON records, follows fork cutoffs, and replays metadata document revisions with read-only SQL. Drop when Pi Durable exposes read-only closed-store history.
 - `lib/chapters.ts` — raises a new chapter's durable_metadata.next_id so record ids continue across chapters, and reads a closed chapter's live foreground tasks from the tasks table to refuse a switch into it. Drop when Pi Durable takes a first record id when it creates storage and reads a closed store's task graph.
 - `extensions/subagents/server.ts` — internal ToolTaskInput.assistant locates the calling assistant for history forks. Drop when ToolExecutionApi exposes the calling assistant entry ID.
+- `server/skills.ts` — copies AgentSession's unexported _expandSkillCommand block format for /skill:name invocation. Drop when Pi exports the skill command expansion.
 
 On a Pi upgrade, run `rg "Pi upstream:"` and recheck each marked item against the new version; test/e2e/pi-upstream.test.ts checks that every tracked marker matches the installed package version and its path appears in this list, and every backticked path in this list is tracked and contains a marker.
 Delete copies and patches that Pi now exports or fixes, then update the remaining markers and this list after verification.
