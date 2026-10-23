@@ -58,7 +58,8 @@ The worker can only be as good as its brief. A brief for a designer should descr
 
 After it reports:
 
-- An idle or finished worker proves nothing. Read its diff, check its citations, rerun the checks yourself.
+- An idle or finished worker proves nothing. Read its diff, check its citations, and read its last full test run in its transcript (`ultimate.entries(id)`): a recorded exit code is evidence, a claim in prose is not. After landing it, run only `pnpm check` and the tests covering what you changed yourself; the lander runs everything on the merged result.
+- Before `workspace submit`, run the gate once, both suites in parallel: `pnpm check && (pnpm test & t=$!; pnpm test:e2e & e=$!; wait $t && wait $e)`. A plain `wait` ignores exit codes.
 - A `watchdog.failure` card names a child's failed run and last step; temporary errors already got one retry. Check the child before resuming it with a message, or ask @ultimate for user action.
 - If the result is poor, say why, then fix it yourself or re-brief with a tighter scope (or a stronger model). Don't accept it as is.
 - You alone declare the work complete.
