@@ -8,7 +8,7 @@ import {
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
-import type { ToolExecutionResult } from '@earendil-works/pi-durable'
+import type { ConversationId, ToolExecutionResult } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
 import {
   copyApis,
@@ -88,6 +88,13 @@ it('reads an inactive chapter through the sandbox and rejects project with chapt
       data: { text: 'closed-chapter-needle' },
     })
   }, context)
+  const long = (
+    (
+      await post(server, '/api/conversations', {
+        title: `Closed chapter work ${'with a long prompt '.repeat(400)}`,
+      })
+    ).data as { id: number }
+  ).id
   const live = (await server.root.entries({}, 100, undefined, context)).items.filter(
     (entry) => entry.kind === 'chapter.note',
   )
@@ -109,8 +116,18 @@ it('reads an inactive chapter through the sandbox and rejects project with chapt
   expect(result.data.details.value).toMatchObject({
     entries: live,
     search: live,
-    conversations: expect.arrayContaining([expect.objectContaining({ id: server.root.id })]),
+    conversations: expect.arrayContaining([
+      expect.objectContaining({ id: server.root.id }),
+      expect.objectContaining({
+        id: long,
+        title: expect.stringMatching(/^Closed chapter work with a long prompt .*…$/),
+      }),
+    ]),
   })
+  const { conversations } = result.data.details.value as {
+    conversations: { id: number; title: string }[]
+  }
+  expect(conversations.find((item) => item.id === long)!.title.length).toBeLessThanOrEqual(60)
   const conflict = await run(
     next,
     `return await ultimate.entries(1, { project: 'anything', chapter: '${FIRST_CHAPTER}' });`,
@@ -643,6 +660,31 @@ it('lists conversations with their title and cwd, since the prompt no longer doe
     title: 'Old work',
     concluded: true,
   })
+})
+
+it('lists conversations whose titles are whole prompts with short titles, far below the read limit', async () => {
+  const { server } = await fixture()
+  const prompt = `Rewrite the parser ${'and keep every token '.repeat(300)}`
+  expect(prompt.length).toBeGreaterThan(6000)
+  const ids = await Promise.all(
+    Array.from(
+      { length: 40 },
+      async () =>
+        ((await post(server, '/api/conversations', { title: prompt })).data as { id: number }).id,
+    ),
+  )
+  const result = await run(server, `return await ultimate.conversations()`)
+  expect(result.data.isError).toBe(false)
+  const listed = result.data.details.value as { id: number; title?: string }[]
+  for (const item of listed.filter((entry) => ids.includes(entry.id))) {
+    expect(item.title).toMatch(/^Rewrite the parser and keep every token .*…$/)
+    expect(item.title!.length).toBeLessThanOrEqual(60)
+  }
+  // Full titles would make this listing 40 × 6,000 characters; short ones keep it to a few kilobytes.
+  expect(JSON.stringify(listed).length).toBeLessThan(20_000)
+  // The stored title is untouched.
+  const stored = await server.harness.snapshot(Metadata, ids[0] as ConversationId, context)
+  expect(stored?.title).toBe(prompt)
 })
 
 it("lists project agents once the project's setup is trusted, and says when it is not", async () => {
