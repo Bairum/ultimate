@@ -1,6 +1,7 @@
 import { ActionError, actionMessage, createApi } from './api.ts'
 import { createRegistry } from './registry.ts'
 import { flushSync } from 'react-dom'
+import { experiment } from './experiment.ts'
 import { createStore } from './store.ts'
 import { createUiState } from './ui-state.ts'
 
@@ -27,6 +28,7 @@ export const store = createStore({
   ui: {
     theme: localStorage.getItem('ultimate.theme') === 'light' ? 'light' : 'dark',
   },
+  keep: experiment.cache() ? 6 : 0,
   onFallback: () => {
     replaceSelection = true
     uiState.delete('shell.conversation')
@@ -97,7 +99,7 @@ export function replaceNextSelection() {
  * Experiment toggle: `?switch=vt` crossfades the whole page from one conversation to the next with a view transition
  * (250 ms, the browser's own), so the sidebar, header and transcript change together instead of piecewise.
  */
-const switchStyle = () => new URLSearchParams(location.search).get('switch')
+const switchStyle = () => experiment.switch()
 /** The conversation a view transition is about to show; a second call for it while it captures starts no other. */
 let transitioning: number | undefined
 function followSelection() {
@@ -109,6 +111,7 @@ function followSelection() {
     if (id !== undefined) writeConversation(id, replaceSelection)
   }
   replaceSelection = false
+  document.documentElement.toggleAttribute('data-slow', experiment.slow() > 1)
   if (
     switchStyle() !== 'vt' ||
     id === store.getState().requested ||

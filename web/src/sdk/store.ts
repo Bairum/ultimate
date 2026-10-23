@@ -68,6 +68,8 @@ export interface StoreOptions {
   /** Called when the requested conversation could not be opened and the stream fell back to the root. */
   onFallback?: () => void
   ui?: Partial<UiState>
+  /** How many last shown views to keep for showing again at once; 6 unless given. */
+  keep?: number
 }
 
 const CLOSED = 2
@@ -138,11 +140,13 @@ export function createStore(options: StoreOptions = {}) {
    * it at once while its stream refreshes it, and a refresh that sends the same snapshot changes nothing.
    */
   const recent = new Map<number, { view: StreamedView; raw?: string }>()
+  const keep = options.keep ?? 6
   function remember(view: StreamedView, raw?: string) {
+    if (keep === 0) return
     const id = view.conversation.id
     recent.delete(id)
     recent.set(id, { view, raw })
-    if (recent.size > 6) recent.delete(recent.keys().next().value!)
+    if (recent.size > keep) recent.delete(recent.keys().next().value!)
   }
 
   function set(change: Partial<State>) {

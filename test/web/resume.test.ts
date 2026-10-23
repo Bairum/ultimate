@@ -143,6 +143,7 @@ describe('resuming a reload', () => {
     }))
     vi.stubGlobal('innerWidth', 1200)
     vi.stubGlobal('innerHeight', 800)
+    vi.stubGlobal('location', { search: '' })
     vi.stubGlobal('addEventListener', (type: string, listener: () => void) =>
       listeners.set(type, listener),
     )

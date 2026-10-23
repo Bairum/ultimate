@@ -41,12 +41,13 @@
           frame.innerHTML = resume.html
           const style = document.createElement('style')
           const blur = /[?&]resume=blur(&|$)/.test(location.search)
+          const slow = /[?&]slow(=[^&]*)?(&|$)/.test(location.search) ? 4 : 1
           // Offscreen content sizes itself only once rendered: lay it all out now, so the scroll offsets land.
           style.textContent = `${resume.css}
             #resume * { content-visibility: visible !important; }
             @keyframes resume-blur { to { filter: blur(6px); } }
             @media (prefers-reduced-motion: no-preference) {
-              #resume > div { animation: ${blur ? 'resume-blur 300ms ease-out forwards' : 'none'}; }
+              #resume > div { animation: ${blur ? `resume-blur ${300 * slow}ms ease-out forwards` : 'none'}; }
             }`
           view.append(style, frame)
           document.body.append(view)
