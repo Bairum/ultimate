@@ -13,7 +13,7 @@ approval, and one approval covers one round.
 2. **Start the preview**: `instance start` (or `instance start {subagent: <id>}` for a designer's worktree). It is a
    clean Ultimate with its own empty home on the configured models; it hot-reloads `web/` and `extensions/` as files
    change. A change in `server/` or `shared/` needs `instance stop` and a new `start`.
-3. **Seed it like a user**: open @ultimate (the top-bar button) and send real prompts until the state the user should
+3. **Seed it like a user**: open @ultimate (the first row of the sidebar) and send real prompts until the state the user should
    judge exists: a long transcript, a running tool, a skill run, an error. Never fake state by writing entries.
 4. **Look first yourself**: follow the `verify-ui` skill. Fix what is off before you ask anyone.
 5. **Ask for approval**: `message` @ultimate with reply: true: the URL (the tailnet URL when the preview chip shows

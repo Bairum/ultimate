@@ -101,7 +101,7 @@ delivered like any other: its input resumes it, and its next request recreates a
 
 ## Ultimate and branches
 
-Talk to `@ultimate` in its own conversation to start and steer work, using the top-bar @ultimate button or first sidebar row. It is the built-in standing orchestrator, not a coding worker.
+Talk to `@ultimate` in its own conversation to start and steer work, using the first sidebar row (on phones, the top-bar @ultimate button). It is the built-in standing orchestrator, not a coding worker.
 Model-facing messages identify standing senders as `#12 (@ultimate)` and the lander as `#40 (@lander)`; ordinary
 conversations stay `#id`, and user replies say `user`. Before delivery, standing recipients are refreshed from their
 current definitions, including numeric-address messages and automatic replies.
@@ -214,8 +214,8 @@ append no log items. `MessagesApi`, `Message` and the `Messages` document live i
 ## UI
 
 There is no Messages surface: the extension is plumbing, and everything it carries renders in transcripts. You talk to
-@ultimate in its own conversation (the title bar's `@ultimate` button and the sidebar's top row, both in
-[conversations](../conversations/README.md), open it). Every sender has a stable accent (`accent.tsx`: you the
+@ultimate in its own conversation (the sidebar's top row, and on phones the title bar's `@ultimate` button, both in
+[sidebar](../sidebar/README.md), open it). Every sender has a stable accent (`accent.tsx`: you the
 brand colour, others a small palette by id) shown as a stripe, a faint fill and the sender name. Typed
 messages and replies render as compact transcript cards with Source / Return navigation, in the sender's accent.
 Incoming messages show whether they expect a reply or are one-way, plus their delivery mode (steered, follow-up or note) when recorded. Final answers name their reply

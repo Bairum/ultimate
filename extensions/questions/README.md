@@ -53,8 +53,8 @@ card, on another control or in the panel, whose cards take no global keys.
 ## Where open questions wait
 
 The To-dos tab lists every message that waits on the user at its top, newest first, named by its first question; a
-row opens the asking conversation at the message, where this card answers or dismisses it. The amber count next to
-the top-bar @ultimate button opens the tab from any surface; ⌘K “Show open questions” does too.
+row opens the asking conversation at the message, where this card answers or dismisses it. The amber count on
+@ultimate's sidebar row (on phones, beside the top-bar @ultimate button) opens the tab; ⌘K “Show open questions” does too.
 
 ## Actions
 

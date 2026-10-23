@@ -302,7 +302,8 @@ title bar the host shows above every surface.
 | ---------------------- | ---------------------------------------------------------------------------------------------- |
 | `sidebar`              | Left column (`<Sidebar />`); it disappears while nothing is in it                              |
 | `sidebar.top`          | Agent sidebar, after the Agents group and before the roots: background work such as watches    |
-| `titlebar.left`        | Title bar above every surface, after the project name; monospace, one line                     |
+| `titlebar.project`     | Title bar, in place of the project chip; render `ProjectChip` from `@/sdk` with a menu         |
+| `titlebar.left`        | Title bar above every surface, after the project chip; monospace, one line                     |
 | `titlebar.right`       | Title bar, right, before the palette button                                                    |
 | `header.right`         | Right side of the header, before the panel toggle (`<Header>`)                                 |
 | `statusline.left`      | Bottom status line, left; monospace, one line (`<StatusLine />`)                               |
@@ -638,7 +639,7 @@ The window shows one surface at a time. **Agent** is the built-in home surface (
 with the sidebar and the right panel. An app surface puts its own UI first and keeps the agent one keystroke away,
 usually docked beside it. The `documents` extension provides the Documents tab.
 
-- **Switching**: the title bar lists the surfaces (Agent first, then by `order`, then title); on phones the brand
+- **Switching**: the title bar lists the surfaces as tabs (Agent first, then by `order`, then title); on phones the brand
   opens them as a menu. ⌘K has "Switch to …"; `mod+1…9` select the first nine (Ctrl+1…9 off macOS, which Chrome lets
   the page take before its tab switching). In code: `useUltimate().showSurface(id)` or
   `context.showSurface(id)` in a command. Switching never interrupts the agent: the run goes on, and the transcript and

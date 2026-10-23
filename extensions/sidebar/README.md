@@ -1,4 +1,4 @@
-The Agent surface's sidebar and the title bar's @ultimate button: talk to @ultimate, see each root's tree with what
+The Agent surface's sidebar and, on phones, the title bar's @ultimate button: talk to @ultimate, see each root's tree with what
 is in flight and what landed, and switch, rename, compact, conclude and resume conversations. It is the UI that brings
 the core together, so it sits at the top of the core tier: it reads conversations, workspaces, subagents, lineage and
 messages, and shows what optional extensions provide through points (`conversations/ui.tsx`: a working phase, a plan task).
@@ -22,8 +22,9 @@ agents (label `agent`) by ID. These rows are never concluded or hidden and show 
 and the age of its latest landing (what landed is its Landed section's first row); other agents show `working` or `idle` and the age. Their menu only
 compacts the context; they are never renamed, cleared or concluded.
 
-The title bar's `@ultimate` button (`titlebar.left`, beside the surfaces, also on phones) opens @ultimate the same way
-from every surface. Its mark's dot pulses while @ultimate works and is amber while questions wait on you, with their count.
+@ultimate's row carries an amber count while questions wait on you; it opens them in the To-dos tab. On phones, where
+the sidebar is hidden, the title bar's `@ultimate` button (`titlebar.left`) opens @ultimate from every surface instead:
+its mark's dot pulses while @ultimate works and is amber while questions wait on you, with the same count beside it.
 
 Every section of the sidebar folds the same way (`Section`, `section.tsx`): a quiet mono heading with a chevron and
 a count bubble, open by default, its fold state kept per section in `ext.conversations.closedSections`; the Scheduled

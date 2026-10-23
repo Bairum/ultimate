@@ -321,8 +321,8 @@ function QrCode({ text }: { text: string }) {
 }
 
 /**
- * "tailnet" in the title bar: a green dot while this Ultimate is reachable there, amber while it needs a fix. A click
- * opens the details beneath it. Off or starting, it stays out of the bar; `Tailscale…` in the palette opens the details
+ * "tailnet" in the status line: a green dot while this Ultimate is reachable there, amber while it needs a fix. A click
+ * opens the details above it. Off or starting, it stays out of the line; `Tailscale…` in the palette opens the details
  * anchored where it would be.
  */
 function Indicator() {
@@ -354,7 +354,7 @@ function Indicator() {
           <span aria-hidden className="h-4 w-0" />
         )}
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 max-w-[calc(100vw-1rem)] p-0" side="bottom">
+      <PopoverContent align="end" className="w-80 max-w-[calc(100vw-1rem)] p-0" side="top">
         <Details status={status} />
       </PopoverContent>
     </Popover>
@@ -362,7 +362,7 @@ function Indicator() {
 }
 
 export default defineWebExtension({
-  slots: { 'titlebar.right': [Indicator] },
+  slots: { 'statusline.right': [Indicator] },
   commands: [
     {
       id: 'tailscale.panel',

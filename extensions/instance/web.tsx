@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon } from 'lucide-react'
+import { ChevronRightIcon, ExternalLinkIcon } from 'lucide-react'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
 import { Shimmer } from '@/components/ai/shimmer'
@@ -14,6 +14,7 @@ import {
 import {
   cn,
   defineWebExtension,
+  ProjectChip,
   shortenPath,
   useAction,
   useConversations,
@@ -285,37 +286,31 @@ function PreviewLink({
 const port = (url: string) => `:${new URL(url).port}`
 
 /**
- * Switches between this project and the previews `instance` runs, after the project name in the title bar. Hidden
- * while there are none; the list refreshes when the menu opens.
+ * The title bar's project chip with the previews `instance` runs as its menu: "This project" and each preview. A plain
+ * chip while there are none; the list refreshes when the menu opens.
  */
 function Switcher() {
   const current = useShown()?.preview
   const data = usePreviews()?.filter((preview) => preview.running)
   const conversations = useConversations()
-  if (!data?.length) return null
+  if (!data?.length) return <ProjectChip />
   const title = (preview: Preview) =>
     conversations.find((conversation) => conversation.id === preview.conversationId)?.title
   return (
     <DropdownMenu modal={false} onOpenChange={(open) => open && refetch()}>
       <DropdownMenuTrigger asChild>
-        <button
-          className={cn(
-            'flex h-5 shrink-0 items-center gap-1.5 rounded-sm px-1.5 transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
-            current && 'bg-brand/10 text-foreground',
-          )}
-          title="Switch instance"
-          type="button"
-        >
+        <ProjectChip className={cn(current && 'bg-brand/10')} menu>
           {current ? (
-            <>
+            <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11.5px] text-muted-foreground">
               <span className="size-1.5 rounded-full bg-brand" />#{current.conversationId} ·{' '}
               {port(current.url)}
-            </>
+            </span>
           ) : (
-            `${data.length} ${data.length === 1 ? 'preview' : 'previews'}`
+            <span className="shrink-0 font-mono text-[11.5px] text-muted-foreground">
+              {data.length} {data.length === 1 ? 'preview' : 'previews'}
+            </span>
           )}
-          <ChevronDownIcon className="size-3 opacity-60" />
-        </button>
+        </ProjectChip>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-80" sideOffset={4}>
         <DropdownMenuLabel className="px-2 pt-1 pb-1.5 font-mono text-[10.5px] font-normal tracking-wider text-muted-foreground uppercase">
@@ -362,7 +357,7 @@ function Embedded() {
   if (!current) return null
   const { preview, url } = current
   return (
-    <div className="fixed inset-x-0 top-7 bottom-0 z-40 bg-background">
+    <div className="fixed inset-x-0 top-9 bottom-0 z-40 bg-background">
       {/* oxlint-disable-next-line react/iframe-missing-sandbox -- a whole Ultimate on its own origin, trusted as in its own tab */}
       <iframe
         allow="clipboard-read; clipboard-write"
@@ -378,5 +373,5 @@ function Embedded() {
 export default defineWebExtension({
   tools: { instance: InstanceCall },
   link: PreviewLink,
-  slots: { 'titlebar.left': loopback ? [Switcher] : [], overlay: [Poll, Embedded] },
+  slots: { 'titlebar.project': loopback ? [Switcher] : [], overlay: [Poll, Embedded] },
 })

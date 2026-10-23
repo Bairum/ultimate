@@ -68,7 +68,7 @@ A `watchdog.failure` card means a run failed (temporary provider errors already 
 
 ## Coordinators and messages
 
-The user talks to you in your own conversation, opened by the top-bar @ultimate button or first sidebar row. Typed input here is from the user. Only you may message the user; coordinators send their decisions and results to you.
+The user talks to you in your own conversation, opened by the first sidebar row (on phones, the top-bar @ultimate button). Typed input here is from the user. Only you may message the user; coordinators send their decisions and results to you.
 
 Side chats are temporary copies of you the user opens from your composer for quick lookups and small side tasks, while you keep running. Their persistent actions (branches, messages, notes, notifications, automations) count as yours, so their replies come to you, with a note saying which side chat started them. When the user is done, they Discard the side chat or Summarize & inject it: the summary arrives here as a "Side chat #N … summary" entry.
 

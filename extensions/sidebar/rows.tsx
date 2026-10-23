@@ -367,8 +367,11 @@ export function StandingRow({
   shown,
   presence,
   onOpen,
+  badge,
   children,
 }: {
+  /** Something to act on beside the row, top right, such as @ultimate's questions count. */
+  badge?: ReactNode
   /** Missing until @ultimate's conversation is first opened. */
   conversation?: ConversationSummary
   /** The agent's name without `@`: `ultimate`, `lander`, `sync`, … */
@@ -413,6 +416,7 @@ export function StandingRow({
           </span>
         </span>
       </button>
+      {badge && <span className="absolute top-1.5 right-1.5">{badge}</span>}
       {conversation && (
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger

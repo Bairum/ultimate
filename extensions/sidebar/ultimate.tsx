@@ -24,12 +24,42 @@ export function StandingPhase({ id }: { id: number }) {
   )
 }
 
-/** The title bar's way to @ultimate from every surface, with its state and the questions that wait on you. */
+/**
+ * The title bar's way to @ultimate on phones, where the sidebar with its row is hidden: its state and the questions
+ * that wait on you.
+ */
 export function UltimateButton() {
   return (
-    <Provided input={null} point={ParkedRuns}>
-      {(parked) => <Primary parked={parked} />}
-    </Provided>
+    <span className="contents md:hidden">
+      <Provided input={null} point={ParkedRuns}>
+        {(parked) => <Primary parked={parked} />}
+      </Provided>
+    </span>
+  )
+}
+
+/** The amber count of questions that wait on you; it opens them in the To-dos tab. */
+export function QuestionsCount({ waiting, className }: { waiting: number; className?: string }) {
+  const actions = useUltimate()
+  if (waiting === 0) return null
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          aria-label={`${waiting} ${waiting === 1 ? 'question waits' : 'questions wait'} on you`}
+          className={cn(
+            'flex h-5 shrink-0 items-center rounded-sm bg-amber-500/15 px-1.5 font-mono text-[11px] text-amber-700 transition-colors outline-none hover:bg-amber-500/25 focus-visible:ring-1 focus-visible:ring-ring dark:text-amber-300',
+            className,
+          )}
+          data-questions-count
+          onClick={() => actions.openPanel('todos')}
+          type="button"
+        >
+          {waiting}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{waiting} waiting on you · open Questions</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -86,22 +116,7 @@ function Primary({ parked }: { parked?: ReadonlySet<number> }) {
                     Talk to @{name} · {label}
                   </TooltipContent>
                 </Tooltip>
-                {waiting > 0 && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        aria-label={`${waiting} ${waiting === 1 ? 'question waits' : 'questions wait'} on you`}
-                        className="-ml-1 flex h-5 shrink-0 items-center rounded-sm bg-amber-500/15 px-1.5 text-amber-700 transition-colors outline-none hover:bg-amber-500/25 focus-visible:ring-1 focus-visible:ring-ring dark:text-amber-300"
-                        data-questions-count
-                        onClick={() => actions.openPanel('todos')}
-                        type="button"
-                      >
-                        {waiting}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>{waiting} waiting on you · open Questions</TooltipContent>
-                  </Tooltip>
-                )}
+                <QuestionsCount className="-ml-1" waiting={waiting} />
               </>
             )
           }}

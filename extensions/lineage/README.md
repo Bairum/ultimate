@@ -199,7 +199,7 @@ the task completes. The method returns `{ id }`. With `deliver: false`, no `line
 must deliver its first input (messages uses a reply-enabled message). `by: conversationId` attributes the tally's branch node to that caller,
 including its standing-agent name when available.
 
-The user talks to @ultimate in its own conversation, opened by the top-bar @ultimate button or first sidebar row; it picks a root by reading tallies and starts coordinator branches.
+The user talks to @ultimate in its own conversation, opened by the first sidebar row (on phones, the top-bar @ultimate button); it picks a root by reading tallies and starts coordinator branches.
 A branch is the conversation; the coordinator is the agent that runs it, so the header and System lanes label it `branch · coordinator`.
 There is no manual creation page or message-hover branch action. Coordinator branches keep their composers for steering.
 

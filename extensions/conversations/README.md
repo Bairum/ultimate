@@ -10,7 +10,7 @@ conversations it configures (see the [subagents README](../subagents/README.md))
 
 ## Sidebar
 
-The sidebar, its rows and the title bar's @ultimate button live in the [sidebar](../sidebar/README.md) extension, which
+The sidebar, its rows and the phone title bar's @ultimate button live in the [sidebar](../sidebar/README.md) extension, which
 reads this extension's overview, titles and actions. `ui.tsx` declares the points it renders for optional extensions:
 `ConversationPhase` (a working conversation's phase) and `ConversationTask` (the plan task a child works on).
 
