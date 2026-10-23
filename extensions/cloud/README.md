@@ -21,6 +21,10 @@ A project is its GitHub repository (`lib/project-identity.ts`): the `origin` rem
 `github.com/<owner>/<repo>`, lowercased. A project without a GitHub origin cannot be backed up; its status line says
 `not backed up`.
 
+`api.ts` exposes optional `CloudApi`: `status()` returns `off`, `local` or `on`, and `backup()` performs the same
+non-forced backup of the active chapter as the user action. Dream uses it for the final backup before falling asleep;
+missing, off or local-only cloud is skipped explicitly. Cloud still ships disabled by default.
+
 ## Cloud backups
 
 The Worker lives in the private repository `HazAT/ultimate-fleet` and is deployed from there. Every `/sync/*` route

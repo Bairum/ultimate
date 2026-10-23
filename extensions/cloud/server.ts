@@ -8,6 +8,7 @@ import { implementAction } from '../../lib/actions.ts'
 import { cloudConfig } from '../../lib/cloud.ts'
 import { projectIdentity } from '../../lib/project-identity.ts'
 import { readSecret } from '../../lib/secrets.ts'
+import { CloudApi } from './api.ts'
 import { PauseApi } from '../pause/api.ts'
 import { SecretsApi } from '../secrets/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
@@ -180,6 +181,10 @@ export const actions = {
 export const userActions = ['backup', 'join']
 
 export default function cloud(host: ExtensionHost) {
+  host.implement(CloudApi, {
+    backup: () => backup(host, false),
+    status: async () => (await setup(host)).status,
+  })
   // Optional services, resolved where they are called; declared here so the catalogue lists them.
   host.want(TailscaleApi)
   host.want(PauseApi)

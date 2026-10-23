@@ -23,7 +23,17 @@ export type Proposal = {
 }
 
 /** What the dream learned: three lines in @ultimate's voice, then the journal in Markdown. */
-export type Journal = { learned: string[]; text: string; at: number }
+export type Journal = { learned: string[]; text: string; chapter?: string; at: number }
+
+export type GateResult = { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] }
+export type Sleep = {
+  chapter: string
+  phase: 'seeding' | 'checking' | 'backing up' | 'switching' | 'failed'
+  checks?: GateResult['checks']
+  backup?: { id?: string; skipped?: string }
+  error?: string
+  at: number
+}
 
 export type Session = {
   id: number
@@ -32,6 +42,7 @@ export type Session = {
   dreamer?: number
   passes: Record<PassName, PassState>
   journal?: Journal
+  sleep?: Sleep
   proposals: Proposal[]
   /** Every proposal settled, or the user ended the session. */
   endedAt?: number
@@ -58,10 +69,28 @@ export const JournalAction = actionRef<
     session: number
     learned: string[]
     text: string
+    chapter?: string
     proposals: Pick<Proposal, 'id' | 'pass' | 'title' | 'size' | 'risk' | 'retire'>[]
   },
   { session: number; proposals: number }
 >('dream', 'journal')
+/** `{ session, name? }` → progress: seed, check, back up and restart into a fresh chapter. User-only. */
+export const AsleepAction = actionRef<
+  { session: number; name?: string },
+  { session: number; sleep: Sleep }
+>('dream', 'asleep')
+/** No arguments → the active chapter, its number, the newest name, and every chapter in creation order. */
+export const ChaptersAction = actionRef<
+  null,
+  {
+    active: string
+    number: number
+    newest: string
+    chapters: { name: string; number: number; createdAt?: number }[]
+  }
+>('dream', 'chapters')
+/** `{ chapter }`: restart into an existing, idle chapter. User-only; a returned error means restart failed. */
+export const SwitchAction = actionRef<{ chapter: string }, never>('dream', 'switch')
 /** `{ session, proposal, status, branch? }`: @ultimate records the user's decision on one proposal. */
 export const DecideAction = actionRef<
   {

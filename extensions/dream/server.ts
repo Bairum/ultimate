@@ -4,15 +4,29 @@
  * ones are followed until their branches land. Nothing here changes code, memory or storage by itself.
  */
 import { existsSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineDoc, defineExtension, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Tx } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
+import {
+  chapterFiles,
+  chapterName,
+  PENDING_CHAPTER,
+  readChapters,
+  requestChapter,
+} from '../../lib/chapters.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { CloudApi } from '../cloud/api.ts'
+import { InstanceApi } from '../instance/api.ts'
 import { Standing, SubagentsApi } from '../subagents/api.ts'
 import { SubmissionLanded } from '../workspaces/api.ts'
 import {
+  AsleepAction,
+  ChaptersAction,
+  SwitchAction,
   DecideAction,
   DreamDoc,
   EndAction,
@@ -21,10 +35,11 @@ import {
   StartAction,
   StatsAction,
 } from './refs.ts'
-import type { PassState, Proposal, Session, ToolStats } from './refs.ts'
+import type { PassState, Proposal, Session, Sleep, ToolStats } from './refs.ts'
 import { busyElsewhere, PASSES } from './types.ts'
 import { deliver, deliverTask } from './delivery.ts'
-import { applySeed, SeedState } from './seed.ts'
+import { applySeed, buildSeed, SeedState, writeSeed } from './seed.ts'
+import { gate } from './gate.ts'
 import type { PassName } from './types.ts'
 
 export const Sessions = defineDoc<{ next: number; sessions: Session[] }>({
@@ -37,7 +52,7 @@ export const Sessions = defineDoc<{ next: number; sessions: Session[] }>({
   initial: () => ({ next: 1, sessions: [] }),
 })
 export const docs = [Sessions, SeedState]
-export const userActions = ['start', 'end']
+export const userActions = ['start', 'end', 'asleep', 'switch']
 
 const LEARNED_LINES = 3
 const LINE_CHARS = 200
@@ -157,7 +172,8 @@ export async function fileJournal(tx: Tx, args: unknown, now: number) {
       status: 'open',
     }
   })
-  found.journal = { learned, text: body, at: now }
+  const chapter = input.chapter === undefined ? undefined : chapterName(input.chapter)
+  found.journal = { learned, text: body, ...(chapter ? { chapter } : {}), at: now }
   found.proposals = proposals
   settle(found, now)
   return { found, filed: true }
@@ -244,7 +260,126 @@ export function toolStats(database: string, enabled: readonly string[]): ToolSta
 
 const ultimateOf = async (tx: Tx) => (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
 
+/** Serialize chapter-changing user actions, including their asynchronous gate and backup. */
+async function changing<T>(host: ExtensionHost, run: () => Promise<T>) {
+  const state = host.resource('dream.switching', () => ({ busy: false }))
+  if (state.busy) throw new Error('A chapter change is already running')
+  state.busy = true
+  try {
+    return await run()
+  } finally {
+    state.busy = false
+  }
+}
+
+async function idle(host: ExtensionHost, tx: Tx) {
+  const busy = busyElsewhere(host.conversations(), await ultimateOf(tx))
+  if (busy.length)
+    throw new Error(
+      `Wait for these to finish before switching chapters: ${busy.map((item) => `#${item.id} ${item.title}`).join(', ')}`,
+    )
+}
+
+/** A successful restart never returns; any return or rejection leaves the current chapter active. */
+async function restartChapter(host: ExtensionHost, name: string): Promise<never> {
+  await requestChapter(host.home, name)
+  try {
+    throw new Error(await host.restart(async () => {}))
+  } finally {
+    await rm(join(host.home, PENDING_CHAPTER), { force: true })
+  }
+}
+
 export const actions = {
+  chapters: implementAction(ChaptersAction, async (_args, { host }) => {
+    const { active, chapters } = await readChapters(host.home)
+    return {
+      active,
+      number: chapters.findIndex((item) => item.name === active) + 1,
+      newest: chapters.at(-1)!.name,
+      chapters: chapters.map((item, index) => ({ ...item, number: index + 1 })),
+    }
+  }),
+  switch: implementAction(SwitchAction, async (args, { host }) =>
+    changing(host, async () => {
+      const name = chapterName(fields(args).chapter)
+      const chapters = await readChapters(host.home)
+      if (name === chapters.active) throw new Error(`Chapter ${name} is already active`)
+      if (!chapters.chapters.some((item) => item.name === name))
+        throw new Error(`Unknown chapter ${name}`)
+      await host.harness().commit((tx) => idle(host, tx), context)
+      return restartChapter(host, name)
+    }),
+  ),
+  asleep: implementAction(AsleepAction, async (args, { host }) =>
+    changing(host, async () => {
+      const input = fields(args)
+      const chapters = await readChapters(host.home)
+      const initial = await host.harness().commit(async (tx) => {
+        const found = await find(tx, input.session)
+        if (!found.journal) throw new Error(`Dream session ${found.id} has no journal`)
+        if (found.proposals.some((item) => item.status === 'open' || item.status === 'approved'))
+          throw new Error('Settle every dream proposal before falling asleep')
+        await idle(host, tx)
+        const name = chapterName(input.name ?? found.journal.chapter)
+        if (chapters.chapters.some((item) => item.name === name))
+          throw new Error(`Chapter ${name} already exists; use switch instead`)
+        found.sleep = { chapter: name, phase: 'seeding', at: Date.now() }
+        return { session: found.id, name }
+      }, context)
+      const { session, name } = initial
+      const progress = (change: Partial<Sleep>) =>
+        host.harness().commit(async (tx) => {
+          const found = await find(tx, session)
+          found.sleep = { ...found.sleep!, ...change, at: Date.now() }
+          return JSON.parse(JSON.stringify(found.sleep)) as Sleep
+        }, context)
+      try {
+        const instances = host.want(InstanceApi)
+        if (!instances) throw new Error('Fall asleep needs the instance extension for its gate')
+        let seed = await buildSeed(host, session)
+        await progress({ phase: 'checking' })
+        let result = await gate(seed, name, instances)
+        if (!result.ok) {
+          await progress({ phase: 'seeding', checks: result.checks })
+          seed = await buildSeed(host, session)
+          await progress({ phase: 'checking' })
+          result = await gate(seed, name, instances)
+        }
+        if (!result.ok)
+          return {
+            session,
+            sleep: await progress({
+              phase: 'failed',
+              checks: result.checks,
+              error: 'Chapter gate failed after one repair',
+            }),
+          }
+        await progress({ phase: 'backing up', checks: result.checks })
+        const cloud = host.want(CloudApi)
+        const status = await cloud?.status()
+        const backup =
+          status === 'on'
+            ? { id: (await cloud!.backup()).id }
+            : {
+                skipped:
+                  status === undefined
+                    ? 'Cloud extension is not enabled'
+                    : status === 'off'
+                      ? 'Cloud backups are off'
+                      : 'Project has no GitHub origin; cloud backup is local-only',
+              }
+        await progress({ backup })
+        // The gate and backup can take time; work started since admission must also finish before we switch.
+        await host.harness().commit((tx) => idle(host, tx), context)
+        await progress({ phase: 'switching' })
+        await writeSeed(chapterFiles(host.home, name).dir, seed)
+        return await restartChapter(host, name)
+      } catch (error) {
+        return { session, sleep: await progress({ phase: 'failed', error: String(error) }) }
+      }
+    }),
+  ),
   start: implementAction(StartAction, async (_args, { host }) => {
     const ultimate = await host.need(SubagentsApi).standing('ultimate', context)
     const busy = busyElsewhere(host.conversations(), ultimate)

@@ -2,6 +2,12 @@ Run an on-demand second Ultimate to test core changes before restarting the shar
 
 `instance` supports start, stop, logs and list. An isolated caller previews its ready workspace; `start {subagent: <child id>}` selects an owned child's workspace. A shared caller previews the host source and project. When the project is Ultimate itself, a workspace preview runs the workspace's own source and requires `server/main.ts` and `node_modules`; run `pnpm install` first. In any other project the host's Ultimate runs with the workspace as its project, and the prompt says the preview is not the project's own app. Previews do not prevent landing or removal.
 
+`api.ts` exposes optional `InstanceApi`: `start({ home })` uses the same startup and three-instance limit as the tool,
+but always runs `host.projectRoot` with the host's Ultimate source, without a conversation workspace. It returns
+`{ id, url }`; `stop(id)` stops it. These service instances are not conversation previews and do not appear in the
+UI's preview list or stopped-link history. Explicit homes remain the caller's responsibility; dream removes its gate
+home after stopping the instance.
+
 Start uses a temporary home unless a separate home is supplied. A preview cannot share the host's home or another running preview's home. The child binds to localhost port zero; the tool reads its `Ultimate: <URL>` stdout line and checks `/api/models`. Startup has a 60-second deadline, with the output tail included in errors.
 
 A preview runs the configured models and spends tokens: seed it by prompting it as a user would. Provider logins are read from `~/.pi/agent`, never copied. No state is copied; a workspace preview follows its main checkout's project decision, as every linked worktree does. Each preview keeps its own SQLite storage and Vite cache.
