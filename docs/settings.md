@@ -15,7 +15,7 @@ Built-ins are on by default, including `messages` (durable agent messages and @u
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
 restart. User/project extension folders are on by default too; `disable` turns off any extension. Unknown names
 produce a notice. `summaryModel` (`"provider/id[:thinking]"`, default `openai-codex/gpt-6-luna:medium`; project over user)
-picks the model for automatic titles, summaries, reply summaries, question extraction, tree abstracts and the
+picks the model for automatic titles, summaries, reply summaries, tree abstracts and the
 triage that decides whether an agent's update wakes @ultimate. Set it in either file or with
 the "Summary model…" command, and it applies to the next request. `fastModels` (`["openai-codex/<id>", …]`, or `openai/`; project over
 user) runs those models on the priority tier through the `fast` extension, at a higher usage rate.

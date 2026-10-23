@@ -165,6 +165,14 @@ describe('questions on a message', () => {
     const oneWay = await f.ask(id, { text: 'FYI', reply: false, questions: decisions })
     expect(oneWay.error).toContain('reply-expected message to the user')
     expect(oneWay.message?.text).toBe('Decide these.')
+    // To a conversation, never: questions are the user's card.
+    const other = await f.opened.harness.createConversation(
+      { ownership: { kind: 'ownerless' } },
+      context,
+    )
+    const toConversation = await f.ask(id, { to: `#${other.id}`, text: 'Hi', questions: decisions })
+    expect(toConversation.error).toContain('reply-expected message to the user')
+    expect((await f.log()).messages.filter((m) => m.questions)).toHaveLength(1)
   })
 
   it('refuses questions the card could not answer, naming the question', async () => {
@@ -199,6 +207,15 @@ describe('questions on a message', () => {
     await refused(
       [{ text: 'One?', kind: 'choice', options: [{ label: 'x' }, { label: 'Something else' }] }],
       'offers "Something else…" itself',
+    )
+    await refused([{ text: '  ', kind: 'confirm' }], 'question 1 has no text')
+    await refused(
+      [{ text: 'One?', kind: 'choice', options: [{ label: 'x' }, { label: ' ' }] }],
+      'has an option without a label',
+    )
+    await refused(
+      [{ text: 'Which?', kind: 'multi', options: [{ label: 'unit, fast' }, { label: 'e2e' }] }],
+      'its labels hold no ", "',
     )
     await refused([{ text: 'Rate', kind: 'scale' }], 'needs scale')
     await refused([{ text: 'Rate', kind: 'scale', scale: { min: 1, max: 20 } }], 'at most 10 steps')
@@ -420,6 +437,16 @@ describe('answer text', () => {
         ],
       },
     ])
+    // Only a whole "Other" / "Something else" is the card's own option; a label that starts so is a real one.
+    expect(
+      checkQuestions([
+        {
+          text: 'Scope',
+          kind: 'choice',
+          options: [{ label: 'This repo' }, { label: 'Other repos too' }],
+        },
+      ])[0].options!.map((o) => o.label),
+    ).toEqual(['This repo', 'Other repos too'])
   })
 
   it('names a message by its questions in the open-questions note, else by its asking line', () => {

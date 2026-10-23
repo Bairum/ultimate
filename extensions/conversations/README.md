@@ -126,7 +126,7 @@ task. A task that finds no available model before it chose one settles quietly t
 ## Summary model
 
 `summaryModel` in `~/.ultimate/settings.json` or the project's `.ultimate/settings.json` (project wins, and only once
-the project is chosen) names the model for titles, summaries, reply summaries, question extraction and tree abstracts as
+the project is chosen) names the model for titles, summaries, reply summaries and tree abstracts as
 `provider/id[:thinking]`, an exact provider and model id with an optional Pi thinking level, clamped to what the model
 supports (medium when omitted). Unset, it is `DEFAULT_SUMMARY_MODEL`: GPT-6 Luna with medium thinking through the
 current OpenAI provider (including Sign in with ChatGPT). `summary-model.ts` reads it when a request is considered and again when a
