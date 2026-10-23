@@ -60,9 +60,7 @@ export function Note({ entry }: { entry: EntryRecord }) {
             <Landed row={row} />
           </span>
         ))}
-        {landed.length > named && (
-          <span className="shrink-0">· +{landed.length - named} more</span>
-        )}
+        {landed.length > named && <span className="shrink-0">· +{landed.length - named} more</span>}
         {parts.length > 0 && <span className="truncate">· {parts.join(' · ')}</span>}
       </span>
     </div>

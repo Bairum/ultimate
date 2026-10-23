@@ -85,7 +85,7 @@ export async function landings(
     if (!sha) continue
     let id = Number(trailer?.trim()) || Number(/ from #(\d+) into /.exec(subject)?.[1]) || undefined
     // An owned conversation (a worker, a designer) worked for its owner's branch.
-    for (let owner = id && byId.get(id)?.parentConversationId; owner; ) {
+    for (let owner = id && byId.get(id)?.parentConversationId; owner;) {
       id = owner
       owner = byId.get(owner)?.parentConversationId
     }

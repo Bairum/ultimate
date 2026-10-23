@@ -17,7 +17,6 @@ import {
   useUltimate,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
-import { shortTitle } from '../../lib/title.ts'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { SubmissionLanded } from '../workspaces/ui.tsx'
 import type { LandedData } from '../workspaces/ui.tsx'
@@ -329,10 +328,7 @@ function HotReloaded() {
           title={`Open #${landings[0].conversationId}`}
           type="button"
         >
-          <ConversationRef
-            id={landings[0].conversationId}
-            title={landings[0].title ? shortTitle(landings[0].title) : undefined}
-          />
+          <ConversationRef id={landings[0].conversationId} title={landings[0].title || undefined} />
         </button>
         {landings.length > 1 && <span className="shrink-0">+{landings.length - 1}</span>}
       </div>
