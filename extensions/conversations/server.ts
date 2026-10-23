@@ -18,6 +18,7 @@ import {
   accountResponse,
   askSummaryModel,
   requestSummary,
+  setAutomaticSummaries,
   Summaries,
   summaryBehavior,
 } from './summary.ts'
@@ -265,6 +266,7 @@ export default (host: ExtensionHost) => {
     summaryModel: () => summaryModel(host),
     summaryModelStatus: () => summaryModelStatus(host),
     requestSummary: (tx, id, request, model) => requestSummary(tx, host, id, request, model),
+    setAutomaticSummaries,
     askSummaryModel,
     accountResponse,
     concluded: async (caller) => {

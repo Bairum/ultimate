@@ -4,7 +4,7 @@
  */
 import type { Context } from '@earendil-works/chord'
 import { defineDoc } from '@earendil-works/pi-durable'
-import type { ConversationId, EntryId, TaskId } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
 import { StandingDoc } from './refs.ts'
 import type { createChild } from './children.ts'
@@ -69,7 +69,10 @@ export type SubagentsService = {
   /** The conversation of standing agent `name`, created or refreshed from its definition; throws for unknown names. */
   standing(name: string, ctx: Context): Promise<ConversationId>
   /** Create, inside `tx`, a child conversation configured from a definition or as a copy of the parent's agent. */
-  createChild: typeof createChild
+  createChild: (
+    tx: Tx,
+    options: Parameters<typeof createChild>[2],
+  ) => ReturnType<typeof createChild>
 }
 /** Child conversations and standing agents; `need` it where delegation is required, else `want` it. */
 export const SubagentsApi = defineApi<SubagentsService>()('subagents')

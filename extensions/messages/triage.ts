@@ -3,15 +3,26 @@
  * input. The summary model decides what the sender left open; a declared decision skips the model.
  */
 
-/** An answer that asks for a decision: it ends with a question or numbered options. */
+import { parseDecisions } from '../../lib/decisions.ts'
+
+const bare = (line: string) => line.trim().replace(/[*_`]+$/, '')
+
+/**
+ * An answer that asks for a decision: it ends with a question or numbered options. A numbered list led by a line such
+ * as "Once it has landed, I'll:" is plan steps, unless that line names a decision or the message has lettered options.
+ */
 export function needsDecision(text: string) {
-  const last = text
-    .trim()
-    .split('\n')
-    .at(-1)!
-    .trim()
-    .replace(/[*_`]+$/, '')
-  return last.endsWith('?') || /^\d+[.)]\s/.test(last)
+  const lines = text.trim().split('\n')
+  const last = bare(lines.at(-1)!)
+  if (last.endsWith('?')) return true
+  if (!/^\d+[.)]\s/.test(last)) return false
+  const lead = lines.findLast((line) => line.trim() && !/^\s*\d+[.)]\s|^\s{2,}\S/.test(line))
+  return (
+    !lead ||
+    !bare(lead).endsWith(':') ||
+    /decision|option|choose|choice|pick/i.test(lead) ||
+    parseDecisions(text).length > 0
+  )
 }
 
 export type Verdict = { verdict: 'act' | 'fyi'; reason: string }

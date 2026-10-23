@@ -222,6 +222,29 @@ describe('side chats', () => {
     await running.wait(context)
   })
 
+  it('schedules no automatic summary task for a side chat, so its title stays Side chat', async () => {
+    const f = await fixture()
+    const side = await f.open()
+    await f.ask(side, 'A question answered in the side chat.')
+    const tasks = await f.server.harness.commit(
+      (tx) => tx.scanTasks({ conversationId: side, kind: 'conversations.summary' }, 100),
+      context,
+    )
+    expect(tasks.items).toEqual([])
+    // No intent or reply summary entry: only the hidden identity reminders are the conversations extension's.
+    expect(
+      (await entries(f.server, side)).filter(
+        (entry) =>
+          entry.conversationId === side &&
+          entry.kind.startsWith('conversations.') &&
+          entry.kind !== 'conversations.identity',
+      ),
+    ).toEqual([])
+    expect(
+      f.server.api.conversations().find((conversation) => conversation.id === side),
+    ).toMatchObject({ title: 'Side chat' })
+  })
+
   it('includes terminal tool results and ignores completed generations inside an unfinished run', async () => {
     const f = await fixture()
     await f.call(f.main, 'message', { to: 'user', text: 'finished tool-terminated turn' })

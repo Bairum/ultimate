@@ -39,7 +39,9 @@ The note's delivery decision is saved in the task input for replay.
 A one-way message or a reply from a conversation to the primary agent (@ultimate)
 is triaged, so pure status updates cost no turn. The log records `triage: { verdict, reason? }` on the message:
 
-- **act at once, no model:** a reply-enabled message; text whose last line is a question or numbered options; text
+- **act at once, no model:** a reply-enabled message; text whose last line is a question or numbered options (a
+  numbered list after a line ending in `:` counts only when that line names a decision, option or pick, or the message
+  has lettered options; otherwise it is plan steps); text
   longer than `TRIAGE_MAX` (24,000 characters), which is never cut for the model; a failed reply; a reply to the
   agent's own message that ended with a question or options (read from the task input, so the log's bound never
   drops it).
@@ -122,7 +124,7 @@ This cannot loop: routing goes only from a branch to its starter, which existed 
 one-way, so the starter's answer to it goes nowhere.
 The reply assessment is not used: it arrives later, from the summary model, and only when one is configured. Request id
 `route:<answer entry>` deduplicates delivery in the branch's `board.requests`, so a restart never sends an answer twice.
-Before sending its first input, the tool rereads the `coordinator` definition (built-in, user, then trusted project override), applies only its instructions, and marks `ultimate.metadata.label = 'coordinator'`. The branch keeps its inherited model and tools. Coordinators report decisions to @ultimate and send it one-way landing or failure updates with the sha and divergence.
+Before sending its first input, the tool rereads the `coordinator` definition (built-in, user, then trusted project override), applies its instructions and the model and thinking level it pins (thinking clamped to what the model supports), and marks `ultimate.metadata.label = 'coordinator'`. Without a pin the branch keeps the root's model; its tools stay inherited either way. Coordinators report decisions to @ultimate and send it one-way landing or failure updates with the sha and divergence.
 The tool gives lineage its task and call ids for a task-scoped receipt, recorded atomically with the fork, so replay cannot
 create another branch even before the branch-id memo is saved. Pi retires that receipt when the originating task completes.
 It deduplicates message admission with the same task-scoped `board.sent-calls` receipt as `message`, indexed by call id

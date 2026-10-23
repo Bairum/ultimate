@@ -49,7 +49,7 @@ import {
 } from '../../extensions/conversations/server.ts'
 import { ConversationsApi } from '../../extensions/conversations/api.ts'
 import type { ConversationsService } from '../../extensions/conversations/api.ts'
-import { Summaries } from '../../extensions/conversations/summary.ts'
+import { setAutomaticSummaries, Summaries } from '../../extensions/conversations/summary.ts'
 import self from '../../extensions/self/server.ts'
 import messagesExtension from '../../extensions/messages/server.ts'
 import { Messages, MessagesApi } from '../../extensions/messages/api.ts'
@@ -58,8 +58,9 @@ import subagents from '../../extensions/subagents/server.ts'
 import { Subagents } from '../../extensions/subagents/api.ts'
 import { seedTally, temp, until } from '../helpers.ts'
 
-/** The part of the conversations service a test stands in for. */
-const conversations = (service: Partial<ConversationsService>) => service as ConversationsService
+/** The part of the conversations service a test stands in for; standing a lander turns its summaries off. */
+const conversations = (service: Partial<ConversationsService>) =>
+  ({ setAutomaticSummaries, ...service }) as ConversationsService
 
 // Every test has its own repository and harness, so they all run concurrently; fixtures close when the file ends.
 vi.setConfig({ maxConcurrency: 16 })

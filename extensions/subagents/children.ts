@@ -12,6 +12,7 @@ import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent } from '../../lib/agents.ts'
 import type { AgentDefinition } from '../../lib/agents.ts'
+import { ConversationsApi } from '../conversations/api.ts'
 import { Started } from './refs.ts'
 import { Profile } from './api.ts'
 
@@ -38,8 +39,12 @@ export async function started(
   })
 }
 
-/** A conversation configured from a definition (or as a copy of the parent's agent), new or forked at `fork.at`. */
+/**
+ * A conversation configured from a definition (or as a copy of the parent's agent), new or forked at `fork.at`; a
+ * definition with `summaries: false` turns its automatic summaries off.
+ */
 export async function createChild(
+  host: Pick<ExtensionHost, 'need'>,
   tx: Tx,
   options: {
     owner: ConversationOwnership
@@ -73,5 +78,7 @@ export async function createChild(
     title: options.title,
   })
   if (definition) (await tx.doc(Profile, child.id)).definition = definition.name
+  if (definition?.summaries === false)
+    await host.need(ConversationsApi).setAutomaticSummaries(tx, child.id, false)
   return child
 }

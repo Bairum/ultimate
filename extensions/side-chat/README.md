@@ -1,4 +1,4 @@
-Side chats are temporary, ownerless copies of the standing @ultimate conversation. The user opens one to explore a tangent, then discards it or sends a summary back without waking main.
+Side chats are temporary, ownerless copies of the standing @ultimate conversation. The user opens one to explore a tangent, then discards it or sends a summary back without waking main. A side chat keeps its fixed `Side chat` title: `open` turns its automatic summaries off (`setAutomaticSummaries` on the conversations service), so no intent, reply or spawn trigger asks the summary model; only Summarize & inject does.
 
 ## UI (`web.tsx`)
 

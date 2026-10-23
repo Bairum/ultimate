@@ -27,7 +27,7 @@ import type {
   ToolExecutionApi,
 } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
-import watchdog from '../extensions/watchdog/server.ts'
+import watchdog, { diagnose } from '../extensions/watchdog/server.ts'
 import { idleNote } from '../extensions/watchdog/idle.ts'
 import { Messages } from '../extensions/messages/api.ts'
 import { Branch } from '../extensions/lineage/api.ts'
@@ -45,6 +45,7 @@ afterEach(async () => {
 })
 const error = (text = 'invalid model configuration') =>
   fauxAssistantMessage('', { stopReason: 'error', errorMessage: text })
+const overloaded = 'Our servers are currently overloaded. Please try again later.'
 const model = { provider: 'faux', modelId: 'faux-1' }
 const Anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'watchdog-test.anchor',
@@ -424,7 +425,7 @@ it.each([false, true])(
     const f = await fixture((transcript) => {
       const text = inputText(transcript)
       seen.push(text)
-      return text === 'fail' ? error('not logged in') : fauxAssistantMessage('ok')
+      return text === 'fail' ? error(overloaded) : fauxAssistantMessage('ok')
     })
     const parent = await f.conversation('Coordinator')
     const child = await f.conversation('Scout', parent)
@@ -458,7 +459,7 @@ it.each(['queued', 'running'] as const)(
     const f = await fixture(
       (transcript) => {
         const text = inputText(transcript)
-        if (text === 'fail') return error('not logged in')
+        if (text === 'fail') return error(overloaded)
         return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
       },
       true,
@@ -503,7 +504,7 @@ it.each([false, true])('waits 60 s, retries once; retry failure: %s', async (ret
       seen.push(text)
       return text === 'fail' || retryFails
         ? error(
-            'Claude Code is installed but not logged in. Run `claude auth login` and try again.',
+            'Incomplete Claude Code upstream response (status unknown, capture incomplete, relay failure Error)',
           )
         : fauxAssistantMessage('recovered')
     }
@@ -523,10 +524,7 @@ it.each([false, true])('waits 60 s, retries once; retry failure: %s', async (ret
   await f.harness.waitForIdle(context)
   await f.detach()
   expect(await f.entries()).toHaveLength(retryFails ? 1 : 0)
-  const retryCard = expect.objectContaining({
-    retried: true,
-    hint: 'Run `claude auth login` in a terminal',
-  })
+  const retryCard = expect.objectContaining({ retried: true })
   expect((await f.entries()).map((entry) => entry.data)).toEqual(retryFails ? [retryCard] : [])
   await f.open()
   await f.reopen()
@@ -544,7 +542,7 @@ it.each(['retry', 'report'] as const)(
       (transcript) => {
         const text = inputText(transcript)
         return text === 'fail' || text.startsWith('Your previous run')
-          ? error(phase === 'retry' ? 'not logged in' : 'invalid model configuration')
+          ? error(phase === 'retry' ? overloaded : 'invalid model configuration')
           : fauxAssistantMessage('ok')
       },
       true,
@@ -777,14 +775,80 @@ it('injects idle changes before @ultimate inputs only, never as a system section
 })
 
 it('uses a notice, not a card, when @ultimate fails after one retry', async () => {
-  const f = await fixture(() => error('not logged in'))
+  const f = await fixture(() => error(overloaded))
   await (await f.submit(f.ultimate, 'fail')).wait(context)
   await f.sleeping()
   f.advance(60_000)
   await until(async () => f.notices.length === 1)
-  expect(f.notices[0]).toContain('claude auth login')
   expect(f.notices[0]).toContain('After one automatic retry')
   expect(await f.entries()).toHaveLength(0)
+})
+
+it('reports a broken login at once, with a hint to log in again and no retry', async () => {
+  const f = await fixture((transcript) => {
+    const text = inputText(transcript)
+    return text === 'fail'
+      ? error('Claude Code is installed but not logged in. Run `claude auth login` and try again.')
+      : fauxAssistantMessage('ok')
+  })
+  const branch = await f.conversation('Logged out')
+  await (await f.submit(branch, 'fail')).wait(context)
+  await until(async () => (await f.entries()).length === 1)
+  expect((await f.entries())[0].data).toMatchObject({
+    retried: false,
+    hint: 'Run `claude auth login` in a terminal',
+  })
+  const inputs = (await f.host.scanSubmissions({ conversationId: branch }, 100, undefined, context))
+    .items
+  expect(inputs.some((input) => input.requestId?.startsWith('watchdog-retry:'))).toBe(false)
+})
+
+// Real errors from failed runs, and what the card's next step is.
+it.each([
+  [
+    'OAuth refresh failed for anthropic: Anthropic token refresh request failed. url=https://platform.claude.com/v1/oauth/token; details=Error: HTTP request failed. status=400; body={"error": "invalid_grant", "error_description": "Refresh token not found or invalid"}',
+    false,
+    'Log in to anthropic again: ⌘K → Log in to a provider',
+  ],
+  [
+    'OAuth refresh failed for openai: OpenAI OAuth token request failed (400): {\n  "error": "invalid_grant"\n}',
+    false,
+    'Log in to openai again: ⌘K → Log in to a provider',
+  ],
+  [
+    'Claude Code is installed but not logged in. Run `claude auth login` and try again.',
+    false,
+    'Run `claude auth login` in a terminal',
+  ],
+  [
+    'Incomplete Claude Code upstream response (status unknown, capture incomplete, relay failure Error)',
+    true,
+    undefined,
+  ],
+  [
+    'Incomplete Claude Code upstream response (status unknown, capture incomplete, relay failure AggregateError)',
+    true,
+    undefined,
+  ],
+  [
+    'Incomplete Claude Code upstream response (status 200, capture incomplete, relay failure Error, native retries denied 1)',
+    true,
+    undefined,
+  ],
+  [
+    'Incomplete Claude Code upstream response (status 400, capture incomplete, upstream said: A maximum of 4 blocks with cache_control may be provided. Found 5.)',
+    false,
+    undefined,
+  ],
+  [overloaded, true, undefined],
+  [
+    'Claude Code is not installed. Install it with `npm install -g @anthropic-ai/claude-code` or set PI_CLAUDE_CODE_COMMAND to the executable.',
+    false,
+    undefined,
+  ],
+] as const)('diagnoses %s', (text, temporary, hint) => {
+  const message = error(text)
+  expect(diagnose(text, message)).toEqual(hint ? { hint, temporary } : { temporary })
 })
 
 it('checks all siblings of a dense owner and times idleNote with 1500 conversations', async () => {

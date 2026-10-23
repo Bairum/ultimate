@@ -26,6 +26,8 @@ export interface AgentDefinition {
   onFailure?: 'diagnose' | 'fix'
   /** Requests on an `openai-codex/` or `openai/` model go on the priority (fast) tier; the fast extension reads it. */
   fast?: boolean
+  /** `false`: its conversations get no automatic summaries (intent, title, reply activity, spawn refresh, abstract). */
+  summaries?: boolean
   /** Overlay files whose settings, `addTools` and body discovery merged into this definition, in order. */
   overlays?: string[]
 }
@@ -104,18 +106,26 @@ const fields = new Set([
   'resident',
   'onFailure',
   'fast',
+  'summaries',
 ])
 
 /** The settings a definition or overlay may set; `denyTools` is additive when merged. */
 function parseSettings(frontmatter: Record<string, unknown>): Partial<
   Pick<
     AgentDefinition,
-    'description' | 'thinking' | 'isolate' | 'resident' | 'onFailure' | 'fast' | 'denyTools'
+    | 'description'
+    | 'thinking'
+    | 'isolate'
+    | 'resident'
+    | 'onFailure'
+    | 'fast'
+    | 'summaries'
+    | 'denyTools'
   >
 > & {
   model?: string
 } {
-  const { description, model, thinking, isolate, resident, onFailure, fast, denyTools } =
+  const { description, model, thinking, isolate, resident, onFailure, fast, summaries, denyTools } =
     frontmatter
   if (denyTools !== undefined && !isTools(denyTools))
     throw new Error('denyTools must be a list of tool names')
@@ -132,6 +142,8 @@ function parseSettings(frontmatter: Record<string, unknown>): Partial<
   if (resident !== undefined && typeof resident !== 'boolean')
     throw new Error('resident must be a boolean')
   if (fast !== undefined && typeof fast !== 'boolean') throw new Error('fast must be a boolean')
+  if (summaries !== undefined && typeof summaries !== 'boolean')
+    throw new Error('summaries must be a boolean')
   return {
     ...(description !== undefined ? { description: description.trim() } : {}),
     ...(model !== undefined ? { model } : {}),
@@ -140,6 +152,7 @@ function parseSettings(frontmatter: Record<string, unknown>): Partial<
     ...(resident !== undefined ? { resident: resident } : {}),
     ...(onFailure ? { onFailure: onFailure } : {}),
     ...(fast !== undefined ? { fast } : {}),
+    ...(summaries !== undefined ? { summaries } : {}),
     ...(denyTools !== undefined ? { denyTools } : {}),
   }
 }
@@ -328,6 +341,7 @@ export interface DefinitionFields {
   resident?: boolean
   onFailure?: 'diagnose' | 'fix'
   fast?: boolean
+  summaries?: boolean
 }
 
 /** A flow list of tool names; in a flow list, commas and brackets end an item too. */
@@ -361,6 +375,7 @@ export function serializeDefinition(
     ...(frontmatter.resident !== undefined ? [`resident: ${frontmatter.resident}`] : []),
     ...(frontmatter.onFailure ? [`onFailure: ${frontmatter.onFailure}`] : []),
     ...(frontmatter.fast ? ['fast: true'] : []),
+    ...(frontmatter.summaries === false ? ['summaries: false'] : []),
   ]
   return `---\n${lines.join('\n')}\n---\n\n${instructions.trim()}\n`
 }

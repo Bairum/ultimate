@@ -25,6 +25,7 @@ export type Definition = {
   resident?: boolean
   onFailure?: 'diagnose' | 'fix'
   fast?: boolean
+  summaries?: boolean
 }
 /** A definition file that failed to parse, with the reason. */
 export type Invalid = { name: string; path: string; source: Source; error: string }
@@ -60,6 +61,7 @@ export type DefinitionFields = {
   resident?: boolean
   onFailure?: 'diagnose' | 'fix'
   fast?: boolean
+  summaries?: boolean
 }
 
 /**

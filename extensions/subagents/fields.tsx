@@ -62,6 +62,30 @@ export function StandingField({
   )
 }
 
+export function SummariesField({
+  value,
+  onChange,
+}: {
+  value: boolean
+  onChange: (value: boolean) => void
+}) {
+  return (
+    <Field
+      label="Automatic summaries"
+      hint={
+        value
+          ? 'The summary model names its conversations and describes each reply for the sidebar.'
+          : 'Its conversations keep the title they were given; the summary model answers only explicit calls.'
+      }
+    >
+      <label className="flex items-center justify-between rounded-md border border-border/80 bg-background px-2 py-1.5 text-[13px]">
+        Title and reply activity
+        <Switch aria-label="Automatic summaries" checked={value} onCheckedChange={onChange} />
+      </label>
+    </Field>
+  )
+}
+
 export const inputClass =
   'w-full rounded-md border border-border/80 bg-background px-2 py-1.5 text-[13px] outline-none placeholder:text-muted-foreground/50 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 aria-invalid:border-error/70'
 

@@ -312,6 +312,8 @@ export const actions = {
         title: 'Side chat',
         label: 'side-chat',
       })
+      // A temporary copy keeps its fixed title; only Summarize & inject asks the summary model.
+      await host.need(ConversationsApi).setAutomaticSummaries(tx, fork.id, false)
       ;(await tx.doc(Index, main)).sides.push({ id: fork.id, at, openedAt: Date.now() })
       await tx.createTask(
         Start,

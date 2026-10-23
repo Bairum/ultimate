@@ -38,7 +38,7 @@ import type { ActionContext } from '../server/actions.ts'
 import codemode from '../extensions/codemode/server.ts'
 import { Metadata } from '../server/metadata.ts'
 import { UiState } from '../server/ui-state.ts'
-import { discoverAgents, parseDefinition } from '../lib/agents.ts'
+import { discoverAgents, parseDefinition, serializeDefinition } from '../lib/agents.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
 const directories: string[] = []
@@ -553,7 +553,10 @@ describe('provider error recovery', () => {
       const f = await fixture(undefined, undefined, undefined, (transcript) =>
         transcript.messages.at(-1)?.role === 'user' &&
         transcript.messages.at(-1)?.content === 'one-way failure'
-          ? fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'not logged in' })
+          ? fauxAssistantMessage('', {
+              stopReason: 'error',
+              errorMessage: 'Our servers are currently overloaded. Please try again later.',
+            })
           : undefined,
       )
       await call(f.opened, { action: 'start', agent: 'scout', task: 'initial answer' })
@@ -1778,6 +1781,18 @@ describe('subagents', () => {
           'test',
         ),
       ).toMatchObject({ onFailure })
+    // `summaries: false` survives a save: only the field's off state is written.
+    const quiet = parseDefinition(
+      definition().replace('tools: [read, bash]', 'summaries: false'),
+      'test',
+    )
+    expect(quiet).toMatchObject({ summaries: false })
+    expect(serializeDefinition('scout', quiet, quiet.instructions)).toContain(
+      '\nsummaries: false\n',
+    )
+    expect(serializeDefinition('scout', { description: 'Search' }, 'Search')).not.toContain(
+      'summaries',
+    )
     for (const [from, to, error] of [
       [
         'tools: [read, bash]',
@@ -1791,6 +1806,7 @@ describe('subagents', () => {
       ['tools: [read, bash]', 'tool: [read]', 'Unknown field: tool'],
       ['tools: [read, bash]', 'isolate: remote', 'isolate must be none or worktree'],
       ['tools: [read, bash]', 'onFailure: land', 'onFailure must be diagnose or fix'],
+      ['tools: [read, bash]', 'summaries: never', 'summaries must be a boolean'],
       ['Original instructions', '', 'Instructions are required'],
     ])
       expect(() => parseDefinition(definition().replace(from, to), 'test')).toThrow(error)

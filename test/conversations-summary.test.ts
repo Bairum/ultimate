@@ -31,16 +31,19 @@ import {
   summaryBehavior,
   type SummaryHost,
   requestSummary,
+  setAutomaticSummaries,
+  askSummaryModel,
   IntentSummarized,
   TitleChanged,
   ReplySummarized,
   SummaryDiscarded,
 } from '../extensions/conversations/summary.ts'
 
-it.each(['agent', 'lander'])('never schedules summaries for a standing %s', async (label) => {
+it('schedules no summary task for intent, reply or spawn once automatic summaries are off, while askSummaryModel still answers', async () => {
   const f = await launch(false, true)
   await f.server.harness.commit(async (tx) => {
-    Object.assign(await tx.doc(Metadata, f.server.root.id), { label, title: `@${label}` })
+    Object.assign(await tx.doc(Metadata, f.server.root.id), { title: 'Side chat' })
+    await setAutomaticSummaries(tx, f.server.root.id, false)
   }, context)
   f.server.host.faux!.setResponses([fauxAssistantMessage('A finished answer.')])
   const input = await f.server.root.submit({ type: 'input', content: 'Continue.' }, context)
@@ -51,11 +54,26 @@ it.each(['agent', 'lander'])('never schedules summaries for a standing %s', asyn
     context,
   )
   expect(tasks.items).toEqual([])
-  expect(await f.read()).toBeUndefined()
+  expect(await f.read()).toEqual({ exchanges: 0, revision: 0, automatic: false })
   expect(f.generated).not.toHaveBeenCalled()
   expect(await f.server.harness.snapshot(Metadata, f.server.root.id, context)).toMatchObject({
-    title: `@${label}`,
+    title: 'Side chat',
   })
+  // An explicit call is not a trigger: the flag leaves the summary model available.
+  f.server.host.faux!.setResponses([fauxAssistantMessage('An explicit summary.')])
+  const response = await askSummaryModel(
+    f.server.host.modelRuntime,
+    'Summarize.',
+    'Some text.',
+    AbortSignal.timeout(10_000),
+    { model: { provider: 'faux', id: 'faux-1', thinking: 'off' } },
+  )
+  expect(response).toMatchObject({ text: 'An explicit summary.', stopReason: 'stop' })
+  // Turned back on, the next exchange is summarized again.
+  await f.server.harness.commit((tx) => setAutomaticSummaries(tx, f.server.root.id, true), context)
+  await f.exchange()
+  expect(f.generated).toHaveBeenCalledTimes(1)
+  expect(await f.read()).not.toHaveProperty('automatic')
 })
 
 it.each(['agent', 'lander'])(
@@ -81,6 +99,7 @@ it.each(['agent', 'lander'])(
     await until(async () => (await f.read())?.status === 'pending')
     await f.server.harness.commit(async (tx) => {
       Object.assign(await tx.doc(Metadata, f.server.root.id), { label, title: `@${label}` })
+      await setAutomaticSummaries(tx, f.server.root.id, false)
     }, context)
     release()
     await until(
