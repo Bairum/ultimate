@@ -689,7 +689,9 @@ it.concurrent('discard refuses dirty, keeps the branch until reuse, and recreate
   expect((await f.service.get(id, context))!).toMatchObject({ state: 'ready', base: tip })
   await expect(access(join(f.projectRoot, 'change.txt'))).rejects.toThrow('ENOENT')
 })
-it.concurrent('isolated restart refuses before landing and accepts a clean running clone at the landed tip', async () => {
+// Serial, like every test below that reads a mock's call history: Vitest clears all mocks before each test, so a
+// concurrent sibling starting mid-flight would erase the calls this one is about to assert on.
+it('isolated restart refuses before landing and accepts a clean running clone at the landed tip', async () => {
   const f = await fixture()
   const id = await f.create()
   await f.service.ready(id, context)
@@ -1265,7 +1267,7 @@ async function concluding() {
   ])
   return { f, id, concluded, release: () => report.resolve() }
 }
-it.concurrent('concludes a landed branch once its report run and subagents are idle', async () => {
+it('concludes a landed branch once its report run and subagents are idle', async () => {
   const { f, id, concluded, release } = await concluding()
   await f.service.submit(id, 'None', context)
   // The report's run is still going: the branch stays open.
@@ -1340,7 +1342,7 @@ it.concurrent('answers input from the report run before concluding', async () =>
   expect(['done', 'unanswered']).toContain(seen[0])
   await until(async () => (await concludeTask(f, id))?.state.status === 'terminal')
 })
-it.concurrent('leaves a landed branch open while it waits on a reply it asked for', async () => {
+it('leaves a landed branch open while it waits on a reply it asked for', async () => {
   const { f, id, concluded, release } = await concluding()
   await f.opened.harness.commit(async (tx) => {
     const doc = await tx.doc(Messages, ROOT_CONVERSATION_ID)
@@ -1363,7 +1365,7 @@ it.concurrent('leaves a landed branch open while it waits on a reply it asked fo
   expect(concluded).not.toHaveBeenCalled()
   expect(await concludedIds(f)).not.toContain(id)
 })
-it.concurrent('reports a landing with a deploy warning when the handoff itself fails', async () => {
+it('reports a landing with a deploy warning when the handoff itself fails', async () => {
   const f = await lander({ deploy: { agent: 'deploy-test', paths: ['cloud/'] } }, undefined, true)
   await mkdir(join(f.directory, '.ultimate/agents'), { recursive: true })
   await writeFile(
@@ -1388,7 +1390,7 @@ it.concurrent('reports a landing with a deploy warning when the handoff itself f
   expect((await landerLog(f)).log.map((line) => line.step)).toContain(warning)
   expect(f.notice.mock.calls.flat().join('\n')).toContain(warning)
 })
-it.concurrent.each([
+it.each([
   { settings: {}, file: 'other.txt', step: undefined },
   {
     settings: { deploy: { agent: 'missing', paths: ['cloud/'] } },
@@ -2728,7 +2730,7 @@ it.concurrent('failed setup while recreating a discarded branch preserves its un
   expect(await git(f.projectRoot, 'rev-parse', workspace.branch)).toBe(tip)
 })
 
-it.concurrent('resuming a child after its removal keeps the parent in the same release batch', async () => {
+it('resuming a child after its removal keeps the parent in the same release batch', async () => {
   const { f, parent, child, parentWorkspace, childWorkspace } = await nestedFixture()
   const deletingChildBranch = await holdGit(f.projectRoot, 'branch')
   const queues = f.host.resource('workspaces.land', () => new Map<string, Promise<unknown>>())
