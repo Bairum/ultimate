@@ -36,7 +36,7 @@ User scripts live in `~/.ultimate/automations/<project>/<id>/`: executable `run`
 
 The supervisor uses the reload-stable `automations.supervisor` resource. Every spawn waits behind the existing process-group handshake until its pid is written; EOF before go runs nothing. Pause, relaunch, delete, disable/release and shutdown share SIGTERM → three-second grace → SIGKILL cleanup. The pid file is removed only after the whole group is gone. On open it sweeps every runtime pid, including deleted records, then restarts enabled running scripts. Script state must tolerate restart. A fired one-shot is already done before termination, so reopening cannot re-arm it; its eventual exit still records metadata and an event without reporting failure.
 
-The single v1 session document `ultimate.automations` stores both trigger kinds. Lifecycle events are `automations.started`, `.fired`, `.done`, `.exited`, `.escalated`. Durable `ultimate.automation-delivery` tasks commit with state changes; request-id dedupe in Pi's atomic submit prevents duplicate subscriber inputs. No old records or files are imported.
+The single v2 session document `ultimate.automations` stores both trigger kinds; its migration gives schedule records from before the merge `subscribers: []` and their runs as `fires` and `lastFireAt`. Lifecycle events are `automations.started`, `.fired`, `.done`, `.exited`, `.escalated`. Durable `ultimate.automation-delivery` tasks commit with state changes; request-id dedupe in Pi's atomic submit prevents duplicate subscriber inputs. No other old records or files are imported.
 
 ## Project automations
 

@@ -7,8 +7,8 @@ import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { afterEach, expect, it, vi } from 'vitest'
 import { Type } from '@earendil-works/pi-ai'
-import { defineExtension, defineTool, configure } from '@earendil-works/pi-durable'
-import type { TaskId } from '@earendil-works/pi-durable'
+import { defineDoc, defineExtension, defineTool, configure } from '@earendil-works/pi-durable'
+import type { JsonObject, TaskId } from '@earendil-works/pi-durable'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
@@ -399,6 +399,54 @@ it('removes the prompt on an empty update only while subscribers remain', async 
   await expect(
     f.action('create', { name: 'Empty', prompt: '', schedule: 'every 1d' }),
   ).rejects.toThrow('At least one')
+})
+
+it('migrates schedule records saved before scripts and subscribers', async () => {
+  const f = await fixture()
+  const now = Date.now()
+  // The ledger as the previous automations version wrote it: exactly these keys.
+  const Old = defineDoc<{ next: number; automations: Record<string, JsonObject> }>({
+    kind: 'ultimate.automations',
+    checkpointWhen: () => false,
+    version: 1,
+    scope: 'session',
+    initial: () => ({ next: 1, automations: {} }),
+  })
+  const old = (id: string, schedule: JsonObject, firedAt?: number) => ({
+    id,
+    name: `Old ${id}`,
+    prompt: 'Hello',
+    schedule,
+    enabled: false,
+    createdAt: now - 3_600_000,
+    updatedAt: now - 3_600_000,
+    runs: firedAt ? [{ id: `run-${id}`, firedAt, status: 'done', finishedAt: firedAt }] : [],
+    agent: 'writer',
+  })
+  await f.opened.harness.commit(async (tx) => {
+    const ledger = await tx.doc(Old)
+    ledger.next = 3
+    ledger.automations.A1 = old(
+      'A1',
+      { kind: 'at', time: new Date(now - 60_000).toISOString() },
+      now - 60_000,
+    )
+    ledger.automations.A2 = old('A2', { kind: 'every', ms: 600_000 })
+  }, context)
+  await f.reopen()
+
+  const listed = (await f.action('list')) as Automation[]
+  expect(listed.map((a) => [a.id, a.subscribers, a.fires, a.lastFireAt])).toEqual([
+    ['A1', [], 1, now - 60_000],
+    ['A2', [], 0, undefined],
+  ])
+  const renamed = (await f.action('update', { id: 'A2', name: 'Renamed' })) as Automation
+  expect(renamed).toMatchObject({ name: 'Renamed', subscribers: [], fires: 0 })
+  const resumed = (await f.action('resume', { id: 'A2' })) as Automation
+  expect(resumed.enabled).toBe(true)
+  expect(resumed.nextAt).toBe(now + 600_000)
+  expect(((await f.action('pause', { id: 'A2' })) as Automation).enabled).toBe(false)
+  await expect(f.action('resume', { id: 'A1' })).rejects.toThrow('update the time first')
 })
 
 it('preserves the next interval fire on rename, even when the same schedule is supplied', async () => {

@@ -30,7 +30,9 @@ project's @ultimate to add one with `ultimate.tell`.
 The first tab of the right panel: the user's open questions (read live from Messages, never copied) with their own,
 then @ultimate's, an add field, and the done ones folded away. A question row opens the asking conversation at the
 message (messages’ `messages:open {conversation, call}`), where its answer card has the choices, a reply and Dismiss; the
-header counts questions apart from to-dos. The amber count beside the top-bar @ultimate button and ⌘K “Show open
+header counts questions apart from to-dos. An open to-do's ▶ button (on hover or focus) sends @ultimate, as the
+user, `Work on to-do #<id>: <text>` (`Help me with to-do #<id>: …` for the user's own), after its current run if
+it is busy, and opens its conversation. The amber count beside the top-bar @ultimate button and ⌘K “Show open
 questions” open this tab.
 
 ## Actions
