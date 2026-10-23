@@ -244,9 +244,11 @@ function CloudStatus() {
       : state.lastBackup
         ? `backed up ${since(state.lastBackup.at)}`
         : 'no backup yet'
-  // The first chapter's backups are the project's; later chapters name theirs.
+  // The first chapter's backups are the project's; later chapters name theirs, as the dream cards do.
   const label =
-    state.chapter && state.chapter.number > 1 ? `${state.chapter.name} · ${status}` : status
+    state.chapter && state.chapter.number > 1
+      ? `Chapter ${state.chapter.number} · ${state.chapter.name} · ${status}`
+      : status
   return (
     <Popover>
       <PopoverTrigger asChild>

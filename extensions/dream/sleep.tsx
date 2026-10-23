@@ -230,10 +230,9 @@ function Progress({ session, sleep }: { session: Session; sleep: Sleep }) {
   // The gate repairs once: back at seeding with the first attempt's checks.
   const repairing = sleep.phase === 'seeding' && !!sleep.checks?.some((item) => !item.ok)
   const target = chapters?.chapters.find((item) => item.name === sleep.chapter)
-  const label = chapterLabel(
-    target?.number ?? (chapters?.chapters.length ?? 0) + (running ? 1 : 0),
-    sleep.chapter,
-  )
+  // A running sleep makes the next chapter; a finished one names it as listed (by name alone if it is gone).
+  const number = running ? (chapters?.chapters.length ?? 0) + 1 : target?.number
+  const label = number ? chapterLabel(number, sleep.chapter) : sleep.chapter
   if (!running)
     return (
       <section
@@ -297,7 +296,7 @@ function Progress({ session, sleep }: { session: Session; sleep: Sleep }) {
         })}
       </ol>
       <p className="mt-2.5 text-[11.5px] text-muted-foreground">
-        Start no other work until I'm asleep: anything running at the switch stops it.
+        Start no other work until I'm asleep — anything that starts now cancels the switch.
       </p>
     </section>
   )
