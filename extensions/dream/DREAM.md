@@ -5,9 +5,12 @@ the project's conversations, memory, failures and tools, writes a journal of wha
 The user decides each proposal with @ultimate; approved ones become ordinary branches, and the dream follows them
 until they land. Nothing changes code, memory or storage by itself.
 
-Session N lives in the `dream.sessions` document (`refs.ts`). Actions, called with codemode
+Session N lives in the `dream.sessions` document (`refs.ts`) on conversation 1: read it with codemode
+`ultimate.doc('dream.sessions', 1)`. Actions, called with codemode
 `ultimate.action('dream', name, args)`: `pass {session, pass, status, note?}`, `journal {session, learned, text,
-proposals}`, `decide {session, proposal, status, branch?}` and `stats` (tool numbers from the trace, no model).
+proposals}`, `decide {session, proposal, status, branch?}` and `stats` (tool numbers from the trace, no model). The trace keeps only about the last 7 days, so
+`stats` and `ultimate.trace` see only that window, and `stats` counts only tool calls; older failures and model
+errors are found in conversation entries.
 
 ## For @ultimate
 
@@ -29,7 +32,8 @@ The session ends by itself once every proposal is settled; the user can also end
 
 ## For the dream branch
 
-You coordinate the dream. You change nothing: no code, no memory, no settings. You read, analyse and propose.
+You coordinate the dream. You change nothing: no code, no memory, no settings. You read, analyse and propose. The
+dream's own bookkeeping (`pass`, `journal`) is part of the job, not a change.
 
 1. Run the five passes in parallel, each as a `dream-pass` subagent (background), with the session number, its pass
    name and the brief below. Before starting each, call `pass {session, pass, status: 'running'}`; when it reports,

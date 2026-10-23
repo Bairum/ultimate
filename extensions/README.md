@@ -959,3 +959,7 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
 - Server facets: see `prompt/` for prompt sections and `coding-tools/server.ts` for tools; the root `AGENTS.md` explains
   reloads and durability. Server facets may `export const order = -100`: lower values come first, with the default 0
   keeping discovery order (built-in → user → project, then folder name); changing it reorders the server prompt and tools once.
+- Prompt sections stay stable between turns: the same conversation renders the same text every time, so the prompt
+  stays cached. Anything that changes while a conversation runs (a count, a list, a time) goes in a per-input note
+  from a `beforeInput` hook instead. For example, `todos/server.ts` does not list open to-dos in a section; its
+  `beforeInput` returns a note only when the list changed since the conversation last saw it.
