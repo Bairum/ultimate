@@ -267,11 +267,16 @@ function AttachedAnswer({ answer, question }: { answer: Message; question: Messa
   )
 }
 
+/** A catch-up on the tally and main, the note a conversation gets when it resumes after they moved. */
+const catchup = (entry: EntryRecord) =>
+  entry.kind === 'lineage.note' && (entry.data as { source?: unknown })?.source === 'main'
+
 /** What one background row is, in a few words that its counterpart follows. */
 function backgroundWord(
   { entry, calls }: CompactSummaryProps['rows'][number],
   failed: (call: string) => boolean,
 ) {
+  if (catchup(entry)) return 'Catch-up'
   const words: Record<string, string> = {
     'board.message': 'Message from',
     'board.reply': 'Reply from',
@@ -304,9 +309,10 @@ export function BackgroundSummary({ rows, steps, working }: CompactSummaryProps)
     count === 1
       ? backgroundWord(shown[0], (call) => callFailed(transcript, call))
       : `${count} updates ${who.length ? 'with' : 'between agents'}`
+  const Icon = count === 1 && catchup(shown[0].entry) ? GitBranchIcon : ArrowLeftRightIcon
   return (
     <span className="flex min-w-0 items-center gap-1.5" data-compact-background>
-      <ArrowLeftRightIcon className="size-3 shrink-0 text-brand/80" />
+      <Icon className="size-3 shrink-0 text-brand/80" />
       <span className="shrink-0">{what}</span>
       {who.slice(0, 2).map((id) => (
         <span className="flex min-w-0 text-foreground/80" key={id}>
