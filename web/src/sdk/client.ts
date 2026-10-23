@@ -98,6 +98,8 @@ export function replaceNextSelection() {
  * (250 ms, the browser's own), so the sidebar, header and transcript change together instead of piecewise.
  */
 const switchStyle = () => new URLSearchParams(location.search).get('switch')
+/** The conversation a view transition is about to show; a second call for it while it captures starts no other. */
+let transitioning: number | undefined
 function followSelection() {
   if (!initialized) return
   const value = uiState.get('shell.conversation')
@@ -106,14 +108,27 @@ function followSelection() {
     selected = id
     if (id !== undefined) writeConversation(id, replaceSelection)
   }
-  if (
-    switchStyle() === 'vt' &&
-    id !== store.getState().requested &&
-    !matchMedia('(prefers-reduced-motion: reduce)').matches
-  )
-    document.startViewTransition(() => flushSync(() => store.show(id)))
-  else store.show(id)
   replaceSelection = false
+  if (
+    switchStyle() !== 'vt' ||
+    id === store.getState().requested ||
+    matchMedia('(prefers-reduced-motion: reduce)').matches
+  ) {
+    store.show(id)
+    return
+  }
+  if (id === transitioning) return
+  transitioning = id
+  const transition = document.startViewTransition(() => flushSync(() => store.show(id)))
+  transition.finished.then(
+    () => {
+      transitioning = undefined
+    },
+    () => {
+      // Skipped by a newer transition or a hidden page: the DOM changed all the same.
+      transitioning = undefined
+    },
+  )
 }
 uiState.subscribe(followSelection)
 addEventListener('popstate', () => {
