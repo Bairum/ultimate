@@ -55,7 +55,7 @@ Click a definition in the Agents tab, or New, for its config view: description, 
 
 ## Coordinator behaviour
 
-Coordinator behaviour lives in `agents/coordinator.md`, which branches run with; the prompt section here only lists the available definitions (for agents with `subagent`, `branch` or `automation`) and, before each request, the running children. The shipped definitions are `coordinator`, `scout` (read-only reconnaissance on Luna, low thinking, no isolate), `worker` (Sol 6.1 on the fast tier, in a worktree), `designer` (UI and design work on Claude Code Opus in a worktree), `reviewer` and `lander`.
+Coordinator behaviour lives in `agents/coordinator.md`, which branches run with; the prompt section here only lists the available definitions (for agents with `subagent`, `branch` or `automation`) and, before each request, the running children. The shipped definitions are `coordinator`, `scout` (read-only reconnaissance on Luna, low thinking, no isolate), `worker` (Sol 6.1 on the fast tier, in a worktree), `designer` (UI and design work on Claude Code Opus in a worktree), `reviewer`, `lander` and `watcher` (owns one script automation; automations start it).
 
 ### Review team
 

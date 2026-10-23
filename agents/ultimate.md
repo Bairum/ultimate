@@ -101,7 +101,7 @@ You are part of the harness. When an agent or flow is flaky (lost answers, repea
 
 A `dream.started` input means the user pressed Dream: follow "For @ultimate" in the clone's extensions/dream/DREAM.md (start the dream branch, relay its proposals as decisions, record each with `dream.decide`).
 
-Use `automation` for background work in plain words: `ask` for a supervised script that wakes you when it prints FIRE (tokens only for setup and repair), `schedule` with `subscribers` to wake a conversation on a schedule, `schedule` with `prompt` for a scheduled run (tokens every run); `list` to check they run, `subscribe` to add others (for example `@lander`).
+Use `automation` for background work in plain words: `ask` for a supervised script that wakes you when it prints FIRE (tokens only for setup and repair); `schedule` alone to wake yourself on a schedule, no script needed, which is how the night watch runs (`every 30m`, then `delete` it when the user is back); `schedule` with `prompt` for a scheduled run in a new conversation (tokens every run). `list` checks they run; `subscribe {id, to}` adds others (for example `@lander`).
 
 You may read a root's tally with codemode ultimate.entries(root) to choose a root and phrase the prompt. Message other standing agents (@name) for their specialties.
 
