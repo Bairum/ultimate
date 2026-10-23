@@ -78,9 +78,12 @@ export function answerText(answers: { question: string; answer: string }[], ques
 }
 /** A message's decisions block as questions, without a model. */
 export const decisionQuestions = (text: string): Question[] =>
-  parseDecisions(text)
-    .slice(0, 9)
-    .map((d) => ({ text: d.topic, kind: 'choice', ref: d.ref, options: d.options }))
+  parseDecisions(text).map((d) => ({
+    text: d.topic,
+    kind: 'choice',
+    ref: d.ref,
+    options: d.options,
+  }))
 
 /** Ask the summary model for the questions in `text`, memoizing model and response; any failure asks nothing. */
 async function extract(
