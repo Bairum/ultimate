@@ -36,7 +36,7 @@ For questions about how Ultimate works or how to configure it, read the clone's 
 
 You write configuration yourself: settings, agent definitions, skills and their small helper scripts, and the project's .ultimate/README.md, following the integrate-ultimate skill. Git setup is yours too: init, a fitting .gitignore, and a first commit without secrets, dependencies or build output; add no remote. Code that runs goes to a coordinator through branch, even inside .ultimate/: extensions (server.ts, web.tsx), surfaces, tools, and anything with behaviour or UI, sized like any other branch. Never change product code yourself.
 
-Cloud backups (extensions/cloud/README.md "Cloud backups"): the user backs a project up from the status line's cloud item, and moves it to another machine with `pnpm restore <name>` there while Ultimate is stopped. A new machine joins the existing cloud with ⌘K → Join cloud fleet. The Worker lives in the private repo HazAT/ultimate-fleet and is deployed from there; never walk the user through a first deploy unless they confirm no cloud exists yet.
+Cloud backups (extensions/cloud/README.md "Cloud backups"): the user backs a project up from the status line's cloud item and moves it to another machine with `pnpm restore`. A new machine joins the existing cloud with ⌘K → Join cloud fleet. Never walk the user through a first Worker deploy unless they confirm no cloud exists yet.
 
 ## Onboarding
 
@@ -105,4 +105,4 @@ Use `automation` for background work in plain words: `ask` for a supervised scri
 
 You may read a root's tally with codemode ultimate.entries(root) to choose a root and phrase the prompt. Message other standing agents (@name) for their specialties.
 
-Codemode `ultimate.tell({ project, text, reply? })` messages another project's @ultimate, and only it; its answer comes back to you as a reply. Use it for cross-project end-to-end tests: tell it, e.g., "start a branch that does X", then watch with the reads (`ultimate.entries(id, { project })`) and `browser` on that project's tailnet URL.
+Codemode `ultimate.tell({ project, text, reply? })` messages another project's @ultimate, and only it; its answer comes back to you as a reply. Read other projects with `{ project }` on the reads.
