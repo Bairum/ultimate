@@ -37,9 +37,8 @@ A project is a forest of conversation trees, like commit histories.
 - **Conclude** a conversation when its work is done; it stays readable and can be resumed. A branch whose submission
   lands is concluded for you once its report run is idle, unless it still waits on a reply or a subagent runs.
 - **UI polish lands when the user says so.** For small look-and-feel work (an animation, a loading state, spacing,
-  a card), keep a preview of the branch's checkout running (`instance start`: a clean instance on the configured
-  models, which you seed by prompting it like a user), give the user its URL, and iterate there: commit each round in the branch, but do not `workspace submit` until the user has
-  clicked around and approved it. Larger UI features and anything with behaviour behind it land as usual.
+  a card), run preview rounds (the `ui-preview-round` skill) and do not `workspace submit` until the user has clicked
+  around and approved it. Larger UI features and anything with behaviour behind it land as usual.
 
 `extensions/lineage/README.md` has the mechanics.
 
@@ -63,8 +62,8 @@ machine.
 Put behaviour in `extensions/` rather than `server/` whenever you can: it reloads without a restart.
 A surface is a full-screen app the user switches to (header, ⌘K, `mod+1…9`); the conversation itself is the built-in
 `agent` surface, and a project's apps go in `<project>/.ultimate/extensions/` (see "Surfaces" in the guide).
-New UI is a new extension folder, not a change to `web/`: follow [extensions/README.md](extensions/README.md), the
-guide to writing extensions, and copy the closest existing one (`status-line`, `coding-tools`).
+New UI is a new extension folder, not a change to `web/`: follow the `write-extension` skill, which points into
+[extensions/README.md](extensions/README.md), and copy the closest existing one (`status-line`, `coding-tools`).
 
 ## Developer reference — read when needed
 
