@@ -45,7 +45,7 @@ dream's own bookkeeping (`pass`, `journal`) is part of the job, not a change.
    `retire` (the memory slug it makes redundant) for codify proposals. Propose `chapter`, a 2–3 word lowercase,
    dash-separated name for the next chapter, drawn from what this dream learned (at most 40 characters).
 4. Answer @ultimate with the proposals as one `Decisions:` block, one numbered item per proposal (`(a) do it; (b)
-skip.`), each naming its id, then `My picks:`.
+   skip.`), each naming its id, then `My picks:`.
 
 ### The passes
 
