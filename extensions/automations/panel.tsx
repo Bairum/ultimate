@@ -95,21 +95,23 @@ export function useLive(refetch: () => unknown, overdue: boolean, now: number) {
   }, [refetch])
 }
 
-const raw = (schedule: Schedule) =>
-  schedule.kind === 'cron'
-    ? `cron "${schedule.expr}" ${schedule.tz}`
-    : schedule.kind === 'at'
-      ? `at ${schedule.time}`
-      : `every ${schedule.ms / 1000}s`
+const raw = (schedule: Schedule | undefined) =>
+  !schedule
+    ? ''
+    : schedule.kind === 'cron'
+      ? `cron "${schedule.expr}" ${schedule.tz}`
+      : schedule.kind === 'at'
+        ? `at ${schedule.time}`
+        : `every ${schedule.ms / 1000}s`
 
 /** The schedule in words, from the backend's `describe`; a one-shot needs only its time. */
-function useWords(schedule: Schedule, now: number) {
+function useWords(schedule: Schedule | undefined, now: number) {
   const { data } = useAction(
     DescribeAction,
-    { schedule },
-    { enabled: schedule.kind !== 'at', onError: () => {} },
+    { schedule: schedule ?? '' },
+    { enabled: !!schedule && schedule.kind !== 'at', onError: () => {} },
   )
-  return words(schedule, data?.description ?? raw(schedule), now)
+  return schedule ? words(schedule, data?.description ?? raw(schedule), now) : ''
 }
 
 /** The answer's first line without its Markdown marks: `## Complete` reads as `Complete`. */

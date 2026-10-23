@@ -7,7 +7,7 @@ import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { afterEach, expect, it, vi } from 'vitest'
 import { Type } from '@earendil-works/pi-ai'
-import { defineExtension, defineTool } from '@earendil-works/pi-durable'
+import { defineExtension, defineTool, configure } from '@earendil-works/pi-durable'
 import type { TaskId } from '@earendil-works/pi-durable'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
@@ -18,7 +18,7 @@ import type { Automation } from '../extensions/automations/server.ts'
 import type { ActionContext } from '../server/actions.ts'
 import type { SubagentsService } from '../extensions/subagents/api.ts'
 import { createChild } from '../extensions/subagents/children.ts'
-import { apis, temp, until as waitFor } from './helpers.ts'
+import { apis, eventHost, temp, until as waitFor } from './helpers.ts'
 
 // Advance scheduler time while the shared helper measures IO against a real deadline.
 const until = (test: () => boolean | Promise<boolean>, timeout = 7000) =>
@@ -70,8 +70,18 @@ async function fixture() {
       ],
     }),
   )
+  const resources = new Map<string, unknown>()
   const host = {
     ...prepared,
+    resource: (key: string, create: () => unknown) => {
+      if (!resources.has(key)) resources.set(key, create())
+      return resources.get(key)
+    },
+    ...eventHost(() => opened.harness, 'automations'),
+    onOpen: () => {},
+    onRelease: () => {},
+    onClose: () => {},
+    projectSetup: async () => ({ decision: false }),
     harness: () => opened.harness,
     metadata: Metadata,
     extensions: () => [{ name: 'subagents', enabled }],
@@ -96,8 +106,11 @@ async function fixture() {
   prepared.faux!.setResponses([route])
   opened = await prepared.open()
   hosts.push(opened)
-  const action = async (name: keyof typeof actions, args: JsonValue = {}): Promise<unknown> =>
-    actions[name](args, { host } as unknown as ActionContext)
+  const action = async (
+    name: keyof typeof actions,
+    args: JsonValue = {},
+    conversationId?: number,
+  ): Promise<unknown> => actions[name](args, { host, conversationId } as unknown as ActionContext)
   const records = async () =>
     Object.values((await opened.harness.snapshot(Automations, context))?.automations ?? {})
   return {
@@ -169,6 +182,40 @@ it('fires every 2s into distinct answered conversations and supports pause, resu
   await f.action('delete', { id: a.id })
   expect(await f.records()).toEqual([])
   expect(await f.opened.harness.conversation(runs[0].conversationId!, context)).toBeDefined()
+})
+
+it('fires a subscriber-only schedule without creating a run conversation', async () => {
+  const f = await fixture()
+  const target = await f.opened.harness.commit(async (tx) => {
+    const child = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+    await configure(tx, child.id, {})
+    return child
+  }, context)
+  const a = (await f.action('create', {
+    name: 'Wake',
+    schedule: 'every 2s',
+    subscribers: [target.id],
+  })) as Automation
+  const fired = async () => {
+    const conversation = (await f.opened.harness.conversation(target.id, context))!
+    return (await conversation.context(context)).entries.filter(
+      (e) => e.conversationId === target.id && e.kind === 'automations.fired',
+    )
+  }
+  await until(async () => (await fired()).length > 0)
+  await f.action('pause', { id: a.id })
+  expect((await fired())[0].data).toEqual({ id: a.id, name: 'Wake', text: '' })
+  expect((await f.records())[0].runs).toEqual([])
+  expect((await f.records())[0].fires).toBeGreaterThan(0)
+  const conversations = await f.opened.harness.commit(
+    (tx) => tx.scanConversations({}, 100),
+    context,
+  )
+  for (const child of conversations.items) {
+    expect((await f.opened.harness.snapshot(Metadata, child.id, context))?.label).not.toBe(
+      'automation',
+    )
+  }
 })
 
 it('pause keeps a running profile run alive, skips overlap, and abort cancels a run', async () => {
@@ -271,6 +318,61 @@ it('refuses resuming a spent one-shot through the action', async () => {
   await expect(f.action('resume', { id: a.id })).rejects.toThrow('update the time first')
   expect((await f.records())[0].runs).toHaveLength(1)
   expect((await f.records())[0].enabled).toBe(false)
+})
+
+it('uses subscriber-only fire history to skip the repeated cron hour', async () => {
+  const f = await fixture()
+  vi.setSystemTime(new Date('2026-10-25T00:29:59Z'))
+  const a = (await f.action('create', {
+    name: 'Wake',
+    schedule: 'cron "30 2 * * *" Europe/Vienna',
+    subscribers: [1],
+  })) as Automation
+  await until(async () => (await f.records())[0].fires === 1)
+  await until(async () => (await f.records())[0].nextAt === Date.parse('2026-10-26T01:30:00Z'))
+  expect((await f.records())[0].runs).toEqual([])
+  await f.action('pause', { id: a.id })
+})
+
+it('validates one trigger, project script scope and action targets before creating records', async () => {
+  const f = await fixture()
+  await expect(f.action('create', { name: 'Missing', prompt: 'Hello' })).rejects.toThrow(
+    'Exactly one',
+  )
+  await expect(
+    f.action('create', { name: 'Both', schedule: 'every 1d', ask: 'Watch', prompt: 'Hello' }),
+  ).rejects.toThrow('Exactly one')
+  await expect(
+    f.action('create', {
+      name: 'Project',
+      schedule: 'every 1d',
+      prompt: 'Hello',
+      scope: 'project',
+    }),
+  ).rejects.toThrow('only supported for script')
+  await expect(f.action('create', { name: 'No action', schedule: 'every 1d' })).rejects.toThrow(
+    'At least one',
+  )
+  await expect(
+    f.action('create', { name: 'Bad target', schedule: 'every 1d', subscribers: [99999] }),
+  ).rejects.toThrow('Unknown subscriber')
+  expect(await f.records()).toEqual([])
+  const caller = await f.opened.harness.createConversation(
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  const a = (await f.action(
+    'create',
+    { name: 'Default', schedule: 'every 1d' },
+    caller.id,
+  )) as Automation
+  expect(a.subscribers).toEqual([caller.id])
+  const prompt = (await f.action(
+    'create',
+    { name: 'Prompt', prompt: 'Hello', schedule: 'every 1d' },
+    caller.id,
+  )) as Automation
+  expect(prompt.subscribers).toEqual([])
 })
 
 it('preserves the next interval fire on rename, even when the same schedule is supplied', async () => {

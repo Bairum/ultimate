@@ -1,7 +1,5 @@
-export type Schedule =
-  | { kind: 'cron'; expr: string; tz: string }
-  | { kind: 'at'; time: string }
-  | { kind: 'every'; ms: number }
+import type { Schedule } from './types.ts'
+export type { Schedule } from './types.ts'
 
 function duration(text: string) {
   const match = /^(\d+(?:\.\d+)?)\s*(s|m|h|d)$/.exec(text)

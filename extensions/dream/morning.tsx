@@ -57,7 +57,7 @@ const nouns: Record<keyof Seed['counts'], [string, string]> = {
   todos: ['to-do', 'to-dos'],
   questions: ['question', 'questions'],
   automations: ['automation', 'automations'],
-  subscriptions: ['subscription', 'subscriptions'],
+  scripts: ['script', 'scripts'],
 }
 
 export function MorningCard({ entry }: { entry: EntryRecord }) {

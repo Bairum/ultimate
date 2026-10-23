@@ -15,11 +15,11 @@ export const gateSeed = (): Seed => ({
   todos: [{ text: 'Do this', owner: 'ultimate' }],
   questions: [{ text: 'Which?', ref: '#123' }],
   automations: [{ name: 'Daily', prompt: 'Review', schedule: { kind: 'every', ms: 86400000 } }],
-  subscriptions: [
-    { id: 'S1', title: 'User watch', ask: 'Watch' },
-    { id: 'ci', scope: 'project', title: 'CI', ask: 'Watch CI' },
+  scripts: [
+    { id: 'A1', name: 'User watch', ask: 'Watch' },
+    { id: 'ci', scope: 'project', name: 'CI', ask: 'Watch CI' },
   ],
-  counts: { memories: 1, todos: 1, questions: 1, automations: 1, subscriptions: 2 },
+  counts: { memories: 1, todos: 1, questions: 1, automations: 1, scripts: 2 },
 })
 
 /** A remote instance's actions, not a model. Overrides exercise each observable invariant. */
@@ -45,14 +45,15 @@ export function inspection(
               length:
                 current.counts.todos +
                 current.counts.questions +
-                current.subscriptions.filter((item) => item.scope !== 'project').length,
+                current.scripts.filter((item) => item.scope !== 'project').length +
+                current.automations.filter((item) => !item.prompt).length,
             },
             () => ({}),
           ),
         },
         'ultimate.standing-agents': { ultimate: 20 },
         'dream.seed': {
-          automations: current.automations.map((item) => item.name),
+          automations: current.automations.filter((item) => item.prompt).map((item) => item.name),
         },
         entries: [{ kind: 'dream.chapter', conversationId: 20 }],
         ...overrides(),

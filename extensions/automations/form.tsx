@@ -64,9 +64,14 @@ function draftOf(automation?: Automation): Draft {
     every: '1h',
     agent: '',
   }
-  if (!automation) return blank
+  if (!automation?.schedule) return blank
   const { schedule } = automation
-  const draft = { ...blank, name: automation.name, prompt: automation.prompt, mode: schedule.kind }
+  const draft = {
+    ...blank,
+    name: automation.name,
+    prompt: automation.prompt ?? '',
+    mode: schedule.kind,
+  }
   draft.agent = automation.agent ?? ''
   if (schedule.kind === 'cron') return { ...draft, cron: schedule.expr, tz: schedule.tz }
   if (schedule.kind === 'every') return { ...draft, every: interval(schedule.ms) }

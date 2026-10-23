@@ -5,7 +5,7 @@ import type { Automation, Run, Schedule } from './refs.ts'
 
 /** A one-shot schedule whose time has passed: resuming it would fire at once, so its switch stays off. */
 export const spent = (automation: Automation, now: number) =>
-  automation.schedule.kind === 'at' && Date.parse(automation.schedule.time) <= now
+  automation.schedule?.kind === 'at' && Date.parse(automation.schedule.time) <= now
 
 /** `in 3s`, `in 12m`, `in 3h 12m`, `in 2d 4h`, then a short date. */
 export function until(at: number, now: number) {

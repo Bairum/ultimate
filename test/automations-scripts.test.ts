@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterAll, expect, it } from 'vitest'
-import { doneText, fireText, trimLog } from '../extensions/subscriptions/types.ts'
-import type { Subscription } from '../extensions/subscriptions/types.ts'
+import { doneText, fireText, trimLog } from '../extensions/automations/types.ts'
+import type { Automation } from '../extensions/automations/types.ts'
 import { context } from '../server/harness.ts'
 import { fauxServer, removeTemp, temp, until } from './helpers.ts'
 
@@ -45,25 +45,25 @@ it('retains the newest output within both line and byte limits', () => {
 // A project extension outside the clone cannot import api.ts; the token is its name, which is all `want` needs.
 const consumer = `
 import { defineExtension } from '@earendil-works/pi-durable'
-const Subscriptions = { name: 'subscriptions' }
+const Automations = { name: 'automations' }
 export default () => defineExtension({ name: 'prs' })
 export const actions = {
   call: async ({ method, id }, { host }) => {
-    const subscriptions = host.want(Subscriptions)
-    if (!subscriptions) return 'missing'
-    try { return await subscriptions[method](id) } catch (error) { return String(error) }
+    const automations = host.want(Automations)
+    if (!automations) return 'missing'
+    try { return await automations[method](id) } catch (error) { return String(error) }
   },
 }`
 
-it('lets a project extension read, stop and start a subscription through the service', async () => {
-  const home = await temp('ultimate-subscriptions-service-')
+it('lets a project extension read, pause and resume an automation through the service', async () => {
+  const home = await temp('ultimate-automations-service-')
   homes.push(home)
   const projectRoot = join(home, 'project')
   const definitions = join(home, '.ultimate/agents')
   await mkdir(definitions, { recursive: true })
   await writeFile(
-    join(definitions, 'subscription.md'),
-    '---\nname: subscription\ndescription: Test\nmodel: faux/faux-1\ntools: []\n---\nShort.\n',
+    join(definitions, 'watcher.md'),
+    '---\nname: watcher\ndescription: Test\nmodel: faux/faux-1\ntools: []\n---\nShort.\n',
   )
   const folder = join(projectRoot, '.ultimate/extensions/prs')
   await mkdir(folder, { recursive: true })
@@ -80,29 +80,37 @@ it('lets a project extension read, stop and start a subscription through the ser
     context,
   )
   const sub = (await server.extensions.invoke(
-    'subscriptions',
+    'automations',
     'create',
-    { ask: 'Watch ship/* PRs', once: false },
+    { name: 'Watch', ask: 'Watch ship/* PRs', once: false },
     new AbortController().signal,
     caller.id,
-  )) as Subscription
+  )) as Automation
   await until(() => !!server.extensions.action('prs', 'call'))
   const call = (method: string, id = sub.id) =>
     server.extensions.invoke('prs', 'call', { method, id }, new AbortController().signal)
 
-  expect(await call('status')).toMatchObject({ id: sub.id, state: 'writing', alive: false })
-  expect(await call('stop')).toMatchObject({ id: sub.id, state: 'stopped', enabled: false })
-  // Start checks the executable before it changes anything: the subscription stays stopped.
-  expect(await call('start')).toContain('Missing or non-executable')
-  expect(await call('status')).toMatchObject({ state: 'stopped' })
-  expect(await call('status', 'S99')).toBe('Error: Unknown subscription: S99')
-  expect(await call('status', 'nope')).toBe('Error: Unknown subscription: nope')
+  expect(await call('status')).toMatchObject({
+    id: sub.id,
+    alive: false,
+    script: { state: 'writing' },
+  })
+  expect(await call('pause')).toMatchObject({
+    id: sub.id,
+    enabled: false,
+    script: { state: 'stopped' },
+  })
+  // Resume checks the executable before it changes anything: the automation stays stopped.
+  expect(await call('resume')).toContain('Missing or non-executable')
+  expect(await call('status')).toMatchObject({ script: { state: 'stopped' } })
+  expect(await call('status', 'A99')).toBe('Error: Unknown automation: A99')
+  expect(await call('status', 'nope')).toBe('Error: Unknown automation: nope')
   expect(await call('status', 'Not/A slug')).toBe(
-    'Error: id must be S<n> or a project subscription slug',
+    'Error: id must be A<n> or a project automation slug',
   )
-  expect(server.extensions.catalogue().apis.find((api) => api.name === 'subscriptions')).toEqual({
-    name: 'subscriptions',
-    provider: 'subscriptions',
+  expect(server.extensions.catalogue().apis.find((api) => api.name === 'automations')).toEqual({
+    name: 'automations',
+    provider: 'automations',
     needs: [],
     wants: ['prs'],
   })
