@@ -1,7 +1,11 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterAll, expect, it } from 'vitest'
-import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
@@ -33,6 +37,8 @@ async function fixture(onRequest?: (text: string, home: string) => Promise<void>
   const home = await temp('ultimate-agent-')
   homes.push(home)
   const root = await sourceCopy(home)
+  // The repository's coordinator overlay pins a Claude Code model no test can run; tests pin their own.
+  await rm(join(root, '.ultimate/agents/coordinator.md'))
   await mkdir(join(home, '.ultimate/agents'), { recursive: true })
   await writeFile(
     join(home, '.ultimate/agents/dice.md'),
@@ -53,6 +59,8 @@ async function fixture(onRequest?: (text: string, home: string) => Promise<void>
       ultimateRoot: root,
       home: join(home, 'state'),
       userHome: home,
+      // The first model is the default; the second reasons, so a definition can pin a thinking level.
+      faux: fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-think', reasoning: true }] }),
     })
     servers.push(server)
     const route: FauxResponseFactory = async (transcript) => {
@@ -143,6 +151,12 @@ it.concurrent('starts a lineage branch with a message input and caller attributi
   const f = await fixture()
   await seedTally(f.server.harness)
   const ultimate = await f.subagents.standing('ultimate', context)
+  // A project overlay pins the coordinator's model; `max` exceeds what the model supports and clamps to `high`.
+  const overlay = join(f.root, '.ultimate/agents/coordinator.md')
+  await writeFile(
+    overlay,
+    '---\nname: coordinator\nmodel: faux/faux-think\nthinking: max\naddTools: []\n---\n',
+  )
   await ask(
     f.server,
     ultimate,
@@ -211,6 +225,8 @@ it.concurrent('starts a lineage branch with a message input and caller attributi
   expect(coordinator.tools).toBeUndefined()
   expect(coordinator.model).toBeUndefined()
   expect(configured.instructions).toBe(coordinator.instructions)
+  expect(configured.model).toEqual({ provider: 'faux', modelId: 'faux-think' })
+  expect(configured.thinkingLevel).toBe('high')
   expect(configured.tools.map((tool) => tool.name)).not.toContain('branch')
   const agentBranch = (await f.server.root.agent(context)).deferred.find(
     (tool) => tool.name === 'branch',
@@ -219,6 +235,8 @@ it.concurrent('starts a lineage branch with a message input and caller attributi
     (tx) => configure(tx, branch, { modelTools: { add: [agentBranch] } }),
     context,
   )
+  // A user definition without a pin: the branch inherits the root's model and thinking level.
+  await rm(overlay)
   await writeFile(
     join(f.home, '.ultimate/agents/coordinator.md'),
     '---\nname: coordinator\ndescription: Custom coordinator\n---\nUse the project procedure.',
@@ -234,7 +252,10 @@ it.concurrent('starts a lineage branch with a message input and caller attributi
     context,
   ))!.agent(context)
   expect(overridden.instructions).toBe('Use the project procedure.')
-  expect(overridden.model).toEqual(configured.model)
+  const rootAgent = await f.server.root.agent(context)
+  expect(overridden.model).toEqual(rootAgent.model)
+  expect(overridden.model).toEqual({ provider: 'faux', modelId: 'faux-1' })
+  expect(overridden.thinkingLevel).toBe(rootAgent.thinkingLevel)
   expect(overridden.tools.map((tool) => tool.name)).toEqual(
     configured.tools.map((tool) => tool.name),
   )
