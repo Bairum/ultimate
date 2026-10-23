@@ -1,4 +1,4 @@
-import { MoonIcon } from 'lucide-react'
+import { LibraryIcon, MoonIcon } from 'lucide-react'
 import {
   defineWebExtension,
   provide,
@@ -9,8 +9,19 @@ import {
 } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { MemoryHeader } from '../lineage/ui.tsx'
-import { StandingDoc } from '../subagents/ui.tsx'
+import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
+import {
+  chapterLabel,
+  ChaptersDialog,
+  chaptersDialog,
+  OlderChapterBanner,
+  OlderChapterStatus,
+  SwitchVeil,
+  useChapters,
+  useWakeUp,
+} from './chapters.tsx'
 import { JournalCard, StartedCard } from './journal.tsx'
+import { MorningCard } from './morning.tsx'
 import { DreamDialog, dreamDialog } from './modal.tsx'
 import { DreamDoc } from './refs.ts'
 
@@ -68,12 +79,29 @@ function TimeToDream() {
   )
 }
 
-/** The Memory panel's Dream button: dreaming distils this memory, among other things. */
+/**
+ * The Memory panel's header: which chapter this memory belongs to (a way to the others), and the Dream button, since
+ * dreaming distils this memory, among other things.
+ */
 function useDreamButton() {
   const actions = useUltimate()
+  const chapters = useChapters()
   return (
     <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
-      <span className="text-[11px] text-muted-foreground">What every new branch starts from</span>
+      {chapters && chapters.chapters.length > 1 ? (
+        <button
+          className="-mx-1.5 flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          data-dream-chapters-open
+          onClick={() => actions.open(chaptersDialog)}
+          title="This memory belongs to the open chapter: see every chapter, or switch"
+          type="button"
+        >
+          <LibraryIcon className="size-3 shrink-0" />
+          <span className="truncate">{chapterLabel(chapters.number, chapters.active)}</span>
+        </button>
+      ) : (
+        <span className="text-[11px] text-muted-foreground">What every new branch starts from</span>
+      )}
       <button
         className="flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         data-dream-open
@@ -88,9 +116,27 @@ function useDreamButton() {
   )
 }
 
+/** After a Fall asleep the reloaded page opens @ultimate, where the morning card waits. */
+function WakeUp() {
+  const actions = useUltimate()
+  useWakeUp(() => talkToUltimate(actions))
+  return null
+}
+
 export default defineWebExtension({
-  entries: { 'dream.started': StartedCard, 'dream.journal': JournalCard },
-  slots: { 'statusline.right': [TimeToDream], overlay: [DreamDialog] },
-  commands: [{ id: 'dream.open', title: 'Dream…', run: (context) => context.open(dreamDialog) }],
+  entries: {
+    'dream.started': StartedCard,
+    'dream.journal': JournalCard,
+    'dream.chapter': MorningCard,
+  },
+  slots: {
+    'sidebar.top': [{ component: OlderChapterBanner, order: -30 }],
+    'statusline.right': [TimeToDream, OlderChapterStatus],
+    overlay: [DreamDialog, ChaptersDialog, SwitchVeil, WakeUp],
+  },
+  commands: [
+    { id: 'dream.open', title: 'Dream…', run: (context) => context.open(dreamDialog) },
+    { id: 'dream.chapters', title: 'Chapters…', run: (context) => context.open(chaptersDialog) },
+  ],
   provides: [provide(MemoryHeader, useDreamButton)],
 })

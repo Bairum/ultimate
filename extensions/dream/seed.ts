@@ -184,11 +184,14 @@ export async function applySeed(host: ExtensionHost) {
         type: seed.gate ? 'write' : 'input',
         session: seed.session,
         kind: 'dream.chapter',
+        // The morning card shows where we came from and what came along; the old chapter's documents stay there.
         data: {
           from: seed.from,
           number: host.chapter.number,
           name: host.chapter.name,
           session: seed.session,
+          learned: seed.journal.learned,
+          carried: seed.counts,
         },
         content: chapterText(host, seed),
       })
