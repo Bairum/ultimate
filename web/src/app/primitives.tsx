@@ -133,8 +133,12 @@ function Overlay({
 }
 
 /** The `sidebar` slot as a left column (`mod+b`), or over the conversation on a phone; gone while nothing is in it. */
-/** The docked sidebar's width; the title bar's left part takes it too, so the surface tabs start where the sidebar ends. */
+/**
+ * The docked sidebar's width (18 rem); the title bar's left part takes it beyond a phone on every surface, so the
+ * surface tabs stay put and start where Agent's sidebar ends. Change both together.
+ */
 export const sidebarWidth = 'w-72'
+export const sidebarWidthBeyondPhone = 'md:w-72'
 
 export function Sidebar() {
   useMountRegion('sidebar')

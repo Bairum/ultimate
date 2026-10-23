@@ -14,13 +14,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import type { SystemInfo } from '../../../shared/protocol.ts'
 import { actions } from '../sdk/actions.ts'
 import { shortenPath } from '../sdk/format.ts'
-import { useExtensions, useRegionOpen, useStore, useSystem } from '../sdk/hooks.ts'
+import { useExtensions, useStore, useSystem } from '../sdk/hooks.ts'
 import { HOME, slotItems, surfaceItems } from '../sdk/registry.ts'
-import { overlays, useViewport } from '../sdk/viewport.ts'
 import { Slot } from './boundary.tsx'
 import { Shortcut } from './palette.tsx'
-import { sidebarWidth } from './primitives.tsx'
-import { useRegion } from './surface.ts'
+import { sidebarWidthBeyondPhone } from './primitives.tsx'
 
 /**
  * The project as tabs name it: its folder from home. A branch's checkout (`<home>/worktrees/<id>`) is the project's
@@ -103,15 +101,6 @@ export const ProjectChip = forwardRef<
     </button>
   )
 })
-
-/** Whether the shown surface docks an open sidebar beside the conversation. */
-function useDockedSidebar() {
-  const rendered = useRegion('sidebar')
-  const open = useRegionOpen('sidebar')
-  const viewport = useViewport()
-  const filled = slotItems(useExtensions(), 'sidebar').length > 0
-  return rendered && open && filled && !overlays('sidebar', viewport)
-}
 
 /** The project chip, or what extensions put in its place (`titlebar.project`), such as the chip with a menu. */
 function Project() {
@@ -267,22 +256,21 @@ function SurfaceItems() {
  * project chip, `titlebar.left`, the surfaces; then `titlebar.right` and the command palette.
  */
 export function TitleBar() {
-  const docked = useDockedSidebar()
   return (
     <div className="flex h-9 shrink-0 items-center gap-3 overflow-hidden border-b border-border/70 bg-sidebar pr-3 font-mono text-[11.5px] text-muted-foreground">
       <div className="flex min-w-0 flex-1 items-center overflow-hidden whitespace-nowrap">
-        {/* As wide as a docked sidebar, so the surfaces start where the conversation does. */}
+        {/* As wide as the docked sidebar on every surface, so the surfaces never move and start where Agent's conversation does. */}
         <div
           className={cn(
-            'flex min-w-0 items-center gap-2 overflow-hidden pl-3',
-            docked ? cn(sidebarWidth, 'shrink-0 pr-2') : 'shrink pr-3',
+            'flex min-w-0 items-center gap-2 overflow-hidden pl-3 pr-3 md:shrink-0 md:pr-2',
+            sidebarWidthBeyondPhone,
           )}
         >
           <Brand />
           <Project />
           <Slot name="titlebar.left" variant="inline" />
         </div>
-        <div className={cn('flex shrink-0 items-center', docked && 'pl-2')}>
+        <div className="flex shrink-0 items-center pl-2">
           <SurfaceItems />
         </div>
       </div>
