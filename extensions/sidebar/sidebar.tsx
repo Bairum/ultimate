@@ -46,7 +46,7 @@ import { useRoots } from '../lineage/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import type { KeptWork } from '../conversations/types.ts'
 import { ago, LanderState } from './lander.tsx'
-import { QuestionsCount, StandingPhase, WaitingOnUser } from './ultimate.tsx'
+import { StandingPhase, WaitingOnUser } from './ultimate.tsx'
 import { useSidebarState } from './state.tsx'
 import { topLevelRows } from './listed.ts'
 import { UnderUltimate } from './ui.tsx'
@@ -284,7 +284,6 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
             : void talkToUltimate(actions)
         }
         shown={shown}
-        badge={isUltimate ? <QuestionsCount waiting={waiting} /> : undefined}
       >
         {lander ? (
           <LanderState id={conversation.id} index={workspaceIndex} now={now} state={state} />

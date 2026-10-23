@@ -141,7 +141,7 @@ stays docked on every surface, and the choice is durable: reloads, other tabs, a
 - Press `Ctrl+Alt+B` for the right panel: To-dos, Tasks, Activity, Automations (schedules and watching scripts),
   Agents, Documents (the plan, the codemode store, and every other extension document), Info (workspace, model,
   build, machine, skills) and Extensions, each a tab; Secrets and Claude Code open from ⌘K.
-- Use @ultimate's row at the top of the sidebar (on phones, the top-bar **@ultimate** button) to ask for work, explore an idea, or start an independent line of work. Its messages and questions appear in its transcript, with answer cards beneath questions; open questions also wait at the top of the right panel's To-dos tab, and the amber count on that row opens it, until you answer or dismiss them.
+- Use @ultimate's row at the top of the sidebar (on phones, the top-bar **@ultimate** button) to ask for work, explore an idea, or start an independent line of work. Its messages and questions appear in its transcript, with answer cards beneath questions; open questions also wait at the top of the right panel's To-dos tab until you answer or dismiss them, and @ultimate's mark turns amber meanwhile.
 
 ## How it is put together
 

@@ -22,9 +22,9 @@ agents (label `agent`) by ID. These rows are never concluded or hidden and show 
 and the age of its latest landing (what landed is its Landed section's first row); other agents show `working` or `idle` and the age. Their menu only
 compacts the context; they are never renamed, cleared or concluded.
 
-@ultimate's row carries an amber count while questions wait on you; it opens them in the To-dos tab. On phones, where
-the sidebar is hidden, the title bar's `@ultimate` button (`titlebar.left`) opens @ultimate from every surface instead:
-its mark's dot pulses while @ultimate works and is amber while questions wait on you, with the same count beside it.
+@ultimate's mark is amber while questions wait on you, and its line says how many; the To-dos tab lists them. On
+phones, where the sidebar is hidden, the title bar's `@ultimate` button (`titlebar.left`) opens @ultimate from every
+surface instead, with the same mark: its dot pulses while @ultimate works and is amber while questions wait.
 
 Every section of the sidebar folds the same way (`Section`, `section.tsx`): a quiet mono heading with a chevron and
 a count bubble, open by default, its fold state kept per section in `ext.conversations.closedSections`; the Scheduled

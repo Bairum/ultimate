@@ -32,8 +32,7 @@ then @ultimate's, an add field, and the done ones folded away. A question row op
 message (messages’ `messages:open {conversation, call}`), where its answer card has the choices, a reply and Dismiss; the
 header counts questions apart from to-dos. An open to-do's ▶ button (on hover or focus) sends @ultimate, as the
 user, `Work on to-do #<id>: <text>` (`Help me with to-do #<id>: …` for the user's own), after its current run if
-it is busy, and opens its conversation. The amber count on @ultimate's sidebar row (on phones, beside the top-bar button) and ⌘K “Show open
-questions” open this tab.
+it is busy, and opens its conversation. ⌘K “Show open questions” opens this tab.
 
 ## Actions
 

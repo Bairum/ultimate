@@ -25,8 +25,8 @@ export function StandingPhase({ id }: { id: number }) {
 }
 
 /**
- * The title bar's way to @ultimate on phones, where the sidebar with its row is hidden: its state and the questions
- * that wait on you.
+ * The title bar's way to @ultimate on phones, where the sidebar with its row is hidden: its state, the mark amber while
+ * questions wait on you.
  */
 export function UltimateButton() {
   return (
@@ -35,31 +35,6 @@ export function UltimateButton() {
         {(parked) => <Primary parked={parked} />}
       </Provided>
     </span>
-  )
-}
-
-/** The amber count of questions that wait on you; it opens them in the To-dos tab. */
-export function QuestionsCount({ waiting, className }: { waiting: number; className?: string }) {
-  const actions = useUltimate()
-  if (waiting === 0) return null
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          aria-label={`${waiting} ${waiting === 1 ? 'question waits' : 'questions wait'} on you`}
-          className={cn(
-            'flex h-5 shrink-0 items-center rounded-sm bg-amber-500/15 px-1.5 font-mono text-[11px] text-amber-700 transition-colors outline-none hover:bg-amber-500/25 focus-visible:ring-1 focus-visible:ring-ring dark:text-amber-300',
-            className,
-          )}
-          data-questions-count
-          onClick={() => actions.openPanel('todos')}
-          type="button"
-        >
-          {waiting}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>{waiting} waiting on you · open Questions</TooltipContent>
-    </Tooltip>
   )
 }
 
@@ -88,36 +63,33 @@ function Primary({ parked }: { parked?: ReadonlySet<number> }) {
             const word = workingWord(phase)
             const label = primaryLabel({ paused, working, word, waiting })
             return (
-              <>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      aria-current={active ? 'page' : undefined}
-                      aria-label={`Talk to @${name} (${label})`}
-                      className={cn(
-                        'flex h-5 shrink-0 items-center gap-1.5 rounded-sm px-1.5 transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
-                        active && 'text-foreground',
-                      )}
-                      data-ultimate-button
-                      onClick={() => void talkToUltimate(actions)}
-                      type="button"
-                    >
-                      <AgentMark
-                        name={name}
-                        presence={working ? 'working' : waiting ? 'waiting' : undefined}
-                        size="sm"
-                      />
-                      @{name}
-                      {working && word !== 'working' && <span className="text-brand">{word}</span>}
-                      {paused && <span className="text-warning">paused</span>}
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    Talk to @{name} · {label}
-                  </TooltipContent>
-                </Tooltip>
-                <QuestionsCount className="-ml-1" waiting={waiting} />
-              </>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    aria-current={active ? 'page' : undefined}
+                    aria-label={`Talk to @${name} (${label})`}
+                    className={cn(
+                      'flex h-5 shrink-0 items-center gap-1.5 rounded-sm px-1.5 transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
+                      active && 'text-foreground',
+                    )}
+                    data-ultimate-button
+                    onClick={() => void talkToUltimate(actions)}
+                    type="button"
+                  >
+                    <AgentMark
+                      name={name}
+                      presence={working ? 'working' : waiting ? 'waiting' : undefined}
+                      size="sm"
+                    />
+                    @{name}
+                    {working && word !== 'working' && <span className="text-brand">{word}</span>}
+                    {paused && <span className="text-warning">paused</span>}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Talk to @{name} · {label}
+                </TooltipContent>
+              </Tooltip>
             )
           }}
         </Provided>
