@@ -14,11 +14,11 @@ import type { BackupFile } from '../extensions/cloud/backup.ts'
 
 /**
  * Files that go: the state, the call trace and states parked by earlier versions, each with its `-wal` and `-shm` (also
- * one whose database already went, as an interrupted reset leaves it), and files describing the old state, rebuilt
- * when needed.
+ * one whose database already went, as an interrupted reset leaves it), later chapters with their record and a pending
+ * switch, and files describing the old state, rebuilt when needed.
  */
 export const MOVES =
-  /^((state|trace|state\.stale-.+)\.sqlite(-wal|-shm)?|conversations\.json|previews\.json|supervisor\.log)$/
+  /^((state|trace|state\.stale-.+)\.sqlite(-wal|-shm)?|chapters|chapters\.json|pending-chapter\.json|conversations\.json|previews\.json|supervisor\.log)$/
 /**
  * The reset or restore in progress, written before the first file moves: a rerun finishes it into the same backup.
  * While it exists no Ultimate opens the home (`server/harness.ts`).

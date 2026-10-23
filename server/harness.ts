@@ -17,6 +17,7 @@ import { guardToolArguments, modelTrace } from './tool-arguments.ts'
 import { callTrace } from './trace.ts'
 import { projectSkills } from './skills.ts'
 import { requestSwap } from './supervisor-protocol.ts'
+import { activeChapter, finishChapterSwitch } from '../lib/chapters.ts'
 import type {
   ConversationId,
   Cursor,
@@ -126,7 +127,8 @@ export async function prepareHarness(options: HostOptions) {
   const builds = createBuild(ultimateRoot)
   const home = options.home ?? process.env.ULTIMATE_HOME ?? projectHome(projectRoot, userHome)
   await mkdir(home, { recursive: true })
-  const database = join(home, 'state.sqlite')
+  /** The active chapter's files, read again each time storage opens, after a journaled switch finished. */
+  let chapter = await activeChapter(home)
   const runtime = await ModelRuntime.create()
   const settings = SettingsManager.create(projectRoot)
   applyHttpProxySettings(settings.getGlobalSettings().httpProxy)
@@ -145,7 +147,7 @@ export async function prepareHarness(options: HostOptions) {
   }
   // Here, not with the extensions: model calls are traced through the models the harness opens with, and through the
   // runtime extensions call directly (health's pings), so `modelRuntime` below is the guarded one too.
-  const trace = callTrace(join(home, 'trace.sqlite'))
+  const trace = callTrace(() => chapter.trace)
   const modelCalls = modelTrace(trace)
   registry.install(modelCalls.extension)
   const modelRuntime = guardToolArguments(runtime, modelCalls)
@@ -197,7 +199,14 @@ export async function prepareHarness(options: HostOptions) {
     builds,
     build: builds.current,
     home,
-    database,
+    /** The active chapter's `state.sqlite`. */
+    get database() {
+      return chapter.database
+    },
+    /** The active chapter: its name, number, the newest chapter's name and its files. */
+    get chapter() {
+      return chapter
+    },
     /** The call trace of this home, which extensions read as `host.trace`; open while the harness is. */
     callTrace: trace,
     modelRuntime,
@@ -220,7 +229,12 @@ export async function prepareHarness(options: HostOptions) {
           throw new Error(
             `A reset or restore of ${home} was interrupted; rerun pnpm reset or pnpm restore`,
           )
-        storage = await openNodeSqliteStorage(database)
+        await finishChapterSwitch(home, async (file) => {
+          const created = await openNodeSqliteStorage(file)
+          await created.close(context)
+        })
+        chapter = await activeChapter(home)
+        storage = await openNodeSqliteStorage(chapter.database)
         harness = await Harness.open(
           storage,
           {

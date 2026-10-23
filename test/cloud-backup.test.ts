@@ -49,7 +49,7 @@ const back = (
   at: { projectRoot: string; home: string },
   name: string,
   extra: { force?: boolean; tailnet?: string; key?: string; fetch?: typeof fetch } = {},
-) => backUp({ ...cloud, key, machine: name, ...at, ...extra })
+) => backUp({ ...cloud, key, machine: name, dir: at.home, projectRoot: at.projectRoot, ...extra })
 /** A project of its own for each test, so earlier backups never make its first one stale. */
 let projects = 0
 const own = () => `github.com/o/other-${++projects}`
@@ -117,7 +117,14 @@ it('takes a 409 naming this very backup as latest for success: a retried commit 
     await stub.fetch(input, init)
     return stub.fetch(input, init)
   }
-  const done = await backUp({ ...cloud, key: other, machine: 'desk', ...a, fetch: retried })
+  const done = await backUp({
+    ...cloud,
+    key: other,
+    machine: 'desk',
+    dir: a.home,
+    projectRoot: a.projectRoot,
+    fetch: retried,
+  })
   expect(stub.register.projects.find((project) => project.key === other)?.latest.id).toBe(done.id)
   expect(await readBackup(a.home, other)).toEqual({ key: other, parent: done.id, last: done })
 })

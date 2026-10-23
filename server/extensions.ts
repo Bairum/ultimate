@@ -46,6 +46,7 @@ export type ExtensionHost = Pick<
   | 'models'
   | 'skills'
   | 'restart'
+  | 'chapter'
 > & {
   access: Pick<Access, 'allow'>
   notice(message: string): void
@@ -360,6 +361,9 @@ export async function loadExtensions(
     models: () => host.models(),
     skills: (cwd) => host.skills(cwd),
     restart: (approved) => host.restart(approved),
+    get chapter() {
+      return host.chapter
+    },
     harness: runtime.harness,
     system: runtime.system,
     conversations: runtime.conversations,
