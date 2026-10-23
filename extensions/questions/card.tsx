@@ -114,6 +114,12 @@ function Summary({
   drafts: Record<number, Draft>
   note: string
 }) {
+  // One column for the tags, as wide as the widest ("2a,b,c", "note"), so every answer starts at the same place.
+  const widest = Math.max(
+    ...questions.map((question, index) => brief(question, index, drafts[index]).tag.length),
+    note.trim() ? 4 : 0,
+  )
+  const tag = { minWidth: `${Math.max(3, widest)}ch` }
   return (
     <ul className="mt-1.5 space-y-0.5 pl-5.5 text-[13px] leading-relaxed">
       {questions.map((question, index) => {
@@ -124,7 +130,9 @@ function Summary({
             className="flex min-w-0 items-baseline gap-2 motion-safe:animate-fade-in"
             style={{ animationDelay: `${index * 40}ms` }}
           >
-            <span className="w-7 shrink-0 font-mono text-[11px] text-brand">{answer.tag}</span>
+            <span className="shrink-0 font-mono text-[11px] text-brand" style={tag}>
+              {answer.tag}
+            </span>
             {answer.words ? (
               <span className="min-w-0 text-foreground">{answer.words}</span>
             ) : (
@@ -138,7 +146,9 @@ function Summary({
           className="flex min-w-0 items-baseline gap-2 motion-safe:animate-fade-in"
           style={{ animationDelay: `${questions.length * 40}ms` }}
         >
-          <span className="w-7 shrink-0 font-mono text-[11px] text-muted-foreground">note</span>
+          <span className="shrink-0 font-mono text-[11px] text-muted-foreground" style={tag}>
+            note
+          </span>
           <span className="min-w-0 whitespace-pre-wrap text-foreground">{note.trim()}</span>
         </li>
       )}
