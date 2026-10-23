@@ -90,9 +90,10 @@ export function inFlight(database: string): number[] {
 }
 
 /**
- * Finish a journaled switch, holding the home's storage lock before storage opens. A new chapter gets its database,
- * created by `create`, with record ids continuing after every chapter's, so `#123` names one conversation across
- * chapters. Each step can be repeated: an interrupted switch finishes on the next open.
+ * Finish a journaled switch, holding the home's storage lock before storage opens. A new chapter gets its database from
+ * `create`, which must be idempotent (a crash can leave a file without its schema). On every switch the target's record
+ * ids continue after every other chapter's, so `#123` names one conversation across chapters, also when switching back.
+ * Each step can be repeated: an interrupted switch finishes on the next open.
  */
 export async function finishChapterSwitch(
   home: string,
@@ -102,16 +103,18 @@ export async function finishChapterSwitch(
   if (!pending) return undefined
   const to = chapterName(pending.to)
   const chapters = await readChapters(home)
+  const target = chapterFiles(home, to).database
   if (!chapters.chapters.some((chapter) => chapter.name === to)) {
-    const files = chapterFiles(home, to)
-    await mkdir(files.dir, { recursive: true })
-    if (!existsSync(files.database)) await create(files.database)
-    continueIds(
-      chapters.chapters.map((chapter) => chapterFiles(home, chapter.name).database),
-      files.database,
-    )
+    await mkdir(chapterFiles(home, to).dir, { recursive: true })
+    await create(target)
     chapters.chapters.push({ name: to, createdAt: Date.now() })
   }
+  continueIds(
+    chapters.chapters
+      .filter((chapter) => chapter.name !== to)
+      .map((chapter) => chapterFiles(home, chapter.name).database),
+    target,
+  )
   chapters.active = to
   await writeJson(join(home, CHAPTERS_FILE), chapters)
   await rm(join(home, PENDING_CHAPTER))

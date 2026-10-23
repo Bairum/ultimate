@@ -1,6 +1,6 @@
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { existsSync } from 'node:fs'
-import { readdir } from 'node:fs/promises'
+import { mkdir, readdir } from 'node:fs/promises'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -75,10 +75,24 @@ it('switches to a new chapter on the next open, continuing ids, and back again',
   } finally {
     await opened.close()
   }
+  // Back in the first chapter, new ids still continue after the second chapter's.
+  expect(await conversationIn(prepared)).toBeGreaterThan(second)
   expect(await readChapters(home)).toMatchObject({
     active: FIRST_CHAPTER,
     chapters: [{ name: FIRST_CHAPTER }, { name: 'fresh-roots' }],
   })
+})
+
+it('finishes a switch whose new database was left without its schema', async () => {
+  const home = await temp('ultimate-chapters-')
+  const prepared = await prepare(home)
+  const first = await conversationIn(prepared)
+  await requestChapter(home, 'next')
+  // A crash between creating the file and committing Pi's migrations.
+  await mkdir(join(home, 'chapters', 'next'), { recursive: true })
+  new DatabaseSync(join(home, 'chapters', 'next', 'state.sqlite')).close()
+  expect(await conversationIn(prepared)).toBeGreaterThan(first)
+  expect((await activeChapter(home)).name).toBe('next')
 })
 
 it('finishes a switch interrupted after the new database was created', async () => {
