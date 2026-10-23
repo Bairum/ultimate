@@ -43,9 +43,16 @@ function lineCount(value: string) {
 }
 const lines = (count: number) => `${count} line${count === 1 ? '' : 's'}`
 
+/** The skill a read loads: the folder name of a `SKILL.md`, the convention Pi's skill list points agents at. */
+export function skillOf(path: string) {
+  const parts = path.split('/')
+  return parts.at(-1) === 'SKILL.md' && parts.length > 1 ? parts.at(-2) : undefined
+}
+
 function Read({ call }: { call: ToolCallView }) {
   const path = text(call.args.path)
   const shown = usePath(path)
+  const skill = skillOf(path)
   const duration = useToolDuration(call)
   const offset = typeof call.args.offset === 'number' ? call.args.offset : undefined
   const limit = typeof call.args.limit === 'number' ? call.args.limit : undefined
@@ -67,13 +74,20 @@ function Read({ call }: { call: ToolCallView }) {
             {duration && <span>{duration}</span>}
           </>
         }
-        name="read"
+        name={skill ? 'skill' : 'read'}
         state={call.status}
         title={
-          <>
-            {shown}
-            <span className="text-muted-foreground/60">{range}</span>
-          </>
+          skill ? (
+            <>
+              <span className="text-brand">{skill}</span>
+              <span className="text-muted-foreground/60"> · {shown}</span>
+            </>
+          ) : (
+            <>
+              {shown}
+              <span className="text-muted-foreground/60">{range}</span>
+            </>
+          )
         }
       />
       <ToolContent>
@@ -406,6 +420,22 @@ const fileLine = (verb: string) =>
     )
   }
 
+/** A read as a step line; a skill's `SKILL.md` names the skill it loads. */
+function ReadLine({ call }: { call: ToolCallView }) {
+  const path = text(call.args.path)
+  const shown = usePath(path)
+  const skill = skillOf(path)
+  return skill ? (
+    <>
+      <span className="text-foreground/80">skill</span> <span className="text-brand">{skill}</span>
+    </>
+  ) : (
+    <>
+      <span className="text-foreground/80">read</span> {shown}
+    </>
+  )
+}
+
 /** A bash call as a step line: its programs, as its header shows them. */
 function BashLine({ call }: { call: ToolCallView }) {
   const command = text(call.args.command)
@@ -425,7 +455,7 @@ function BashLine({ call }: { call: ToolCallView }) {
 export default defineWebExtension({
   tools: { read: Read, write: Write, edit: Edit, bash: Bash },
   toolLines: {
-    read: fileLine('read'),
+    read: ReadLine,
     write: fileLine('write'),
     edit: fileLine('edit'),
     bash: BashLine,

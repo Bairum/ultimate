@@ -145,7 +145,20 @@ export interface SystemInfo {
   code: { ultimateRoot: string; branch: string; sha: string; dirty: boolean; coreStale?: boolean }
   extensionDiagnostics: string[]
   extensions: ExtensionInfo[]
-  skills: { name: string; description: string; path: string }[]
+  /**
+   * Loaded skills: `scope` is where the winner came from, `overrides` the paths of same-named skills in earlier scopes,
+   * `manual` a skill with `disable-model-invocation` that the model is never shown.
+   */
+  skills: {
+    name: string
+    description: string
+    path: string
+    scope: 'clone' | 'user' | 'project'
+    overrides: string[]
+    manual?: true
+  }[]
+  /** Pi's warnings and errors from loading skills: malformed files, missing descriptions, invalid names. */
+  skillDiagnostics: { type: 'warning' | 'error' | 'collision'; message: string; path?: string }[]
   contextFiles: string[]
 }
 export interface Notice {
