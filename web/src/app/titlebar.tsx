@@ -122,18 +122,44 @@ function Project() {
 const wordmark =
   'flex shrink-0 items-center gap-2 rounded-sm px-1 font-sans text-[11px] font-semibold tracking-[0.28em] text-brand'
 
+/** The ULTIMATE wordmark beyond a phone; with `onClick` a button, for an extension that fills `titlebar.brand`. */
+export function Wordmark({ onClick, label }: { onClick?: () => void; label?: string }) {
+  if (!onClick) return <span className={wordmark}>ULTIMATE</span>
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          aria-label={label}
+          className={cn(
+            wordmark,
+            'h-6 cursor-pointer px-1.5 transition-colors outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring',
+          )}
+          onClick={onClick}
+          type="button"
+        >
+          ULTIMATE
+        </button>
+      </TooltipTrigger>
+      {label && <TooltipContent>{label}</TooltipContent>}
+    </Tooltip>
+  )
+}
+
 /**
- * The brand. Beyond a phone it is just the mark, since the tabs beside it list the surfaces; on phones it opens the
- * list of surfaces and names the shown one.
+ * The brand. Beyond a phone it is the mark, which an extension may make a button (`titlebar.brand`), since the tabs
+ * beside it list the surfaces; on phones it opens the list of surfaces and names the shown one.
  */
 function Brand() {
   const surfaces = surfaceItems(useExtensions())
   const shown = useStore((state) => state.ui.surface?.id)
   const current = surfaces.find((surface) => surface.id === shown)
   const Icon = current?.icon
+  const replaced = slotItems(useExtensions(), 'titlebar.brand').length > 0
   return (
     <>
-      <span className={cn(wordmark, 'max-md:hidden')}>ULTIMATE</span>
+      <span className="contents max-md:hidden">
+        {replaced ? <Slot name="titlebar.brand" variant="inline" /> : <Wordmark />}
+      </span>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <button

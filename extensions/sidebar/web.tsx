@@ -1,11 +1,12 @@
 import { defineWebExtension } from '@/sdk'
 import { Conversations, Seen } from './sidebar.tsx'
-import { UltimateButton } from './ultimate.tsx'
+import { UltimateButton, UltimateWordmark } from './ultimate.tsx'
 
 export default defineWebExtension({
   slots: {
     sidebar: Conversations,
     // Phones only, where the sidebar with @ultimate's row is hidden; last in the title bar's left side.
+    'titlebar.brand': [UltimateWordmark],
     'titlebar.left': [{ component: UltimateButton, order: 100 }],
     overlay: [Seen],
   },

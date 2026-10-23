@@ -1,6 +1,15 @@
 import type { ReactNode } from 'react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { cn, ParkedRuns, Provided, useDocOf, useStore, useTasks, useUltimate } from '@/sdk'
+import {
+  cn,
+  ParkedRuns,
+  Provided,
+  useDocOf,
+  useStore,
+  useTasks,
+  useUltimate,
+  Wordmark,
+} from '@/sdk'
 import { MessagesDoc, emptyMessages, waitingOnUser } from '../messages/ui.tsx'
 import { AgentMark, ConversationPhase, useOverview } from '../conversations/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
@@ -22,6 +31,12 @@ export function StandingPhase({ id }: { id: number }) {
       {(phase) => <span className="shrink-0 text-brand">{workingWord(phase)}</span>}
     </Provided>
   )
+}
+
+/** The title bar's wordmark beyond a phone opens @ultimate, as its sidebar row does. */
+export function UltimateWordmark() {
+  const actions = useUltimate()
+  return <Wordmark label="Talk to @ultimate" onClick={() => void talkToUltimate(actions)} />
 }
 
 /**

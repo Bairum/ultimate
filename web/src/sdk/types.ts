@@ -7,6 +7,7 @@ import type { ConversationSummary } from '../../../shared/protocol.ts'
 export type SlotName =
   | 'sidebar'
   | 'sidebar.top'
+  | 'titlebar.brand'
   | 'titlebar.project'
   | 'titlebar.left'
   | 'titlebar.right'

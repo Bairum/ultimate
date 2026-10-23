@@ -44,7 +44,7 @@ export {
   StatusLine,
 } from '../app/primitives.tsx'
 /** The title bar's project chip, for an extension that replaces it in `titlebar.project` with a menu. */
-export { ProjectChip, projectTitle } from '../app/titlebar.tsx'
+export { ProjectChip, projectTitle, Wordmark } from '../app/titlebar.tsx'
 /** Isolates another extension's component you render, such as a document renderer: it throws into an error card. */
 export { ExtensionBoundary } from '../app/boundary.tsx'
 /** A card that folds to one quiet line in compact mode, and whether one is open; the reader's choice survives reloads. */
