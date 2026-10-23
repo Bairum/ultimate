@@ -10,13 +10,13 @@ Pause the whole Ultimate host and continue it with Play. This is a soft pause: r
 
 ## Rate limits
 
-A model answer that says the provider limits the account (HTTP 429, a rate limit, a usage limit or quota: `lib/rate-limit.ts`) pauses the host by itself, the first time, whichever provider sent it. Retrying sooner only hits the limit again, and Daniel wants it to stay paused until he says so:
+A model answer that is a rate limit Pi retries (HTTP 429, "rate limit", "too many requests": `lib/rate-limit.ts`) pauses the host by itself, the first time, whichever provider sent it. Quota, usage-limit and billing errors are on Pi's no-retry list: they end the run at once, so they fail as usual instead, with nothing for Play to continue. Retrying sooner only hits the limit again, and Daniel wants it to stay paused until he says so:
 
-- The extension watches commits for assistant error entries. On the first rate-limited one it holds the scheduler at once, inside that commit's publication, before Pi's own retry backoff (2 s) can fire, then records the pause with `limit` (`{ provider, model, error, at, conversationId }`).
+- The extension watches commits for assistant error entries. On the first rate-limited one it holds the scheduler at once, inside that commit's publication, before Pi's own retry backoff (2 s) can fire, then records the pause with `limit` (`{ provider, model, error, at, conversationId }`), also into a pause the user started. If that commit fails, it releases the hold again rather than hold work with nothing showing Play.
 - Pi has already scheduled that generation's retry, so the run is not failed: it sleeps in its `retry` phase, held. Every other run parks at its next step; requests already in flight that get their own 429 park the same way and add no second pause.
-- @ultimate gets one `pause.limit` card: the provider, the upstream message, where it first hit, and Play while this pause holds. It is a write of only kind and data, which Pi appends at once even while @ultimate's own run is held, and it starts no run. The models learn of the limit from the Play note on each held run: "Paused for 12m (claude-code rate limited claude-opus-5-5); the run continued after Play."
+- @ultimate gets one `pause.limit` card: the provider, the upstream message, where it first hit, and Play while this pause holds. It is a write of only kind and data, which Pi appends at once even while @ultimate's own run is held, and it starts no run; reopening a paused host writes it if a crash lost it. The models learn of the limit from the Play note on each held run: "Paused for 12m (claude-code rate limited claude-opus-5-5); the run continued after Play."
 - It never resumes by itself; there is no reset time to wait for. Play continues each held run where it stopped, through Pi's retry, on the model its agent has by then, so switching an agent's model while paused takes effect on Play. Each Play while the limit still holds spends one of Pi's retries (3 per generation) and pauses again.
-- The watchdog treats a rate-limited failure as not temporary: it reports once and never re-prompts into the limit.
+- When the limit outlasts those retries, that run fails and the host pauses again. The watchdog treats the failure as not temporary: it reports once, with a hint to resume the conversation after Play, and never re-prompts into the limit.
 
 ## Timers outside the scheduler
 

@@ -429,6 +429,47 @@ it('leaves ordinary provider errors to Pi’s retry without pausing', async () =
   expect(f.paused()).toBe(false)
 })
 
+it('lets a quota error fail its run without pausing: Pi never retries it, so Play would continue nothing', async () => {
+  const f = await fixture()
+  f.prepared.faux!.setResponses([
+    () =>
+      fauxAssistantMessage('', {
+        stopReason: 'error',
+        errorMessage: '429 You exceeded your current quota (insufficient_quota)',
+      }),
+  ])
+  const { root } = await f.open()
+  const submission = await root.submit({ type: 'input', content: 'go' }, context)
+  expect(await submission.wait(context)).toMatchObject({
+    status: 'unanswered',
+    reason: 'model_error',
+  })
+  expect(f.paused()).toBe(false)
+})
+
+it('records a limit into a pause the user started, so it still shows', async () => {
+  const f = await fixture()
+  let asked = false
+  const answer = Promise.withResolvers<void>()
+  f.prepared.faux!.setResponses([
+    async () => {
+      asked = true
+      await answer.promise
+      return fauxAssistantMessage('', { stopReason: 'error', errorMessage: limit })
+    },
+    () => fauxAssistantMessage([fauxText('done')]),
+  ])
+  const { root } = await f.open()
+  const submission = await root.submit({ type: 'input', content: 'go' }, context)
+  await until(() => asked)
+  await f.action('pause')
+  // The request in flight hits the limit after the user paused: the pause stands, now with the limit.
+  answer.resolve()
+  await until(async () => (await f.action('state')).limit !== undefined)
+  await f.action('play')
+  expect((await submission.wait(context)).status).toBe('done')
+})
+
 /** A task record as `running()` reads it: it decides by task kind and checkpoint phase only. */
 const at = (kind: string, phase: string) => ({ kind, state: { checkpoint: { phase } } })
 

@@ -47,7 +47,7 @@ const error = (text = 'invalid model configuration') =>
   fauxAssistantMessage('', { stopReason: 'error', errorMessage: text })
 const overloaded = 'Our servers are currently overloaded. Please try again later.'
 const rateHint =
-  'Rate limited: Ultimate paused; press Play once the limit resets, or switch the agent to another model first'
+  'Still rate limited after Pi’s retries, so Ultimate is paused; once the limit resets (or the agent has another model), press Play and resume this conversation with a message'
 const model = { provider: 'faux', modelId: 'faux-1' }
 const Anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'watchdog-test.anchor',
@@ -849,10 +849,16 @@ it.each([
     rateHint,
   ],
   ['429 Too Many Requests', false, rateHint],
+  // Quota and billing errors are not rate limits Pi retries: they fail as usual, without the pause's hint.
   [
     'You exceeded your current quota, please check your plan and billing details. (insufficient_quota)',
     false,
-    rateHint,
+    undefined,
+  ],
+  [
+    'Claude Code billing: this request was charged to Claude usage credits instead of your plan limits (rate limit status allowed_warning, five_hour).',
+    false,
+    undefined,
   ],
   ['Overloaded (529)', true, undefined],
   [
