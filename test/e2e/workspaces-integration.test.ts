@@ -42,13 +42,17 @@ import { createLander, landerCheckout, landerPath } from '../../extensions/works
 import { CheckRan, Handoff, SubmissionLanded } from '../../extensions/workspaces/api.ts'
 import lineage, { leaveNote, startBranch } from '../../extensions/lineage/server.ts'
 import { LineageApi, Roots } from '../../extensions/lineage/api.ts'
-import { concludeIn, subject } from '../../extensions/conversations/server.ts'
+import {
+  actions as conversationActions,
+  concludeIn,
+  subject,
+} from '../../extensions/conversations/server.ts'
 import { ConversationsApi } from '../../extensions/conversations/api.ts'
 import type { ConversationsService } from '../../extensions/conversations/api.ts'
 import { Summaries } from '../../extensions/conversations/summary.ts'
 import self from '../../extensions/self/server.ts'
 import messagesExtension from '../../extensions/messages/server.ts'
-import { Messages } from '../../extensions/messages/api.ts'
+import { Messages, MessagesApi } from '../../extensions/messages/api.ts'
 import promptExtension, { order as promptOrder } from '../../extensions/prompt/server.ts'
 import subagents from '../../extensions/subagents/server.ts'
 import { Subagents } from '../../extensions/subagents/api.ts'
@@ -145,6 +149,7 @@ async function fixture(
     onOpen: (callback: () => Promise<void>) => openers.push(callback),
     onClose: (close: () => Promise<void>) => closers.push(close),
     doc: () => undefined,
+    conversations: () => [],
     build: () => ({ id: 'test-build' }),
     system: () => ({ process: {} }),
   } as unknown as ExtensionHost
@@ -1274,6 +1279,43 @@ it.concurrent('concludes a landed branch once its report run and subagents are i
   // The release phase freed its worktree: concluded and landed, nothing is kept.
   await until(async () => (await f.service.get(id, context))?.state === 'removed')
   await until(async () => (await concludeTask(f, id))?.state.status === 'terminal')
+})
+it.concurrent('delivers a message to a resumed branch whose checkout conclude released', async () => {
+  const { f, id, release } = await concluding()
+  await f.service.submit(id, 'None', context)
+  release()
+  await until(async () => (await concludedIds(f)).includes(id))
+  await until(async () => (await f.service.get(id, context))?.state === 'removed')
+  const { path } = (await f.service.get(id, context))!
+  // Release marks the record removed before it deletes the folder.
+  await until(() =>
+    access(path).then(
+      () => false,
+      () => true,
+    ),
+  )
+  // Another branch landed meanwhile, so the resumed branch catches up on main.
+  await commit(f.projectRoot, 'meanwhile.txt')
+  await conversationActions.resume({ ids: [id] }, { host: f.host } as ActionContext)
+  f.prepared.faux!.setResponses([() => fauxAssistantMessage('Back on it.')])
+  const messages = f.host.want(MessagesApi)!
+  const sent = await messages.send(
+    ROOT_CONVERSATION_ID,
+    { to: `#${id}`, text: 'Phase two, go.', reply: false },
+    'resumed-message',
+    context,
+  )
+  const stored = async () =>
+    (await f.opened.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context))!.messages.find(
+      (message) => message.id === sent,
+    )!
+  await until(async () => (await stored()).state !== 'sent')
+  expect((await stored()).error).toBeUndefined()
+  expect(await stored()).toMatchObject({ state: 'delivered', entry: expect.any(Number) })
+  await f.opened.harness.waitForIdle(context)
+  // Its run recreated the checkout.
+  expect((await f.service.get(id, context))?.state).toBe('ready')
+  await access(path)
 })
 it.concurrent('answers input from the report run before concluding', async () => {
   const { f, id, concluded, release } = await concluding()

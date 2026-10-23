@@ -414,9 +414,9 @@ function delivery(host: ExtensionHost) {
             : declared(m.text)
         const triager = triaged && !sure ? await triageModel(host, runtime, ctx) : undefined
         const gated = triager !== undefined
-        const receipt =
+        const placing =
           task.input.note || gated
-            ? await recipient.submit(
+            ? recipient.submit(
                 {
                   type: 'write',
                   requestId,
@@ -424,7 +424,7 @@ function delivery(host: ExtensionHost) {
                 },
                 ctx,
               )
-            : await recipient.submit(
+            : recipient.submit(
                 {
                   type: 'input',
                   requestId,
@@ -434,6 +434,23 @@ function delivery(host: ExtensionHost) {
                 },
                 ctx,
               )
+        // A recipient's input hook can refuse the input; its placement rolled back, so the message failed, with why.
+        const receipt = await placing.catch(async (cause: unknown) => {
+          if (runtime.signal.aborted) throw cause
+          const error = `Not delivered to ${task.input.toLabel}: ${cause instanceof Error ? cause.message : String(cause)}`
+          await runtime.commit(async (tx) => {
+            const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
+              (item) => item.id === m.id,
+            )
+            if (stored) {
+              stored.state = 'failed'
+              stored.error = error
+            }
+            return terminal
+          }, ctx)
+          return undefined
+        })
+        if (!receipt) return
         {
           // Admission can precede placement while a recipient is busy. Watch its durable queue,
           // not a timer, so messages become delivered only after leaving the queue.

@@ -94,6 +94,9 @@ advancing the task checkpoint happen in one transaction. A reopened task resumes
 placed input awaiting an answer and a recorded answer awaiting delivery survive without duplicate replies.
 One-way input deliveries also wait for the answer; recording it and completing the task commit together.
 Note deliveries complete after placement, without waiting for an answer.
+When the recipient's input hooks refuse placement, the message becomes `failed` with `error` naming the cause, and
+the task completes instead of faulting with the message stuck in `sent`. A message to a concluded conversation is
+delivered like any other: its input resumes it, and its next request recreates a released checkout.
 
 ## Ultimate and branches
 
