@@ -1,7 +1,7 @@
 ---
 name: reviewer-architecture
-description: Advisory architecture review (OpenRouter Opus 5.5); asks whether a range uses Ultimate's own architecture instead of building beside it. Never blocks.
-model: openrouter/anthropic/claude-opus-5.5
+description: Advisory architecture review (Sol 6.1, fast); asks whether a range uses Ultimate's own architecture instead of building beside it. Never blocks.
+model: openai-codex/gpt-6.1-sol
 thinking: low
 fast: true
 tools: [read, bash]

@@ -1,7 +1,7 @@
 ---
 name: reviewer-correctness
-description: Correctness, security and regressions review of an immutable commit range (OpenRouter Opus 5.5).
-model: openrouter/anthropic/claude-opus-5.5
+description: Correctness, security and regressions review of an immutable commit range (Astra 6).
+model: openai-codex/gpt-6-astra
 thinking: high
 tools: [read, bash]
 ---
