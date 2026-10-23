@@ -148,7 +148,8 @@ it('creates a listed chapter that has no database yet when switching to it', asy
   await requestChapter(home, 'restored')
   const restored = await conversationIn(prepared)
   await rm(join(home, 'state.sqlite'), { force: true })
-  expect(existsSync(join(home, 'state.sqlite'))).toBe(false)
+  // A crash while creating it left the file without its schema.
+  new DatabaseSync(join(home, 'state.sqlite')).close()
 
   await requestChapter(home, FIRST_CHAPTER)
   expect(await conversationIn(prepared)).toBeGreaterThan(restored)

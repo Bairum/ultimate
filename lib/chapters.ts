@@ -78,6 +78,9 @@ export function inFlight(database: string): number[] {
   // Pi upstream: @earendil-works/pi-durable@1.4.0 src/storage/sqlite/migrations.ts — tasks.status is terminal once a task ended; background tasks (schedules, watchers) always live. Drop when Pi Durable reads a closed store's task graph.
   const db = new DatabaseSync(database, { readOnly: true })
   try {
+    // A file a crash left without its schema holds no work.
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").get())
+      return []
     return db
       .prepare(
         "SELECT DISTINCT conversation_id AS id FROM tasks WHERE status != 'terminal' AND background = 0 ORDER BY id",
@@ -105,11 +108,10 @@ export async function finishChapterSwitch(
   const chapters = await readChapters(home)
   const target = chapterFiles(home, to)
   const known = chapters.chapters.some((chapter) => chapter.name === to)
-  // A new chapter, or a listed one without its database (a restore lists the first chapter it never installed).
-  if (!known || !existsSync(target.database)) {
-    await mkdir(target.dir, { recursive: true })
-    await create(target.database)
-  }
+  // Every switch initialises the target: a new chapter, a listed one without its database (a restore lists the first
+  // chapter it never installed), or a file a crash left without its schema. Pi's migrations are idempotent.
+  await mkdir(target.dir, { recursive: true })
+  await create(target.database)
   if (!known) chapters.chapters.push({ name: to, createdAt: Date.now() })
   continueIds(otherDatabases(home, chapters, to), target.database)
   chapters.active = to
