@@ -31,6 +31,18 @@ export interface AgentDefinition {
   /** Overlay files whose settings, `addTools` and body discovery merged into this definition, in order. */
   overlays?: string[]
 }
+/**
+ * The model a preview runs every agent on, from `ULTIMATE_MODEL` (`provider/id`), which the parent's `instance.model`
+ * setting sets; undefined outside a preview or when the parent opted out.
+ */
+export function previewModel(env: NodeJS.ProcessEnv = process.env) {
+  const value = env.ULTIMATE_MODEL
+  const slash = value?.indexOf('/') ?? -1
+  if (!value || slash <= 0 || slash === value.length - 1) return undefined
+  return { provider: value.slice(0, slash), modelId: value.slice(slash + 1) }
+}
+
+/** The agent change a definition makes over `parent`; in a preview, its model replaces every other choice. */
 export function definitionAgent(
   definition: AgentDefinition | undefined,
   parent: Agent,
@@ -48,7 +60,7 @@ export function definitionAgent(
   } = {},
 ): AgentChange {
   const excludeTools = [...excluded, ...(definition?.denyTools ?? [])]
-  const ref = overrideModel ?? definition?.model ?? parent.model
+  const ref = previewModel() ?? overrideModel ?? definition?.model ?? parent.model
   const model = ref && modelRuntime.getModel(ref.provider, ref.modelId)
   const thinking = overrideThinking ?? definition?.thinking ?? parent.thinkingLevel
   const tools = [

@@ -1,4 +1,7 @@
 {
+  "instance": {
+    "model": "openai-codex/gpt-6.1-sol"
+  },
   "isolates": {
     "worktree": {
       "setup": ["pnpm install --frozen-lockfile --prefer-offline"]

@@ -13,7 +13,7 @@
 - `ULTIMATE_GENERATION` defaults to `1` and labels the process in system info.
 - Pi's models, settings, and auth are shared with `~/.pi/agent`; the `models` extension logs in to providers.
 - `pnpm check` checks format/lint/types; `pnpm test` runs the fast in-process tests with temporary homes (about 60 s today), each scripting its model responses on Pi's faux provider (`prepareHarness({ faux })`, test-only); `pnpm test:e2e` runs `test/e2e`, the tests that spawn real supervisors and instances, on a scripted OpenAI-compatible endpoint (`test/e2e/scripted-model.ts`). Test servers find no Tailscale CLI (`TAILSCALE_COMMAND`), so they stay off the tailnet.
-- UI and behaviour are verified on a preview: `instance start` runs a clean Ultimate on the configured models (its own home; provider logins are read from `~/.pi/agent`, never copied). Seed it by prompting it as a user would, then look with screenshot or browser (the `verify-ui` skill has the checklist). It spends tokens; stop it when done.
+- UI and behaviour are verified on a preview: `instance start` runs a clean Ultimate with every agent on `instance.model` (default `openai-codex/gpt-6.1-sol`, fast; its own home; provider logins are read from `~/.pi/agent`, never copied). Seed it by prompting it as a user would, then look with screenshot or browser (the `verify-ui` skill has the checklist). It spends tokens; stop it when done.
 - Restart and chapter-switch flows need a supervised scratch server, since a preview runs `server/main.ts` without the
   supervisor and cannot restart. From the checkout under test:
   `ULTIMATE_HOME=$(mktemp -d) pnpm start --port 4799 --no-open`. Tailscale follows user settings, so with it on there

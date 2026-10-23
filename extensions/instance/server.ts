@@ -31,11 +31,41 @@ import { spawnGroup, stopGroup } from '../../lib/process-group.ts'
 import type { Group, GroupProcess } from '../../lib/process-group.ts'
 import { InstanceApi } from './api.ts'
 import { ListAction } from './refs.ts'
+import type { JsonObject } from '@earendil-works/pi-durable'
+import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 
-/** A preview keeps ordinary parent variables, but gets its own host identity and no inherited cloud settings. */
+/** Previews run every agent on this model unless `instance.model` names another or is `null`. */
+export const DEFAULT_PREVIEW_MODEL = 'openai-codex/gpt-6.1-sol'
+
+/** The `instance.model` setting, project over user: the `provider/id` a preview runs every agent on, or none. */
+export async function previewModelSetting(
+  host: Pick<ExtensionHost, 'userHome' | 'projectSettings'>,
+): Promise<string | undefined> {
+  // Invalid settings JSON is reported where settings load; here it counts as unset.
+  const user: JsonObject = await readSettings(userSettingsPath(host.userHome)).catch(() => ({}))
+  for (const settings of [await host.projectSettings(), user]) {
+    const instance = settings.instance
+    if (instance && typeof instance === 'object' && !Array.isArray(instance))
+      if (Object.hasOwn(instance, 'model')) {
+        const { model } = instance
+        if (model === null) return undefined
+        if (typeof model !== 'string' || !/^[^/\s]+\/\S+$/.test(model))
+          throw new Error(
+            `Invalid instance.model ${JSON.stringify(model)}: expected "provider/id" or null`,
+          )
+        return model
+      }
+  }
+  return DEFAULT_PREVIEW_MODEL
+}
+
+/**
+ * A preview keeps ordinary parent variables, but gets its own host identity, no inherited cloud settings, and
+ * `ULTIMATE_MODEL` only when `model` is set.
+ */
 export function previewEnv(
   parent: NodeJS.ProcessEnv,
-  options: { home: string; project: string; userHome: string; ownerPid: number },
+  options: { home: string; project: string; userHome: string; ownerPid: number; model?: string },
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(
@@ -51,6 +81,7 @@ export function previewEnv(
             'ULTIMATE_CLOUD_URL',
             'ULTIMATE_CLOUD_TOKEN',
             'ULTIMATE_CLOUD_MACHINE',
+            'ULTIMATE_MODEL',
           ].includes(key),
       ),
     ),
@@ -60,6 +91,7 @@ export function previewEnv(
     ULTIMATE_PORT: '0',
     ULTIMATE_NO_OPEN: '1',
     ULTIMATE_INSTANCE_OWNER: String(options.ownerPid),
+    ...(options.model ? { ULTIMATE_MODEL: options.model } : {}),
   }
   return env
 }
@@ -298,6 +330,7 @@ export default function instanceExtension(
         project,
         userHome: host.userHome,
         ownerPid: process.pid,
+        model: await previewModelSetting(host),
       })
       // No pid file: a preview exits by itself once its owner is gone (ULTIMATE_INSTANCE_OWNER).
       const group = spawnGroup(process.execPath, ['server/main.ts'], {
@@ -445,15 +478,15 @@ export default function instanceExtension(
     sections: [
       section('test_core_changes', () =>
         ownSource
-          ? 'Before restarting after core changes, start a second instance, check its API and UI using browser/screenshot, then stop it. An instance runs the configured models and spends tokens; drive it with real prompts. Instances are temporary and process-local.'
-          : "To check changes to this project's .ultimate/ extensions, agents or settings, start a second instance: it runs this Ultimate with your workspace as its project. Look at it with browser/screenshot, then stop it. It runs the configured models and spends tokens. It does not run the project's own app.",
+          ? 'Before restarting after core changes, start a second instance, check its API and UI using browser/screenshot, then stop it. An instance runs every agent on the `instance.model` setting (default openai-codex/gpt-6.1-sol, fast) and spends tokens; drive it with real prompts. Instances are temporary and process-local.'
+          : "To check changes to this project's .ultimate/ extensions, agents or settings, start a second instance: it runs this Ultimate with your workspace as its project. Look at it with browser/screenshot, then stop it. It runs every agent on the `instance.model` setting (default openai-codex/gpt-6.1-sol, fast) and spends tokens. It does not run the project's own app.",
       ),
     ],
     tools: [
       defineTool({
         name: 'instance',
         description:
-          'Start, inspect logs, list or stop isolated standalone Ultimate test servers (maximum three). Defaults to the calling workspace; set subagent to preview an owned child worktree. Instances run the configured models.',
+          'Start, inspect logs, list or stop isolated standalone Ultimate test servers (maximum three). Defaults to the calling workspace; set subagent to preview an owned child worktree. Instances run every agent on `instance.model` (default openai-codex/gpt-6.1-sol, fast).',
         parameters: Type.Object({
           action: Type.Union(
             ['start', 'stop', 'logs', 'list'].map((action) => Type.Literal(action)),
