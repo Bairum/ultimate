@@ -3,8 +3,6 @@
  * input. The summary model decides what the sender left open; a declared decision skips the model.
  */
 
-import { parseDecisions } from '../../lib/decisions.ts'
-
 const bare = (line: string) => line.trim().replace(/[*_`]+$/, '')
 
 /**
@@ -21,7 +19,8 @@ export function needsDecision(text: string) {
     !lead ||
     !bare(lead).endsWith(':') ||
     /decision|option|choose|choice|pick/i.test(lead) ||
-    parseDecisions(text).length > 0
+    // Lettered options on a numbered line: a decisions block.
+    /^\s*\d+[.)]\s.*\(a\)/m.test(text)
   )
 }
 

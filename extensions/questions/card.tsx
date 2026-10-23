@@ -4,13 +4,13 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import { api, cn, errorMessage, useConversation, useDocOf, useViewport } from '@/sdk'
+import type { Question } from '../messages/refs.ts'
 import { MessagesDoc } from '../messages/ui.tsx'
 import { keyCard, openQuestions } from './open.tsx'
 import type { Message } from './open.tsx'
 import { brief, QuestionItem } from './question.tsx'
-import { AnswerAction, DismissAction, QuestionsDoc } from './refs.ts'
+import { AnswerAction, DismissAction } from './refs.ts'
 import type { Answer } from './refs.ts'
-import type { Question } from './types.ts'
 import {
   answered,
   answerOf,
@@ -27,15 +27,14 @@ const UNDO_MS = 3000
 
 /** Whether `card` is the one on the shown conversation's page that takes the desktop 1–9 and Enter keys. */
 function useKeys(card: string) {
-  const log = useDocOf(1, QuestionsDoc)
   const messages = useDocOf(1, MessagesDoc)?.messages ?? []
   const conversation = useConversation((value) => value.id)
-  return keyCard(log, conversation, messages) === card
+  return keyCard(conversation, messages) === card
 }
 
 /**
- * The answer card of a message that waits on the user: its extracted questions, or only Dismiss while none were
- * extracted. `keys` (default: the shown conversation decides) whether it takes the desktop 1–9 and Enter keys.
+ * The answer card of a message that waits on the user: the questions it asks, or only a reply field and Dismiss when
+ * it asks none. `keys` (default: the shown conversation decides) whether it takes the desktop 1–9 and Enter keys.
  */
 export function MessageQuestions({
   message,
@@ -46,7 +45,7 @@ export function MessageQuestions({
   keys?: boolean
   className?: string
 }) {
-  const questions = openQuestions(useDocOf(1, QuestionsDoc), message)
+  const questions = openQuestions(message)
   const card = `message:${message.id}`
   const shown = useKeys(card)
   if (message.to !== 'user' || !message.reply || message.state !== 'delivered') return null
@@ -55,7 +54,9 @@ export function MessageQuestions({
       card={card}
       questions={questions}
       keys={questions.length > 0 && (keys ?? shown)}
-      submit={(answers) => api.action(AnswerAction, { messageId: message.id, answers })}
+      submit={(answers, note) =>
+        api.action(AnswerAction, { messageId: message.id, answers, ...(note ? { note } : {}) })
+      }
       reply={(text) => api.action(AnswerAction, { messageId: message.id, text })}
       dismiss={() => api.action(DismissAction, { messageId: message.id })}
       {...(className === undefined ? {} : { className })}
@@ -104,7 +105,15 @@ function Progress({ done }: { done: boolean[] }) {
  * What was sent, folded to a line per question in the shape of the answer under an answered message: the number and
  * letter, the words, and "skipped" for a question left open.
  */
-function Summary({ questions, drafts }: { questions: Question[]; drafts: Record<number, Draft> }) {
+function Summary({
+  questions,
+  drafts,
+  note,
+}: {
+  questions: Question[]
+  drafts: Record<number, Draft>
+  note: string
+}) {
   return (
     <ul className="mt-1.5 space-y-0.5 pl-5.5 text-[13px] leading-relaxed">
       {questions.map((question, index) => {
@@ -124,7 +133,65 @@ function Summary({ questions, drafts }: { questions: Question[]; drafts: Record<
           </li>
         )
       })}
+      {note.trim() && (
+        <li
+          className="flex min-w-0 items-baseline gap-2 motion-safe:animate-fade-in"
+          style={{ animationDelay: `${questions.length * 40}ms` }}
+        >
+          <span className="w-7 shrink-0 font-mono text-[11px] text-muted-foreground">note</span>
+          <span className="min-w-0 whitespace-pre-wrap text-foreground">{note.trim()}</span>
+        </li>
+      )}
     </ul>
+  )
+}
+
+/**
+ * The note field under every card: whatever comes to mind while answering goes along with the answers, or on its
+ * own. Enter sends, ⇧Enter breaks a line, Esc hands the keys back to the card; `/` focuses it from the card.
+ */
+function Note({
+  value,
+  disabled,
+  hint,
+  onChange,
+  onSend,
+}: {
+  value: string
+  disabled: boolean
+  hint: boolean
+  onChange: (value: string) => void
+  onSend: () => void
+}) {
+  return (
+    <div className="relative">
+      <textarea
+        data-note
+        aria-label="A note to send with your answer"
+        placeholder="Anything else? Sent with your answers, or on its own…"
+        rows={1}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing) return
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault()
+            event.stopPropagation()
+            onSend()
+          } else if (event.key === 'Escape') {
+            event.preventDefault()
+            event.currentTarget.blur()
+          }
+        }}
+        className="field-sizing-content max-h-40 min-h-9 w-full resize-none rounded-md border border-border/70 bg-background/40 px-2.5 py-2 pr-8 text-[13px] leading-snug transition-colors outline-none placeholder:text-muted-foreground/60 hover:border-border focus:border-brand/60 focus:bg-background disabled:opacity-60 max-md:min-h-11"
+      />
+      {hint && !value && (
+        <Key className="pointer-events-none absolute top-2.5 right-2.5 bg-transparent text-muted-foreground/60">
+          /
+        </Key>
+      )}
+    </div>
   )
 }
 
@@ -140,12 +207,13 @@ export function Card({
   card: string
   questions: Question[]
   keys: boolean
-  submit: (answers: Answer[]) => Promise<unknown>
+  submit: (answers: Answer[], note?: string) => Promise<unknown>
   reply: (text: string) => Promise<unknown>
   dismiss: () => Promise<unknown>
   className?: string
 }) {
   const [text, setText] = useState('')
+  const [note, setNote] = useState('')
   const root = useRef<HTMLDivElement>(null)
   const [drafts, setDrafts] = useState<Record<number, Draft>>({})
   const [current, setCurrent] = useState(0)
@@ -238,13 +306,14 @@ export function Card({
     }
   }
   const send = (list: Answer[] = ready) => {
-    if (!list.length || pending.current || phase !== 'answering') return
+    const extra = note.trim()
+    if ((!list.length && !extra) || pending.current || phase !== 'answering') return
     clearTimeout(advance.current)
     const fire = () => {
       pending.current = undefined
       setPhase('sending')
       setError(undefined)
-      submit(list).then(
+      submit(list, extra || undefined).then(
         () => setPhase('sent'),
         (failure: unknown) => {
           setPhase('answering')
@@ -279,6 +348,8 @@ export function Card({
     clearTimeout(advance.current)
     setDrafts((old) => ({ ...old, [current]: { chosen: [] } }))
   }
+  const focusNote = () =>
+    root.current?.querySelector<HTMLTextAreaElement>('textarea[data-note]')?.focus()
   const fieldKey = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing) return
     if (event.key === 'Enter') {
@@ -336,6 +407,9 @@ export function Card({
       } else if (event.key === 'Escape' && words[current]) {
         event.preventDefault()
         clear()
+      } else if (event.key === '/') {
+        event.preventDefault()
+        focusNote()
       }
     }
     window.addEventListener('keydown', key)
@@ -407,7 +481,7 @@ export function Card({
           )}
           {phase === 'sending' && <span className="ml-auto">sending…</span>}
         </div>
-        <Summary questions={questions} drafts={drafts} />
+        <Summary questions={questions} drafts={drafts} note={note} />
         {phase === 'undo' && (
           <div className="mt-2.5 h-0.5 overflow-hidden rounded-full bg-border/60">
             <div
@@ -457,6 +531,9 @@ export function Card({
             />
           </div>
         ))}
+      </div>
+      <div className="px-3 pt-2">
+        <Note value={note} disabled={busy} hint={hints} onChange={setNote} onSend={() => send()} />
       </div>
       <div className="flex flex-wrap items-center gap-2 px-3 pt-2 pb-2.5">
         {hints && (
@@ -512,8 +589,16 @@ export function Card({
               {hints && <Key className="bg-transparent">⇧↵</Key>}
             </Button>
           )}
-          <Button size="sm" disabled={!ready.length || busy} onClick={() => send()}>
-            {unanswered && ready.length ? `Send ${ready.length} of ${questions.length}` : 'Send'}
+          <Button
+            size="sm"
+            disabled={(!ready.length && !note.trim()) || busy}
+            onClick={() => send()}
+          >
+            {!ready.length && note.trim()
+              ? 'Send note'
+              : unanswered && ready.length
+                ? `Send ${ready.length} of ${questions.length}`
+                : 'Send'}
           </Button>
         </span>
         {error && (

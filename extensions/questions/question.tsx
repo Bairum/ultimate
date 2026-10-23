@@ -3,7 +3,7 @@ import { useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { cn } from '@/sdk'
-import type { Question } from './types.ts'
+import type { Question } from '../messages/refs.ts'
 import { answerOf, choices, keyOf, position } from './state.tsx'
 import type { Choice, Draft } from './state.tsx'
 

@@ -9,7 +9,6 @@ import type { MemoryItem } from '../lineage/refs.ts'
 import type { Todo } from '../todos/refs.ts'
 import { Roots } from '../lineage/api.ts'
 import { Messages } from '../messages/api.ts'
-import type { Question } from '../questions/types.ts'
 import type { Automation } from '../automations/types.ts'
 import { deliver } from './delivery.ts'
 import type { Session } from './refs.ts'
@@ -59,15 +58,14 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
         if (!memories[slug] || memory.updated > memories[slug].updated) memories[slug] = memory
       }
     }
-    // Open questions are the user's unanswered messages, as the To-dos panel lists them: their extracted questions, or
-    // the message itself when extraction is off, pending or failed. Both live on conversation 1.
-    const board = await document<{ asked: Record<string, Question[]> }>(host, tx, 'questions.board')
+    // Open questions are the user's unanswered messages, as the To-dos panel lists them: the questions each asks, or
+    // the message itself when it asks none.
     const questions: Seed['questions'] = []
     for (const message of (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages) {
       if (message.to !== 'user' || !message.reply || message.state !== 'delivered') continue
       const ref = `#${message.id}`
-      const extracted = board.asked[String(message.id)] ?? []
-      if (extracted.length) for (const { text } of extracted) questions.push({ text, ref })
+      if (message.questions?.length)
+        for (const { text } of message.questions) questions.push({ text, ref })
       else questions.push({ text: message.text, ref })
     }
     for (const slug of about)

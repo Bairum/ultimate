@@ -1,23 +1,19 @@
 /**
- * Questions in the browser: the open questions extracted from agents' messages to the user, and the actions that
- * answer them from a card. Browser-safe.
+ * Questions in the browser: the actions that answer an agent's questions to the user from its message's card.
+ * Browser-safe.
  */
-import { actionRef, docRef } from '../../shared/extension-api.ts'
-import type { MessageQuestionsData } from './types.ts'
+import { actionRef } from '../../shared/extension-api.ts'
 
-/** One answered question: the question's text and the chosen or typed answer. */
+/** One answered question: the question's text and the chosen or typed answer (several choices joined by ", "). */
 export type Answer = { question: string; answer: string }
 
-/** Extracted questions by message id, on conversation 1. */
-export const QuestionsDoc = docRef<MessageQuestionsData>('questions.board')
-
 /**
- * `{ messageId, answers }` or `{ messageId, text }` → `{ id }`: answer open message `messageId` with a reply
- * to its sender, from its extracted questions or as free text; `id` is the reply's message id. Fails when the message
- * no longer waits on the user.
+ * `{ messageId, answers?, note? }` or `{ messageId, text }` → `{ id }`: answer open message `messageId` with a reply
+ * to its sender, from its questions (`note` goes after the answer lines) or as free text; `id` is the reply's message
+ * id. Fails when the message no longer waits on the user.
  */
 export const AnswerAction = actionRef<
-  { messageId: number; answers?: Answer[]; text?: string },
+  { messageId: number; answers?: Answer[]; note?: string; text?: string },
   { id: number }
 >('questions', 'answer')
 /**

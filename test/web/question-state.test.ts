@@ -6,7 +6,7 @@ import {
   picks,
   position,
 } from '../../extensions/questions/state.tsx'
-import type { Question } from '../../extensions/questions/types.ts'
+import type { Question } from '../../extensions/messages/refs.ts'
 
 const lettered: Question = {
   text: 'Branch starts',

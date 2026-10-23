@@ -6,8 +6,8 @@ import { cn, Header } from '@/sdk'
 import { AgentMark } from '../conversations/ui.tsx'
 import { accentOf } from '../messages/ui.tsx'
 import { Card } from './card.tsx'
+import type { Question } from '../messages/refs.ts'
 import type { Answer } from './refs.ts'
-import type { Question } from './types.ts'
 
 type Sample = { id: string; title: string; text: string; questions: Question[] }
 
@@ -214,8 +214,13 @@ function Sample({
           card={`playground:${sample.id}`}
           questions={sample.questions}
           keys={keys}
-          submit={(answers: Answer[]) =>
-            record(answers.map((a) => `${a.question}: ${a.answer}`).join('\n'))
+          submit={(answers: Answer[], note?: string) =>
+            record(
+              [
+                ...answers.map((a) => `${a.question}: ${a.answer}`),
+                ...(note ? [`Note: ${note}`] : []),
+              ].join('\n'),
+            )
           }
           reply={(text) => record(text)}
           dismiss={() => record('(dismissed)')}

@@ -12,7 +12,6 @@ import type { ActionContext } from '../server/actions.ts'
 import { Metadata } from '../server/metadata.ts'
 import { docs as lineageDocs } from '../extensions/lineage/server.ts'
 import { Messages } from '../extensions/messages/api.ts'
-import { MessageQuestions } from '../extensions/questions/server.ts'
 import { Todos } from '../extensions/todos/server.ts'
 import { Standing } from '../extensions/subagents/api.ts'
 import automations, {
@@ -41,7 +40,7 @@ async function fixture() {
   let opened: OpenHost
   let opener: () => Promise<void>
   let scripts: (Seed['scripts'][number] & { enabled: boolean })[] = []
-  const tokens = [...lineageDocs, Messages, MessageQuestions, Todos, Sessions]
+  const tokens = [...lineageDocs, Messages, Todos, Sessions]
   const resources = new Map<string, unknown>()
   const invoke = vi.fn<ExtensionHost['invoke']>(async (extension, action, args) => {
     if (extension !== 'automations' || !['list', 'create', 'describe'].includes(action))
@@ -155,12 +154,10 @@ async function fixture() {
             at: 1,
             reply: true,
             state,
+            questions: [{ text: `Choose ${id}?`, kind: 'confirm' }],
           })
-          ;(await tx.doc(MessageQuestions, ROOT_CONVERSATION_ID)).asked[String(id)] = [
-            { text: `Choose ${id}?`, kind: 'confirm' },
-          ]
         }
-        // Open, but its questions were never extracted: the message itself is the question.
+        // Open, asking no questions of its own: the message itself is the question.
         board.messages.push({
           id: 103,
           from: 1,

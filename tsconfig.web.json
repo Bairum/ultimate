@@ -30,7 +30,6 @@
     "extensions/dream/types.ts",
     "extensions/lineage/types.ts",
     "extensions/phase/types.ts",
-    "extensions/questions/types.ts",
     "extensions/conversations/summary-model-ref.ts",
     "extensions/models/switches.ts",
     "extensions/context/breakdown.ts",

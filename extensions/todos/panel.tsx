@@ -10,7 +10,8 @@ import type { ReactNode } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { api, cn, errorMessage, events, useDocOf, useNow, useUltimate } from '@/sdk'
 import { Address, MessagesDoc, emptyMessages, relativeTime, useAccentOf } from '../messages/ui.tsx'
-import { QuestionsDoc, waiting } from '../questions/ui.tsx'
+import type { Question } from '../messages/refs.ts'
+import { waiting } from '../questions/ui.tsx'
 import { AddAction, DoneAction, ReopenAction, TodosDoc } from './refs.ts'
 import type { Todo } from './refs.ts'
 
@@ -22,6 +23,7 @@ type Asked = {
   at: number
   call?: string
   remote?: { project: string; machine: string }
+  questions?: Question[]
 }
 
 const owners: { id: Todo['owner']; label: string }[] = [
@@ -180,7 +182,7 @@ function TodoRow({ todo, now, toggle }: { todo: Todo; now: number; toggle: (todo
  * message, where its answer card offers the choices, a reply and Dismiss.
  */
 function QuestionRow({ message, now }: { message: Asked; now: number }) {
-  const extracted = useDocOf(1, QuestionsDoc)?.asked[String(message.id)] ?? []
+  const extracted = message.questions ?? []
   const { showSurface, switchConversation } = useUltimate()
   const accent = useAccentOf(message.from)
   const more = extracted.length > 1 ? ` +${extracted.length - 1}` : ''

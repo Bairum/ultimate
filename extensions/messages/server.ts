@@ -34,13 +34,13 @@ import { isolatable } from '../../lib/git.ts'
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import { locate, postAction, selfAddress } from '../../lib/remote.ts'
 import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
-import { parseDecisions } from '../../lib/decisions.ts'
 import { LineageApi, Roots } from '../lineage/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
 import { Asked, Messages, MessagesApi, Gate, MessageSent, Triaged } from './api.ts'
-import type { Message } from './api.ts'
+import type { Message, Question } from './api.ts'
+import { checkQuestions, questionsParameter } from './questions.ts'
 import { callerOf } from './caller.ts'
 import { CallerAction } from './refs.ts'
 import type { Remote, Triage } from './refs.ts'
@@ -156,12 +156,11 @@ const Started = defineDoc<{ by?: number; yielded?: number }>({
 })
 /** A reply-enabled message to the user that the user has neither answered nor dismissed yet. */
 const openQuestion = (m: Message) => m.to === 'user' && m.reply && m.state === 'delivered'
-/** A question in one line: its decisions' topics, else its first line that asks something, else its first line, clipped. */
-export const gist = (text: string) => {
-  const decisions = parseDecisions(text)
-  const lines = decisions.length
-    ? [`decisions ${decisions.map((d) => `${d.ref}. ${d.topic}`).join('; ')}`]
-    : text
+/** A message in one line: its questions by number, else its first line that asks something, else its first line, clipped. */
+export const gist = (message: Pick<Message, 'text' | 'questions'>) => {
+  const lines = message.questions?.length
+    ? [`questions ${message.questions.map((q, i) => `${q.ref ?? i + 1}. ${q.text}`).join('; ')}`]
+    : message.text
         .split('\n')
         .map((line) => line.replace(/\*\*/g, '').trim())
         .filter(Boolean)
@@ -186,7 +185,7 @@ export async function openQuestionsNote(tx: Tx, conversationId: ConversationId, 
         : `${Math.round(minutes / 60)}h ago`
   }
   const text = `Open questions to the user, unanswered until they answer or dismiss them:\n${open
-    .map((m) => `- message ${m.id}: ${gist(m.text)} (asked ${ago(m.at)})`)
+    .map((m) => `- message ${m.id}: ${gist(m)} (asked ${ago(m.at)})`)
     .join('\n')}`
   return {
     entries: [
@@ -849,6 +848,8 @@ async function send(
     imagesFrom?: ConversationId
     /** The user's reply `re` dismisses that question instead of answering it. */
     dismiss?: boolean
+    /** With `to: 'user'`, the decisions the message asks, as its answer card shows them. */
+    questions?: Question[]
   },
   ctx: Context,
   taskId?: TaskId,
@@ -877,6 +878,9 @@ async function send(
       )
   }
   if (!input.text.trim()) throw new Error('Message text must not be empty')
+  if (input.questions !== undefined && (input.to !== 'user' || input.reply === false))
+    throw new Error('questions go only with a reply-expected message to the user')
+  const questions = input.questions === undefined ? undefined : checkQuestions(input.questions)
   // Checked before resolving, which may create a standing agent's conversation.
   const parent = from === 'user' ? undefined : await parentOf(host, from, ctx)
   if (parent !== undefined && input.to.replace(/^#/, '') !== String(parent))
@@ -935,6 +939,7 @@ async function send(
       ...(input.re === undefined ? {} : { re: input.re }),
       ...(callId === undefined ? {} : { call: callId }),
       ...(images ? { images } : {}),
+      ...(questions ? { questions } : {}),
     })
     await host.emit(tx, MessageSent, { message: message.id, from, to, reply: message.reply, steer })
     // The user's answer or dismissal is their input to the asker; the message's `entry` names it once delivered.
@@ -1261,7 +1266,7 @@ export default function messages(host: ExtensionHost) {
         'user',
         {
           to: `#${message.from}`,
-          text: `The user dismissed your question (message ${messageId}): ${gist(message.text)}\nIt is closed without an answer; ask again only if it still matters.`,
+          text: `The user dismissed your question (message ${messageId}): ${gist(message)}\nIt is closed without an answer; ask again only if it still matters.`,
           reply: false,
           re: messageId,
           dismiss: true,
@@ -1432,6 +1437,7 @@ export default function messages(host: ExtensionHost) {
           reply: Type.Optional(Type.Boolean()),
           steer: Type.Optional(Type.Boolean()),
           images: Type.Optional(imagesParameter),
+          questions: Type.Optional(questionsParameter),
         }),
         // The task-scoped receipt deduplicates admission; the memo returns the same id on replay.
         replay: 'safe',

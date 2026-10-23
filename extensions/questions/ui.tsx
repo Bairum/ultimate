@@ -1,3 +1,2 @@
-/** Questions for other extensions' browser code: the questions document and which messages wait on the user. */
-export { QuestionsDoc } from './refs.ts'
+/** Questions for other extensions' browser code: which messages wait on the user. */
 export { waiting } from './open.tsx'

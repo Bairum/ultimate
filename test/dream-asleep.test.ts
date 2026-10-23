@@ -21,7 +21,6 @@ import type { InstanceService } from '../extensions/instance/api.ts'
 import { Standing } from '../extensions/subagents/api.ts'
 import { docs as lineageDocs } from '../extensions/lineage/server.ts'
 import { Messages } from '../extensions/messages/api.ts'
-import { MessageQuestions } from '../extensions/questions/server.ts'
 import { Todos } from '../extensions/todos/server.ts'
 import {
   actions,
@@ -50,7 +49,7 @@ async function fixture() {
   )
   harnesses.push(harness)
   await harness.root(context)
-  const tokens = [...lineageDocs, Messages, MessageQuestions, Todos, Sessions]
+  const tokens = [...lineageDocs, Messages, Todos, Sessions]
   const resources = new Map<string, unknown>()
   const phases: Sleep[] = []
   let previous = ''

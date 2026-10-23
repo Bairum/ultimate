@@ -84,16 +84,18 @@ Follow the project's landing and UI approval rules. A landing that changed `serv
 
 Give each branch a `title`: one short line naming the work ("Branch titles on the branch tool"), which the sidebar shows at once; the summary model may rename it later. Make each branch prompt self-contained: include the user's words, goal and constraints. Branches run with the coordinator instructions: their answers and decisions come back to you, and they tell you when they land. Tell them their answers return to @ultimate and to message @ultimate with reply: false when their submission lands. When the user's input has screenshots relevant to a branch or message, pass them along with `images` ("latest" or the input's entry id). After starting a branch, end your turn; its reply wakes you.
 
-A message to the user appears as a bubble in your own transcript, with an answer card beneath a question. Ask every decision in one consolidated reply-expected message, never only in a final answer, ending with this block, which becomes the answer card:
+A message to the user appears as a bubble in your own transcript, with an answer card beneath its questions. Ask every decision in one consolidated reply-expected message and pass the decisions as `questions`, which become the card; the text explains, the questions decide. A final answer never asks: a question in it has no card and gets no answer, so when you still need something from the user, send it with `message` instead.
 
 ```
-Decisions:
-1. **Topic:** (a) first option; (b) second option.
-2. **Topic:** (a) …; (b) …; (c) ….
-My picks: 1a 2b.
+questions: [
+  { text: "Topic", kind: "choice", ref: "1", options: [
+    { label: "first option", key: "a", recommended: true, detail: "why" },
+    { label: "second option", key: "b" } ] },
+  { text: "Topic", kind: "multi", ref: "2", options: [ … ] }
+]
 ```
 
-One numbered line per decision with lettered options, a yes/no as (a) yes; (b) no, and your picks on the last line. No "Reply e.g." line and no separate "go" item. Answers come back as `1a. Topic: option` lines, or `2: <their words>`. It stays at the top of the user's To-dos panel until they answer or dismiss it; until then it is unanswered, and each of your turns starts with the list of questions still open. A report that needs no answer, such as a landing, goes with reply: false; keep the default reply only when you wait for the user's decision, because an open reply shows you as awaiting the user. When the user decides, message the branch.
+Kinds: `choice` (one option), `multi` (any number), `confirm` (yes/no), `text` (typed; `placeholder` hints it), `scale` (`scale: { min, max, low, high }`, e.g. 1–5 from "rough" to "polished"). Number the questions with `ref` and letter the options with `key`, mark your picks `recommended`, keep labels short with the reasoning in `detail`, and give an option a Markdown `preview` (a diff, a sketch) when seeing it helps. The card adds "Something else…" and a note field itself, so never add an "other" option, a "Reply e.g." line or a separate "go" question. Answers come back as `1a. Topic: option` lines (`2a,c.` for several, `3: <their words>` for typed text), with any note after them. It stays at the top of the user's To-dos panel until they answer or dismiss it; until then it is unanswered, and each of your turns starts with the list of questions still open. A report that needs no answer, such as a landing, goes with reply: false; keep the default reply only when you wait for the user's decision, because an open reply shows you as awaiting the user. When the user decides, message the branch.
 
 ## Improving the harness
 

@@ -18,6 +18,27 @@ export type Remote = {
   key: string
 }
 
+/**
+ * One question an agent asks the user with a message, as the `message` tool's `questions` argument declares it: the
+ * answer card renders exactly this. `ref` is the number the message gives it ("2") and an option's `key` its letter
+ * ("a"), so an answer can name them. An option's `preview` is Markdown shown beside it (a diff, a sketch); `scale`
+ * bounds a numbered rating with its end labels; `placeholder` hints a typed answer.
+ */
+export type Question = {
+  text: string
+  kind: 'choice' | 'multi' | 'confirm' | 'text' | 'scale'
+  ref?: string
+  options?: {
+    label: string
+    detail?: string
+    recommended?: boolean
+    key?: string
+    preview?: string
+  }[]
+  scale?: { min: number; max: number; low?: string; high?: string }
+  placeholder?: string
+}
+
 /** One message as the log stores it. */
 export type Message = {
   id: number
@@ -40,6 +61,8 @@ export type Message = {
   triage?: Triage
   /** The other project's Ultimate a `remote` side names. */
   remote?: Remote
+  /** The questions a reply-expected message to the user asks, answered on its card. */
+  questions?: Question[]
 }
 /** A triage verdict: `act` wakes the primary agent, `fyi` leaves it as context for its next input. */
 export type Triage = { verdict: 'assessing' | 'act' | 'fyi'; reason?: string }
