@@ -6,8 +6,20 @@ import { Tool, ToolContent, ToolHeader, ToolOutput, ToolSection } from '@/compon
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { cn, defineWebExtension, formatTime, useRestart, useSystem, useToolDuration } from '@/sdk'
+import {
+  cn,
+  defineWebExtension,
+  formatTime,
+  useEvents,
+  useRestart,
+  useSystem,
+  useToolDuration,
+  useUltimate,
+} from '@/sdk'
 import type { ToolCallView } from '@/sdk'
+import { ConversationRef } from '../conversations/ui.tsx'
+import { SubmissionLanded } from '../workspaces/ui.tsx'
+import type { LandedData } from '../workspaces/ui.tsx'
 
 const short = (id: string | undefined) => id?.slice(0, 7)
 
@@ -234,33 +246,97 @@ const hotLifetime = 3000
 /** `extensions/lineage/web.tsx?t=1` as `lineage/web.tsx`: enough to recognise the file. */
 const hotFile = (path: string) => path.split('?')[0].split('/').slice(-2).join('/')
 
+/** How far apart a hot update and a landing may be to belong together: the lander fast-forwards, then records it. */
+const landingWindow = 60_000
+
+// This module re-run by a hot update counts as one, so a landing that replaced this file still names itself.
+const reloadedAt = import.meta.hot?.data.loaded ? Date.now() : 0
+if (import.meta.hot) import.meta.hot.data.loaded = true
+
 /**
  * A quiet toast above the bottom right of the status line when Vite applies a hot update without reloading the page:
- * the modules it re-ran (its accept boundaries, not necessarily the edited file). Updates arriving meanwhile join it
- * and keep it up.
+ * the branches whose landing brought it, else the modules it re-ran (its accept boundaries, not necessarily the edited
+ * file). Updates arriving meanwhile join it and keep it up.
  */
 function HotReloaded() {
   const [files, setFiles] = useState<readonly string[]>([])
+  const [landings, setLandings] = useState<readonly LandedData[]>([])
+  const { switchConversation } = useUltimate()
+  const events = useEvents({ events: [SubmissionLanded], limit: 5 })
+  const lastHot = useRef(reloadedAt)
+  const seen = useRef<number | undefined>(undefined)
+  const recent = useRef<{ at: number; landing: LandedData }[]>([])
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const keep = (lifetime: number) => {
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => {
+      setFiles([])
+      setLandings([])
+    }, lifetime)
+  }
+  const show = (landing: LandedData) =>
+    setLandings((shown) =>
+      shown.some((row) => row.submission === landing.submission) ? shown : [landing, ...shown],
+    )
+  // Landings recorded since this page loaded: named right away when a hot update just came, else kept for one to come.
+  useEffect(() => {
+    if (!events) return
+    const newest = events[0]?.id ?? 0
+    if (seen.current === undefined) {
+      seen.current = newest
+      return
+    }
+    const fresh = events.filter((event) => event.id > seen.current!)
+    seen.current = Math.max(seen.current, newest)
+    const now = Date.now()
+    for (const event of fresh) {
+      if (now - lastHot.current < landingWindow) {
+        show(event.data)
+        keep(hotLifetime * 2)
+      } else recent.current.push({ at: now, landing: event.data })
+    }
+  }, [events])
   useEffect(() => {
     const hot = import.meta.hot
     if (!hot) return undefined
-    let timer: ReturnType<typeof setTimeout> | undefined
     const updated = ({ updates }: { updates: { acceptedPath: string }[] }) => {
       // Vite's own virtual modules mean nothing to a reader.
       const paths = updates
         .map((update) => update.acceptedPath)
         .filter((path) => !path.startsWith('/@id/'))
       if (paths.length === 0) return
+      const now = Date.now()
+      lastHot.current = now
+      recent.current = recent.current.filter((row) => now - row.at < landingWindow)
+      for (const row of recent.current) show(row.landing)
       setFiles((shown) => [...new Set([...shown, ...paths.map(hotFile)])])
-      clearTimeout(timer)
-      timer = setTimeout(() => setFiles([]), hotLifetime)
+      keep(recent.current.length ? hotLifetime * 2 : hotLifetime)
     }
     hot.on('vite:afterUpdate', updated)
     return () => {
       hot.off('vite:afterUpdate', updated)
-      clearTimeout(timer)
+      clearTimeout(timer.current)
     }
   }, [])
+  if (landings.length > 0)
+    return (
+      <div
+        className="fixed right-3 bottom-9 z-40 flex max-w-[28rem] animate-in items-center gap-1.5 rounded-md border border-border/80 bg-popover px-2.5 py-1.5 font-mono text-[11.5px] text-muted-foreground shadow-lg fade-in-0 slide-in-from-bottom-1"
+        role="status"
+      >
+        <ZapIcon className="size-3.5 shrink-0 text-brand" />
+        <span className="shrink-0 text-foreground/90">Landed</span>
+        <button
+          className="flex min-w-0 cursor-pointer overflow-hidden hover:underline"
+          onClick={() => switchConversation(landings[0].conversationId)}
+          title={`Open #${landings[0].conversationId}`}
+          type="button"
+        >
+          <ConversationRef id={landings[0].conversationId} title={landings[0].title || undefined} />
+        </button>
+        {landings.length > 1 && <span className="shrink-0">+{landings.length - 1}</span>}
+      </div>
+    )
   if (files.length === 0) return null
   // Tailwind rebuilds its stylesheet on every source change: name it only when nothing else changed.
   const scripts = files.filter((file) => !file.endsWith('.css'))
