@@ -1326,9 +1326,11 @@ export default function messages(host: ExtensionHost) {
       defineTool({
         name: 'branch',
         deferred: true,
-        description: 'Start a lineage branch. Its answer returns to you as a reply.',
+        description:
+          "Start a lineage branch. Its answer returns to you as a reply. Give it a title: one short line naming the work (at most 60 characters), shown in the sidebar and the tally until its summary renames it; without one, the prompt's first 80 characters name it.",
         parameters: Type.Object({
           prompt: Type.String({ minLength: 1 }),
+          title: Type.Optional(Type.String({ minLength: 1, maxLength: 60 })),
           root: Type.Optional(Type.Number()),
           isolated: Type.Optional(Type.Boolean()),
           images: Type.Optional(imagesParameter),
@@ -1362,6 +1364,7 @@ export default function messages(host: ExtensionHost) {
               {
                 from: root,
                 prompt: input.prompt,
+                ...(input.title ? { title: input.title } : {}),
                 isolated: input.isolated ?? true,
                 deliver: false,
                 by: from,
