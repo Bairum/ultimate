@@ -5,6 +5,8 @@ import { afterAll, expect, it } from 'vitest'
 import { fauxServer, sourceCopy, temp, until, attach } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { compareExtensions, discoverExtensions } from '../server/discovery.ts'
+import { defaultOff } from '../shared/extension-api.ts'
+import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { createRegistry, toolRenderers } from '../web/src/sdk/registry.ts'
 
 const homes: string[] = []
@@ -355,7 +357,7 @@ it.concurrent('keeps a core-tier extension enabled over extensions.disable, with
   })
 })
 
-it.concurrent('enables every built-in by default', async () => {
+it.concurrent('enables every built-in by default except the default-off ones', async () => {
   const home = await temp()
   homes.push(home)
   const root = await sourceCopy(home)
@@ -367,9 +369,39 @@ it.concurrent('enables every built-in by default', async () => {
     home: join(home, 'state'),
   })
   servers.push(server)
-  expect(server.extensions.info().every((entry) => entry.enabled && !entry.server?.error)).toBe(
-    true,
+  const info = server.extensions.info()
+  const off = info.filter((entry) => !entry.enabled).map((entry) => entry.name)
+  expect(off.toSorted()).toEqual([...defaultOff].toSorted())
+  expect(info.find((entry) => entry.name === 'sounds')).toMatchObject({ layer: 'default' })
+  expect(info.every((entry) => !entry.server?.error)).toBe(true)
+  expect(
+    discovered
+      .filter((entry) => !entry.enabled)
+      .map((entry) => entry.name)
+      .toSorted(),
+  ).toEqual([...defaultOff].toSorted())
+})
+
+it.concurrent('turns a default-off built-in on from user or project settings', async () => {
+  const home = await temp()
+  homes.push(home)
+  const projectRoot = join(home, 'project')
+  await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
+  await mkdir(join(home, '.ultimate'))
+  await writeFile(
+    join(home, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { enable: ['sounds'] } }),
   )
-  expect(discovered.every((entry) => entry.enabled)).toBe(true)
-  expect(discovered.map((entry) => entry.name)).toContain('tailscale')
+  await writeFile(
+    join(projectRoot, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { enable: ['update'] } }),
+  )
+  new ProjectTrustStore(join(home, '.ultimate')).set(projectRoot, true)
+  const discovered = await discoverExtensions(resolve('.'), projectRoot, home)
+  const enabled = (name: string) => discovered.find((entry) => entry.name === name)?.enabled
+  expect(enabled('sounds')).toBe(true)
+  expect(enabled('update')).toBe(true)
+  expect(enabled('cloud')).toBe(false)
+  expect(discovered.settings.layers.get('sounds')).toBe('user')
+  expect(discovered.settings.layers.get('update')).toBe('project')
 })

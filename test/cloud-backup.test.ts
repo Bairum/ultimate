@@ -484,6 +484,11 @@ it('backs up from the UI, records the refusal as a failed event with the sentenc
   vi.stubEnv('ULTIMATE_CLOUD_TOKEN', cloud.token)
   vi.stubEnv('ULTIMATE_CLOUD_SNAPSHOT_KEY', cloud.secret)
   vi.stubEnv('ULTIMATE_CLOUD_MACHINE', 'desk')
+  await mkdir(join(userHome, '.ultimate'), { recursive: true })
+  await writeFile(
+    join(userHome, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { enable: ['cloud'] } }),
+  )
   const server = await fauxServer({
     ultimateRoot: join(import.meta.dirname, '..'),
     projectRoot,

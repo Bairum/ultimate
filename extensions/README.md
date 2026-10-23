@@ -53,7 +53,9 @@ replaces the whole extension, both facets:
 | `user`    | `~/.ultimate/extensions/`         | Your additions, in every project                                   |
 | `project` | `<project>/.ultimate/extensions/` | One project's tools and apps, committed with the project; wins all |
 
-Every extension folder is on by default, built-in, user or project: adding the folder is the opt-in. Turn one off
+Every extension folder is on by default, built-in, user or project: adding the folder is the opt-in. The exception is
+the built-ins listed in `defaultOff` (`shared/extension-api.ts`; see [settings](../docs/settings.md)), which need
+something of their own and ship off until `extensions.enable` names them. Turn one off
 with `{ "extensions": { "disable": ["hello"] } }` in `~/.ultimate/settings.json` (this machine) or
 `<project>/.ultimate/settings.json` (this project), and back on with `extensions.enable`. Settings layer defaults →
 machine → project; later layers win. Settings changes apply live without a restart; unknown names produce a notice.
@@ -66,7 +68,7 @@ The `parallel` web tools read their key from `secrets`. Secrets are user-global,
 
 A server facet may export `secrets: { name: string; description: string; url?: string }[]`. Names must match `^[A-Z][A-Z0-9_]*$`, descriptions must be non-empty, and optional URLs must use http(s). Installed declarations appear in `ExtensionInfo.server.secrets` and the Secrets panel; values never appear in extension info. Other server facets read values with `readSecret(userHome, name)` from `lib/secrets.ts`; only the secrets extension writes them.
 
-The `tailscale` built-in exposes Ultimate to your own Tailscale login by default; only user settings set its allowlist, and a project cannot turn on what they disable. See [tailscale](tailscale/README.md) for stable project URLs and owner-login admission.
+The `tailscale` built-in, once enabled, exposes Ultimate to your own Tailscale login; only user settings set its allowlist. See [tailscale](tailscale/README.md) for stable project URLs and owner-login admission.
 
 The project is the directory Ultimate was started in (`ultimate [dir]`); the Info panel lists every extension with its
 source when `info` is enabled; the building-blocks prompt names the clone root. Put a project's app in its `.ultimate/extensions/<name>/`. When the

@@ -183,7 +183,7 @@ export function Recommended({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const core = (useSystem()?.extensions ?? []).flatMap((info) => (info.core ? [info.name] : []))
-  const options = extensionOptions(status?.user.disable ?? [], changed, core)
+  const options = extensionOptions(status?.user ?? { enable: [], disable: [] }, changed, core)
   const checked = Object.fromEntries(options.map(({ name, checked: value }) => [name, value]))
   const check = (name: string, enabled: boolean) => {
     if (core.includes(name)) return
