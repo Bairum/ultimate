@@ -33,6 +33,7 @@ it('starts the host project without resolving any conversation workspace, shares
     projectRoot: '/project',
     ultimateRoot: '/ultimate',
     userHome: '/user',
+    projectSettings: async () => ({}),
     resource: (key: string, create: () => unknown) => {
       if (!resources.has(key)) resources.set(key, create())
       return resources.get(key)
