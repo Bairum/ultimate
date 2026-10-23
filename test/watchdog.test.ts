@@ -46,6 +46,8 @@ afterEach(async () => {
 const error = (text = 'invalid model configuration') =>
   fauxAssistantMessage('', { stopReason: 'error', errorMessage: text })
 const overloaded = 'Our servers are currently overloaded. Please try again later.'
+const rateHint =
+  'Rate limited: Ultimate paused; press Play once the limit resets, or switch the agent to another model first'
 const model = { provider: 'faux', modelId: 'faux-1' }
 const Anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'watchdog-test.anchor',
@@ -574,7 +576,7 @@ it.each(['retry', 'report'] as const)(
 it('recognizes pi-ai retryable errors, and leaves a conversation that somebody resumed alone', async () => {
   const f = await fixture((transcript) => {
     const text = inputText(transcript)
-    if (text === 'fail') return error('429 rate limit exceeded')
+    if (text === 'fail') return error(overloaded)
     if (text === 'hold')
       return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
     return fauxAssistantMessage('ok')
@@ -683,7 +685,7 @@ it.each([false, true])(
       })
       await tx.appendEntry(branch, {
         kind: 'pi.assistant',
-        model: [error('429 rate limit exceeded')],
+        model: [error(overloaded)],
       })
       if (noModel)
         await configure(tx, branch, { model: { provider: 'missing', modelId: 'missing' } })
@@ -841,6 +843,18 @@ it.each([
     undefined,
   ],
   [overloaded, true, undefined],
+  [
+    "Incomplete Claude Code upstream response (status 429, capture incomplete, upstream said: This request would exceed your account's rate limit. Please try again later.)",
+    false,
+    rateHint,
+  ],
+  ['429 Too Many Requests', false, rateHint],
+  [
+    'You exceeded your current quota, please check your plan and billing details. (insufficient_quota)',
+    false,
+    rateHint,
+  ],
+  ['Overloaded (529)', true, undefined],
   [
     'Claude Code is not installed. Install it with `npm install -g @anthropic-ai/claude-code` or set PI_CLAUDE_CODE_COMMAND to the executable.',
     false,

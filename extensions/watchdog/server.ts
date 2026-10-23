@@ -20,6 +20,7 @@ import type {
   Tx,
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { rateLimited } from '../../lib/rate-limit.ts'
 import { Messages } from '../messages/api.ts'
 import { Standing } from '../subagents/api.ts'
 import { idleNote } from './idle.ts'
@@ -86,10 +87,16 @@ async function boundary(tx: Tx, task: Generation, next?: Generation) {
 
 /**
  * What a failed run's error asks for: a broken login needs the user, so it reports at once with a hint to log in again;
- * an incomplete Claude Code relay response (status 200 or unknown) is a dropped stream, so it retries like Pi's own
+ * a rate limit paused Ultimate (the pause extension), so it reports once and never retries into the limit; an
+ * incomplete Claude Code relay response (status 200 or unknown) is a dropped stream, so it retries like Pi's own
  * retryable errors.
  */
 export function diagnose(error: string, assistant?: AssistantMessage) {
+  if (rateLimited(error))
+    return {
+      hint: 'Rate limited: Ultimate paused; press Play once the limit resets, or switch the agent to another model first',
+      temporary: false,
+    }
   if (/not logged in/i.test(error))
     return { hint: 'Run `claude auth login` in a terminal', temporary: false }
   const provider = /OAuth refresh failed for ([\w-]+)/i.exec(error)?.[1] ?? assistant?.provider

@@ -2,13 +2,26 @@
 import { actionRef, docRef } from '../../shared/extension-api.ts'
 
 /**
+ * The rate limit that paused Ultimate: the provider and model that answered with it, the error as Pi recorded it,
+ * when (ms), and the conversation it first hit. Also the data of the `pause.limit` card in @ultimate's transcript.
+ */
+export type RateLimit = {
+  provider: string
+  model: string
+  error: string
+  at: number
+  conversationId: number
+}
+
+/**
  * The pause on conversation 1: `since` when it began; `runs` each conversation mid-turn then, by id, with its run's
- * generation task and first input submission, so Play notes that run only.
+ * generation task and first input submission, so Play notes that run only; `limit` when a rate limit paused it.
  */
 export type PauseDocState = {
   paused: boolean
   since?: number
   runs?: Record<string, { task: number; input?: number }>
+  limit?: RateLimit
   /** Bumped when gated in-task work (a triage model call) ends while paused, so the footer refreshes. */
   work?: number
 }
@@ -28,6 +41,8 @@ export type RunningTask = {
 export type PauseState = {
   paused: boolean
   since?: number
+  /** The rate limit that paused Ultimate, if one did. */
+  limit?: RateLimit
   /** Foreground tasks still running: while paused, the pause is safe once this is empty. */
   running: RunningTask[]
 }

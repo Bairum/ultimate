@@ -3,11 +3,13 @@ import { defineDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-dur
 import type { ConversationId, Cursor, SubmissionId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { rateLimited } from '../../lib/rate-limit.ts'
 import { Gate } from '../messages/api.ts'
+import { Standing } from '../subagents/api.ts'
 import { PauseApi } from './api.ts'
 import { lasted } from './lasted.ts'
 import { PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
-import type { PauseDocState, PauseNote, PauseState, RunningTask } from './refs.ts'
+import type { PauseDocState, PauseNote, PauseState, RateLimit, RunningTask } from './refs.ts'
 
 const State = defineDoc<PauseDocState>({
   kind: PauseDoc.kind,
@@ -20,7 +22,10 @@ const State = defineDoc<PauseDocState>({
 })
 export const docs = [State]
 
-type Host = Pick<ExtensionHost, 'harness' | 'resource' | 'onOpen' | 'implement' | 'conversations'>
+type Host = Pick<
+  ExtensionHost,
+  'harness' | 'resource' | 'onOpen' | 'onClose' | 'onRelease' | 'implement' | 'conversations'
+>
 
 /** The flag timers read synchronously; shared across reloads, set from the doc each time the harness opens. */
 const flag = (host: Pick<ExtensionHost, 'resource'>) =>
@@ -173,13 +178,17 @@ async function state(host: Host): Promise<PauseState> {
   return {
     paused: doc.paused,
     ...(doc.since === undefined ? {} : { since: doc.since }),
+    ...(doc.limit === undefined ? {} : { limit: doc.limit }),
     running: await running(host),
   }
 }
 
 // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched Harness.hold()/release() keep the scheduler from starting tasks.
-/** Hold the scheduler, then record the pause and each run mid-turn now (its task and first input), which Play notes. */
-async function pause(host: Host) {
+/**
+ * Hold the scheduler, then record the pause and each run mid-turn now (its task and first input), which Play notes;
+ * `limit` when a rate limit pauses it.
+ */
+async function pause(host: Host, limit?: RateLimit) {
   const harness = host.harness()
   harness.hold()
   flag(host).paused = true
@@ -187,7 +196,8 @@ async function pause(host: Host) {
     const doc = await tx.doc(State, ROOT_CONVERSATION_ID)
     if (doc.paused) return
     const runs: NonNullable<PauseDocState['runs']> = {}
-    for (const status of ['pending', 'running', 'waiting'] as const) {
+    // Sleeping: a generation waiting out its retry backoff, as one that just hit a rate limit does.
+    for (const status of ['pending', 'running', 'waiting', 'sleeping'] as const) {
       let cursor: Cursor | undefined
       do {
         const page = await tx.scanTasks({ kind: 'pi.generation', status }, 100, cursor)
@@ -199,9 +209,34 @@ async function pause(host: Host) {
         cursor = page.next
       } while (cursor)
     }
-    Object.assign(doc, { paused: true, since: Date.now(), runs })
+    Object.assign(doc, { paused: true, since: Date.now(), runs, ...(limit && { limit }) })
   }, context)
   return state(host)
+}
+
+/**
+ * A model answered with a rate limit: pause, so nothing retries into it, and tell @ultimate with one `pause.limit`
+ * card. Pi has already scheduled that generation's retry; the hold parks it, and every other run at its next step,
+ * until Play. The caller holds the scheduler already, in the commit's publication, before that retry's timer can fire.
+ */
+async function limited(host: Host, limit: RateLimit) {
+  await pause(host, limit)
+  const harness = host.harness()
+  const doc = await read(host)
+  const ultimate = (await harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
+  if (doc.limit?.at !== limit.at || ultimate === undefined) return
+  // Only kind and data, so Pi appends it at once even while @ultimate's own run is held; the model learns of the limit
+  // from the note Play leaves on each held run.
+  await (
+    await harness.conversation(ultimate, context)
+  )?.submit(
+    {
+      type: 'write',
+      requestId: `pause.limit:${doc.since}`,
+      entry: { kind: 'pause.limit', data: limit },
+    },
+    context,
+  )
 }
 
 /**
@@ -235,7 +270,7 @@ async function play(host: Host) {
   const doc = await read(host)
   if (doc.paused && doc.since !== undefined) {
     const until = Date.now()
-    const span = lasted(until - doc.since)
+    const span = `${lasted(until - doc.since)}${doc.limit ? ` (${doc.limit.provider} rate limited ${doc.limit.model})` : ''}`
     for (const [key, recorded] of Object.entries(doc.runs ?? {})) {
       const id = Number(key) as ConversationId
       const how = await noted(host, id, recorded)
@@ -270,6 +305,7 @@ async function play(host: Host) {
     delete current.since
     delete current.runs
     delete current.work
+    delete current.limit
   }, context)
   flag(host).paused = false
   harness.release()
@@ -283,14 +319,50 @@ export default function pauseExtension(host: Host) {
   host.implement(Gate, {
     work: (call, fn, signal) => gated(host, call, fn, signal),
   })
+  let unsubscribe: (() => void) | undefined
+  const close = async () => {
+    unsubscribe?.()
+    unsubscribe = undefined
+  }
+  host.onClose(close)
+  host.onRelease(close)
   // The server resumes scheduling only after every opener settled, so a paused host reopens with nothing started.
-  host.onOpen(() =>
-    serial(host, async () => {
+  host.onOpen(async () => {
+    unsubscribe?.()
+    // Every model answer Pi records lands in a commit; the first rate-limited one pauses.
+    unsubscribe = host.harness().subscribeCommits((publication) => {
+      for (const change of publication.changes) {
+        const message = change.type === 'entry' ? change.value.model?.[0] : undefined
+        // A host already paused stays as it is: requests in flight that hit the limit too park the same way.
+        if (
+          flag(host).paused ||
+          change.type !== 'entry' ||
+          message?.role !== 'assistant' ||
+          message.stopReason !== 'error' ||
+          !rateLimited(message.errorMessage ?? '')
+        )
+          continue
+        const limit: RateLimit = {
+          provider: message.provider,
+          model: message.model,
+          error: message.errorMessage!,
+          at: message.timestamp,
+          conversationId: change.value.conversationId,
+        }
+        flag(host).paused = true
+        host.harness().hold()
+        serial(host, () => limited(host, limit)).catch((error: unknown) => {
+          // Pi's own retry and the watchdog's report still stand; only the automatic pause is lost.
+          console.error('pause: pausing for a rate limit failed:', error)
+        })
+      }
+    })
+    await serial(host, async () => {
       const paused = (await read(host)).paused
       flag(host).paused = paused
       if (paused) host.harness().hold()
-    }),
-  )
+    })
+  })
   return { name: 'pause' }
 }
 

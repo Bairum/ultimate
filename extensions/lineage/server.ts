@@ -586,6 +586,12 @@ function lineage(host: ExtensionHost) {
             const record = await host
               .harness()
               .commit((tx) => tx.submissionByRequest(id, report), ctx)
+            // A report whose run failed (a provider error) left the branch's work unfinished: it stays open.
+            if (
+              record?.status === 'unanswered' &&
+              ['model_error', 'no_model'].includes(record.reason)
+            )
+              return runtime.commit(() => done, ctx)
             if (record?.status === 'done' || record?.status === 'unanswered') break
             // Admitted, the report settles on its own; before that, the lander going idle means none is coming.
             const woke = await awaitWithContext(

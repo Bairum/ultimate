@@ -1686,18 +1686,26 @@ describe('subagents', () => {
     expect(found.errors).toEqual([])
     expect(found.replaced).toEqual([])
   })
-  it("merges this repository's lander overlay into the tools, model and instructions of its old full copy", async () => {
+  it('merges a project lander overlay into the tools, model and instructions of the built-in lander', async () => {
+    // The built-in lander comes from this repository; the overlay is a fixture, so switching the repository's own
+    // lander model never touches this test.
     const root = fileURLToPath(new URL('..', import.meta.url)),
-      home = await directory()
-    new ProjectTrustStore(join(home, '.ultimate')).set(decisionRoot(root), true)
-    const found = await discoverAgents(root, root, home, await ModelRuntime.create())
+      home = await directory(),
+      cwd = await directory()
+    await mkdir(join(cwd, '.ultimate/agents'), { recursive: true })
+    await writeFile(
+      join(cwd, '.ultimate/agents/lander.md'),
+      '---\nname: lander\nmodel: anthropic/claude-opus-4-8\nthinking: high\nonFailure: fix\naddTools: [workspace, automation, screenshot, browser, codemode, write, edit, instance, web_search, web_fetch, restart]\n---\n\nThe checks are `pnpm check`, then `pnpm test` and `pnpm test:e2e` in parallel.\n\nWhen you fix: read AGENTS.md first. A flaky test is fixed at its cause or deleted, never skipped or given a longer timeout.\n',
+    )
+    new ProjectTrustStore(join(home, '.ultimate')).set(decisionRoot(cwd), true)
+    const found = await discoverAgents(root, cwd, home, await ModelRuntime.create())
     const lander = found.definitions.find((agent) => agent.name === 'lander')!
     expect(lander).toMatchObject({
       source: 'builtin',
-      model: { provider: 'openrouter', modelId: 'anthropic/claude-opus-5.5' },
+      model: { provider: 'anthropic', modelId: 'claude-opus-4-8' },
       thinking: 'high',
       onFailure: 'fix',
-      overlays: [join(root, '.ultimate/agents/lander.md')],
+      overlays: [join(cwd, '.ultimate/agents/lander.md')],
     })
     expect(lander.tools?.toSorted()).toEqual(
       [

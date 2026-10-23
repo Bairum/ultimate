@@ -13,6 +13,7 @@ import {
   GenerationTask,
   hook,
   LiveDoc,
+  ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Harness } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
@@ -24,6 +25,9 @@ import pauseExtension, { actions, passive } from '../extensions/pause/server.ts'
 import { lasted } from '../extensions/pause/lasted.ts'
 import { PauseApi } from '../extensions/pause/api.ts'
 import { apis, removeTemps, temp, until } from './helpers.ts'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { Standing } from '../extensions/subagents/api.ts'
 
 const hosts: OpenHost[] = []
 afterEach(async () => {
@@ -53,6 +57,9 @@ const streamTask = (released: Promise<void>) =>
 /** A faux harness with the pause extension and a `work` tool that runs until the test releases it, as bash would. */
 async function fixture(home?: string) {
   home ??= await temp('ultimate-pause-')
+  // Pi's retry backoff in 1 ms, so a retry the pause held runs at once after Play.
+  await mkdir(join(home, '.pi'), { recursive: true })
+  await writeFile(join(home, '.pi/settings.json'), JSON.stringify({ retry: { baseDelayMs: 1 } }))
   const prepared = await prepareHarness({
     ultimateRoot: home,
     userHome: home,
@@ -96,6 +103,8 @@ async function fixture(home?: string) {
       }
     })(),
     onOpen: (callback: () => Promise<void>) => void openers.push(callback),
+    onClose: () => {},
+    onRelease: () => {},
     conversations: () => [],
   } as unknown as ExtensionHost
   prepared.registry.install(pauseExtension(host))
@@ -349,6 +358,75 @@ it('leaves no note when the run handed over during the drain and its successor w
   await b.wait(context)
   const entries = (await root.context(context)).entries
   expect(entries.filter((entry) => entry.kind === 'pause.note')).toEqual([])
+})
+
+const limit =
+  "Incomplete Claude Code upstream response (status 429, capture incomplete, upstream said: This request would exceed your account's rate limit. Please try again later.)"
+
+it('pauses on the first rate-limited answer: the run waits in its retry, fails nothing, and continues on play', async () => {
+  const f = await fixture()
+  let responses = 0
+  f.prepared.faux!.setResponses([
+    () => {
+      responses++
+      return fauxAssistantMessage('', { stopReason: 'error', errorMessage: limit })
+    },
+    () => {
+      responses++
+      return fauxAssistantMessage([fauxText('done')])
+    },
+  ])
+  const { root, harness } = await f.open()
+  const ultimate = await harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
+  await harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = ultimate.id
+  }, context)
+  const submission = await root.submit({ type: 'input', content: 'go' }, context)
+  await until(async () => (await f.action('state')).limit !== undefined)
+  expect(await f.action('state')).toMatchObject({
+    paused: true,
+    limit: { error: limit, conversationId: root.id },
+  })
+  expect(f.paused()).toBe(true)
+  // Pi's retry was due after 1 ms; held, it never asks again, and the run neither fails nor ends.
+  for (let turn = 0; turn < 20; turn++) await new Promise((resolve) => setImmediate(resolve))
+  expect(responses).toBe(1)
+  const [generation] = await generations(harness)
+  expect(generation.record.state.status).not.toBe('terminal')
+  expect((await harness.snapshot(LiveDoc, root.id, context))?.run).toBeDefined()
+  const cards = async () =>
+    (await ultimate.context(context)).entries.filter((entry) => entry.kind === 'pause.limit')
+  await until(async () => (await cards()).length === 1)
+  expect((await cards())[0].data).toMatchObject({ error: limit, conversationId: root.id })
+
+  const played = await f.action('play')
+  expect(played.limit).toBeUndefined()
+  expect((await submission.wait(context)).status).toBe('done')
+  expect(responses).toBe(2)
+  const notes = (await root.context(context)).entries.filter((entry) => entry.kind === 'pause.note')
+  expect(notes).toHaveLength(1)
+  // The held run's model learns why it was paused.
+  expect(notes[0].model?.[0]?.content).toMatch(
+    /^Paused for \d+s \(faux rate limited [\w-]+\); the run continued after Play\.$/,
+  )
+  expect(await cards()).toHaveLength(1)
+})
+
+it('leaves ordinary provider errors to Pi’s retry without pausing', async () => {
+  const f = await fixture()
+  f.prepared.faux!.setResponses([
+    () =>
+      fauxAssistantMessage('', {
+        stopReason: 'error',
+        errorMessage: 'Our servers are currently overloaded. Please try again later.',
+      }),
+    () => fauxAssistantMessage([fauxText('done')]),
+  ])
+  const { root } = await f.open()
+  expect(
+    (await (await root.submit({ type: 'input', content: 'go' }, context)).wait(context)).status,
+  ).toBe('done')
+  expect(f.paused()).toBe(false)
 })
 
 /** A task record as `running()` reads it: it decides by task kind and checkpoint phase only. */
