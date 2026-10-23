@@ -99,7 +99,7 @@ function page(stored?: string) {
     createElement: (tag: string) => new Element(tag.toUpperCase()),
     querySelectorAll: () => [],
   }
-  return { document, sessionStorage, items, body }
+  return { document, sessionStorage, items, body, location: { search: '' } }
 }
 
 afterEach(() => {
@@ -114,7 +114,14 @@ describe('resuming a reload', () => {
     const transcript = Object.assign(new Element('DIV'), { scrollTop: 420 })
     const earlier = new Element('P')
     earlier.append(new Text('long ago '.repeat(1000)))
-    earlier.box = { top: -900, bottom: -600, left: 0, right: 100, width: 100, height: 300 }
+    earlier.box = {
+      top: -900,
+      bottom: -600,
+      left: 0,
+      right: 100,
+      width: 100,
+      height: 300,
+    }
     const latest = new Element('P')
     latest.append(new Text('just now'))
     transcript.append(earlier)
@@ -122,13 +129,18 @@ describe('resuming a reload', () => {
     app.append(transcript)
     before.body.append(app)
     before.body.append(new Element('SCRIPT'))
-    before.document.styleSheets.push({ cssRules: [{ cssText: 'body { color: red; }' }] })
+    before.document.styleSheets.push({
+      cssRules: [{ cssText: 'body { color: red; }' }],
+    })
     const listeners = new Map<string, () => void>()
     vi.stubGlobal('document', before.document)
     vi.stubGlobal('sessionStorage', before.sessionStorage)
     vi.stubGlobal('HTMLElement', Element)
     vi.stubGlobal('HTMLTextAreaElement', class extends Element {})
-    vi.stubGlobal('getComputedStyle', () => ({ margin: '16px 0px', position: 'static' }))
+    vi.stubGlobal('getComputedStyle', () => ({
+      margin: '16px 0px',
+      position: 'static',
+    }))
     vi.stubGlobal('innerWidth', 1200)
     vi.stubGlobal('innerHeight', 800)
     vi.stubGlobal('addEventListener', (type: string, listener: () => void) =>

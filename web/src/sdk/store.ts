@@ -36,6 +36,8 @@ export interface State {
   requested?: number
   /** The shown conversation's replica: snapshot plus every applied ops batch. */
   view?: StreamedView
+  /** `view` is what this tab showed of the requested conversation before; its stream's snapshot replaces it. */
+  restored?: boolean
   /** Replicas retained by `ConversationScope`, independent of the shown conversation. */
   viewsOf: Readonly<Record<number, StreamedView | undefined>>
   /** Extension documents of the shown conversation, by kind. */
@@ -131,6 +133,17 @@ export function createStore(options: StoreOptions = {}) {
   let sync: ReturnType<typeof setTimeout> | undefined
   let noticeId = 0
   let stopped = true
+  /**
+   * The last views shown in this tab, by conversation, with the snapshot text each came from: showing one again paints
+   * it at once while its stream refreshes it, and a refresh that sends the same snapshot changes nothing.
+   */
+  const recent = new Map<number, { view: StreamedView; raw?: string }>()
+  function remember(view: StreamedView, raw?: string) {
+    const id = view.conversation.id
+    recent.delete(id)
+    recent.set(id, { view, raw })
+    if (recent.size > 6) recent.delete(recent.keys().next().value!)
+  }
 
   function set(change: Partial<State>) {
     state = { ...state, ...change }
@@ -156,19 +169,21 @@ export function createStore(options: StoreOptions = {}) {
       case 'conversations':
         set({ conversations: data as ServerEvents['conversations'] })
         break
-      case 'view':
-        // A (re)connect starts from a fresh snapshot; ops of the old stream are gone with it.
-        set({ view: data as StreamedView })
-        break
       case 'ops':
-        if (state.view) set({ view: applyImmutable(state.view, data as ServerEvents['ops']) })
+        if (state.view) {
+          const view = applyImmutable(state.view, data as ServerEvents['ops'])
+          remember(view)
+          set({ view })
+        }
         break
       case 'ui':
         set({ shared: (data as ServerEvents['ui']).value })
         break
       case 'uiOps':
         if (state.shared)
-          set({ shared: applyImmutable(state.shared, (data as ServerEvents['uiOps']).ops) })
+          set({
+            shared: applyImmutable(state.shared, (data as ServerEvents['uiOps']).ops),
+          })
         break
       case 'doc':
       case 'docOps': {
@@ -190,6 +205,18 @@ export function createStore(options: StoreOptions = {}) {
         })
         break
     }
+  }
+
+  /** A (re)connect starts from a fresh snapshot; ops of the old stream are gone with it. */
+  function receiveView(raw: string) {
+    const kept = state.requested === undefined ? undefined : recent.get(state.requested)
+    if (kept && kept.raw === raw && state.view === kept.view) {
+      if (state.restored) set({ restored: false })
+      return
+    }
+    const view = JSON.parse(raw) as StreamedView
+    remember(view, raw)
+    set({ view, restored: false })
   }
 
   function connect() {
@@ -223,7 +250,10 @@ export function createStore(options: StoreOptions = {}) {
     })
     for (const name of names)
       current.addEventListener(name, (event) => {
-        if (source === current) handle(name, JSON.parse((event as MessageEvent<string>).data))
+        if (source !== current) return
+        const raw = (event as MessageEvent<string>).data
+        if (name === 'view') receiveView(raw)
+        else handle(name, JSON.parse(raw))
       })
   }
   function scheduleReconnect() {
@@ -234,7 +264,10 @@ export function createStore(options: StoreOptions = {}) {
 
   function openDocs(conversation: number, kinds: string) {
     closeDocs(conversation)
-    const params = new URLSearchParams({ conversation: String(conversation), docs: kinds })
+    const params = new URLSearchParams({
+      conversation: String(conversation),
+      docs: kinds,
+    })
     const stream: DocStream = { kinds, source: open(`/api/events?${params}`) }
     docStreams.set(conversation, stream)
     stream.source.addEventListener('error', () => {
@@ -327,10 +360,16 @@ export function createStore(options: StoreOptions = {}) {
       source = undefined
       for (const conversation of docStreams.keys()) closeDocs(conversation)
     },
-    /** Show another conversation: its replica replaces the current one. */
+    /** Show another conversation: its replica replaces the current one, from the start when it was shown before. */
     show(id: number | undefined) {
       if (id === state.requested) return
-      set({ requested: id, view: undefined, docs: {} })
+      const kept = id === undefined ? undefined : recent.get(id)?.view
+      set({
+        requested: id,
+        view: kept,
+        restored: kept !== undefined,
+        docs: {},
+      })
       scheduleReconnect()
     },
     /** Retain a live replica without changing the shown conversation. Multiple scopes share one stream. */

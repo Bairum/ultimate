@@ -1,5 +1,6 @@
 import { ActionError, actionMessage, createApi } from './api.ts'
 import { createRegistry } from './registry.ts'
+import { flushSync } from 'react-dom'
 import { createStore } from './store.ts'
 import { createUiState } from './ui-state.ts'
 
@@ -23,7 +24,9 @@ function writeConversation(id: number, replace: boolean) {
 
 /** The page's one live stream and its replica. */
 export const store = createStore({
-  ui: { theme: localStorage.getItem('ultimate.theme') === 'light' ? 'light' : 'dark' },
+  ui: {
+    theme: localStorage.getItem('ultimate.theme') === 'light' ? 'light' : 'dark',
+  },
   onFallback: () => {
     replaceSelection = true
     uiState.delete('shell.conversation')
@@ -39,7 +42,10 @@ const detached = sessionStorage.getItem('ultimate.detached') === '1'
 /** Durable UI state shared by every tab, fed by the stream (see ui-state.ts). */
 export const uiState = createUiState(detached ? undefined : api.updateUi, {
   onError: (error) =>
-    store.notify({ level: 'error', message: `UI state not saved: ${String(error)}` }),
+    store.notify({
+      level: 'error',
+      message: `UI state not saved: ${String(error)}`,
+    }),
 })
 /** Installed web facets of `extensions/*`. */
 export const registry = createRegistry()
@@ -87,6 +93,11 @@ export function replaceNextSelection() {
   replaceSelection = true
 }
 // The stream follows `shell.conversation`, whichever tab or action set it.
+/**
+ * Experiment toggle: `?switch=vt` crossfades the whole page from one conversation to the next with a view transition
+ * (250 ms, the browser's own), so the sidebar, header and transcript change together instead of piecewise.
+ */
+const switchStyle = () => new URLSearchParams(location.search).get('switch')
 function followSelection() {
   if (!initialized) return
   const value = uiState.get('shell.conversation')
@@ -95,7 +106,13 @@ function followSelection() {
     selected = id
     if (id !== undefined) writeConversation(id, replaceSelection)
   }
-  store.show(id)
+  if (
+    switchStyle() === 'vt' &&
+    id !== store.getState().requested &&
+    !matchMedia('(prefers-reduced-motion: reduce)').matches
+  )
+    document.startViewTransition(() => flushSync(() => store.show(id)))
+  else store.show(id)
   replaceSelection = false
 }
 uiState.subscribe(followSelection)

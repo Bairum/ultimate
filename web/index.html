@@ -34,17 +34,19 @@
           view.inert = true
           view.style.cssText =
             'position:fixed;inset:0;z-index:2147483647;background:var(--background)'
-          // The frame blurs in from sharp, so its first paint matches the page that went away.
+          // The frame stays as the page that went away looked: sharp, until the app beneath shows the same again.
+          // Experiment toggle: ?resume=blur plays the blur the frame had before.
           const frame = document.createElement('div')
           frame.style.cssText = 'position:absolute;inset:0'
           frame.innerHTML = resume.html
           const style = document.createElement('style')
+          const blur = /[?&]resume=blur(&|$)/.test(location.search)
           // Offscreen content sizes itself only once rendered: lay it all out now, so the scroll offsets land.
           style.textContent = `${resume.css}
             #resume * { content-visibility: visible !important; }
             @keyframes resume-blur { to { filter: blur(6px); } }
             @media (prefers-reduced-motion: no-preference) {
-              #resume > div { animation: resume-blur 300ms ease-out forwards; }
+              #resume > div { animation: ${blur ? 'resume-blur 300ms ease-out forwards' : 'none'}; }
             }`
           view.append(style, frame)
           document.body.append(view)

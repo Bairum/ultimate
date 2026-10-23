@@ -8,9 +8,12 @@ const key = 'ultimate.resume'
 const shown = document.getElementById('resume')
 /** Longest the previous view covers the app, should it never render. */
 const deadline = 8000
-/** Once the app has rendered, it settles for at most this long, and counts as settled after this long unchanged. */
-const settle = 1500
-const quiet = 150
+/**
+ * Once the app has rendered, it settles for at most this long, and counts as settled after this long without the
+ * transcript growing or scrolling. Timestamps and status text keep changing and do not count.
+ */
+const settle = 700
+const quiet = 120
 let covering = shown !== null
 /** The app has rendered: there is a view worth resuming. */
 let ready = false
@@ -76,7 +79,7 @@ function capture() {
   }
 }
 
-/** Fades the previous view out, blurred, so the app beneath comes into focus. */
+/** Crossfades the previous view out over the app beneath, which shows the same page by now. */
 function uncover() {
   if (!shown || !covering) return
   covering = false
@@ -84,7 +87,10 @@ function uncover() {
   if (document.hidden) shown.remove()
   else
     void shown
-      .animate([{ opacity: 1 }, { opacity: 0 }], { duration: 240, easing: 'ease-out' })
+      .animate([{ opacity: 1 }, { opacity: 0 }], {
+        duration: 200,
+        easing: 'ease-out',
+      })
       // Cancellation also ends the cover; do not leave its rejected finished promise floating.
       .finished.then(
         () => shown.remove(),
@@ -94,8 +100,8 @@ function uncover() {
 
 /**
  * The app has rendered: a reload from here resumes it, and the previous view uncovers it once it has settled, when
- * nothing in it changed or scrolled for `quiet` ms (such as the transcript sticking to its bottom as code blocks
- * highlight) or after `settle` ms.
+ * nothing in it was added, removed or scrolled for `quiet` ms (such as the transcript sticking to its bottom as code
+ * blocks highlight) or after `settle` ms.
  */
 export function rendered() {
   if (ready) return
@@ -108,7 +114,7 @@ export function rendered() {
     timer = setTimeout(done, quiet)
   }
   const changes = new MutationObserver(wait)
-  changes.observe(app, { subtree: true, childList: true, attributes: true, characterData: true })
+  changes.observe(app, { subtree: true, childList: true })
   addEventListener('scroll', wait, true)
   const cap = setTimeout(done, settle)
   function done() {

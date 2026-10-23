@@ -35,7 +35,8 @@ const user = (id: number, text: string) => ({
 const view = (
   entries: ReturnType<typeof user>[],
   docs: ConversationView['docs'] = {},
-): ConversationView => ({ conversation: { id: 1 }, entries, docs }) as unknown as ConversationView
+  id = 1,
+): ConversationView => ({ conversation: { id }, entries, docs }) as unknown as ConversationView
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())
 const tick = () => vi.advanceTimersByTimeAsync(10)
@@ -58,8 +59,12 @@ describe('web replica store', () => {
     source.send('ops', [['a', ['entries', 1, 'model', 0, 'content'], ' now']])
     const replica = store.getState().view!
     expect(replica.entries.map((entry) => entry.id)).toEqual([1, 3])
-    expect(replica.entries[1].model?.[0]).toMatchObject({ content: 'steer now' })
-    expect(replica.docs['pi.live']).toEqual({ run: { taskId: 2, inputs: [1] } })
+    expect(replica.entries[1].model?.[0]).toMatchObject({
+      content: 'steer now',
+    })
+    expect(replica.docs['pi.live']).toEqual({
+      run: { taskId: 2, inputs: [1] },
+    })
     // Unchanged entries keep their identity, so the transcript re-renders only what changed.
     source.send('ops', [['d', ['docs', 'pi.live', 'run']]])
     expect(store.getState().view!.entries[0]).toBe(replica.entries[0])
@@ -67,7 +72,10 @@ describe('web replica store', () => {
     // The root conversation's UI document rides along on every stream.
     source.send('ui', { value: { 'shell.panelOpen': true } })
     source.send('uiOps', { ops: [['s', ['shell.surface'], 'example']] })
-    expect(store.getState().shared).toEqual({ 'shell.panelOpen': true, 'shell.surface': 'example' })
+    expect(store.getState().shared).toEqual({
+      'shell.panelOpen': true,
+      'shell.surface': 'example',
+    })
 
     source.drop()
     expect(store.getState().connection.status).toBe('reconnecting')
@@ -90,7 +98,10 @@ describe('web replica store', () => {
     expect(latest().url).toBe('/api/events?docs=test.counter')
 
     latest().send('doc', { kind: 'test.counter', value: { count: 0 } })
-    latest().send('docOps', { kind: 'test.counter', ops: [['s', ['count'], 1]] })
+    latest().send('docOps', {
+      kind: 'test.counter',
+      ops: [['s', ['count'], 1]],
+    })
     expect(store.getState().docs['test.counter']).toEqual({ count: 1 })
     // Documents nobody asked for are ignored.
     latest().send('doc', { kind: 'other', value: { x: 1 } })
@@ -98,11 +109,17 @@ describe('web replica store', () => {
 
     release()
     expect(store.getState().docs['test.counter']).toBeUndefined()
-    latest().send('docOps', { kind: 'test.counter', ops: [['s', ['count'], 2]] })
+    latest().send('docOps', {
+      kind: 'test.counter',
+      ops: [['s', ['count'], 2]],
+    })
     expect(store.getState().docs['test.counter']).toBeUndefined()
     // Watched again: the old stream's ops wait for the new stream's snapshot.
     store.watchDoc('test.counter')
-    latest().send('docOps', { kind: 'test.counter', ops: [['s', ['count'], 3]] })
+    latest().send('docOps', {
+      kind: 'test.counter',
+      ops: [['s', ['count'], 3]],
+    })
     expect(store.getState().docs['test.counter']).toBeUndefined()
     await tick()
     latest().send('doc', { kind: 'test.counter', value: { count: 3 } })
@@ -197,6 +214,45 @@ describe('web replica store', () => {
     store.stop()
   })
 
+  it('shows a conversation seen before at once, until its stream brings a different snapshot', async () => {
+    const { store, latest } = setup()
+    latest().open()
+    latest().send('view', view([user(1, 'root')]))
+    store.show(7)
+    await tick()
+    latest().open()
+    const seven = view([user(2, 'seven')], {}, 7)
+    latest().send('view', seven)
+    expect(store.getState().restored).toBe(false)
+
+    // Back to the root, then to 7 again: its last replica shows before any stream answers.
+    store.show(undefined)
+    expect(store.getState().view).toBeUndefined()
+    store.show(7)
+    const kept = store.getState()
+    expect(kept.restored).toBe(true)
+    expect(kept.view?.entries.map((entry) => entry.id)).toEqual([2])
+    await tick()
+    latest().open()
+    // The same snapshot as last time changes nothing but the flag; a different one replaces the replica.
+    latest().send('view', seven)
+    expect(store.getState().view).toBe(kept.view)
+    expect(store.getState().restored).toBe(false)
+    latest().send('view', view([user(2, 'seven'), user(4, 'new')], {}, 7))
+    expect(store.getState().view?.entries.map((entry) => entry.id)).toEqual([2, 4])
+
+    // Ops applied since make the replica newer than its snapshot: the next snapshot replaces it again.
+    latest().send('ops', [['p', ['entries'], 2, 0, [user(5, 'later')]]])
+    store.show(undefined)
+    store.show(7)
+    expect(store.getState().view?.entries.map((entry) => entry.id)).toEqual([2, 4, 5])
+    await tick()
+    latest().open()
+    latest().send('view', seven)
+    expect(store.getState().view?.entries.map((entry) => entry.id)).toEqual([2])
+    store.stop()
+  })
+
   it('refreshes models after (re)starts and keeps notices', async () => {
     const { store, latest, fetch } = setup()
     const source = latest()
@@ -207,10 +263,16 @@ describe('web replica store', () => {
     source.send('system', system)
     await vi.waitFor(() => expect(store.getState().models).toEqual({ providers: [], models: [] }))
     expect(fetch).toHaveBeenCalledOnce()
-    source.send('system', { ...system, process: { ...system.process, generation: 2 } })
+    source.send('system', {
+      ...system,
+      process: { ...system.process, generation: 2 },
+    })
     expect(fetch).toHaveBeenCalledTimes(2)
 
-    source.send('notice', { level: 'warning', message: 'Unknown extension document: x' })
+    source.send('notice', {
+      level: 'warning',
+      message: 'Unknown extension document: x',
+    })
     expect(store.getState().notices.map((notice) => notice.message)).toEqual([
       'Unknown extension document: x',
     ])
