@@ -54,6 +54,8 @@ export interface BackupOptions {
   machine: string
   /** The chapter's key (`chapterKey`). */
   key: string
+  /** The chapter the backup belongs to, named in the commit so the fleet can group a project's chapters. */
+  chapter: { name: string; number: number }
   /** The active chapter's folder: its `state.sqlite` and `cloud-backup.json`. */
   dir: string
   projectRoot: string
@@ -103,6 +105,7 @@ export async function backUp(o: BackupOptions): Promise<LastBackup> {
       body: JSON.stringify({
         key: o.key,
         name: basename(o.projectRoot),
+        chapter: { name: o.chapter.name, number: o.chapter.number },
         machine: o.machine,
         parent,
         ...(o.force ? { force: true } : {}),

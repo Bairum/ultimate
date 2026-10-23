@@ -48,11 +48,22 @@ const notes = (home: string) => {
     db.close()
   }
 }
+/** The first chapter, whose key has no `@` suffix; the commit still names it. */
+const firstChapter = { name: FIRST_CHAPTER, number: 1 }
 const back = (
   at: { projectRoot: string; home: string },
   name: string,
   extra: { force?: boolean; tailnet?: string; key?: string; fetch?: typeof fetch } = {},
-) => backUp({ ...cloud, key, machine: name, dir: at.home, projectRoot: at.projectRoot, ...extra })
+) =>
+  backUp({
+    ...cloud,
+    key,
+    chapter: firstChapter,
+    machine: name,
+    dir: at.home,
+    projectRoot: at.projectRoot,
+    ...extra,
+  })
 /** A project of its own for each test, so earlier backups never make its first one stale. */
 let projects = 0
 const own = () => `github.com/o/other-${++projects}`
@@ -63,6 +74,7 @@ it('commits backups with their parent, refuses a stale one with the Worker’s s
   expect(stub.commits.at(-1)).toMatchObject({
     key,
     name: 'app',
+    chapter: { name: 'the-beginning', number: 1 },
     machine: 'desk',
     parent: null,
     tailnet: 'https://desk.tail.ts.net',
@@ -123,6 +135,7 @@ it('takes a 409 naming this very backup as latest for success: a retried commit 
   const done = await backUp({
     ...cloud,
     key: other,
+    chapter: firstChapter,
     machine: 'desk',
     dir: a.home,
     projectRoot: a.projectRoot,
@@ -405,9 +418,16 @@ it('restores chapters by name, explicit key and snapshot, defaulting to the acti
     const next = await backUp({
       ...cloud,
       key: chapterKey,
+      chapter: { name: chapter, number: 2 },
       machine: 'desk',
       dir: chapterSource.home,
       projectRoot: source.projectRoot,
+    })
+    // A later chapter's commit carries its own name and number next to its `<key>@<chapter>` key.
+    expect(worker.commits.at(-1)).toMatchObject({
+      key: chapterKey,
+      name: 'app',
+      chapter: { name: 'fresh-roots', number: 2 },
     })
     const target = await machine(['keep first'])
     const user = await temp()

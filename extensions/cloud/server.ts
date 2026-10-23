@@ -50,6 +50,7 @@ async function setup(host: ExtensionHost) {
     status: 'on' as const,
     config,
     key: chapterKey(identity.key, chapter.name, chapter.number === 1),
+    chapter: { name: chapter.name, number: chapter.number },
     dir: chapter.dir,
   }
 }
@@ -86,7 +87,12 @@ export async function backup(host: ExtensionHost, force: boolean) {
 async function upload(
   host: ExtensionHost,
   running: Running,
-  ready: { config: { url: string; token: string; machine: string }; key: string; dir: string },
+  ready: {
+    config: { url: string; token: string; machine: string }
+    key: string
+    chapter: { name: string; number: number }
+    dir: string
+  },
   force: boolean,
 ) {
   const started = Date.now()
@@ -100,6 +106,7 @@ async function upload(
       ...ready.config,
       secret,
       key: ready.key,
+      chapter: ready.chapter,
       dir: ready.dir,
       projectRoot: host.projectRoot,
       force,
