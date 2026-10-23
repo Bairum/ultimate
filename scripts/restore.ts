@@ -85,6 +85,12 @@ export interface RestoreOptions {
   now?: Date
 }
 
+/** What a restore of the chapter in `dir` moves aside: its state files, never other chapters. */
+const chapterState = async (dir: string) =>
+  (await movable(dir)).filter(
+    (name) => !/^(chapters|chapters\.json|pending-chapter\.json)$/.test(name),
+  )
+
 /** The home-wide journal still blocks every chapter until installation and registration finish. */
 type RestoreJournal = Journal & { chapter?: string }
 
@@ -168,7 +174,8 @@ async function install(home: string, journal: RestoreJournal) {
   if (!pending) throw new Error(`${join(home, JOURNAL)} is a reset's; finish it with pnpm reset`)
   const moves: string[] = []
   if (existsSync(pending.database)) {
-    moves.push(...(await movable(dir)))
+    // Only this chapter's state moves: the other chapters and their record stay.
+    moves.push(...(await chapterState(dir)))
     if (existsSync(join(dir, 'cloud-backup.json'))) moves.push('cloud-backup.json')
     await moveInto(dir, backup, moves)
     await moveDatabase(pending.database, database)
@@ -177,7 +184,8 @@ async function install(home: string, journal: RestoreJournal) {
       `${pending.database} is gone and ${dir} has no state.sqlite; the restore cannot finish`,
     )
   await writeBackup(dir, pending.record)
-  if (chapter !== FIRST_CHAPTER) {
+  // The restored chapter becomes active; a home that only ever had the first chapter keeps no chapters file.
+  if (chapter !== FIRST_CHAPTER || existsSync(join(home, CHAPTERS_FILE))) {
     const chapters = await readChapters(home)
     if (!chapters.chapters.some(({ name }) => name === chapter))
       chapters.chapters.push({ name: chapter, createdAt: Date.now() })
@@ -267,7 +275,7 @@ export async function main(args = process.argv.slice(2)) {
         : '') +
       '\n',
   )
-  const moves = existsSync(files.dir) ? await movable(files.dir) : []
+  const moves = existsSync(files.dir) ? await chapterState(files.dir) : []
   for (const name of moves) console.log(`  move ${name} (${await size(join(files.dir, name))})`)
   if (!moves.length) console.log('  nothing to move: the home holds no state yet')
   const { running } = existsSync(home) ? await holder(home) : {}

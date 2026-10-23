@@ -425,6 +425,20 @@ it('restores chapters by name, explicit key and snapshot, defaulting to the acti
     expect(await cli(user, target.home, '--dir', source.projectRoot, '--yes')).toContain(
       `Installed backup ${next.id}`,
     )
+    // Restoring the first chapter leaves later chapters where they are, and makes the first active.
+    expect(
+      await cli(
+        user,
+        target.home,
+        '--chapter',
+        FIRST_CHAPTER,
+        '--dir',
+        source.projectRoot,
+        '--yes',
+      ),
+    ).toContain(`Installed backup ${first.id}`)
+    expect(notes(files.dir)).toEqual(['chapter notes'])
+    expect((await readChapters(target.home)).active).toBe(FIRST_CHAPTER)
     // A chapter key by itself derives the chapter, even in a fresh home.
     const fresh = await temp()
     expect(await cli(user, fresh, chapterKey, '--dir', source.projectRoot, '--yes')).toContain(
