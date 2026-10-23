@@ -26,8 +26,8 @@ The title bar's `@ultimate` button (`titlebar.left`, beside the surfaces, also o
 from every surface. Its mark's dot pulses while @ultimate works and is amber while questions wait on you, with their count.
 
 Every section of the sidebar folds the same way (`Section`, `section.tsx`): a quiet mono heading with a chevron and
-a count bubble, open by default, its fold state kept per section in `ext.conversations.closedSections`; the Watching
-and Scheduled sections of the `sidebar.top` slot draw the same heading. Top to bottom:
+a count bubble, open by default, its fold state kept per section in `ext.conversations.closedSections`; the Scheduled
+section of the `sidebar.top` slot draws the same heading. Top to bottom:
 
 - **@ultimate**, then the **Agents** group: the lander first, with its **Landed · N** section right under its row,
   aligned with the other sections, then other standing agents.
@@ -46,7 +46,7 @@ and Scheduled sections of the `sidebar.top` slot draw the same heading. Top to b
   browsable history (every branch, abstract and landing), whose footer offers Compact (lineage `compact {id}`) and
   Talk to @ultimate. The row has no menu; a root is never renamed, cleared or concluded here.
 - The `sidebar.top` slot: background work that optional extensions contribute without the sidebar importing them,
-  subscriptions' **Watching** and automations' **Scheduled**, each up to five compact rows with `+N more`, and its own
+  automations' **Scheduled**, up to five compact rows with `+N more`, and its own
   bottom rule. Each hides while it has nothing active.
 - **In flight · N** (`InFlight`, `root.tsx`): every open branch of every tree, newest input first. A branch is open
   until it is concluded or it landed after its latest input (the lander's results, or a root landing note from it;

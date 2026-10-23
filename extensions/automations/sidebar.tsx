@@ -1,70 +1,93 @@
 import { useState } from 'react'
 import { ChevronRightIcon } from 'lucide-react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { cn, useAction, useExtensionUiState, useNow, useUltimate } from '@/sdk'
-import { useLive } from './panel.tsx'
-import { full, RunIcon, statusLabel, until } from './parts.tsx'
-import { ListAction } from './refs.ts'
+import { cn, useExtensionUiState, useNow, useUltimate } from '@/sdk'
+import {
+  Dot,
+  KindIcon,
+  active,
+  attention,
+  lookOf,
+  looks,
+  openAutomationsPanel,
+  since,
+  stateLine,
+  until,
+  useAutomations,
+  useOpenAutomation,
+  worstFirst,
+} from './parts.tsx'
 import type { Automation } from './refs.ts'
 
 const FIRST = 5
 
+/** A few words for a row, fewer than the panel's line since the sidebar is narrow. */
+function short(automation: Automation, now: number) {
+  const look = lookOf(automation, now)
+  const last = automation.runs.at(-1)
+  if (look === 'working' && last) return `working ${since(last.firedAt, now)}`
+  if (look === 'watching') return automation.fires > 0 ? `fired ${automation.fires}` : 'watching'
+  if (look === 'scheduled' && automation.nextAt !== undefined) return until(automation.nextAt, now)
+  return looks[look].word
+}
+
 /**
- * The Agent sidebar's Scheduled section: enabled automations, soonest first, with their next run and how the last
- * one went; hidden while none is enabled. A row opens its running or failed run's conversation, else the panel.
+ * The Agent sidebar's Automations section: enabled or busy automations of both kinds, worst first; hidden while none is.
+ * The heading folds it; its count opens the panel with every automation, paused ones included, and turns red while one
+ * needs attention.
  */
-export function ScheduledSection() {
-  const list = useAction(ListAction, null, { onError: () => {} })
-  const enabled = (list.data ?? [])
-    .filter((automation) => automation.enabled)
-    .toSorted((a, b) => (a.nextAt ?? Infinity) - (b.nextAt ?? Infinity))
-  const soon = enabled.some(
-    (automation) =>
-      automation.runs.at(-1)?.status === 'running' ||
-      (automation.nextAt !== undefined && automation.nextAt - Date.now() < 120000),
-  )
-  const now = useNow(soon ? 1000 : 15000)
-  useLive(
-    list.refetch,
-    enabled.some((automation) => automation.nextAt !== undefined && now - automation.nextAt > 1500),
+export function AutomationsSection() {
+  const { data } = useAutomations(5000)
+  const now = useNow(10_000)
+  const shell = useUltimate()
+  const [expanded, setExpanded] = useExtensionUiState('sidebarOpen', true)
+  const [all, setAll] = useState(false)
+  const list = worstFirst(
+    (data ?? []).filter((automation) => active(automation, now)),
     now,
   )
-  const [all, setAll] = useState(false)
-  const [expanded, setExpanded] = useExtensionUiState('sidebarOpen', true)
-  if (enabled.length === 0) return null
-  const failing = enabled.filter((automation) => automation.runs.at(-1)?.status === 'failed').length
+  if (list.length === 0) return null
+  const failing = list.filter((automation) => attention(lookOf(automation, now))).length
   return (
     <Collapsible
-      aria-label="Scheduled"
+      aria-label="Automations"
       className="mb-1 flex flex-col gap-px border-b border-border/60 pb-1"
       data-sidebar-section="automations"
       onOpenChange={setExpanded}
       open={expanded}
     >
-      <CollapsibleTrigger className="group/scheduled mx-2 flex h-6 cursor-pointer items-center gap-1 rounded-md px-1 font-mono text-[9.5px] tracking-wider text-muted-foreground/70 uppercase outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
-        <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/scheduled:rotate-90" />
-        Scheduled
-        <span
+      <div className="mx-2 flex h-6 items-center gap-1">
+        <CollapsibleTrigger className="group/automations flex h-6 cursor-pointer items-center gap-1 rounded-md px-1 font-mono text-[9.5px] tracking-wider text-muted-foreground/70 uppercase outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
+          <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/automations:rotate-90" />
+          Automations
+        </CollapsibleTrigger>
+        <button
+          aria-label={`${list.length} active${failing ? `, ${failing} need attention` : ''}: show all automations`}
           className={cn(
-            'rounded-full bg-sidebar-accent px-1.5 text-[9.5px] leading-4 tracking-normal tabular-nums',
+            'cursor-pointer rounded-full bg-sidebar-accent px-1.5 font-mono text-[9.5px] leading-4 tabular-nums outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
             failing ? 'text-error' : 'text-foreground/80',
           )}
-          title={failing ? `${failing} last run failed` : undefined}
+          data-automations-open
+          onClick={() => openAutomationsPanel(shell)}
+          title={
+            failing ? `${failing} need attention · show all automations` : 'Show all automations'
+          }
+          type="button"
         >
-          {enabled.length}
-        </span>
-      </CollapsibleTrigger>
+          {list.length}
+        </button>
+      </div>
       <CollapsibleContent className="flex flex-col gap-px">
-        {(all ? enabled : enabled.slice(0, FIRST)).map((automation) => (
+        {(all ? list : list.slice(0, FIRST)).map((automation) => (
           <Row automation={automation} key={automation.id} now={now} />
         ))}
-        {enabled.length > FIRST && (
+        {list.length > FIRST && (
           <button
             className="mx-2 h-5 cursor-pointer rounded-md pl-[26px] text-left font-mono text-[10px] text-muted-foreground/70 outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
             onClick={() => setAll(!all)}
             type="button"
           >
-            {all ? 'fewer' : `+${enabled.length - FIRST} more`}
+            {all ? 'fewer' : `+${list.length - FIRST} more`}
           </button>
         )}
       </CollapsibleContent>
@@ -73,50 +96,38 @@ export function ScheduledSection() {
 }
 
 function Row({ automation, now }: { automation: Automation; now: number }) {
-  const { openPanel, switchConversation, showSurface } = useUltimate()
+  const shell = useUltimate()
+  const openAutomation = useOpenAutomation()
+  const look = lookOf(automation, now)
   const last = automation.runs.at(-1)
-  const running = last?.status === 'running'
-  // A run that is going or just failed is what the user wants to see; otherwise the overview.
-  const target = last && (running || last.status === 'failed') ? last.conversationId : undefined
+  // A run that is going or just failed is what the user wants to see; a script opens beside its watcher.
+  const run =
+    last && (last.status === 'running' || look === 'failed') ? last.conversationId : undefined
   return (
     <button
-      className="mx-2 flex h-7 min-w-0 cursor-pointer items-center gap-2 rounded-md pr-2 pl-2.5 text-left outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
+      className="group/row mx-2 flex h-7 min-w-0 cursor-pointer items-center gap-2 rounded-md pr-2 pl-2.5 text-left outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset"
       data-sidebar-automation={automation.id}
       onClick={() => {
-        if (target === undefined) return openPanel('automations')
-        showSurface('agent')
-        switchConversation(target)
+        if (automation.script) return openAutomation(automation.id)
+        if (run === undefined) return openAutomationsPanel(shell)
+        shell.showSurface('agent')
+        shell.switchConversation(run)
       }}
-      title={[
-        `${automation.id} · ${automation.name}`,
-        automation.nextAt !== undefined && `next ${full(automation.nextAt)}`,
-        last && `last run ${statusLabel(last.status)}`,
-      ]
-        .filter(Boolean)
-        .join('\n')}
+      title={`${automation.id} · ${automation.name}\n${looks[look].word} · ${stateLine(automation, now)}`}
       type="button"
     >
-      <span className="flex size-1.5 shrink-0 items-center justify-center">
-        {last ? (
-          <RunIcon className="size-2.5" status={last.status} />
-        ) : (
-          <span className="size-1.5 rounded-full border border-muted-foreground/50" />
-        )}
-      </span>
+      <Dot look={look} />
       <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground/85">
         {automation.name}
       </span>
+      <KindIcon automation={automation} className="size-2.5 text-muted-foreground/50" />
       <span
         className={cn(
           'shrink-0 font-mono text-[10px] tabular-nums',
-          running ? 'text-brand' : 'text-muted-foreground',
+          look === 'watching' || look === 'scheduled' ? 'text-muted-foreground' : looks[look].text,
         )}
       >
-        {running
-          ? 'running'
-          : automation.nextAt !== undefined
-            ? until(automation.nextAt, now)
-            : '—'}
+        {short(automation, now)}
       </span>
     </button>
   )

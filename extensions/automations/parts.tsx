@@ -1,11 +1,21 @@
-import { CheckIcon, LoaderCircleIcon, MinusCircleIcon, SkipForwardIcon, XIcon } from 'lucide-react'
+import {
+  CalendarClockIcon,
+  CheckIcon,
+  LoaderCircleIcon,
+  MinusCircleIcon,
+  RadarIcon,
+  SkipForwardIcon,
+  XIcon,
+} from 'lucide-react'
+import { useEffect, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { cn, formatTime } from '@/sdk'
-import type { Automation, Run, Schedule } from './refs.ts'
+import { api, cn, formatDuration, formatTime, useUltimate } from '@/sdk'
+import { ListAction } from './refs.ts'
+import type { Automation, AutomationListItem, Run, Schedule } from './refs.ts'
 
 /** A one-shot schedule whose time has passed: resuming it would fire at once, so its switch stays off. */
 export const spent = (automation: Automation, now: number) =>
-  automation.schedule.kind === 'at' && Date.parse(automation.schedule.time) <= now
+  automation.schedule?.kind === 'at' && Date.parse(automation.schedule.time) <= now
 
 /** `in 3s`, `in 12m`, `in 3h 12m`, `in 2d 4h`, then a short date. */
 export function until(at: number, now: number) {
@@ -89,6 +99,234 @@ export function Tag({ children, className }: { children: ReactNode; className?: 
       {children}
     </span>
   )
+}
+
+/**
+ * What an automation is doing, in one word, whatever its trigger: a script's lifecycle, a prompt run working or failed,
+ * or a schedule armed, paused or spent. Red and yellow need attention; green is armed; purple works; grey rests.
+ */
+export type Look =
+  | 'failed'
+  | 'investigating'
+  | 'writing'
+  | 'working'
+  | 'watching'
+  | 'scheduled'
+  | 'paused'
+  | 'done'
+export const looks: Record<
+  Look,
+  { dot: string; text: string; word: string; rank: number; busy?: boolean }
+> = {
+  failed: { dot: 'bg-error', text: 'text-error', word: 'failed', rank: 0 },
+  investigating: {
+    dot: 'bg-warning',
+    text: 'text-warning',
+    word: 'investigating',
+    rank: 1,
+    busy: true,
+  },
+  writing: { dot: 'bg-brand', text: 'text-brand', word: 'writing', rank: 2, busy: true },
+  working: { dot: 'bg-brand', text: 'text-brand', word: 'working', rank: 2, busy: true },
+  watching: { dot: 'bg-success', text: 'text-success', word: 'watching', rank: 3 },
+  scheduled: { dot: 'bg-success', text: 'text-success', word: 'scheduled', rank: 3 },
+  paused: { dot: 'bg-muted-foreground/50', text: 'text-muted-foreground', word: 'paused', rank: 4 },
+  done: { dot: 'bg-muted-foreground/50', text: 'text-muted-foreground', word: 'done', rank: 5 },
+}
+
+export function lookOf(automation: Automation, now: number): Look {
+  const state = automation.script?.state
+  if (state === 'failed' || state === 'investigating' || state === 'writing') return state
+  const last = automation.runs.at(-1)?.status
+  if (last === 'running') return 'working'
+  // A failed run of a paused automation was already dealt with by pausing it; a fired one-shot script is disabled by
+  // its fire, not by anyone, so its failed run still needs attention.
+  if (last === 'failed' && (automation.enabled || state === 'done')) return 'failed'
+  if (state === 'running') return 'watching'
+  if (state === 'done') return 'done'
+  if (automation.enabled) return 'scheduled'
+  return spent(automation, now) ? 'done' : 'paused'
+}
+
+export const attention = (look: Look) => look === 'failed' || look === 'investigating'
+/** Enabled, working or needing attention: what the sidebar and the chip count. */
+export const active = (automation: Automation, now: number) =>
+  looks[lookOf(automation, now)].rank <= 3
+
+/** Worst first, then newest. */
+export const worstFirst = <T extends Automation>(list: readonly T[], now: number) =>
+  list.toSorted(
+    (a, b) => looks[lookOf(a, now)].rank - looks[lookOf(b, now)].rank || b.createdAt - a.createdAt,
+  )
+
+export function Dot({ look, className }: { look: Look; className?: string }) {
+  const { dot, word, busy } = looks[look]
+  return (
+    <span
+      aria-label={word}
+      className={cn(
+        'inline-block size-1.5 shrink-0 rounded-full',
+        dot,
+        busy && 'animate-pulse-dot',
+        className,
+      )}
+      role="img"
+    />
+  )
+}
+
+/** The trigger at a glance: a clock for a schedule, a radar for a watching script. */
+export function KindIcon({
+  automation,
+  className,
+}: {
+  automation: Automation
+  className?: string
+}) {
+  const Icon = automation.script ? RadarIcon : CalendarClockIcon
+  return (
+    <Icon
+      aria-label={automation.script ? 'script' : 'schedule'}
+      className={cn('size-3 shrink-0 text-muted-foreground/70', className)}
+    />
+  )
+}
+
+/** `12s`, `5m`, `3h 12m`, `2d 4h`: how long since `at`, in whole units. */
+export function since(at: number, now: number) {
+  const seconds = Math.max(0, Math.floor((now - at) / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ''}`
+  const days = Math.floor(hours / 24)
+  return `${days}d${hours % 24 ? ` ${hours % 24}h` : ''}`
+}
+
+const fired = (automation: Automation, now: number) =>
+  automation.fires > 0
+    ? `fired ${automation.fires}${automation.lastFireAt ? ` · ${ago(automation.lastFireAt, now)}` : ''}`
+    : undefined
+
+/** The one line under a name: what it is doing right now and what it did last. */
+export function stateLine(automation: Automation, now: number): string {
+  const look = lookOf(automation, now)
+  const script = automation.script
+  const last = automation.runs.at(-1)
+  const parts: (string | false | undefined)[] = []
+  if (look === 'failed')
+    parts.push(
+      script?.state === 'failed'
+        ? (script.error ?? 'the script failed')
+        : `last run failed ${last ? ago(last.finishedAt ?? last.firedAt, now) : ''}`,
+    )
+  else if (look === 'investigating') parts.push('the watcher is repairing the script')
+  else if (look === 'writing') parts.push('the watcher is writing the script')
+  else if (look === 'working')
+    parts.push(`run working · ${formatDuration(Math.max(0, now - last!.firedAt))}`)
+  else if (look === 'watching') {
+    if (script?.startedAt) parts.push(`up ${since(script.startedAt, now)}`)
+    parts.push(fired(automation, now) ?? 'not fired yet')
+  } else if (look === 'scheduled') {
+    parts.push(
+      automation.nextAt !== undefined ? `next ${until(automation.nextAt, now)}` : 'scheduling…',
+    )
+    if (last) parts.push(`${statusLabel(last.status)} ${ago(last.finishedAt ?? last.firedAt, now)}`)
+  } else {
+    // The state word already stands before this line: add only what happened.
+    if (script) parts.push(fired(automation, now) ?? 'never fired')
+    else if (last)
+      parts.push(`last ${statusLabel(last.status)} ${ago(last.finishedAt ?? last.firedAt, now)}`)
+  }
+  return parts.filter(Boolean).join(' · ')
+}
+
+type Polled = { data?: AutomationListItem[]; error?: unknown }
+/**
+ * One list poll for the whole page: the chip, the sidebar, the panel and the cards share it, and it runs at the fastest
+ * rate any of them asks for.
+ */
+const poll = {
+  state: {} as Polled,
+  listeners: new Set<() => void>(),
+  rates: new Map<symbol, number>(),
+  timer: undefined as ReturnType<typeof setInterval> | undefined,
+  rate: 0,
+  loading: undefined as Promise<void> | undefined,
+}
+function publish(state: Polled) {
+  poll.state = state
+  for (const listener of poll.listeners) listener()
+}
+/** Fetch the list now; a fetch in flight is reused. Call it after an action changes an automation. */
+export function refreshAutomations() {
+  poll.loading ??= api
+    .action(ListAction)
+    .then((data) => publish({ data }))
+    .catch((error: unknown) => publish({ ...poll.state, error }))
+    .finally(() => (poll.loading = undefined))
+  return poll.loading
+}
+function reschedule() {
+  const rate = Math.min(...poll.rates.values())
+  if (rate === poll.rate) return
+  clearInterval(poll.timer)
+  poll.rate = rate
+  poll.timer = Number.isFinite(rate)
+    ? setInterval(() => void refreshAutomations(), rate)
+    : undefined
+}
+const listen = (listener: () => void) => {
+  poll.listeners.add(listener)
+  return () => void poll.listeners.delete(listener)
+}
+
+/** The automations, fetched again every `ms` while this component is mounted (`false`: once). */
+export function useAutomations(ms: number | false): Polled {
+  useEffect(() => {
+    const key = Symbol()
+    poll.rates.set(key, ms === false ? Infinity : ms)
+    reschedule()
+    // oxlint-disable-next-line typescript/no-floating-promises -- refreshAutomations catches failures and publishes them in poll.state.error.
+    void refreshAutomations()
+    return () => {
+      poll.rates.delete(key)
+      reschedule()
+    }
+  }, [ms])
+  return useSyncExternalStore(listen, () => poll.state)
+}
+
+/** Opens the Automations panel, on the Agent surface: other surfaces, such as System, have no panels. */
+export function openAutomationsPanel(shell: {
+  showSurface: (id: string) => void
+  openPanel: (id?: string) => void
+}) {
+  shell.showSurface('agent')
+  shell.openPanel('automations')
+}
+
+/**
+ * Opens automation `id`: a script's watcher conversation in the middle and the panel beside it, which then shows its
+ * script; a schedule opens the panel on the list. An id the list does not know yet (a card for one just created) is
+ * looked up first.
+ */
+export function useOpenAutomation() {
+  const { switchConversation, ...shell } = useUltimate()
+  const watcher = (id: string) =>
+    poll.state.data?.find((automation) => automation.id === id)?.script?.conversationId
+  const show = (id: string) => {
+    const to = watcher(id)
+    if (to !== undefined) switchConversation(to)
+    // After the switch, which closes an overlaid panel on a phone.
+    openAutomationsPanel(shell)
+  }
+  return (id: string) => {
+    if (poll.state.data?.some((automation) => automation.id === id)) return show(id)
+    // oxlint-disable-next-line typescript/no-floating-promises -- refreshAutomations catches failures and publishes them in poll.state.error.
+    void refreshAutomations().then(() => show(id))
+  }
 }
 
 /** A small uppercase heading with a meta value on the right, as in the Agents and Extensions panels. */

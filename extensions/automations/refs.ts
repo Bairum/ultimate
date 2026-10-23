@@ -1,68 +1,60 @@
-/**
- * Automations in the browser: the scheduled agent prompts and their runs, and the actions the Automations panel
- * manages them with. Browser-safe.
- */
+/** Automations: durable triggers, actions, runs and script lifecycle events. Browser-safe. */
 import { actionRef } from '../../shared/extension-api.ts'
-
-/** When an automation fires: a cron expression in a timezone, once at an ISO time, or every `ms` milliseconds. */
-export type Schedule =
-  | { kind: 'cron'; expr: string; tz: string }
-  | { kind: 'at'; time: string }
-  | { kind: 'every'; ms: number }
-/** One firing of an automation; `conversationId` is the conversation it ran in. */
-export type Run = {
-  id: string
-  firedAt: number
-  conversationId?: number
-  status: 'running' | 'done' | 'failed' | 'aborted' | 'skipped'
-  finishedAt?: number
-  answer?: string
-}
-/** A scheduled prompt; `agent` names the definition it runs as, else it copies the root agent. */
-export type Automation = {
-  id: string
-  name: string
-  prompt: string
-  schedule: Schedule
-  enabled: boolean
-  createdAt: number
-  updatedAt: number
-  nextAt?: number
-  runs: Run[]
-  agent?: string
-}
-/** A schedule parsed, in words, and its next fire times. */
+import { defineEvent } from '../../shared/events.ts'
+import type { Automation, AutomationListItem, CreateArgs, Run, Schedule } from './types.ts'
+export type { Automation, AutomationListItem, CreateArgs, Run, Schedule } from './types.ts'
 export type Described = { schedule: Schedule; description: string; next: number[] }
-/**
- * A schedule as text: `cron "0 9 * * 1-5" Europe/Vienna` (timezone optional), `at 2026-12-01T09:00:00Z`, `in 30m`,
- * `every 15m`, or parsed.
- */
-type ScheduleInput = string | Schedule
-/** An automation's id, `A<n>`. */
 type Id = { id: string }
-
-/** No arguments → every automation. */
-export const ListAction = actionRef<null, Automation[]>('automations', 'list')
-/** `{ schedule }` → the schedule parsed, in words, and its next three fire times (one for `at`). */
-export const DescribeAction = actionRef<{ schedule: ScheduleInput }, Described>(
+/** No arguments → all automations, with process-local alive. */
+export const ListAction = actionRef<null, AutomationListItem[]>('automations', 'list')
+/** Flat trigger and action arguments → new automation. */
+export const CreateAction = actionRef<CreateArgs, Automation>('automations', 'create')
+/** Update trigger settings and run profile; an empty agent copies the root agent. */
+export const UpdateAction = actionRef<
+  Id & Partial<Omit<CreateArgs, 'scope' | 'slug' | 'subscribers'>>,
+  Automation
+>('automations', 'update')
+/** Pause a trigger, terminating its script process group if present. */
+export const PauseAction = actionRef<Id, Automation>('automations', 'pause')
+/** Resume a trigger; scripts require an executable run file. */
+export const ResumeAction = actionRef<Id, Automation>('automations', 'resume')
+/** Fire a schedule now, or relaunch a script. */
+export const RunAction = actionRef<Id, Run | Automation | Id>('automations', 'run')
+/** Delete a record; files and conversations remain. */
+export const DeleteAction = actionRef<Id, Id>('automations', 'delete')
+/** Parse a schedule and describe its next fire times. */
+export const DescribeAction = actionRef<{ schedule: string | Schedule }, Described>(
   'automations',
   'describe',
 )
-/** `{ name, prompt, schedule, agent? }` → the new automation, enabled. */
-export const CreateAction = actionRef<
-  { name: string; prompt: string; schedule: ScheduleInput; agent?: string },
-  Automation
->('automations', 'create')
-/** `{ id, name?, prompt?, schedule?, agent? }` → the automation updated; an empty `agent` copies the root agent again. */
-export const UpdateAction = actionRef<
-  Id & { name?: string; prompt?: string; schedule?: ScheduleInput; agent?: string },
-  Automation
->('automations', 'update')
-/** `{ id }` → the automation, paused. */
-export const PauseAction = actionRef<Id, Automation>('automations', 'pause')
-/** `{ id }` → the automation, enabled again; fails for a one-shot whose time has passed. */
-export const ResumeAction = actionRef<Id, Automation>('automations', 'resume')
-/** `{ id }` → the run fired now. */
-export const RunAction = actionRef<Id, Run>('automations', 'run')
-/** `{ id }` → `{ id }`: delete the automation; its conversations stay. */
-export const DeleteAction = actionRef<Id, Id>('automations', 'delete')
+/** Subscribe #id or @name; default caller. */
+export const SubscribeAction = actionRef<Id & { to?: string }, Automation>(
+  'automations',
+  'subscribe',
+)
+/** Remove a subscriber; default caller. */
+export const UnsubscribeAction = actionRef<Id & { to?: string }, Automation>(
+  'automations',
+  'unsubscribe',
+)
+/** Last output.log lines, default 50 and maximum 2000. */
+export const LogAction = actionRef<Id & { lines?: number }, { text: string }>('automations', 'log')
+/** Executable path and first 64 KiB of text; empty while unwritten. */
+export const ScriptAction = actionRef<Id, { path: string; text: string }>('automations', 'script')
+/** Fail a script, notifying subscribers and @ultimate. */
+export const EscalateAction = actionRef<Id & { reason: string }, Automation>(
+  'automations',
+  'escalate',
+)
+/** A trigger fired; fire is its lifetime count. */
+export const Fired = defineEvent<{ id: string; text: string; fire: number }>('automations.fired')
+/** Supervised executable started. */
+export const Started = defineEvent<{ id: string; pid: number }>('automations.started')
+/** Executable exited; null code means a signal or spawn error. */
+export const Exited = defineEvent<{ id: string; code: number | null; signal?: string }>(
+  'automations.exited',
+)
+/** Recurring script printed DONE and exited 0. */
+export const Done = defineEvent<{ id: string; text?: string }>('automations.done')
+/** Watcher could not recover its script. */
+export const Escalated = defineEvent<{ id: string; reason: string }>('automations.escalated')

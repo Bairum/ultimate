@@ -10,7 +10,7 @@ import type { Todo } from '../todos/refs.ts'
 import { Roots } from '../lineage/api.ts'
 import { Messages } from '../messages/api.ts'
 import type { Question } from '../questions/types.ts'
-import type { Subscription } from '../subscriptions/types.ts'
+import type { Automation } from '../automations/types.ts'
 import { deliver } from './delivery.ts'
 import type { Session } from './refs.ts'
 import type { Seed } from './types.ts'
@@ -37,13 +37,7 @@ async function document<T>(host: ExtensionHost, tx: Tx, kind: string, id = 1): P
 export async function buildSeed(host: ExtensionHost, session: number): Promise<Seed> {
   const signal = new AbortController().signal
   // These ledgers are session-scoped, not exported conversation docs; their list actions read them.
-  const automations = (await host.invoke(
-    'automations',
-    'list',
-    null,
-    signal,
-  )) as (Seed['automations'][number] & { enabled: boolean })[]
-  const subscriptions = (await host.invoke('subscriptions', 'list', null, signal)) as Subscription[]
+  const automations = (await host.invoke('automations', 'list', null, signal)) as Automation[]
   return host.harness().commit(async (tx) => {
     const found = (
       await document<{ sessions: Session[] }>(host, tx, 'dream.sessions')
@@ -82,9 +76,10 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
       .filter((item) => item.done === undefined)
       .map(({ text, owner }) => ({ text, owner }))
     const schedules = automations
-      .filter((item) => item.enabled)
+      .filter((item) => item.enabled && item.schedule)
       .map((item) => {
-        const { name, prompt, schedule, agent, model, thinking } = item
+        const { name, prompt, agent, model, thinking } = item
+        const schedule = item.schedule!
         return {
           name,
           prompt,
@@ -99,13 +94,17 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
       if (names.has(name)) throw new Error(`Chapter seed needs unique automation names: ${name}`)
       names.add(name)
     }
-    const watchers = subscriptions
-      .filter((item) => item.enabled)
-      .map(({ id, scope, title, ask }) => ({
+    const watchers = automations
+      .filter((item) => item.enabled && item.script)
+      .map(({ id, scope, name, script, prompt, agent, model, thinking }) => ({
         id,
         ...(scope ? { scope } : {}),
-        title,
-        ask,
+        name,
+        ask: script!.ask,
+        ...(prompt ? { prompt } : {}),
+        ...(agent ? { agent } : {}),
+        ...(model ? { model } : {}),
+        ...(thinking ? { thinking } : {}),
       }))
     // Materialize document overlays before the transaction releases them.
     return JSON.parse(
@@ -117,13 +116,13 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
         todos,
         questions,
         automations: schedules,
-        subscriptions: watchers,
+        scripts: watchers,
         counts: {
           memories: Object.keys(memories).length,
           todos: todos.length,
           questions: questions.length,
           automations: schedules.length,
-          subscriptions: watchers.length,
+          scripts: watchers.length,
         },
       }),
     ) as Seed
@@ -169,12 +168,18 @@ export async function applySeed(host: ExtensionHost) {
           owner: 'user' as const,
           text: `Open question (${seed.from.name}${ref}): ${text}`,
         })),
-        // There is no user subscription adoption path. Project manifests are rediscovered by subscriptions onOpen.
-        ...seed.subscriptions
+        // Project manifests are rediscovered by automations onOpen; user scripts need recreating.
+        ...seed.scripts
           .filter((item) => item.scope !== 'project')
-          .map(({ id, title, ask }) => ({
+          .map(({ id, name, ask, prompt, agent }) => ({
             owner: 'ultimate' as const,
-            text: `Recreate subscription ${id} (${title}): ${ask}`,
+            text: `Recreate script ${id} (${name}): ${ask}${prompt ? ` · prompt: ${prompt}${agent ? ` (agent ${agent})` : ''}` : ''}`,
+          })),
+        ...seed.automations
+          .filter((item) => !item.prompt)
+          .map(({ name, schedule }) => ({
+            owner: 'ultimate' as const,
+            text: `Recreate schedule automation (${name}) with new subscribers: ${JSON.stringify(schedule)}`,
           })),
       ]
       for (const item of carried) todos.items.push({ ...item, id: todos.next++, at: Date.now() })
@@ -200,6 +205,7 @@ export async function applySeed(host: ExtensionHost) {
   }
   const signal = new AbortController().signal
   for (const automation of seed.automations) {
+    if (!automation.prompt) continue
     const receipt = await harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context)
     if (receipt?.automations.includes(automation.name)) continue
     if (seed.gate) {
@@ -207,8 +213,12 @@ export async function applySeed(host: ExtensionHost) {
       await host.invoke('automations', 'describe', { schedule: automation.schedule }, signal)
     } else {
       // Names are unique in a seed and the destination starts empty: a matching name is a create whose receipt was lost.
-      const current = (await host.invoke('automations', 'list', null, signal)) as { name: string }[]
-      if (!current.some((item) => item.name === automation.name))
+      // A rediscovered project script may share the name: only a schedule counts as the lost create.
+      const current = (await host.invoke('automations', 'list', null, signal)) as {
+        name: string
+        schedule?: unknown
+      }[]
+      if (!current.some((item) => item.schedule && item.name === automation.name))
         await host.invoke('automations', 'create', automation, signal)
     }
     await harness.commit(async (tx) => {

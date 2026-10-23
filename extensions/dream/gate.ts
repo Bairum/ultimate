@@ -68,9 +68,10 @@ export async function gate(
       todos.items.filter((item) => item.done === undefined).length,
       seed.counts.todos +
         seed.counts.questions +
-        seed.subscriptions.filter((item) => item.scope !== 'project').length,
+        seed.scripts.filter((item) => item.scope !== 'project').length +
+        seed.automations.filter((item) => !item.prompt).length,
     )
-    count('automations', automations.length, seed.counts.automations)
+    count('automations', automations.length, seed.automations.filter((item) => item.prompt).length)
     // Passive entry delivery runs after the seed commit. Wait only for that local effect, not a model.
     const deadline = Date.now() + 10_000
     let entries: unknown[] = []

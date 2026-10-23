@@ -50,8 +50,8 @@ made active again (`lib/chapters.ts`).
 `seed.ts` builds a JSON manifest with `buildSeed(host, session)` and atomically writes it with
 `writeSeed(chapterDir, seed)` to `seed.json`. It carries the journal and proposal statuses, every root's memories
 (slug collisions keep the newest `updated`, including `about-*`), open to-dos and questions, and enabled automations
-and subscriptions, with counts for the later gate. Conversation docs are read through the host's exported tokens;
-the session-scoped automation and subscription ledgers are read through their list actions.
+and scripts, with counts for the later gate. Conversation docs are read through the host's exported tokens;
+both trigger kinds are read through the single automations list action. Enabled schedule records keep name, optional prompt, schedule and run profile, but no subscribers: conversation ids do not survive a chapter. Schedules without a prompt become recreation to-dos.
 
 On open, dream applies a chapter's seed in one commit with `dream.seed.applied` on conversation 1: memories keep
 their sources, to-dos get fresh ids, questions become user-owned to-dos naming the old chapter and message id, and a
@@ -62,9 +62,9 @@ Automations are recreated through their create action after the commit, with per
 A seed carries at most one enabled automation per name: building rejects duplicates. The destination starts empty;
 before each create, dream checks existing names, so a create committed just before a crash is not repeated when its
 receipt is missing. Seed application must finish before users create unrelated automations with matching names.
-Project subscriptions are rediscovered, stopped, from trusted `.ultimate/subscriptions` manifests by subscriptions'
-own open hook. There is no user-subscription adoption path: each enabled user subscription becomes an
-@ultimate-owned “Recreate subscription” to-do rather than a fabricated ledger record.
+Project scripts are rediscovered, stopped, from trusted `.ultimate/automations` manifests by automations'
+own open hook. There is no user-script adoption path: each enabled user script becomes an
+@ultimate-owned “Recreate script” to-do rather than a fabricated ledger record.
 
 ### Fall asleep and switch
 
@@ -74,7 +74,7 @@ changes are serialized. Each progress update commits separately on the session a
 `backing up`, `switching`, or `failed`, with the gate checks, backup id or skip reason, error, and timestamp.
 
 The gate writes a real seed and switch journal in a temporary home, starts it through optional `InstanceApi`, and
-reads its HTTP actions without a model: root memories, open to-dos (including questions and user subscriptions),
+reads its HTTP actions without a model: root memories, open to-dos (including questions and user scripts),
 automations, @ultimate's `dream.chapter` entry, and the memory brief's tokens. Passive delivery gets up to ten
 seconds to settle. Lineage only publishes `briefTokens` once a root has branched, so the gate uses `estimateTextTokens`
 on the fresh root's index and read instructions (the `memoryBrief` format, with no recent landings); a regression test

@@ -12,14 +12,14 @@ import type { EventData, EventRecord } from '@/sdk'
 import { compareUrl } from '../../lib/compare.ts'
 import { defineEvent, NoticeEvent } from '../../shared/events.ts'
 import type { BackupEvent as BackupToken } from '../cloud/refs.ts'
-import type { Escalated as EscalatedToken } from '../subscriptions/refs.ts'
+import type { Escalated as EscalatedToken } from '../automations/refs.ts'
 import { ConversationRef, FeatureTag } from '../conversations/ui.tsx'
 import { Branched, Rooted } from '../lineage/ui.tsx'
 import { CheckRan, CommitCount, SubmissionLanded, useGithubRepo } from '../workspaces/ui.tsx'
 
 // Optional extensions' events, by name: their browser contracts are not imported, so Activity loads without them.
 const Backup = defineEvent<EventData<typeof BackupToken>>('cloud.backup')
-const Escalated = defineEvent<EventData<typeof EscalatedToken>>('subscriptions.escalated')
+const Escalated = defineEvent<EventData<typeof EscalatedToken>>('automations.escalated')
 
 /** The events the feed shows, each with its own row. */
 export const activityEvents = [
@@ -323,7 +323,7 @@ function Escalation({ event, now }: Props<typeof Escalated>) {
       event={event}
       icon={<CircleXIcon className={cn(iconClass, 'text-error')} />}
       now={now}
-      title={`Subscription ${id} escalated: ${reason}`}
+      title={`Automation ${id} escalated: ${reason}`}
     >
       <span className="line-clamp-2 min-w-0 font-sans text-[12px] break-words text-foreground/80">
         <span className="mr-1.5 font-mono text-[10.5px] text-error">{id} escalated</span>

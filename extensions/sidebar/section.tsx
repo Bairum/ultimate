@@ -5,7 +5,7 @@ import { cn } from '@/sdk'
 import { useSidebarState } from './state.tsx'
 
 /**
- * A folding sidebar section: a quiet mono heading with a count bubble, as subscriptions' Watching and automations'
+ * A folding sidebar section: a quiet mono heading with a count bubble, as automations'
  * Scheduled sections draw theirs, and its rows. `rule` closes it with the hairline the sidebar's groups end with. The fold state is kept per `id`.
  */
 export function Section({

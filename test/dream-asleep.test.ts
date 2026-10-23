@@ -84,7 +84,7 @@ async function fixture() {
   const invoke = vi.fn<(extension: string, action: string) => Promise<[]>>(
     async (extension, action) => {
       expect(action).toBe('list')
-      expect(['automations', 'subscriptions']).toContain(extension)
+      expect(extension).toBe('automations')
       return []
     },
   )

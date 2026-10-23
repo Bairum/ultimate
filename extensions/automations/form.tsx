@@ -1,14 +1,16 @@
 import {
   BotIcon,
+  CalendarClockIcon,
   CheckIcon,
   ChevronDownIcon,
   CoinsIcon,
   LoaderCircleIcon,
+  RadarIcon,
   SlidersHorizontalIcon,
   XIcon,
 } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
@@ -18,7 +20,18 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { api, cn, errorMessage, events, formatKeys, useAction, useEvent, useNow } from '@/sdk'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  api,
+  cn,
+  errorMessage,
+  events,
+  formatKeys,
+  useAction,
+  useEvent,
+  useNow,
+  useUltimate,
+} from '@/sdk'
 import { clock, full, until, words } from './parts.tsx'
 import { DefinitionsAction } from '../subagents/ui.tsx'
 import { CreateAction, DescribeAction, UpdateAction } from './refs.ts'
@@ -26,8 +39,14 @@ import type { Automation } from './refs.ts'
 
 type Mode = 'cron' | 'at' | 'every'
 interface Draft {
+  trigger: 'schedule' | 'script'
   name: string
   prompt: string
+  /** What a script watches for, in plain words; its watcher writes the script from it. */
+  ask: string
+  once: boolean
+  /** Whether a fire wakes the conversation the form was opened beside. */
+  wake: boolean
   mode: Mode
   cron: string
   tz: string
@@ -47,6 +66,20 @@ const presets: { label: string; draft: Partial<Draft> }[] = [
   { label: 'Every hour', draft: { mode: 'every', every: '1h' } },
   { label: 'In 30 minutes', draft: { mode: 'at', at: 'in 30m' } },
 ]
+const triggers = [
+  {
+    value: 'schedule',
+    label: 'On a schedule',
+    hint: 'run a prompt at set times',
+    icon: CalendarClockIcon,
+  },
+  {
+    value: 'script',
+    label: 'When something happens',
+    hint: 'a script watches for it',
+    icon: RadarIcon,
+  },
+] as const
 const modes: { value: Mode; label: string; hint: string }[] = [
   { value: 'cron', label: 'Cron', hint: 'minute hour day month weekday · Sunday is 0' },
   { value: 'at', label: 'At', hint: 'once: in 30m, in 2h, or a local date and time' },
@@ -55,8 +88,12 @@ const modes: { value: Mode; label: string; hint: string }[] = [
 
 function draftOf(automation?: Automation): Draft {
   const blank: Draft = {
+    trigger: 'schedule',
     name: '',
     prompt: '',
+    ask: '',
+    once: true,
+    wake: true,
     mode: 'cron',
     cron: '0 9 * * 1-5',
     tz: zone,
@@ -64,9 +101,25 @@ function draftOf(automation?: Automation): Draft {
     every: '1h',
     agent: '',
   }
-  if (!automation) return blank
+  if (automation?.script)
+    return {
+      ...blank,
+      trigger: 'script',
+      name: automation.name,
+      prompt: automation.prompt ?? '',
+      ask: automation.script.ask,
+      once: automation.script.once,
+      wake: automation.subscribers.length > 0,
+      agent: automation.agent ?? '',
+    }
+  if (!automation?.schedule) return blank
   const { schedule } = automation
-  const draft = { ...blank, name: automation.name, prompt: automation.prompt, mode: schedule.kind }
+  const draft = {
+    ...blank,
+    name: automation.name,
+    prompt: automation.prompt ?? '',
+    mode: schedule.kind,
+  }
   draft.agent = automation.agent ?? ''
   if (schedule.kind === 'cron') return { ...draft, cron: schedule.expr, tz: schedule.tz }
   if (schedule.kind === 'every') return { ...draft, every: interval(schedule.ms) }
@@ -333,23 +386,37 @@ export function AutomationForm({
   const ids = useId()
   const name = useRef<HTMLInputElement>(null)
   const set = (change: Partial<Draft>) => setDraft((previous) => ({ ...previous, ...change }))
+  // A fire wakes the conversation the form opens beside: the shown one, which actions run on behalf of.
+  const { conversationId } = useUltimate()
+  const script = draft.trigger === 'script'
   const schedule = scheduleOf(draft)
-  const ready = draft.name.trim() && draft.prompt.trim() && schedule !== undefined && !saving
+  const prompt = draft.prompt.trim()
+  // A fire needs something to do: wake a conversation, run a prompt, or both. An edit keeps its subscribers.
+  const acts = !!prompt || (automation ? automation.subscribers.length > 0 : script && draft.wake)
+  const ready =
+    draft.name.trim() && (script ? draft.ask.trim() : schedule !== undefined) && acts && !saving
   const save = async () => {
     if (!ready) return
     setSaving(true)
     setError(undefined)
     try {
-      const fields = { name: draft.name.trim(), prompt: draft.prompt.trim(), schedule }
+      const trigger = script ? { ask: draft.ask.trim(), once: draft.once } : { schedule }
+      const fields = { name: draft.name.trim(), ...trigger, ...(prompt ? { prompt } : {}) }
       const saved = automation
         ? await api.action(UpdateAction, {
             id: automation.id,
             ...fields,
-            agent: draft.agent,
+            // An empty prompt removes the run action the automation had.
+            ...(!prompt && automation.prompt ? { prompt: '' } : {}),
+            ...(prompt ? { agent: draft.agent } : {}),
           })
         : await api.action(CreateAction, {
             ...fields,
-            ...(draft.agent ? { agent: draft.agent } : {}),
+            ...(prompt && draft.agent ? { agent: draft.agent } : {}),
+            // Without a prompt the server subscribes the caller by itself; with one only when asked.
+            ...(script && prompt && draft.wake && conversationId !== undefined
+              ? { subscribers: [conversationId] }
+              : {}),
           })
       onSaved(saved)
       onOpenChange(false)
@@ -358,6 +425,12 @@ export function AutomationForm({
     } finally {
       setSaving(false)
     }
+  }
+  const submitOnModEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+    event.preventDefault()
+    // oxlint-disable-next-line typescript/no-floating-promises -- save catches failures and displays them with setError.
+    void save()
   }
   const mode = modes.find((candidate) => candidate.value === draft.mode)!
   const submitKeys = formatKeys('mod+enter')[0] ?? []
@@ -388,143 +461,229 @@ export function AutomationForm({
               {automation ? 'Edit automation' : 'New automation'}
             </DialogTitle>
             <DialogDescription className="mt-1.5 text-[12.5px] leading-relaxed">
-              Runs the prompt on a schedule. Each run is a new conversation you can open.
+              {script
+                ? 'An agent writes a small script that watches for it, then wakes you or runs a prompt when it happens.'
+                : 'Runs the prompt on a schedule. Each run is a new conversation you can open.'}
             </DialogDescription>
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pt-1 pb-5">
+            {!automation && (
+              <div
+                aria-label="Trigger"
+                className="grid grid-cols-2 gap-1 rounded-md border border-border/80 bg-background p-0.5"
+                role="radiogroup"
+              >
+                {triggers.map((option) => (
+                  <button
+                    aria-checked={option.value === draft.trigger}
+                    className={cn(
+                      'flex items-center gap-2 rounded-[5px] px-2.5 py-1.5 text-left text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
+                      option.value === draft.trigger && 'bg-accent text-foreground shadow-xs',
+                    )}
+                    key={option.value}
+                    onClick={() => set({ trigger: option.value })}
+                    role="radio"
+                    type="button"
+                  >
+                    <option.icon className="size-3.5 shrink-0" />
+                    <span className="flex min-w-0 flex-col">
+                      <span className="text-[12.5px]">{option.label}</span>
+                      <span className="truncate text-[11px] text-muted-foreground">
+                        {option.hint}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
             <Field htmlFor={`${ids}-name`} label="Name">
               <input
                 autoComplete="off"
                 className={input}
                 id={`${ids}-name`}
                 onChange={(event) => set({ name: event.target.value })}
-                placeholder="Morning summary"
+                placeholder={script ? 'CI of PR #812' : 'Morning summary'}
                 ref={name}
                 value={draft.name}
               />
             </Field>
-            <Field htmlFor={`${ids}-prompt`} label="Prompt">
-              <textarea
-                className={cn(input, 'h-auto min-h-24 resize-y py-2 leading-relaxed')}
-                id={`${ids}-prompt`}
-                onChange={(event) => set({ prompt: event.target.value })}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                    event.preventDefault()
-                    // oxlint-disable-next-line typescript/no-floating-promises -- save catches failures and displays them with setError.
-                    void save()
-                  }
-                }}
-                placeholder="Summarise yesterday's commits and open questions."
-                rows={4}
-                value={draft.prompt}
-              />
-            </Field>
-            <fieldset className="flex flex-col gap-2">
-              <legend className="mb-1.5 text-[12.5px] font-medium text-foreground/90">
-                Schedule
-              </legend>
-              <div className="flex flex-wrap gap-1.5" role="group" aria-label="Presets">
-                {presets.map((preset) => {
-                  const pressed = matches(draft, preset.draft)
-                  return (
-                    <button
-                      aria-pressed={pressed}
-                      className={cn(
-                        'flex h-6 items-center gap-1 rounded-full border px-2.5 text-[11.5px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                        pressed
-                          ? 'border-brand/60 bg-brand/10 text-foreground'
-                          : 'border-border/80 text-muted-foreground hover:border-border hover:text-foreground',
-                      )}
-                      key={preset.label}
-                      onClick={() => set(preset.draft)}
-                      type="button"
-                    >
-                      {pressed && <CheckIcon className="size-3 text-brand" />}
-                      {preset.label}
-                    </button>
-                  )
-                })}
-              </div>
-              <div className="flex items-center gap-2">
-                <div
-                  aria-label="Schedule kind"
-                  className="inline-flex shrink-0 rounded-md border border-border/80 bg-background p-0.5 font-mono text-[11px]"
-                  role="radiogroup"
-                >
-                  {modes.map((option) => (
-                    <button
-                      aria-checked={option.value === draft.mode}
-                      className={cn(
-                        'flex h-6 items-center rounded-[5px] px-2.5 text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
-                        option.value === draft.mode && 'bg-accent text-foreground shadow-xs',
-                      )}
-                      key={option.value}
-                      onClick={() => set({ mode: option.value })}
-                      role="radio"
-                      type="button"
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-                <span className="min-w-0 truncate font-mono text-[10.5px] text-muted-foreground/70">
-                  {mode.hint}
-                </span>
-              </div>
-              {draft.mode === 'cron' ? (
-                <div className="flex gap-2">
-                  <input
-                    aria-label="Cron expression"
-                    autoComplete="off"
-                    className={cn(input, 'flex-[3] font-mono text-[12.5px]')}
-                    onChange={(event) => set({ cron: event.target.value })}
-                    placeholder="0 9 * * 1-5"
-                    spellCheck={false}
-                    value={draft.cron}
+            {script ? (
+              <>
+                <Field htmlFor={`${ids}-ask`} label="Watch for">
+                  <textarea
+                    className={cn(input, 'h-auto min-h-20 resize-y py-2 leading-relaxed')}
+                    id={`${ids}-ask`}
+                    onChange={(event) => set({ ask: event.target.value })}
+                    onKeyDown={submitOnModEnter}
+                    placeholder="The CI of PR #812 finishes, green or red."
+                    rows={3}
+                    value={draft.ask}
                   />
-                  <input
-                    aria-label="Timezone"
-                    autoComplete="off"
-                    className={cn(input, 'flex-[2] font-mono text-[12.5px]')}
-                    list={`${ids}-zones`}
-                    onChange={(event) => set({ tz: event.target.value })}
-                    placeholder={zone}
-                    spellCheck={false}
-                    value={draft.tz}
+                </Field>
+                <label className="-mt-1.5 flex items-center gap-2 text-[12.5px] text-foreground/90">
+                  <Checkbox
+                    checked={!draft.once}
+                    onCheckedChange={(checked) => set({ once: checked !== true })}
                   />
-                  <datalist id={`${ids}-zones`}>
-                    {zones.map((tz) => (
-                      <option key={tz} value={tz} />
-                    ))}
-                  </datalist>
-                </div>
-              ) : draft.mode === 'at' ? (
-                <input
-                  aria-label="Time"
-                  autoComplete="off"
-                  className={cn(input, 'font-mono text-[12.5px]')}
-                  onChange={(event) => set({ at: event.target.value })}
-                  placeholder="in 30m · 2026-12-01 09:00"
-                  spellCheck={false}
-                  value={draft.at}
-                />
-              ) : (
-                <input
-                  aria-label="Interval"
-                  autoComplete="off"
-                  className={cn(input, 'font-mono text-[12.5px]')}
-                  onChange={(event) => set({ every: event.target.value })}
-                  placeholder="15m"
-                  spellCheck={false}
-                  value={draft.every}
-                />
-              )}
-              <Preview schedule={schedule} />
-            </fieldset>
-            <Field htmlFor="automation-agent" label="Agent">
-              <AgentPicker onChange={(agent) => set({ agent })} value={draft.agent} />
-            </Field>
+                  Keep watching after it happens
+                  <span className="text-[11.5px] text-muted-foreground">
+                    {draft.once ? 'stops after the first time' : 'fires every time'}
+                  </span>
+                </label>
+                <fieldset className="flex flex-col gap-2">
+                  <legend className="mb-1.5 text-[12.5px] font-medium text-foreground/90">
+                    When it happens
+                  </legend>
+                  {!automation && (
+                    <label className="flex items-center gap-2 text-[12.5px] text-foreground/90">
+                      <Checkbox
+                        checked={draft.wake}
+                        onCheckedChange={(checked) => set({ wake: checked === true })}
+                      />
+                      Wake this conversation
+                      {conversationId !== undefined && (
+                        <span className="font-mono text-[11px] text-muted-foreground">
+                          #{conversationId}
+                        </span>
+                      )}
+                    </label>
+                  )}
+                  <textarea
+                    aria-label="Prompt (optional)"
+                    className={cn(input, 'h-auto min-h-16 resize-y py-2 leading-relaxed')}
+                    onChange={(event) => set({ prompt: event.target.value })}
+                    onKeyDown={submitOnModEnter}
+                    placeholder="Optional: also run a prompt in a new conversation, e.g. Summarise the failing tests."
+                    rows={2}
+                    value={draft.prompt}
+                  />
+                </fieldset>
+                {prompt && (
+                  <Field htmlFor="automation-agent" label="Agent">
+                    <AgentPicker onChange={(agent) => set({ agent })} value={draft.agent} />
+                  </Field>
+                )}
+              </>
+            ) : (
+              <>
+                <Field htmlFor={`${ids}-prompt`} label="Prompt">
+                  <textarea
+                    className={cn(input, 'h-auto min-h-24 resize-y py-2 leading-relaxed')}
+                    id={`${ids}-prompt`}
+                    onChange={(event) => set({ prompt: event.target.value })}
+                    onKeyDown={submitOnModEnter}
+                    placeholder="Summarise yesterday's commits and open questions."
+                    rows={4}
+                    value={draft.prompt}
+                  />
+                </Field>
+                <fieldset className="flex flex-col gap-2">
+                  <legend className="mb-1.5 text-[12.5px] font-medium text-foreground/90">
+                    Schedule
+                  </legend>
+                  <div className="flex flex-wrap gap-1.5" role="group" aria-label="Presets">
+                    {presets.map((preset) => {
+                      const pressed = matches(draft, preset.draft)
+                      return (
+                        <button
+                          aria-pressed={pressed}
+                          className={cn(
+                            'flex h-6 items-center gap-1 rounded-full border px-2.5 text-[11.5px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                            pressed
+                              ? 'border-brand/60 bg-brand/10 text-foreground'
+                              : 'border-border/80 text-muted-foreground hover:border-border hover:text-foreground',
+                          )}
+                          key={preset.label}
+                          onClick={() => set(preset.draft)}
+                          type="button"
+                        >
+                          {pressed && <CheckIcon className="size-3 text-brand" />}
+                          {preset.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div
+                      aria-label="Schedule kind"
+                      className="inline-flex shrink-0 rounded-md border border-border/80 bg-background p-0.5 font-mono text-[11px]"
+                      role="radiogroup"
+                    >
+                      {modes.map((option) => (
+                        <button
+                          aria-checked={option.value === draft.mode}
+                          className={cn(
+                            'flex h-6 items-center rounded-[5px] px-2.5 text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
+                            option.value === draft.mode && 'bg-accent text-foreground shadow-xs',
+                          )}
+                          key={option.value}
+                          onClick={() => set({ mode: option.value })}
+                          role="radio"
+                          type="button"
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="min-w-0 truncate font-mono text-[10.5px] text-muted-foreground/70">
+                      {mode.hint}
+                    </span>
+                  </div>
+                  {draft.mode === 'cron' ? (
+                    <div className="flex gap-2">
+                      <input
+                        aria-label="Cron expression"
+                        autoComplete="off"
+                        className={cn(input, 'flex-[3] font-mono text-[12.5px]')}
+                        onChange={(event) => set({ cron: event.target.value })}
+                        placeholder="0 9 * * 1-5"
+                        spellCheck={false}
+                        value={draft.cron}
+                      />
+                      <input
+                        aria-label="Timezone"
+                        autoComplete="off"
+                        className={cn(input, 'flex-[2] font-mono text-[12.5px]')}
+                        list={`${ids}-zones`}
+                        onChange={(event) => set({ tz: event.target.value })}
+                        placeholder={zone}
+                        spellCheck={false}
+                        value={draft.tz}
+                      />
+                      <datalist id={`${ids}-zones`}>
+                        {zones.map((tz) => (
+                          <option key={tz} value={tz} />
+                        ))}
+                      </datalist>
+                    </div>
+                  ) : draft.mode === 'at' ? (
+                    <input
+                      aria-label="Time"
+                      autoComplete="off"
+                      className={cn(input, 'font-mono text-[12.5px]')}
+                      onChange={(event) => set({ at: event.target.value })}
+                      placeholder="in 30m · 2026-12-01 09:00"
+                      spellCheck={false}
+                      value={draft.at}
+                    />
+                  ) : (
+                    <input
+                      aria-label="Interval"
+                      autoComplete="off"
+                      className={cn(input, 'font-mono text-[12.5px]')}
+                      onChange={(event) => set({ every: event.target.value })}
+                      placeholder="15m"
+                      spellCheck={false}
+                      value={draft.every}
+                    />
+                  )}
+                  <Preview schedule={schedule} />
+                </fieldset>
+                <Field htmlFor="automation-agent" label="Agent">
+                  <AgentPicker onChange={(agent) => set({ agent })} value={draft.agent} />
+                </Field>
+              </>
+            )}
             {error && (
               <p className="flex items-start gap-1.5 font-mono text-[11.5px] leading-snug break-words text-error">
                 <XIcon className="mt-px size-3 shrink-0" />
@@ -535,7 +694,9 @@ export function AutomationForm({
           <div className="flex items-center gap-2 border-t border-border/70 bg-sidebar px-5 py-3">
             <p className="flex min-w-0 items-start gap-1.5 text-[11.5px] leading-snug text-muted-foreground">
               <CoinsIcon className="mt-px size-3.5 shrink-0 text-warning" />
-              Each run uses the model and costs tokens.
+              {script && !prompt
+                ? 'Writing and repairing the script costs tokens; watching does not.'
+                : 'Each run uses the model and costs tokens.'}
             </p>
             <Button
               className="ml-auto"

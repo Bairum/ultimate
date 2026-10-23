@@ -17,19 +17,28 @@ export type Seed = {
   questions: { text: string; ref: string }[]
   automations: {
     name: string
-    prompt: string
+    prompt?: string
     schedule: Schedule
     agent?: string
     model?: { provider: string; modelId: string }
     thinking?: ModelThinkingLevel
   }[]
-  subscriptions: { id: string; scope?: 'project'; title: string; ask: string }[]
+  scripts: {
+    id: string
+    scope?: 'project'
+    name: string
+    ask: string
+    prompt?: string
+    agent?: string
+    model?: { provider: string; modelId: string }
+    thinking?: ModelThinkingLevel
+  }[]
   counts: {
     memories: number
     todos: number
     questions: number
     automations: number
-    subscriptions: number
+    scripts: number
   }
 }
 

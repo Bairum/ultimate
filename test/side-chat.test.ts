@@ -18,7 +18,7 @@ import { context } from '../server/harness.ts'
 import { Messages } from '../extensions/messages/api.ts'
 import { branchOf, rootOf } from '../extensions/lineage/server.ts'
 import { Branch } from '../extensions/lineage/api.ts'
-import { Subscriptions } from '../extensions/subscriptions/server.ts'
+import { Automations } from '../extensions/automations/server.ts'
 import { Index, Side, tracksEffect } from '../extensions/side-chat/server.ts'
 import type { endTask } from '../extensions/side-chat/server.ts'
 import { fauxServer, post, sourceCopy, temp, until } from './helpers.ts'
@@ -27,10 +27,10 @@ let ultimateRoot: string
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 beforeAll(async () => {
   ultimateRoot = await sourceCopy(await temp())
-  // A subscription writer that inherits faux and only answers: creation must not launch a real script.
+  // A watcher that inherits faux and only answers: creation must not launch a real script.
   await writeFile(
-    join(ultimateRoot, 'agents/subscription.md'),
-    '---\nname: subscription\ndescription: Test subscription writer\ntools: [read]\n---\nAnswer without writing or starting any script.\n',
+    join(ultimateRoot, 'agents/watcher.md'),
+    '---\nname: watcher\ndescription: Test automation writer\ntools: [read]\n---\nAnswer without writing or starting any script.\n',
   )
   await writeFile(
     join(ultimateRoot, '.ultimate/settings.json'),
@@ -267,18 +267,21 @@ describe('side chats', () => {
       expect(tracksEffect(name, {})).toBe(false)
     for (const action of ['add', 'done']) expect(tracksEffect('todo', { action })).toBe(true)
     expect(tracksEffect('todo', { action: 'list' })).toBe(false)
-    for (const action of ['list', 'log'])
-      expect(tracksEffect('subscription', { action })).toBe(false)
+    for (const action of ['list', 'runs', 'log'])
+      expect(tracksEffect('automation', { action })).toBe(false)
     for (const action of [
       'create',
       'subscribe',
       'unsubscribe',
-      'start',
-      'stop',
+      'update',
+      'pause',
+      'resume',
+      'run',
+      'abort',
       'delete',
       'escalate',
     ])
-      expect(tracksEffect('subscription', { action })).toBe(true)
+      expect(tracksEffect('automation', { action })).toBe(true)
     const f = await fixture()
     const side = await f.open()
     await f.call(side, 'todo', { action: 'list' })
@@ -553,36 +556,33 @@ describe('side chats', () => {
     const side = await f.open()
     // Subscribe to an existing stopped record: no script or subprocess is needed to test ownership.
     await f.server.harness.commit(async (tx) => {
-      const state = await tx.doc(Subscriptions)
+      const state = await tx.doc(Automations)
       state.next = 2
-      state.subscriptions.S1 = {
-        id: 'S1',
-        title: 'test',
-        ask: 'test',
-        once: true,
-        secrets: [],
-        conversationId: f.main,
+      state.automations.A1 = {
+        id: 'A1',
+        name: 'test',
+        script: { ask: 'test', once: true, secrets: [], conversationId: f.main, state: 'stopped' },
         subscribers: [],
-        state: 'stopped',
+        runs: [],
         fires: 0,
         createdAt: Date.now(),
         updatedAt: Date.now(),
         enabled: false,
       }
     }, context)
-    await f.call(side, 'subscription', { action: 'subscribe', id: 'S1' })
-    const subscriptions = await f.server.harness.snapshot(Subscriptions, context)
-    expect(subscriptions!.subscriptions.S1.subscribers).toEqual([f.main])
-    await f.call(side, 'subscription', { action: 'create', ask: 'test creation only' })
-    const created = (await f.server.harness.snapshot(Subscriptions, context))!.subscriptions.S2
+    await f.call(side, 'automation', { action: 'subscribe', id: 'A1' })
+    const automations = await f.server.harness.snapshot(Automations, context)
+    expect(automations!.automations.A1.subscribers).toEqual([f.main])
+    await f.call(side, 'automation', { action: 'create', name: 'Test', ask: 'test creation only' })
+    const created = (await f.server.harness.snapshot(Automations, context))!.automations.A2
     expect(created.subscribers).toEqual([f.main])
-    expect(created.state).toBe('writing')
-    expect(created.pid).toBeUndefined()
+    expect(created.script!.state).toBe('writing')
+    expect(created.script!.pid).toBeUndefined()
     expect(
       (await entries(f.server, f.main)).filter(
         (entry) =>
           entry.kind === 'lineage.note' &&
-          JSON.stringify(entry.data).includes(`Side chat #${side} created subscription S2`),
+          JSON.stringify(entry.data).includes(`Side chat #${side} created automation A2`),
       ),
     ).toHaveLength(1)
     expect(
