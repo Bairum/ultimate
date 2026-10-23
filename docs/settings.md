@@ -18,7 +18,9 @@ produce a notice. `summaryModel` (`"provider/id[:thinking]"`, default `openai-co
 picks the model for automatic titles, summaries, reply summaries, tree abstracts and the
 triage that decides whether an agent's update wakes @ultimate. Set it in either file or with
 the "Summary model…" command, and it applies to the next request. `fastModels` (`["openai-codex/<id>", …]`, or `openai/`; project over
-user) runs those models on the priority tier through the `fast` extension, at a higher usage rate.
+user) runs those models on the priority tier through the `fast` extension, at a higher usage rate. `instance.model`
+(`"provider/id"`, project over user, default `openai-codex/gpt-6.1-sol`; `null` turns it off) is the one model every
+agent in a preview (`instance start`) runs on, fast tier included; see `extensions/instance/README.md`.
 Compaction thresholds come from Pi's settings (`~/.pi/agent/settings.json`, then `<project>/.pi/settings.json`,
 key `compaction`: `enabled`, `reserveTokens`, `keepRecentTokens`) over Pi Durable's defaults (reserve 16k, keep 20k,
 background compaction 32k below the blocking threshold), which suit a ~200k window. `server/harness.ts`
@@ -27,8 +29,8 @@ background compaction 32k below the blocking threshold), which suit a ~200k wind
 earlier. `compaction.modelOverrides` in those settings files, keyed by exact `"provider/modelId"` (fields
 `reserveTokens`, `keepRecentTokens`, `backgroundTokens`, `enabled`), replaces them field by field. Pi's settings files
 are read when the server starts.
-User config is independent of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` holds only its isolate setup
-and lander checks.
+User config is independent of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` holds its isolate setup,
+lander checks and preview model.
 
 A project's `.ultimate/` applies only once it is chosen: its `extensions/`, the project `extensions` settings layer,
 `agents/`, and `skills/` load only when the project decision is local. Decisions are kept per project path with Pi's

@@ -10,7 +10,7 @@ import {
   ProviderDoc,
 } from '@earendil-works/pi-durable'
 import type { JsonObject } from '@earendil-works/pi-durable'
-import { discoverAgents } from '../../lib/agents.ts'
+import { discoverAgents, previewModel } from '../../lib/agents.ts'
 import { Profile } from '../subagents/api.ts'
 import { readSettings, updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -41,8 +41,19 @@ async function fastSetting(host: Pick<FastHost, 'userHome' | 'projectSettings'>)
     : { value: user.fastModels, project: false }
 }
 
-/** The models `fastModels` names, read at each request so a change applies to the next one. */
+/**
+ * The models `fastModels` names, read at each request so a change applies to the next one; in a preview, also the
+ * model it runs every agent on.
+ */
 export async function fastModels(host: FastHost): Promise<Set<string>> {
+  const preview = previewModel()
+  const models = await listedModels(host)
+  if (preview && fastProvider(`${preview.provider}/`))
+    models.add(`${preview.provider}/${preview.modelId}`)
+  return models
+}
+
+async function listedModels(host: FastHost): Promise<Set<string>> {
   const { value } = await fastSetting(host)
   if (value === undefined) return new Set()
   const valid =

@@ -11,7 +11,7 @@ approval, and one approval covers one round.
 1. **Commit the round** in your branch. A preview runs your checkout as it is on disk; committing keeps each round
    recoverable.
 2. **Start the preview**: `instance start` (or `instance start {subagent: <id>}` for a designer's worktree). It is a
-   clean Ultimate with its own empty home on the configured models; it hot-reloads `web/` and `extensions/` as files
+   clean Ultimate with its own empty home, every agent on `instance.model` (Sol, fast); it hot-reloads `web/` and `extensions/` as files
    change. A change in `server/` or `shared/` needs `instance stop` and a new `start`.
 3. **Seed it like a user**: open @ultimate (the first row of the sidebar) and send real prompts until the state the user should
    judge exists: a long transcript, a running tool, a skill run, an error. Never fake state by writing entries.

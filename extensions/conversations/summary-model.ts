@@ -2,6 +2,7 @@ import { clampThinkingLevel } from '@earendil-works/pi-ai'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
+import { previewModel } from '../../lib/agents.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { parseSummaryModel } from './summary-model-ref.ts'
 
@@ -85,7 +86,11 @@ const once = (host: Pick<SummaryModelHost, 'notice'>, message: string) => {
  * never does, it is only reported (the setup check shows it).
  */
 export async function summaryModelStatus(host: SummaryModelHost): Promise<SummaryModelStatus> {
-  const { value, source } = await summaryModelSetting(host)
+  // A preview runs every model call on its one model.
+  const preview = previewModel()
+  const { value, source } = preview
+    ? { value: `${preview.provider}/${preview.modelId}`, source: 'default' as const }
+    : await summaryModelSetting(host)
   const configured = typeof value === 'string' ? value : JSON.stringify(value)
   const parsed = typeof value === 'string' ? parseSummaryModel(value) : undefined
   if (!parsed) {
