@@ -3,7 +3,7 @@
  * another one. A successful switch never answers: the process exits, the page reconnects to the new one and reloads.
  */
 import { ArrowRightIcon, LibraryIcon, LoaderCircleIcon, MoonIcon, RotateCwIcon } from 'lucide-react'
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
@@ -56,6 +56,10 @@ type Pending = {
   /** The process that was serving when the switch began; another one serving means the switch happened. */
   pid?: number
   since: number
+  /** System info when the stream dropped: the same process answering again with fresh info rolled the switch back. */
+  dropped?: object
+  /** The restart failed after its approval and the same process serves again. */
+  failed?: true
 }
 
 /** Latched until the page reloads: the new chapter's documents no longer show the sleep that started it. */
@@ -138,13 +142,43 @@ export function SwitchVeil() {
       setPending(undefined)
   }, [sessions, sleep, pid])
   useEffect(() => {
-    if (!pending || pid === undefined || pending.pid === undefined) return
-    if (pid === pending.pid || connection.status !== 'open') return
+    if (!pending || pid === undefined || pending.pid === undefined || pending.failed) return
+    if (connection.status !== 'open') {
+      if (!pending.dropped) setPending({ ...pending, dropped: system ?? {} })
+      return
+    }
+    if (pid === pending.pid) {
+      // Reconnected to the same process with fresh system info: the supervisor rolled the restart back.
+      if (pending.dropped && system && system !== pending.dropped)
+        setPending({ ...pending, failed: true })
+      return
+    }
     if (pending.verb === 'asleep') sessionStorage.setItem(WAKE, '1')
     // A fresh page: nothing of the old chapter's documents, views or selection stays behind.
     location.replace('/')
-  }, [pid, connection.status])
+  }, [pid, connection.status, system])
+  useReloadOnChapterChange(pid)
   if (!ours) return null
+  if (ours.failed)
+    return (
+      <div
+        className="fixed inset-0 z-[100] flex animate-fade-in items-center justify-center bg-background/95 backdrop-blur-sm"
+        data-dream-veil="failed"
+        role="alert"
+      >
+        <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center">
+          <MoonIcon className="size-6 text-muted-foreground" />
+          <p className="text-[15px] text-foreground">The switch didn't happen</p>
+          <p className="text-[12px] leading-relaxed text-muted-foreground">
+            The new server failed to start and the old one took over again: nothing moved. The
+            reason is in the supervisor's output.
+          </p>
+          <Button onClick={() => setPending(undefined)} size="xs" variant="outline">
+            Stay here
+          </Button>
+        </div>
+      </div>
+    )
   const slow = now - ours.since > 90_000
   return (
     <div
@@ -182,6 +216,29 @@ export function SwitchVeil() {
       </div>
     </div>
   )
+}
+
+/**
+ * Another tab switched chapters: this one reconnects to a new process without reloading, while its chapter names and
+ * views still belong to the chapter before. A new process with another active chapter reloads the page.
+ */
+function useReloadOnChapterChange(pid: number | undefined) {
+  /** The active chapter this page was loaded with, read once from the first process it saw. */
+  const loaded = useRef<string>(undefined)
+  useEffect(() => {
+    if (pid === undefined) return undefined
+    const controller = new AbortController()
+    api
+      .action(ChaptersAction, null, { signal: controller.signal })
+      .then((chapters) => {
+        if (loaded.current === undefined) loaded.current = chapters.active
+        else if (loaded.current !== chapters.active) location.replace('/')
+      })
+      .catch(() => {
+        // Unreadable while the server restarts again: the next process's effect reads it.
+      })
+    return () => controller.abort()
+  }, [pid])
 }
 
 /** After a Fall asleep reloaded the page: show @ultimate, where the morning card is. */
@@ -310,7 +367,7 @@ function ChaptersBody() {
                   <Button
                     className="h-6"
                     data-dream-switch={chapter.name}
-                    disabled={switching !== undefined}
+                    disabled={busy.length > 0 || switching !== undefined}
                     onClick={() => void go(chapter.name, chapter.number)}
                     size="xs"
                     variant="outline"

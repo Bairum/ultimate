@@ -161,11 +161,17 @@ function Awake({ data }: { data: ChapterEntry }) {
         >
           Check again
         </Button>
+        {failure && <p className="w-full text-[12px] text-error">{failure}</p>}
       </div>
     )
 
   if (check?.ended === 'discarded')
-    return <Off data={data} onAgain={() => void open()} opening={opening || !!waking} />
+    return (
+      <>
+        <Off data={data} onAgain={() => void open()} opening={opening || !!waking} />
+        {failure && <p className="px-4 pb-2.5 text-[12px] text-error">{failure}</p>}
+      </>
+    )
 
   if (check)
     return (
