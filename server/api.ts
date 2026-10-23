@@ -10,6 +10,7 @@ import type {
 import type { ServerEvents, ConversationSummary, ConfigureRequest } from '../shared/protocol.ts'
 import { UI_REVISION, imageMimeTypes, maxImageBytes, maxImages } from '../shared/protocol.ts'
 import { listModels } from './models.ts'
+import { expandSkillCommand } from './skills.ts'
 import type { Extensions } from './extensions.ts'
 import { context } from './harness.ts'
 import type { OpenHost, PreparedHost } from './harness.ts'
@@ -530,12 +531,19 @@ export async function createApi(
               })
               if (!data.text.trim() && !blocks.length)
                 throw new HttpError(400, 'Expected text or images')
+              // `/skill:name args` sends the skill's instructions with the request, as Pi does.
+              const expanded = data.text.startsWith('/skill:')
+                ? expandSkillCommand(
+                    data.text,
+                    host.skills((await conversation.agent(context)).cwd ?? host.projectRoot),
+                  )
+                : data.text
               const content = blocks.length
                 ? [
-                    ...(data.text.trim() ? [{ type: 'text' as const, text: data.text }] : []),
+                    ...(expanded.trim() ? [{ type: 'text' as const, text: expanded }] : []),
                     ...blocks,
                   ]
-                : data.text
+                : expanded
               const submission = await conversation.submit(
                 { type: 'input', content, whenBusy: data.whenBusy },
                 context,

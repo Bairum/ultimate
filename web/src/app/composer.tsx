@@ -211,6 +211,13 @@ function getDraft(id: number | string | undefined) {
   return drafts.get(id)!
 }
 
+/** Replace conversation `id`'s draft with `text`, as typing it would; the caller focuses the composer. */
+export function fillComposer(id: number, text: string) {
+  const draft = getDraft(id)
+  draft.set({ text, revision: draft.get().revision + 1 })
+  if (draft.key) localStorage.setItem(draft.key, text)
+}
+
 function clearDraft(
   draft: ReturnType<typeof createDraft>,
   snapshot: { text: string; revision: number },

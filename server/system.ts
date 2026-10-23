@@ -23,6 +23,28 @@ import type { PreparedHost } from './harness.ts'
 import { watchRoots } from './watch-roots.ts'
 
 const run = promisify(execFile)
+
+/** The skills the Info tab lists, with their scope and overrides, and Pi's load diagnostics as text. */
+export function skillInfo({
+  skills,
+  diagnostics,
+}: ReturnType<typeof projectSkills>): Pick<SystemInfo, 'skills' | 'skillDiagnostics'> {
+  return {
+    skills: skills.map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      path: skill.filePath,
+      scope: skill.scope,
+      overrides: skill.overrides,
+      ...(skill.disableModelInvocation && { manual: true as const }),
+    })),
+    skillDiagnostics: diagnostics.map((diagnostic) => ({
+      type: diagnostic.type,
+      message: diagnostic.message,
+      ...(diagnostic.path && { path: diagnostic.path }),
+    })),
+  }
+}
 async function bytes(path: string) {
   try {
     return (await stat(path)).size
@@ -119,11 +141,7 @@ export async function createSystem(
       code,
       extensions: registry(),
       extensionDiagnostics: registry.diagnostics(),
-      skills: projectSkills(host).map((skill) => ({
-        name: skill.name,
-        description: skill.description,
-        path: skill.filePath,
-      })),
+      ...skillInfo(projectSkills(host)),
       contextFiles: loadProjectContextFiles({
         cwd: host.projectRoot,
         agentDir: join(host.userHome, '.ultimate'),
@@ -156,6 +174,7 @@ export async function createSystem(
       join(host.projectRoot, '.ultimate'),
       join(host.userHome, '.ultimate/extensions'),
       join(host.userHome, '.ultimate/skills'),
+      join(host.projectRoot, '.agents/skills'),
       join(host.projectRoot, '.pi/skills'),
     ])
     const stopRoots = watchRoots([join(host.projectRoot, '.ultimate')], (root) => {

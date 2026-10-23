@@ -78,8 +78,7 @@ Extensions outside the clone import exactly what built-ins import (`@/sdk`, `@/c
 `lucide-react`, any package installed in the clone): Ultimate resolves those from its clone, and Tailwind picks up their
 classes. In the clone, `pnpm check` type-checks and lints `extensions/` and `.ultimate/extensions/`; extensions of
 other projects are not checked by anything, so try them in the browser. Agents live in the same three places
-(`agents/`); skills come from clone `skills/`, then the project's `.pi/skills/`, then `~/.ultimate/skills/`, then
-`<project>/.ultimate/skills/`, later winning by name. A project's `.ultimate/settings.json` may set `defaultSurface` (see
+(`agents/`); skills load as [Discovery and settings](../docs/settings.md) describes, later scopes winning by name. A project's `.ultimate/settings.json` may set `defaultSurface` (see
 [Surfaces](#surfaces)).
 
 ## Extension host
@@ -89,7 +88,7 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `ultimateRoot`, `projectRoot`, `userHome`, `home`: source, work, user and instance-state roots.
 - `modelRuntime`, `settings`: Pi model/auth runtime and settings.
 - `models()`: model descriptors, including availability.
-- `skills(cwd)`: merged clone, Pi, user and project skills for a working directory.
+- `skills(cwd)`: merged clone, user and project skills for a working directory, each with its `scope` and `overrides`.
 - `restart(approved)`: request a verified core swap; the async callback records the approved generation before activation.
 - `build()`, `system()`, `extensions()`: current build, system and extension inspection.
 - `conversations()`: every conversation's summary, as `useConversations()` gives the web; empty until the harness is open.
