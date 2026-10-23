@@ -615,13 +615,16 @@ export default function subagents(
       const childActions = Object.values(state.actions).filter(
         (candidate) => candidate.conversationId === submission.conversationId,
       )
-      // A one-way message from the parent has no reporter and no reply: without this,
-      // the answer it starts never reaches the parent, which stays idle. A pending reporter
-      // whose input was answered in the same run delivers that answer itself.
+      // A one-way message from the parent, or its reply to the child's own question, has no
+      // reporter and no reply: without this, the answer it starts never reaches the parent,
+      // which stays idle. A pending reporter whose input was answered in the same run delivers
+      // that answer itself.
       const input = await tx.entry(submission.entry)
       const message = input?.data as { from?: unknown; reply?: unknown } | undefined
       let messaged =
-        input?.kind === 'board.message' && message?.from === parent && message.reply === false
+        message?.from === parent &&
+        ((input?.kind === 'board.message' && message.reply === false) ||
+          input?.kind === 'board.reply')
       for (const action of childActions) {
         if (!messaged || action.status !== undefined) continue
         const sibling = await tx.submissionByRequest(

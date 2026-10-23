@@ -933,6 +933,46 @@ describe('turns without an answer', () => {
     expect(last.model?.[0]).toMatchObject({ role: 'assistant' })
     expect(JSON.stringify(last.model)).toContain('Report received')
   })
+  it('reports the answer to the parent’s reply to the child’s question once, across reopen', async () => {
+    const f = await fixture()
+    await call(f.opened, { action: 'start', agent: 'scout', task: 'Ready', background: true })
+    await until(async () => (await reports(f.opened)).length === 1)
+    await f.opened.harness.waitForIdle(context)
+    const [child] = await children(f.opened)
+    const handle = (await f.opened.harness.conversation(child.conversationId, context))!
+    // What the Messages reply phase submits into the child after it asked a question with `message`.
+    const reply = async (id: number, from: number, content: string) =>
+      (
+        await handle.submit(
+          {
+            type: 'input',
+            requestId: `board-reply:${id}`,
+            whenBusy: 'steer',
+            content,
+            entry: {
+              kind: 'board.reply',
+              data: { id, re: id - 1, from, text: content, failed: false },
+            },
+          },
+          context,
+        )
+      ).wait(context)
+    // Another conversation answering the child's question is not the parent's business.
+    await reply(2, f.opened.root.id + 1000, 'Sibling reply')
+    await f.opened.harness.waitForIdle(context)
+    expect(await reports(f.opened)).toHaveLength(1)
+    await reply(4, f.opened.root.id, 'Yes, proceed')
+    await until(async () => (await reports(f.opened)).length === 2)
+    expect((await reports(f.opened))[1].model?.[0]).toMatchObject({
+      content: `[subagent ${child.conversationId} (scout) answered] Returned model: faux/faux-1\nChild: Yes, proceed`,
+    })
+    await f.opened.harness.waitForIdle(context)
+    await f.opened.close()
+    hosts.splice(hosts.indexOf(f.opened), 1)
+    const resumed = await f.reopen()
+    await resumed.harness.waitForIdle(context)
+    expect(await reports(resumed)).toHaveLength(2)
+  })
   it('reports a one-way message answer once while a later queued follow-up is pending', async () => {
     const f = await gatedFixture()
     await call(f.opened, { action: 'start', agent: 'scout', task: 'Ready', background: true })
