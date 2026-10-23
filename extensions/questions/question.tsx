@@ -239,7 +239,7 @@ export function QuestionItem({
     />
   )
   const options = (
-    <div className={cn('grid gap-1.5', question.kind === 'confirm' && 'grid-cols-2')}>
+    <div className={cn('grid content-start gap-1.5', question.kind === 'confirm' && 'grid-cols-2')}>
       {list.map((choice, number) => {
         const chosen = choice.custom ? !!draft?.other : !!draft?.chosen.includes(number)
         return (
@@ -253,7 +253,7 @@ export function QuestionItem({
               chosen={chosen}
               multi={multi}
               onSelect={() => onSelect(number)}
-              onActive={() => setActive(number)}
+              onActive={() => !choice.custom && setActive(number)}
             >
               {choice.custom && chosen && (
                 <div className="px-2.5 pb-2.5 pl-10">
@@ -325,7 +325,7 @@ export function QuestionItem({
                 </span>
               </>
             ) : (
-              'not answered'
+              <span className="whitespace-nowrap">not answered</span>
             )}
           </span>
         )}
@@ -349,18 +349,21 @@ export function QuestionItem({
             ) : question.kind === 'scale' ? (
               <Scale question={question} draft={draft} onSelect={onSelect} />
             ) : previews ? (
+              // Side by side, the preview fills the options' height and scrolls inside, so hovering never moves them.
               <div className="grid gap-2 @lg:grid-cols-2">
                 {options}
-                <div className="min-w-0 rounded-md border border-border/70 bg-background/70 @lg:self-start">
-                  <div className="border-b border-border/60 px-2.5 py-1 font-mono text-[10px] text-muted-foreground">
-                    preview · {keyOf(question, shown) ?? shown + 1}
-                  </div>
-                  <div className="min-w-0 px-2.5 py-2 text-xs leading-relaxed">
-                    {list[shown]?.preview ? (
-                      <MessageResponse>{list[shown].preview}</MessageResponse>
-                    ) : (
-                      <span className="text-muted-foreground">No preview for this option.</span>
-                    )}
+                <div className="relative min-h-24 min-w-0">
+                  <div className="flex min-w-0 flex-col rounded-md border border-border/70 bg-background/70 @lg:absolute @lg:inset-0">
+                    <div className="border-b border-border/60 px-2.5 py-1 font-mono text-[10px] text-muted-foreground">
+                      preview · {list[shown]?.label}
+                    </div>
+                    <div className="min-h-0 min-w-0 flex-1 overflow-auto px-2.5 py-2 text-xs leading-relaxed">
+                      {list[shown]?.preview ? (
+                        <MessageResponse>{list[shown].preview}</MessageResponse>
+                      ) : (
+                        <span className="text-muted-foreground">No preview for this option.</span>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

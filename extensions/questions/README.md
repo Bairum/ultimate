@@ -38,13 +38,19 @@ memoized response or creating duplicate cards.
 
 ## Card
 
-Under the outgoing `message` card in @ultimate's transcript, through messages’ `MessageAnswers` point. Confirmations offer Yes/No; choices show the extracted options, their letter and a `pick` marker on
-recommended ones. Both offer “Something else…” with an inline field. **Accept picks** chooses every pick at once. Send answers is enabled after at least one answer; omitted questions stay
-out. Dismiss closes the message without an answer. A message without extracted questions gets a one-line answer field
-(sent as a Reply to that message) and Dismiss. On phones, one question shows at a time with Back/Next. On desktop, 1–9
-or an option's letter chooses, ↑/↓ moves between questions and Enter goes to the next or sends, on the shown
-conversation's newest open card; they leave alone input/textarea editing and keys pressed
-in another card, on another control or in the panel, whose cards take no global keys.
+Under the outgoing `message` card in @ultimate's transcript, through messages’ `MessageAnswers` point. One question is
+open at a time; the others fold to a line with their answer (`1b drop them`) or “not answered”, and a dot per question
+shows progress. Kinds: `choice` (one option), `multi` (any), `confirm` (Yes/No), `scale` (numbered steps with end
+labels) and `text` (a field); options offer “Something else…” with an inline field, and an option's Markdown `preview`
+shows beside the options for the hovered or chosen one. Recommended options carry a “my pick” chip. **Accept picks**
+chooses every pick still open; Send sends what is answered (“Send 2 of 5”). Sending opens a 3 s window with Undo before
+the answer goes out, then the card settles into the summary of what was sent. Dismiss closes the message without an
+answer. A message without extracted questions gets a one-line answer field (sent as a Reply to that message) and
+Dismiss. On desktop, 1–9 or an option's letter (`y`/`n` for Yes/No, `o` for Something else) chooses, ↑/↓ moves
+between questions, Enter takes the open question's pick or goes to the next, and sends from the last one; ⇧Enter
+accepts every pick and sends; Esc clears an answer or, while sending, undoes. Only the shown conversation's newest open
+card takes these keys; they leave alone input/textarea editing and keys pressed in another card, on another control or
+in the panel, whose cards take no global keys. The Questions playground surface shows every kind with sample data.
 
 ## Where open questions wait
 
