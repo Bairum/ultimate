@@ -21,7 +21,6 @@ import {
   useUltimate,
 } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
-import { StandingDoc } from '../subagents/ui.tsx'
 import { AsleepAction, ChaptersAction, DreamDoc, SwitchAction } from './refs.ts'
 import { busyElsewhere } from './types.ts'
 
@@ -39,11 +38,12 @@ export function useChapters() {
   return useAction(ChaptersAction, null, { onError: () => {} }).data
 }
 
-/** Conversations at work besides @ultimate: a chapter change waits for them, as the server does. */
+/**
+ * Conversations at work, @ultimate included: a chapter change waits for them, as the server does. Work parked by a
+ * switch would keep the chapter left behind from ever being switched back to.
+ */
 export function useBusyElsewhere() {
-  const conversations = useConversations()
-  const ultimate = useDocOf(1, StandingDoc)?.ultimate
-  return busyElsewhere(conversations, ultimate)
+  return busyElsewhere(useConversations())
 }
 
 // ---- the switch in flight ------------------------------------------------------------------------------------------

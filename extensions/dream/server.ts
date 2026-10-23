@@ -276,8 +276,12 @@ async function changing<T>(host: ExtensionHost, run: () => Promise<T>) {
   }
 }
 
-async function idle(host: ExtensionHost, tx: Tx) {
-  const busy = busyElsewhere(host.conversations(), await ultimateOf(tx))
+/**
+ * No top-level conversation at work, @ultimate included: a switch parks whatever runs, and parked work in the chapter
+ * left behind keeps it from ever being switched back to (`requestChapter` refuses it).
+ */
+async function idle(host: ExtensionHost, _tx: Tx) {
+  const busy = busyElsewhere(host.conversations())
   if (busy.length)
     throw new Error(
       `Wait for these to finish before switching chapters: ${busy.map((item) => `#${item.id} ${item.title}`).join(', ')}`,

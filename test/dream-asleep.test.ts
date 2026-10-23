@@ -194,14 +194,15 @@ it.each(['no journal', 'open', 'approved', 'busy', 'no name', 'existing'])(
           status: reason,
         })
       }, context)
+    // @ultimate counts too: a switch would park its turn, and parked work keeps the old chapter from being reopened.
     if (reason === 'busy')
-      f.host.conversations = () => [{ id: 30, busy: true, title: 'Building' }] as never
+      f.host.conversations = () => [{ id: 20, busy: true, title: 'Building' }] as never
     const args = { session: 1, ...(reason === 'existing' ? { name: 'the-beginning' } : {}) }
     const messages = {
       'no journal': 'has no journal',
       open: 'Settle every',
       approved: 'Settle every',
-      busy: '#30 Building',
+      busy: '#20 Building',
       'no name': 'chapter name',
       existing: 'already exists',
     }
@@ -223,8 +224,6 @@ it('commits each sleep phase, takes the final backup before journaling, and reco
     expect(f.phases.at(-1)?.phase).toBe('backing up')
     return { id: 'final', at: 1, machine: 'here', bytes: 1, uploaded: 1 }
   })
-  // @ultimate itself may be busy, as when the user invokes the action from its conversation.
-  f.host.conversations = () => [{ id: 20, busy: true }] as never
   const result = await actions.asleep({ session: 1 }, f.call)
   expect(result).toMatchObject({
     session: 1,
@@ -409,9 +408,7 @@ it.each([true, false])(
     })
     f.host.restart = vi.fn<ExtensionHost['restart']>(async (approved) => {
       f.host.conversations = () =>
-        busy
-          ? ([{ id: 30, busy: true, title: 'Late work' }] as never)
-          : ([{ id: 20, busy: true }] as never)
+        busy ? ([{ id: 30, busy: true, title: 'Late work' }] as never) : []
       await approved(2)
       expect(f.hold).toHaveBeenCalledOnce()
       return 'Restart refused'
