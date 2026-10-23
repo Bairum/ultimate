@@ -1,9 +1,12 @@
 What each conversation is about: titles, summaries, features and reply summaries, the overview the sidebar reads,
 and concluding and resuming conversations. Several branches run at once as separate agents; lineage roots keep their shared context without running turns.
 A summary model (GPT-6 Luna by default) automatically gives top-level conversations concise titles and sidebar summaries, and describes each final reply without
-changing the main agent. Ownerless, top-level standing agents (label `agent`) and lander conversations
-(label `lander`) never schedule summary tasks: their `@name` titles stay fixed, with no automatic summary,
-feature, activity or reply summary. This applies to intent, spawn and completed-reply triggers.
+changing the main agent. A conversation turns these automatic triggers (intent, spawn and completed reply) off with
+`setAutomaticSummaries(tx, id, false)` on the service: it then schedules no summary task, a task admitted before settles
+without writing, and its title stays as set, with no automatic summary, feature, activity, reply summary or abstract.
+Explicit `askSummaryModel` calls are unaffected. Standing agents and landers are off (their `@name` titles stay fixed), side
+chats are off (only Summarize & inject asks the model), and a definition with `summaries: false` turns off the
+conversations it configures (see the [subagents README](../subagents/README.md)).
 
 ## Sidebar
 

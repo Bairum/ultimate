@@ -88,7 +88,7 @@ async function fixture() {
     ...apis(provided),
   }
   provided.set('subagents', {
-    createChild,
+    createChild: (tx, options) => createChild(host, tx, options),
   } satisfies Partial<SubagentsService>)
   const extension = automations(host as unknown as Parameters<typeof automations>[0])
   prepared.registry.install(extension)

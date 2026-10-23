@@ -77,6 +77,8 @@ export type ResponseReceipt = {
 export type SummaryState = {
   exchanges: number
   revision: number
+  /** `false` turns off every automatic trigger (intent, reply, spawn); explicit `askSummaryModel` calls stay. */
+  automatic?: false
   intentRequested?: boolean
   lastYield?: TaskId
   lastAnswer?: EntryId
@@ -403,12 +405,20 @@ export type SummaryHost = Pick<ExtensionHost, 'harness' | 'metadata'> &
   Partial<Pick<ExtensionHost, 'want'>> &
   SummaryModelHost
 
-/** Standing agents and landers keep their `@name` and get no summary, title, feature or assessment. */
-async function standing(tx: Tx, host: SummaryHost, id: ConversationId) {
-  const own = await tx.conversation(id)
-  const { label } = await tx.doc(host.metadata, id)
-  return label === 'lander' || (label === 'agent' && !!own && !own.parent && !own.owner)
+/**
+ * Turn conversation `id`'s automatic summaries on or off inside `tx`: off, no trigger schedules a summary task and
+ * one already running settles without writing, so the title stays as set. Explicit `askSummaryModel` calls are
+ * unaffected. Standing agents, landers and side chats are off; a definition with `summaries: false` turns its
+ * conversations off.
+ */
+export async function setAutomaticSummaries(tx: Tx, id: ConversationId, enabled: boolean) {
+  const state = await tx.doc(Summaries, id)
+  if (enabled) delete state.automatic
+  else state.automatic = false
 }
+
+const automatic = async (tx: Tx, id: ConversationId) =>
+  (await tx.doc(Summaries, id)).automatic !== false
 
 /**
  * Request inside the trigger's transaction; only durable documents decide deduplication. `model` is the summary model
@@ -424,7 +434,7 @@ export async function requestSummary(
 ) {
   const own = await tx.conversation(id)
   if (!own || (request.reason !== 'reply' && own.owner)) return
-  if (await standing(tx, host, id)) return
+  if (!(await automatic(tx, id))) return
   const state = await tx.doc(Summaries, id)
   let intent: EntryId | undefined
   if (request.reason === 'intent') {
@@ -698,8 +708,8 @@ export function summaryBehavior(host: SummaryHost, generate = generateSummary) {
               at: now,
             })
           delete state.pending
-          // A task admitted before the conversation became standing settles without writing its result.
-          if (await standing(tx, host, runtime.conversationId)) {
+          // A task admitted before the conversation turned its summaries off settles without writing its result.
+          if (!(await automatic(tx, runtime.conversationId))) {
             if (state.assessmentStatus === 'pending') delete state.assessmentStatus
             if (state.status === 'pending') delete state.status
             return terminal

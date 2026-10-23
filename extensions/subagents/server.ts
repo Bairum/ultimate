@@ -428,8 +428,18 @@ export const actions = {
     if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter))
       throw new Error('frontmatter must be an object')
     if (typeof instructions !== 'string') throw new Error('instructions must be a string')
-    const { description, model, thinking, tools, denyTools, isolate, resident, onFailure, fast } =
-      frontmatter
+    const {
+      description,
+      model,
+      thinking,
+      tools,
+      denyTools,
+      isolate,
+      resident,
+      onFailure,
+      fast,
+      summaries,
+    } = frontmatter
     if (typeof description !== 'string') throw new Error('description is required')
     if (model !== undefined && typeof model !== 'string') throw new Error('model must be a string')
     if (thinking !== undefined && typeof thinking !== 'string')
@@ -451,6 +461,8 @@ export const actions = {
     if (resident !== undefined && typeof resident !== 'boolean')
       throw new Error('resident must be a boolean')
     if (fast !== undefined && typeof fast !== 'boolean') throw new Error('fast must be a boolean')
+    if (summaries !== undefined && typeof summaries !== 'boolean')
+      throw new Error('summaries must be a boolean')
     const { definitions } = await discoverAgents(
       host.ultimateRoot,
       host.projectRoot,
@@ -479,6 +491,7 @@ export const actions = {
         ...(resident !== undefined ? { resident } : {}),
         ...(onFailure ? { onFailure } : {}),
         ...(fast ? { fast } : {}),
+        ...(!summaries ? { summaries } : {}),
       },
       instructions,
     )
@@ -522,7 +535,8 @@ export default function subagents(
       await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
     ).definitions.filter((definition) => definition.resident === true)
   /** Drops standing agents whose definition is gone; their conversations become ordinary ones. Retirement waits
-   * until every definition parses: an error names a file, not the agent it defines, so a typo retires nothing. */
+   * until every definition parses: an error names a file, not the agent it defines, so a typo retires nothing. The
+   * ones kept get their automatic summaries turned off, as `standing` does on every refresh. */
   const pruneRetired = async (ctx: Context) => {
     const { definitions, errors } = await discoverAgents(
       host.ultimateRoot,
@@ -539,16 +553,20 @@ export default function subagents(
     await host.harness().commit(async (tx) => {
       const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
       for (const name of Object.keys(index)) {
-        if (kept.has(name)) continue
         const id = index[name]
+        const exists = await tx.conversation(id)
+        if (kept.has(name)) {
+          if (exists) await conversations.setAutomaticSummaries(tx, id, false)
+          continue
+        }
         delete index[name]
-        if (await tx.conversation(id)) delete (await tx.doc(host.metadata, id)).label
+        if (exists) delete (await tx.doc(host.metadata, id)).label
       }
     }, ctx)
   }
   host.implement(SubagentsApi, {
     async createChild(tx, options) {
-      const child = await createChild(tx, options)
+      const child = await createChild(host, tx, options)
       await started(host, tx, child, options.definition?.name ?? options.label, 'child')
       return child
     },
@@ -588,6 +606,8 @@ export default function subagents(
         const change = definitionAgent(definition, base, host.modelRuntime)
         await configure(tx, id, { ...change, cwd: host.projectRoot })
         Object.assign(await tx.doc(host.metadata, id), { label: 'agent', title: `@${name}` })
+        // A standing agent keeps its `@name`: no automatic title, summary or reply activity.
+        await conversations.setAutomaticSummaries(tx, id, false)
         ;(await tx.doc(Profile, id)).definition = name
         // Only a new conversation starts: a refresh reconfigures one that already runs.
         if (created) await started(host, tx, created, name, 'standing')
@@ -921,7 +941,7 @@ export default function subagents(
                   ownership: { kind: 'conversation' },
                   background: true,
                 })
-                const child = await createChild(tx, {
+                const child = await createChild(host, tx, {
                   owner: { kind: 'task', taskId: owner },
                   definition,
                   parentAgent: parent,

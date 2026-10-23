@@ -241,7 +241,11 @@ export function workspaces(host: Host) {
         const own = await ensureLander(tx, index, source, target, path)
         if (!landers.includes(own)) landers.push(own)
       }
-      for (const id of landers) await configure(tx, id, change)
+      for (const id of landers) {
+        await configure(tx, id, change)
+        // A lander keeps its `@lander` title: no automatic summaries.
+        await host.need(ConversationsApi).setAutomaticSummaries(tx, id, false)
+      }
     }, context)
   }
   /**

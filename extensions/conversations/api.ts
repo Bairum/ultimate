@@ -6,7 +6,12 @@ import type { Context } from '@earendil-works/chord'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
 import type { ConversationSubject, KeptWork } from './types.ts'
-import type { accountResponse, askSummaryModel, SummaryRequest } from './summary.ts'
+import type {
+  accountResponse,
+  askSummaryModel,
+  setAutomaticSummaries,
+  SummaryRequest,
+} from './summary.ts'
 import type { SummaryModel, SummaryModelStatus } from './summary-model.ts'
 
 export type ConversationsService = {
@@ -32,6 +37,11 @@ export type ConversationsService = {
     request: SummaryRequest,
     model: SummaryModel | undefined,
   ): Promise<void>
+  /**
+   * Inside `tx`, turn conversation `id`'s automatic summaries (intent, reply and spawn triggers) on or off; its title
+   * then stays as set. Off for standing agents, landers, side chats and definitions with `summaries: false`.
+   */
+  setAutomaticSummaries: typeof setAutomaticSummaries
   /** Ask a summary model once with a system prompt and input, or return the response the receipt already holds. */
   askSummaryModel: typeof askSummaryModel
   /** Add a summary model response's usage to the conversation's `pi.usage` inside `tx`, after asking. */

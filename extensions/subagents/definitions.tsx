@@ -24,6 +24,7 @@ import {
   Segmented,
   ToolsField,
   StandingField,
+  SummariesField,
   thinkingLevels,
 } from './fields.tsx'
 import { Heading, Tag, useRefresh } from './parts.tsx'
@@ -228,6 +229,7 @@ interface Draft {
   isolate: 'none' | 'worktree'
   onFailure: 'diagnose' | 'fix' | null
   fast: boolean
+  summaries: boolean
   instructions: string
 }
 const draftOf = (definition?: Shown['definition'], name = ''): Draft => ({
@@ -241,6 +243,7 @@ const draftOf = (definition?: Shown['definition'], name = ''): Draft => ({
   isolate: definition?.isolate ?? 'none',
   onFailure: definition?.onFailure ?? null,
   fast: definition?.fast ?? false,
+  summaries: definition?.summaries ?? true,
   instructions: definition?.instructions ?? '',
 })
 
@@ -324,6 +327,7 @@ function Form({
           ...(draft.isolate === 'worktree' ? { isolate: 'worktree' } : {}),
           ...(draft.onFailure ? { onFailure: draft.onFailure } : {}),
           ...(draft.fast ? { fast: true } : {}),
+          ...(draft.summaries ? {} : { summaries: false }),
         },
         instructions: draft.instructions,
       })
@@ -463,6 +467,7 @@ function Form({
             />
           </Field>
           <StandingField value={draft.resident} onChange={(resident) => set({ resident })} />
+          <SummariesField value={draft.summaries} onChange={(summaries) => set({ summaries })} />
           <Field
             hint={
               draft.isolate === 'worktree'
