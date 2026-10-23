@@ -115,7 +115,9 @@ document, tools and model-facing text, where agents and stored entries already u
   to near-duplicates, delete or rewrite memories a landing removes or replaces, and merge at the cap, with one example
   answer. The parser takes the one object with an `ops` array (extra keys ignored) or a bare array of ops, also inside
   one code fence or between prose; two fences, no batch or invalid JSON refuse it, the last with the JSON error; adds and
-  updates take the landing's `#<submitter>/<at>` as source. The ops commit with the task's completion, so a resumed task applies them once. An unparsable answer or a refused batch writes nothing and is asked once
+  updates take the landing's `#<submitter>/<at>` as source. Since nobody corrects a landing's batch, `normalizeMemoryOp`
+  first collapses each `line` to one line and cuts a long `line` or `body` at a word boundary with `…`, and kebab-cases
+  a slug outside the pattern; the `remember` tool stays strict. The ops commit with the task's completion, so a resumed task applies them once. An unparsable answer or a refused batch writes nothing and is asked once
   more with the refused answer and the reason appended (a memo of its own); when that is refused too, it leaves a notice. The landing itself never fails on it.
 - **Go back** (`rewind.ts`, `rewind.tsx`): the message action **Go back to here** on any stored message of a non-root
   conversation (standing agents included) opens a confirm dialog fed by `rewindPreview {conversation, at}`: steps set

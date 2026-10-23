@@ -9,6 +9,7 @@ import {
   applyMemoryOps,
   Memory,
   MEMORY_LIMIT,
+  normalizeMemoryOp,
   parseMemoryOps,
 } from '../extensions/lineage/memory.ts'
 import { Seen } from '../extensions/lineage/catchup.ts'
@@ -18,7 +19,7 @@ import { estimateTextTokens } from '@earendil-works/pi-ai/utils/estimate'
 import { Standing } from '../extensions/subagents/api.ts'
 import { SubmissionLanded } from '../extensions/workspaces/api.ts'
 import type { LandedData } from '../extensions/workspaces/api.ts'
-import { emit, EventLog } from '../server/events.ts'
+import { emit, EventFeed, EventLog } from '../server/events.ts'
 import { context } from '../server/harness.ts'
 import { fauxServer, post, seedTally, sourceCopy, temp, until } from './helpers.ts'
 
@@ -244,6 +245,49 @@ it('finds the one batch of ops in a memorize answer, wrapped or not', () => {
   )
 })
 
+it('normalises what a landing writes: long lines and bodies are cut, slugs kebab-cased', () => {
+  const words = (count: number) => Array.from({ length: count }, (_, i) => `w${i}`).join(' ')
+  const exact = 'x'.repeat(120)
+  expect(normalizeMemoryOp({ op: 'update', slug: 'ok', line: exact })).toEqual({
+    op: 'update',
+    slug: 'ok',
+    line: exact,
+  })
+  // One over the limit cuts at the last word boundary that fits, ending with an ellipsis.
+  const spaced = `${words(30)} ${'y'.repeat(121 - words(30).length - 1)}`
+  expect(spaced).toHaveLength(121)
+  expect(normalizeMemoryOp({ op: 'update', slug: 'ok', line: spaced })).toEqual({
+    op: 'update',
+    slug: 'ok',
+    line: `${words(30)}…`,
+  })
+  // Without a usable space the cut is hard, still within the limit.
+  const solid = normalizeMemoryOp({ op: 'update', slug: 'ok', line: 'z'.repeat(140) }) as {
+    line: string
+  }
+  expect(solid.line).toBe(`${'z'.repeat(119)}…`)
+  expect(solid.line).toHaveLength(120)
+  // Whitespace collapses to one line first; a body is cut at its own limit; a bad slug is kebab-cased.
+  expect(
+    normalizeMemoryOp({
+      op: 'add',
+      slug: 'Pnpm Only!',
+      kind: 'fact',
+      line: '  two\n  lines\there ',
+      body: `${words(400)} ${'b'.repeat(2000)}`,
+    }),
+  ).toEqual({
+    op: 'add',
+    slug: 'pnpm-only',
+    kind: 'fact',
+    line: 'two lines here',
+    body: `${words(400)}…`,
+  })
+  // What is not a string, or not an object, passes through for applyMemoryOps to refuse.
+  expect(normalizeMemoryOp({ op: 'delete', slug: 7 })).toEqual({ op: 'delete', slug: 7 })
+  expect(normalizeMemoryOp('nope')).toBe('nope')
+})
+
 it.concurrent('forks of a briefed branch inherit the tally tip its brief covers', async () => {
   const { server } = await fixture()
   const older = (await server.harness.commit(
@@ -412,29 +456,48 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
   expect(await memorizeTasks(server)).toHaveLength(1)
 
   // A batch applyMemoryOps refuses is asked once more with the reason; a valid retry is written.
-  const long = 'x'.repeat(121)
   state.queued.push(
-    JSON.stringify({ ops: [add('retried', long)] }),
+    JSON.stringify({ ops: [{ ...add('retried', 'An opinion'), kind: 'opinion' }] }),
     JSON.stringify({ ops: [add('retried', 'Short enough')] }),
   )
-  await land(landing('long', id))
+  await land(landing('retry', id))
   await settledTasks(server, 2)
   expect(state.asked).toHaveLength(3)
-  expect(state.asked[2]).toContain('Op 1: line must be at most 120 characters')
-  expect(state.asked[2]).toContain(long)
+  expect(state.asked[2]).toContain('Op 1: kind must be decision, fact or lesson')
+  expect(state.asked[2]).toContain('An opinion')
   expect((await memories(server)).retried).toMatchObject({ line: 'Short enough' })
+
+  // A line over 120 characters, which the model keeps writing on a retry too, is cut short and written the first
+  // time, so there is no retry and no notice.
+  const long = `${'word '.repeat(27)}and-then-some-more`
+  expect(long).toHaveLength(153)
+  state.memorize = JSON.stringify({ ops: [add('long', long)] })
+  await land(landing('long', id))
+  await settledTasks(server, 3)
+  expect(state.asked).toHaveLength(4)
+  expect((await memories(server)).long).toMatchObject({
+    line: `${'word '.repeat(22)}word…`,
+    body: `${long}, in full.`,
+  })
+  const notices = async () =>
+    ((await server.harness.snapshot(EventFeed, ROOT_CONVERSATION_ID, context))?.events ?? [])
+      .filter((event) => event.name === 'ultimate.notice')
+      .map((event) => event.data as { extension: string; message: string })
+      .filter((data) => data.extension === 'lineage')
+      .map((data) => data.message)
+  expect(await notices()).toEqual([])
 
   // An empty batch with commentary writes nothing and is not retried, so it leaves no notice.
   state.memorize = '{"ops":[]}\nNothing here is worth remembering.'
   await land(landing('empty', id))
-  await settledTasks(server, 3)
-  expect(state.asked).toHaveLength(4)
+  await settledTasks(server, 4)
+  expect(state.asked).toHaveLength(5)
 
   // A malformed answer, and a batch applyMemoryOps refuses, write nothing, retried or not.
   const before = await memories(server)
   state.memorize = 'Sure! Here are the ops: none'
   await land(landing('s2', id))
-  await settledTasks(server, 4)
+  await settledTasks(server, 5)
   state.memorize = JSON.stringify({
     ops: [
       { op: 'add', slug: 'fine', kind: 'fact', line: 'Fine', body: 'Fine.' },
@@ -442,10 +505,19 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
     ],
   })
   await land(landing('s3', id))
-  await settledTasks(server, 5)
-  expect(state.asked).toHaveLength(8)
-  expect(state.asked[7]).toContain('Op 2: no memory missing')
+  await settledTasks(server, 6)
+  expect(state.asked).toHaveLength(9)
+  expect(state.asked[8]).toContain('Op 2: no memory missing')
   expect(await memories(server)).toEqual(before)
+  await until(async () => (await notices()).length === 2)
+  expect(await notices()).toEqual([
+    expect.stringContaining(
+      'Memory from landing s2 in #1 was not written: Error: expected {"ops": [...]}',
+    ),
+    expect.stringContaining(
+      'Memory from landing s3 in #1 was not written: Error: Op 2: no memory missing',
+    ),
+  ])
 
   // Receipts are never evicted: after more than 100 further landings, the first again starts no task.
   state.memorize = '{"ops":[]}'
@@ -453,7 +525,7 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
     for (let index = 0; index < 101; index++)
       await emit(tx, SubmissionLanded, landing(`bulk-${index}`, id))
   }, context)
-  await settledTasks(server, 106)
+  await settledTasks(server, 107)
   const repeat = (await land(landing('s1', id))).id
   await until(
     async () =>
@@ -461,7 +533,7 @@ it.concurrent('distils each landing into memory once and writes nothing from a r
         'lineage/memorize'
       ] ?? 0) >= repeat,
   )
-  expect(await memorizeTasks(server)).toHaveLength(106)
+  expect(await memorizeTasks(server)).toHaveLength(107)
 })
 
 it.concurrent('a fresh memorize reactor skips landings from before it and distils new ones', async () => {
