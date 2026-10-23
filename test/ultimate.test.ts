@@ -42,6 +42,11 @@ async function fixture(onRequest?: (text: string, home: string) => Promise<void>
     join(root, '.ultimate/settings.json'),
     JSON.stringify({ summaryModel: 'unavailable/test' }),
   )
+  // @ultimate's definition names web_search and web_fetch, which come with the default-off parallel.
+  await writeFile(
+    join(home, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { enable: ['parallel'] } }),
+  )
   const requests: string[] = []
   const open = async () => {
     const server = await fauxServer({

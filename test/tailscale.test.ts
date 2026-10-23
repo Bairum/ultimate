@@ -128,7 +128,7 @@ async function repo(home: string) {
   return root
 }
 
-it('is on by default, applies user-only settings through the real loader and tears down on live settings reload', async () => {
+it('starts on a project enable, takes the allowlist only from user settings and tears down on live settings reload', async () => {
   const f = await fixture()
   const root = await repo(f.home)
   const server = await createServer({
@@ -153,23 +153,15 @@ it('is on by default, applies user-only settings through the real loader and tea
   )
   await until(async () => (await status()).allow.includes('changed@example.com'))
   expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(1)
-  await writeFile(
-    join(f.home, '.ultimate/settings.json'),
-    '{"extensions":{"disable":["tailscale"]}}',
+  await writeFile(join(root, '.ultimate/settings.json'), '{}')
+  await until(
+    () => server.extensions.info().find((entry) => entry.name === 'tailscale')?.enabled === false,
   )
-  await until(async () => (await status()).state === 'disabled')
   await until(
     async () => (await f.invocations()).filter((args) => args.includes('off')).length === 2,
   )
   expect((await f.invocations()).filter((args) => args.includes('off'))).toHaveLength(2)
   await until(() => server.system.current().access.origins.length === 0)
-  await until(() =>
-    server.system
-      .current()
-      .extensionDiagnostics.some((message) =>
-        message.includes('project settings cannot enable remote access'),
-      ),
-  )
 })
 
 it('serves, verifies the owner login by default, and tears down only its port', async () => {

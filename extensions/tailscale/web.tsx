@@ -11,7 +11,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Switch } from '@/components/ui/switch'
 import {
   api,
   cn,
@@ -23,7 +22,6 @@ import {
   useSystem,
 } from '@/sdk'
 import { encode } from 'uqr'
-import { SetExtensionAction } from '../onboarding/ui.tsx'
 import { RetryAction, StatusAction } from './refs.ts'
 import type { Status } from './refs.ts'
 type Problem = Exclude<Status['state'], 'disabled' | 'starting' | 'ready'>
@@ -212,44 +210,6 @@ function Trouble({ state, hint }: { state: Problem; hint?: string }) {
   )
 }
 
-/** Exposure is a machine owner's choice, so this writes only `~/.ultimate/settings.json`, never a project's. */
-function TurnOn() {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string>()
-  const turnOn = async () => {
-    setBusy(true)
-    setError(undefined)
-    try {
-      await api.action(SetExtensionAction, {
-        name: 'tailscale',
-        enabled: true,
-        scope: 'user',
-      })
-    } catch (failure) {
-      setError(errorMessage(failure))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <>
-      <label className="mt-2.5 flex items-center gap-3">
-        <span className="min-w-0 flex-1 text-[12.5px] text-foreground/90">
-          Reach this Ultimate from your devices
-        </span>
-        <Switch busy={busy} checked={busy} onCheckedChange={(next) => next && void turnOn()} />
-      </label>
-      <p className="mt-1 truncate font-mono text-[10.5px] text-muted-foreground/70">
-        saved in ~/.ultimate/settings.json
-      </p>
-      <p className="mt-2 text-[12px] leading-snug text-muted-foreground">
-        For every project; projects cannot turn it on.
-      </p>
-      {error && <p className="mt-2 font-mono text-[11px] leading-snug text-error">{error}</p>}
-    </>
-  )
-}
-
 /** Runs the start again, as after fixing what a problem names, then reads the status it reached. */
 function CheckAgain({ onChecked }: { onChecked: () => Promise<unknown> }) {
   const [busy, setBusy] = useState(false)
@@ -294,7 +254,7 @@ const quiet = (label: string) => (
   </span>
 )
 
-/** Everything about the tailnet in one place: the address to scan, or what to fix, or the switch to turn it on. */
+/** Everything about the tailnet in one place: the address to scan, or what to fix. */
 function Details({ status }: { status: ReturnType<typeof useStatus> }) {
   const { data, error, refetch } = status
   const state = data?.state
@@ -323,9 +283,8 @@ function Details({ status }: { status: ReturnType<typeof useStatus> }) {
         </p>
       )}
       {state === 'ready' && data?.url && <Ready allow={data.allow} url={data.url} />}
-      {state === 'disabled' && <TurnOn />}
       {state && state in problems && <Trouble hint={data?.hint} state={state as Problem} />}
-      {(state === 'disabled' || (state && state in problems)) && <CheckAgain onChecked={refetch} />}
+      {state && state in problems && <CheckAgain onChecked={refetch} />}
     </section>
   )
 }

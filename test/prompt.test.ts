@@ -59,8 +59,9 @@ it('renders only enabled guidance, lists off building blocks, and adds self guid
     await until(() => !!server.host.registry.snapshot().extension('self'))
     const withSelf = await render()
     expect(withSelf.self).toBeDefined()
-    // Every built-in is on, so nothing is left to list.
-    expect(withSelf.building_blocks).toBeUndefined()
+    // Only the default-off built-ins are left to list.
+    expect(withSelf.building_blocks).not.toContain('- self:')
+    expect(withSelf.building_blocks).toContain('- sounds:')
 
     const checkout = join(home, 'isolated-work')
     await mkdir(checkout)

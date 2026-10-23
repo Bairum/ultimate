@@ -123,17 +123,10 @@ export default function tailscale(host: ExtensionHost) {
   async function start() {
     if (ownedPort !== undefined || closed) return
     try {
-      const settings = await readJson<{
-        extensions?: { disable?: string[] }
-        tailscale?: { allow?: string[] }
-      }>(userSettingsPath(host.userHome), {})
-      if (settings.extensions?.disable?.includes('tailscale')) {
-        fail(
-          'disabled',
-          '~/.ultimate/settings.json disables tailscale; project settings cannot enable remote access.',
-        )
-        return
-      }
+      const settings = await readJson<{ tailscale?: { allow?: string[] } }>(
+        userSettingsPath(host.userHome),
+        {},
+      )
       set({ state: 'starting', allow: [] })
       let output: string
       try {
