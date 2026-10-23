@@ -62,7 +62,7 @@ export const ProjectChip = forwardRef<
     system && !system.persistence.path.startsWith(`${system.machine.home}/.ultimate/projects/`)
   const body = (
     <>
-      {preview && <span className="text-muted-foreground">preview ·</span>}
+      {preview && <span className="text-muted-foreground max-md:hidden">preview ·</span>}
       <span className="truncate">{name}</span>
       {children}
       {menu && <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />}
