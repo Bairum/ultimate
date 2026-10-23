@@ -56,8 +56,11 @@ type Pending = {
   /** The process that was serving when the switch began; another one serving means the switch happened. */
   pid?: number
   since: number
-  /** System info when the stream dropped: the same process answering again with fresh info rolled the switch back. */
-  dropped?: object
+  /**
+   * The activation error the process reported when the stream dropped. A rolled-back restart reopens the same process
+   * with a new one (`reacquire`); a plain reconnect while the switch is still prepared does not change it.
+   */
+  dropped?: { error?: string }
   /** The restart failed after its approval and the same process serves again. */
   failed?: true
 }
@@ -143,13 +146,14 @@ export function SwitchVeil() {
   }, [sessions, sleep, pid])
   useEffect(() => {
     if (!pending || pid === undefined || pending.pid === undefined || pending.failed) return
+    const error = system?.process.activationError
     if (connection.status !== 'open') {
-      if (!pending.dropped) setPending({ ...pending, dropped: system ?? {} })
+      if (!pending.dropped) setPending({ ...pending, dropped: { error } })
       return
     }
     if (pid === pending.pid) {
-      // Reconnected to the same process with fresh system info: the supervisor rolled the restart back.
-      if (pending.dropped && system && system !== pending.dropped)
+      // The same process reports a new activation error: the supervisor rolled the restart back to it.
+      if (pending.dropped && error !== undefined && error !== pending.dropped.error)
         setPending({ ...pending, failed: true })
       return
     }
