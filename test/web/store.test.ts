@@ -253,6 +253,25 @@ describe('web replica store', () => {
     store.stop()
   })
 
+  it('keeps the last six views shown and forgets the rest', async () => {
+    const { store, latest } = setup()
+    latest().open()
+    for (let id = 2; id <= 8; id++) {
+      store.show(id)
+      await tick()
+      latest().open()
+      latest().send('view', view([user(id, `c${id}`)], {}, id))
+    }
+    // Seven shown after the root: the oldest, 2, is gone; 3 is still at hand.
+    store.show(2)
+    expect(store.getState().view).toBeUndefined()
+    expect(store.getState().restored).toBe(false)
+    store.show(3)
+    expect(store.getState().restored).toBe(true)
+    expect(store.getState().view?.conversation.id).toBe(3)
+    store.stop()
+  })
+
   it('refreshes models after (re)starts and keeps notices', async () => {
     const { store, latest, fetch } = setup()
     const source = latest()

@@ -200,17 +200,10 @@
   .dark .shiki span[style*='--shiki-dark'] {
     color: var(--shiki-dark) !important;
   }
-  /* Experiment toggle `slow`: the view-transition crossfade four times longer, like every other duration. */
-  html[data-slow]::view-transition-group(*) {
-    animation-duration: 1s;
-  }
   @media (prefers-reduced-motion: reduce) {
     *,
     ::before,
-    ::after,
-    ::view-transition-group(*),
-    ::view-transition-old(*),
-    ::view-transition-new(*) {
+    ::after {
       animation: none !important;
       transition: none !important;
     }

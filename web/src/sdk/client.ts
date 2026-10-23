@@ -1,7 +1,5 @@
 import { ActionError, actionMessage, createApi } from './api.ts'
 import { createRegistry } from './registry.ts'
-import { flushSync } from 'react-dom'
-import { experiment } from './experiment.ts'
 import { createStore } from './store.ts'
 import { createUiState } from './ui-state.ts'
 
@@ -28,7 +26,6 @@ export const store = createStore({
   ui: {
     theme: localStorage.getItem('ultimate.theme') === 'light' ? 'light' : 'dark',
   },
-  keep: experiment.cache() ? 6 : 0,
   onFallback: () => {
     replaceSelection = true
     uiState.delete('shell.conversation')
@@ -95,13 +92,6 @@ export function replaceNextSelection() {
   replaceSelection = true
 }
 // The stream follows `shell.conversation`, whichever tab or action set it.
-/**
- * Experiment toggle: `?switch=vt` crossfades the whole page from one conversation to the next with a view transition
- * (250 ms, the browser's own), so the sidebar, header and transcript change together instead of piecewise.
- */
-const switchStyle = () => experiment.switch()
-/** The conversation a view transition is about to show; a second call for it while it captures starts no other. */
-let transitioning: number | undefined
 function followSelection() {
   if (!initialized) return
   const value = uiState.get('shell.conversation')
@@ -110,28 +100,8 @@ function followSelection() {
     selected = id
     if (id !== undefined) writeConversation(id, replaceSelection)
   }
+  store.show(id)
   replaceSelection = false
-  document.documentElement.toggleAttribute('data-slow', experiment.slow() > 1)
-  if (
-    switchStyle() !== 'vt' ||
-    id === store.getState().requested ||
-    matchMedia('(prefers-reduced-motion: reduce)').matches
-  ) {
-    store.show(id)
-    return
-  }
-  if (id === transitioning) return
-  transitioning = id
-  const transition = document.startViewTransition(() => flushSync(() => store.show(id)))
-  transition.finished.then(
-    () => {
-      transitioning = undefined
-    },
-    () => {
-      // Skipped by a newer transition or a hidden page: the DOM changed all the same.
-      transitioning = undefined
-    },
-  )
 }
 uiState.subscribe(followSelection)
 addEventListener('popstate', () => {

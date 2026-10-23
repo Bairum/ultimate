@@ -3,8 +3,6 @@
  * positions) in `sessionStorage`, `index.html` paints that before any module loads, and it fades out once the app has
  * rendered again (`rendered()`). A core swap, a Vite full reload or F5 so never flash an empty window or the splash.
  */
-import { experiment } from './experiment.ts'
-
 const key = 'ultimate.resume'
 /** The view `index.html` painted from the previous page, until released. */
 const shown = document.getElementById('resume')
@@ -89,10 +87,7 @@ function uncover() {
   if (document.hidden) shown.remove()
   else
     void shown
-      .animate([{ opacity: 1 }, { opacity: 0 }], {
-        duration: 200 * experiment.slow(),
-        easing: 'ease-out',
-      })
+      .animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: 'ease-out' })
       // Cancellation also ends the cover; do not leave its rejected finished promise floating.
       .finished.then(
         () => shown.remove(),

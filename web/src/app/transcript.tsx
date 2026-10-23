@@ -51,7 +51,6 @@ import {
   useUltimate,
 } from '../sdk/hooks.ts'
 import { entryRenderers, messageItems, toolLine } from '../sdk/registry.ts'
-import { experiment } from '../sdk/experiment.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary, Provided, Slot } from './boundary.tsx'
 import { ParkedRuns, RunStart } from '../sdk/types.ts'
@@ -81,41 +80,6 @@ import { callsStart, indexTools, partialOf, slotsOf, toolCallView } from './mode
 import type { ToolResult } from './model.ts'
 import { ToolCallBlock } from './tool-call.tsx'
 import { TranscriptSkeleton } from './transcript-skeleton.tsx'
-
-/**
- * How rows of a freshly loaded conversation come in. Experiment toggle: `?reveal=fade` (the default), `blur` (what it
- * was), or `none`.
- */
-const revealStyles: Record<
-  string,
-  { frames: Keyframe[]; duration: number; stagger: number } | undefined
-> = {
-  fade: {
-    frames: [{ opacity: 0 }, { opacity: 1 }],
-    duration: 260,
-    stagger: 14,
-  },
-  blur: {
-    frames: [
-      { opacity: 0, filter: 'blur(4px)' },
-      { opacity: 1, filter: 'none' },
-    ],
-    duration: 450,
-    stagger: 30,
-  },
-  none: undefined,
-}
-
-/** Which experiment toggles the page runs with, so a preview URL visibly took. */
-function ExperimentBadge() {
-  const active = experiment.active()
-  if (!active.length) return null
-  return (
-    <div className="pointer-events-none fixed top-14 right-4 z-50 rounded-md border border-border bg-muted/90 px-2 py-1 font-mono text-[11px] text-muted-foreground">
-      experiment · {active.join(' · ')}
-    </div>
-  )
-}
 
 /** The shown conversation; `dock` fits it into a narrow side region. */
 export function Transcript({ dock }: { dock?: boolean }) {
@@ -154,14 +118,11 @@ export function Transcript({ dock }: { dock?: boolean }) {
   }, [loading, placeholder])
   // Rows on screen come in from the bottom up when a conversation first loads: not when there are none, when a resumed
   // reload already shows them, or when this tab showed them before (`restored`), which opens as it was.
-  // Opacity (and blur) only: a moving row would suspend the browser's scroll anchoring while older rows render above.
+  // Opacity only: a moving row would suspend the browser's scroll anchoring while older rows render above.
   const restored = useStore((state) => state.restored)
   const reveal = useEffectEvent((scroll: HTMLElement, content: HTMLElement) => {
     if (!messages || restored || covered()) return
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) return
-    const style = revealStyles[experiment.reveal()]
-    if (!style) return
-    const slow = experiment.slow()
     // Rows settle shorter as they finish rendering, pulling rows from above into view: animate a screen of those too.
     const view = scroll.getBoundingClientRect()
     const rows = [...content.children].filter((row) => {
@@ -169,9 +130,9 @@ export function Transcript({ dock }: { dock?: boolean }) {
       return box.height > 0 && box.bottom > view.top - view.height && box.top < view.bottom
     })
     rows.toReversed().forEach((row, index) =>
-      row.animate(style.frames, {
-        delay: index * style.stagger * slow,
-        duration: style.duration * slow,
+      row.animate([{ opacity: 0 }, { opacity: 1 }], {
+        delay: index * 14,
+        duration: 260,
         easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
         fill: 'backwards',
       }),
@@ -218,7 +179,6 @@ export function Transcript({ dock }: { dock?: boolean }) {
         <ConversationScrollButton />
       </Conversation>
       {placeholder && <TranscriptSkeleton dock={dock} ref={skeleton} />}
-      <ExperimentBadge />
     </div>
   )
 }
