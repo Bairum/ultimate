@@ -196,7 +196,7 @@ it('carries the seed into a fresh chapter once, including user memory and its pa
     new AbortController().signal,
   )
   f.scripts([
-    { id: 'A1', name: 'Watch it', ask: 'Watch the build', enabled: true },
+    { id: 'A1', name: 'Watch it', ask: 'Watch the build', prompt: 'Summarise', enabled: true },
     { id: 'build-watch', scope: 'project', name: 'Project watch', ask: 'Watch CI', enabled: true },
     { id: 'A2', name: 'Stopped', ask: 'Ignore', enabled: false },
   ])
@@ -239,7 +239,10 @@ it('carries the seed into a fresh chapter once, including user memory and its pa
     { text: 'Keep this', owner: 'ultimate' },
     { text: 'Open question (the-beginning#100): Choose 100?', owner: 'user' },
     { text: 'Open question (the-beginning#103): Question 103', owner: 'user' },
-    { text: 'Recreate script A1 (Watch it): Watch the build', owner: 'ultimate' },
+    {
+      text: 'Recreate script A1 (Watch it): Watch the build · prompt: Summarise',
+      owner: 'ultimate',
+    },
   ])
   expect(after.todos.next).toBe(5)
   expect(after.seed.applied).toBeGreaterThan(0)
@@ -277,13 +280,29 @@ it('carries the seed into a fresh chapter once, including user memory and its pa
   expect(
     Object.values((await contents()).automations.automations).map((item) => item.name),
   ).toEqual(['Daily'])
+  // A rediscovered project script with the schedule's name never stands in for its lost create.
+  await f.harness.commit(async (tx) => {
+    const records = (await tx.doc(Automations)).automations
+    delete records.A1
+    ;(await tx.doc(SeedState, ROOT_CONVERSATION_ID)).automations = []
+  }, context)
+  f.scripts([{ id: 'daily', scope: 'project', name: 'Daily', ask: 'Watch', enabled: true }])
+  await applySeed(f.host)
+  expect(
+    Object.values((await contents()).automations.automations).map((item) => [
+      item.name,
+      item.schedule?.kind,
+    ]),
+  ).toEqual([['Daily', 'every']])
+  f.scripts([])
+  const settled = await contents()
   await f.close()
   await f.open()
   const again = await contents()
   expect(again.memory).toEqual(after.memory)
   expect(again.todos).toEqual(after.todos)
   expect(again.seed).toEqual(after.seed)
-  expect(again.automations).toEqual(after.automations)
+  expect(again.automations).toEqual(settled.automations)
   expect(await chapterEntries()).toEqual([entry])
 })
 

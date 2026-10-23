@@ -448,7 +448,8 @@ function AutomationRow({
             script
             <ChevronRightIcon className="size-3" />
           </Button>
-        ) : (
+        ) : null}
+        {(!script || automation.prompt || automation.runs.length > 0) && (
           <Button
             aria-expanded={expanded}
             className="h-6 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
@@ -577,7 +578,9 @@ function AutomationRow({
         </div>
       )}
       <ErrorLine error={error} />
-      {expanded && !script && <Runs now={now} runs={automation.runs} />}
+      {expanded && (!script || automation.prompt || automation.runs.length > 0) && (
+        <Runs now={now} runs={automation.runs} />
+      )}
     </li>
   )
 }

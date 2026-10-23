@@ -391,8 +391,8 @@ export function AutomationForm({
   const script = draft.trigger === 'script'
   const schedule = scheduleOf(draft)
   const prompt = draft.prompt.trim()
-  // A script needs something to do on a fire: wake this conversation, run a prompt, or both. An edit keeps its subscribers.
-  const acts = script ? !!automation || draft.wake || !!prompt : !!prompt
+  // A fire needs something to do: wake a conversation, run a prompt, or both. An edit keeps its subscribers.
+  const acts = !!prompt || (automation ? automation.subscribers.length > 0 : script && draft.wake)
   const ready =
     draft.name.trim() && (script ? draft.ask.trim() : schedule !== undefined) && acts && !saving
   const save = async () => {
@@ -406,7 +406,9 @@ export function AutomationForm({
         ? await api.action(UpdateAction, {
             id: automation.id,
             ...fields,
-            ...(script && !prompt ? {} : { agent: draft.agent }),
+            // An empty prompt removes the run action the automation had.
+            ...(!prompt && automation.prompt ? { prompt: '' } : {}),
+            ...(prompt ? { agent: draft.agent } : {}),
           })
         : await api.action(CreateAction, {
             ...fields,

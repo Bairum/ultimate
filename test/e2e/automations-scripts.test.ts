@@ -220,6 +220,30 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
   await until(async () => !!(await get(restart.id)).script!.exitedAt)
   expect(await get(restart.id)).toMatchObject({ enabled: false, script: { state: 'stopped' } })
   expect(await entries(restart.script!.conversationId, 'automations.failed')).toHaveLength(0)
+  // A changed ask stops the running script and sends the watcher back to writing, as at creation.
+  await invoke('resume', { id: restart.id })
+  const watching = (await get(restart.id)).script!.pid!
+  const rewritten = (await invoke('update', {
+    id: restart.id,
+    ask: 'Survive a server reopen, then fire',
+  })) as Automation
+  expect(rewritten.script).toMatchObject({
+    state: 'writing',
+    ask: 'Survive a server reopen, then fire',
+  })
+  await until(() => {
+    try {
+      process.kill(watching, 0)
+      return false
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true
+      throw error
+    }
+  })
+  await until(
+    async () => (await entries(restart.script!.conversationId, 'automations.writing')).length === 2,
+  )
+  expect((await get(restart.id)).script!.state).toBe('writing')
   await script(
     restart.id,
     'if [ -e "$AUTOMATION_STATE/ready" ]; then echo FIRE resumed; else touch "$AUTOMATION_STATE/ready"; echo ready-for-reopen; sleep 60; fi',
@@ -585,9 +609,10 @@ it.each(['pause', 'delete'])(
     expect(() => process.kill(-pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
     await expect(readFile(join(folder(sub.id), 'pid'))).rejects.toMatchObject({ code: 'ENOENT' })
     const saved = (await app.harness.snapshot(Automations, context))!.automations[sub.id]
+    // A fired one-shot stays done: pausing its lingering process is not a stop.
     const stopped = expect.objectContaining({
       enabled: false,
-      script: expect.objectContaining({ state: 'stopped', exitedAt: expect.any(Number) }),
+      script: expect.objectContaining({ state: 'done', exitedAt: expect.any(Number) }),
     })
     expect(saved).toEqual(action === 'delete' ? undefined : stopped)
     expect(saved?.script?.pid).toBeUndefined()

@@ -23,7 +23,16 @@ export type Seed = {
     model?: { provider: string; modelId: string }
     thinking?: ModelThinkingLevel
   }[]
-  scripts: { id: string; scope?: 'project'; name: string; ask: string }[]
+  scripts: {
+    id: string
+    scope?: 'project'
+    name: string
+    ask: string
+    prompt?: string
+    agent?: string
+    model?: { provider: string; modelId: string }
+    thinking?: ModelThinkingLevel
+  }[]
   counts: {
     memories: number
     todos: number

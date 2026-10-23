@@ -139,8 +139,9 @@ export function lookOf(automation: Automation, now: number): Look {
   if (state === 'failed' || state === 'investigating' || state === 'writing') return state
   const last = automation.runs.at(-1)?.status
   if (last === 'running') return 'working'
-  // A failed run of a paused automation was already dealt with by pausing it.
-  if (last === 'failed' && automation.enabled) return 'failed'
+  // A failed run of a paused automation was already dealt with by pausing it; a fired one-shot script is disabled by
+  // its fire, not by anyone, so its failed run still needs attention.
+  if (last === 'failed' && (automation.enabled || state === 'done')) return 'failed'
   if (state === 'running') return 'watching'
   if (state === 'done') return 'done'
   if (automation.enabled) return 'scheduled'

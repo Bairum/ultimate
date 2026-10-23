@@ -96,11 +96,15 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
     }
     const watchers = automations
       .filter((item) => item.enabled && item.script)
-      .map(({ id, scope, name, script }) => ({
+      .map(({ id, scope, name, script, prompt, agent, model, thinking }) => ({
         id,
         ...(scope ? { scope } : {}),
         name,
         ask: script!.ask,
+        ...(prompt ? { prompt } : {}),
+        ...(agent ? { agent } : {}),
+        ...(model ? { model } : {}),
+        ...(thinking ? { thinking } : {}),
       }))
     // Materialize document overlays before the transaction releases them.
     return JSON.parse(
@@ -167,9 +171,9 @@ export async function applySeed(host: ExtensionHost) {
         // Project manifests are rediscovered by automations onOpen; user scripts need recreating.
         ...seed.scripts
           .filter((item) => item.scope !== 'project')
-          .map(({ id, name, ask }) => ({
+          .map(({ id, name, ask, prompt, agent }) => ({
             owner: 'ultimate' as const,
-            text: `Recreate script ${id} (${name}): ${ask}`,
+            text: `Recreate script ${id} (${name}): ${ask}${prompt ? ` · prompt: ${prompt}${agent ? ` (agent ${agent})` : ''}` : ''}`,
           })),
         ...seed.automations
           .filter((item) => !item.prompt)
@@ -209,8 +213,12 @@ export async function applySeed(host: ExtensionHost) {
       await host.invoke('automations', 'describe', { schedule: automation.schedule }, signal)
     } else {
       // Names are unique in a seed and the destination starts empty: a matching name is a create whose receipt was lost.
-      const current = (await host.invoke('automations', 'list', null, signal)) as { name: string }[]
-      if (!current.some((item) => item.name === automation.name))
+      // A rediscovered project script may share the name: only a schedule counts as the lost create.
+      const current = (await host.invoke('automations', 'list', null, signal)) as {
+        name: string
+        schedule?: unknown
+      }[]
+      if (!current.some((item) => item.schedule && item.name === automation.name))
         await host.invoke('automations', 'create', automation, signal)
     }
     await harness.commit(async (tx) => {

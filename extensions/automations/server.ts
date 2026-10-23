@@ -115,7 +115,7 @@ function backend(host: ExtensionHost) {
         throw new Error("Choose this project's local setup before creating project automations")
       const slug =
         args.slug ??
-        (args.name ?? required(args.ask, 'ask'))
+        required(args.name, 'name')
           .toLowerCase()
           .replace(/[^a-z0-9]+/g, '-')
           .replace(/^[^a-z]+|-+$/g, '')
@@ -126,7 +126,7 @@ function backend(host: ExtensionHost) {
           'slug must match ^[a-z][a-z0-9-]*$ (at most 63 characters) and not be an object key',
         )
       const committed: Manifest = {
-        name: args.name?.trim() ?? required(args.ask, 'ask').slice(0, 80),
+        name: required(args.name, 'name'),
         ask: required(args.ask, 'ask'),
         once: args.once ?? true,
         ...(args.secrets?.length ? { secrets: args.secrets } : {}),
@@ -236,7 +236,7 @@ function backend(host: ExtensionHost) {
       )
         throw new Error(`Automation ${prepared.slug} already exists; pass another slug`)
       const id = prepared.slug ?? `A${state.next++}`
-      const name = args.name?.trim() ?? required(args.ask, 'ask').slice(0, 80)
+      const name = required(args.name, 'name')
       // A concurrent list may already have discovered the manifest written in prepare: adopt its agent.
       const conversationId =
         (prepared.slug && state.automations[prepared.slug]?.script?.conversationId) ||
@@ -253,7 +253,7 @@ function backend(host: ExtensionHost) {
       const sub: Automation = {
         id,
         ...(prepared.slug ? { scope: 'project' as const } : {}),
-        name: args.name?.trim() ?? required(args.ask, 'ask').slice(0, 80),
+        name,
         enabled: true,
         script: {
           ask: required(args.ask, 'ask'),
@@ -303,7 +303,7 @@ function backend(host: ExtensionHost) {
     } else if (args.action === 'pause' || args.action === 'delete' || args.action === 'escalate') {
       sub.enabled = false
       if (args.action === 'escalate') sub.script!.state = 'failed'
-      else sub.script!.state = 'stopped'
+      else if (sub.script!.state !== 'done') sub.script!.state = 'stopped'
       const pid = sub.script!.pid
       if (args.action === 'escalate') {
         sub.script!.error = required(args.reason, 'reason')
@@ -357,7 +357,9 @@ function backend(host: ExtensionHost) {
           throw new Error(`Unknown subscriber #${id}`)
     }
     if (args.name !== undefined) required(args.name, 'name')
-    if (args.prompt !== undefined) required(args.prompt, 'prompt')
+    // An empty prompt on update removes the run action; create needs a real one.
+    if (args.prompt !== undefined && (args.action === 'create' || args.prompt !== ''))
+      required(args.prompt, 'prompt')
     if (args.once !== undefined && typeof args.once !== 'boolean')
       throw new Error('once must be boolean')
     if (
@@ -435,15 +437,22 @@ function backend(host: ExtensionHost) {
       throw new Error('This one-shot time has passed; update the time first')
     const abort = a.scheduler
     const oldSchedule = a.schedule && { ...a.schedule }
+    const oldAsk = a.script?.ask
     delete a.scheduler
     if (args.action !== 'update') delete a.nextAt
     if (args.action === 'delete') {
       delete state.automations[id]
       return { result: { id }, ...(abort ? { abort } : {}) }
     }
+    let effect: Effect | undefined
     if (args.action === 'create' || args.action === 'update') {
       if (args.name !== undefined) a.name = required(args.name, 'name')
-      if (args.prompt !== undefined) a.prompt = required(args.prompt, 'prompt')
+      if (args.prompt !== undefined) {
+        if (args.prompt) a.prompt = required(args.prompt, 'prompt')
+        else delete a.prompt
+      }
+      if (!a.prompt && !a.subscribers.length)
+        throw new Error('At least one of prompt or subscribers is required')
       if (args.schedule !== undefined) a.schedule = parseSchedule(args.schedule)
       if (a.script) {
         if (args.ask !== undefined) a.script.ask = required(args.ask, 'ask')
@@ -456,10 +465,21 @@ function backend(host: ExtensionHost) {
       }
       if (args.model !== undefined) a.model = args.model
       if (args.thinking !== undefined) a.thinking = args.thinking
+      if (a.script && a.script.ask !== oldAsk) {
+        // The running script watches the old condition: stop it and have the watcher write run again, as at creation.
+        a.script.state = 'writing'
+        delete a.script.error
+        effect = {
+          id,
+          action: 'pause',
+          ...(a.script.pid ? { previousPid: a.script.pid } : {}),
+        }
+      }
     } else if (args.action === 'pause') a.enabled = false
     else if (args.action === 'resume') a.enabled = true
     else throw new Error(`Unknown action: ${args.action}`)
     a.updatedAt = Date.now()
+    if (effect) await deliver(tx, a, `update:${a.updatedAt}`, 'writing', a.script!.ask)
     if (!isDeepStrictEqual(a.schedule, oldSchedule)) delete a.nextAt
     if (a.enabled && a.schedule) {
       a.nextAt ??= nextAt(a.schedule, Date.now(), a.lastFireAt ?? Date.now())
@@ -473,7 +493,7 @@ function backend(host: ExtensionHost) {
         },
       )
     }
-    return { result: json(a), ...(abort ? { abort } : {}) }
+    return { result: json(a), ...(abort ? { abort } : {}), ...(effect ? { effect } : {}) }
   }
   async function apply(receipt: Partial<Change>) {
     if (receipt.abort) await host.harness().abortTask(receipt.abort, BACKGROUND_CONTEXT)

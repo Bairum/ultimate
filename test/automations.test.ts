@@ -375,6 +375,32 @@ it('validates one trigger, project script scope and action targets before creati
   expect(prompt.subscribers).toEqual([])
 })
 
+it('removes the prompt on an empty update only while subscribers remain', async () => {
+  const f = await fixture()
+  const caller = await f.opened.harness.createConversation(
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  const only = (await f.action('create', {
+    name: 'Prompt only',
+    prompt: 'Hello',
+    schedule: 'every 1d',
+  })) as Automation
+  await expect(f.action('update', { id: only.id, prompt: '' })).rejects.toThrow('At least one')
+  expect((await f.records())[0].prompt).toBe('Hello')
+  const both = (await f.action(
+    'create',
+    { name: 'Both', prompt: 'Hello', schedule: 'every 1d', subscribers: [caller.id] },
+    caller.id,
+  )) as Automation
+  const cleared = (await f.action('update', { id: both.id, prompt: '' })) as Automation
+  expect(cleared.prompt).toBeUndefined()
+  expect(cleared.subscribers).toEqual([caller.id])
+  await expect(
+    f.action('create', { name: 'Empty', prompt: '', schedule: 'every 1d' }),
+  ).rejects.toThrow('At least one')
+})
+
 it('preserves the next interval fire on rename, even when the same schedule is supplied', async () => {
   const f = await fixture()
   const a = (await f.action('create', {
