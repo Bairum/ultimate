@@ -138,9 +138,9 @@ stays docked on every surface, and the choice is durable: reloads, other tabs, a
 - "Use codemode to check which of your extensions failed to load" — one sandboxed script over its own runtime.
 - Change something in `server/` and ask it to `restart`: a new process boots and type-checks next to the old one, and the
   conversation carries on in the new generation. A failed boot rolls back.
-- Press `Ctrl+Alt+B` for the right panel: To-dos, Tasks, Activity, Agents, Documents (the plan, the codemode store,
-  and every other extension document), Info (workspace, model, build, machine, skills) and Extensions, each a tab;
-  Automations, Secrets and Claude Code open from ⌘K.
+- Press `Ctrl+Alt+B` for the right panel: To-dos, Tasks, Activity, Automations (schedules and watching scripts),
+  Agents, Documents (the plan, the codemode store, and every other extension document), Info (workspace, model,
+  build, machine, skills) and Extensions, each a tab; Secrets and Claude Code open from ⌘K.
 - Use the top-bar **@ultimate** button or first sidebar row to ask for work, explore an idea, or start an independent line of work. Its messages and questions appear in its transcript, with answer cards beneath questions; open questions also wait at the top of the right panel's To-dos tab, and the amber count next to the button opens it, until you answer or dismiss them.
 
 ## How it is put together
