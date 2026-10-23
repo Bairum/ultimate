@@ -12,5 +12,12 @@ as Messages deliveries already did. The document keeps a hash of each project co
 clone's `AGENTS.md`, `docs/*.md` and `agents/*.md`, and the note names the definition re-applied and the files changed
 since the last run ("Instructions changed: … · Docs changed: …"). Other agents keep the instructions they started with.
 
-The transcript shows every note as one quiet divider ("↻ Reloaded · build a → b" or "↻ Instructions changed · …"), its
-full text on hover.
+A build note also names what landed: the document keeps the clone's commit each run started on, and the first-parent
+commits since then, grouped by the branch that made them (a lander merge's `from #N`, else the `Ultimate-Conversation`
+trailer, a subagent under its owner), become "landed: <branch title> (#N), …". A commit made outside Ultimate is named
+by its subject; a reload without commits (a hand edit in the clone) names none.
+
+The transcript shows every note as one quiet divider: "↻ Reloaded · <branch> #N · <branch> #M · +K more" with links to
+the branches, else "↻ Reloaded · build a → b" or "↻ Instructions changed · …", its full text on hover. `self`'s
+hot-reload toast names the landing likewise ("Landed <branch>") when a `workspaces.landed` event comes within a minute
+of a hot update.

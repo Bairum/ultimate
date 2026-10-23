@@ -249,6 +249,10 @@ const hotFile = (path: string) => path.split('?')[0].split('/').slice(-2).join('
 /** How far apart a hot update and a landing may be to belong together: the lander fast-forwards, then records it. */
 const landingWindow = 60_000
 
+// This module re-run by a hot update counts as one, so a landing that replaced this file still names itself.
+const reloadedAt = import.meta.hot?.data.loaded ? Date.now() : 0
+if (import.meta.hot) import.meta.hot.data.loaded = true
+
 /**
  * A quiet toast above the bottom right of the status line when Vite applies a hot update without reloading the page:
  * the branches whose landing brought it, else the modules it re-ran (its accept boundaries, not necessarily the edited
@@ -259,7 +263,7 @@ function HotReloaded() {
   const [landings, setLandings] = useState<readonly LandedData[]>([])
   const { switchConversation } = useUltimate()
   const events = useEvents({ events: [SubmissionLanded], limit: 5 })
-  const lastHot = useRef(0)
+  const lastHot = useRef(reloadedAt)
   const seen = useRef<number | undefined>(undefined)
   const recent = useRef<{ at: number; landing: LandedData }[]>([])
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
