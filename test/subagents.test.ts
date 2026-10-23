@@ -553,7 +553,10 @@ describe('provider error recovery', () => {
       const f = await fixture(undefined, undefined, undefined, (transcript) =>
         transcript.messages.at(-1)?.role === 'user' &&
         transcript.messages.at(-1)?.content === 'one-way failure'
-          ? fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'not logged in' })
+          ? fauxAssistantMessage('', {
+              stopReason: 'error',
+              errorMessage: 'Our servers are currently overloaded. Please try again later.',
+            })
           : undefined,
       )
       await call(f.opened, { action: 'start', agent: 'scout', task: 'initial answer' })

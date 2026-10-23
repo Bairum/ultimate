@@ -39,7 +39,9 @@ The note's delivery decision is saved in the task input for replay.
 A one-way message or a reply from a conversation to the primary agent (@ultimate)
 is triaged, so pure status updates cost no turn. The log records `triage: { verdict, reason? }` on the message:
 
-- **act at once, no model:** a reply-enabled message; text whose last line is a question or numbered options; text
+- **act at once, no model:** a reply-enabled message; text whose last line is a question or numbered options (a
+  numbered list after a line ending in `:` counts only when that line names a decision, option or pick, or the message
+  has lettered options; otherwise it is plan steps); text
   longer than `TRIAGE_MAX` (24,000 characters), which is never cut for the model; a failed reply; a reply to the
   agent's own message that ended with a question or options (read from the task input, so the log's bound never
   drops it).
