@@ -48,7 +48,7 @@ export function MessageQuestions({
   )
 }
 
-function Card({
+export function Card({
   card,
   questions,
   keys,
