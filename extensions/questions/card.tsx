@@ -195,7 +195,7 @@ function Note({
   )
 }
 
-export function Card({
+function Card({
   card,
   questions,
   keys,
@@ -416,7 +416,7 @@ export function Card({
     return () => window.removeEventListener('keydown', key)
   })
 
-  // Nothing extracted to answer with buttons: a reply field for this message, and Dismiss.
+  // No questions to answer with buttons: a reply field for this message, and Dismiss.
   if (!questions.length)
     return (
       <form

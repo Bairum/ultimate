@@ -73,7 +73,7 @@ export type MessagesService = {
     signal?: AbortSignal,
   ): Promise<{ message: number; delivered: number }>
 }
-export { Asked, MessageSent, Triaged } from './refs.ts'
+export { MessageSent, Triaged } from './refs.ts'
 export type { Question } from './refs.ts'
 /** Messages between conversations; core, so `need` it. */
 export const MessagesApi = defineApi<MessagesService>()('messages')

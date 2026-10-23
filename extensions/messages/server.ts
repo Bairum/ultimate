@@ -38,7 +38,7 @@ import { LineageApi, Roots } from '../lineage/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
-import { Asked, Messages, MessagesApi, Gate, MessageSent, Triaged } from './api.ts'
+import { Messages, MessagesApi, Gate, MessageSent, Triaged } from './api.ts'
 import type { Message, Question } from './api.ts'
 import { checkQuestions, questionsParameter } from './questions.ts'
 import { callerOf } from './caller.ts'
@@ -951,8 +951,6 @@ async function send(
         length: input.dismiss ? 0 : input.text.length,
         ...device,
       })
-    if (to === 'user' && message.reply && from !== 'user')
-      await host.emit(tx, Asked, { message: message.id, from })
     if (to !== 'user')
       await tx.createTask(
         delivery(host),

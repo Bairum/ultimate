@@ -74,13 +74,12 @@ by the patched `beforeInput` hook in the input's commit: one user-role line list
 line and age. It renders nothing in the transcript. It is per input rather than a system-prompt section, so the
 prompt stays cached; nothing is added while nothing is open.
 
-Reply-expected agent messages to `user` also request question extraction in the append transaction through the
-optional questions service. The sender's outgoing `message` card in its transcript shows extracted decisions
-under the message body while it is open: Yes/No or choice buttons with a recommended marker, plus Something
-else. The user-only questions `answer` action posts
-a normal user reply with `re` and Q/A text, waking the sender. Its admission atomically checks that the
-original message is still open, preventing duplicate replies.
-One-way messages and user replies never request extraction; see [Questions](../questions/README.md).
+A reply-expected agent message to `user` may carry `questions` (the `message` tool's argument, checked in
+`questions.ts`; refused ones come back as the tool's error naming the question). The sender's outgoing `message` card
+in its transcript shows them under the message body while it is open, as the questions extension's answer card. Its
+user-only `answer` action posts a normal user reply with `re` and the answers in the message's numbering, waking the
+sender. Its admission atomically checks that the original message is still open, preventing duplicate replies. See
+[Questions](../questions/README.md).
 
 In the sender's transcript a `message` call renders as an outgoing card: recipient, one-way or expects reply, and
 the message's live state from the messages log (sending, delivered, awaiting reply, awaiting your reply, answered,
@@ -132,8 +131,8 @@ so nested codemode calls stay distinct.
 
 Ultimate answers the user's typed input directly in its conversation. To relay a branch result, decision or landing
 to the user, Ultimate sends one consolidated `message {to: 'user', text}` when the needed replies have arrived.
-It appears there as a bubble with an answer card for questions. Decisions use a reply-expected message, ending with
-a `Decisions:` block (see [Questions](../questions/README.md)); reports that need no answer use `reply: false`.
+It appears there as a bubble with an answer card for questions. Decisions use a reply-expected message with
+`questions` (see [Questions](../questions/README.md)); reports that need no answer use `reply: false`.
 
 ## Other projects' Ultimates
 
@@ -190,6 +189,7 @@ type Message = {
   answer?: EntryId
   error?: string
   remote?: { project: string; machine: string; key: string; id?: number } // the other Ultimate
+  questions?: Question[] // what a reply-expected message to the user asks (see Questions)
 }
 ```
 

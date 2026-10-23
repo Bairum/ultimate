@@ -1,5 +1,5 @@
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-import { apis, eventHost, temp } from './helpers.ts'
+import { apis, eventHost, temp, until } from './helpers.ts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
@@ -104,7 +104,17 @@ async function fixture() {
   hosts.push(opened)
   for (const fn of openers) await fn()
   const log = async () => (await opened.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context))!
-  const settled = () => events.settled()
+  // Settled: every event reacted to and every task done, deliveries included.
+  const settled = () =>
+    until(
+      async () =>
+        (await events.settled()) &&
+        (await opened.harness.commit(
+          async (tx) =>
+            (await tx.scanTasks({}, 1000)).items.every((task) => task.state.status === 'terminal'),
+          context,
+        )),
+    )
   const entries = async (id: ConversationId) =>
     (
       await opened.harness.commit((tx) => tx.scanEntries({ conversationId: id }, 1000), context)
@@ -129,14 +139,13 @@ async function fixture() {
   /** @ultimate's `message` call with `args`; the message it sent, or the tool's error. */
   const ask = async (id: ConversationId, args: Record<string, unknown>) => {
     await type(id, `SEND ${JSON.stringify({ to: 'user', ...args })}`)
+    await settled()
     const call = (await entries(id)).findLast((entry) => entry.kind === 'pi.tool-result')
-    const result = (
-      call?.model as { role: string; content: { isError?: boolean; text?: string }[] }[]
-    )
-      ?.at(-1)
-      ?.content.at(-1)
+    const result = call?.model?.[0] as unknown as
+      | { isError?: boolean; content: { text?: string }[] }
+      | undefined
     return {
-      error: result?.isError ? result.text : undefined,
+      error: result?.isError ? result.content.map((part) => part.text).join('') : undefined,
       message: (await log()).messages.findLast((m) => m.from === id && m.to === 'user'),
     }
   }
@@ -267,6 +276,7 @@ describe('questions on a message', () => {
       'Invalid answers',
     )
     await f.answer({ messageId: message!.id, answers: [], note: 'Later, after the demo.' })
+    await f.settled()
     expect((await f.log()).messages.find((m) => m.re === message!.id)?.text).toBe(
       'Later, after the demo.',
     )

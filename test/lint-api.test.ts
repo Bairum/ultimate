@@ -209,14 +209,13 @@ export const G = defineApi<S>()('echo.')`
 })
 
 it('keeps only the existing persisted event names for messages', () => {
-  const source = `export const A = defineEvent('board.asked')
-export const B = defineEvent('board.sent')
+  const source = `export const B = defineEvent('board.sent')
 export const C = defineEvent('board.triaged')
 export const D = defineEvent('board.new')`
   expect(lint('api-naming', 'extensions/messages/refs.ts', source)).toEqual([
     "Events of extensions/messages are named 'messages.<event>'.",
   ])
-  expect(lint('api-naming', 'extensions/echo/refs.ts', source)).toHaveLength(4)
+  expect(lint('api-naming', 'extensions/echo/refs.ts', source)).toHaveLength(3)
 })
 
 it("allows another extension's api.ts and type imports, and rejects its other runtime files", () => {

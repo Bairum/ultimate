@@ -1,8 +1,9 @@
 // Answers a three-question card in a real browser with only the keyboard: letter keys choose, ↑/↓ move between
-// questions, Enter sends; the reply reaches @ultimate in the message's own numbering.
+// questions, Enter sends; the reply reaches @ultimate in the message's own numbering, with the note field's text after it.
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
+import type { JsonValue } from '@earendil-works/chord'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { chromium } from 'playwright-core'
@@ -12,8 +13,36 @@ import { Messages } from '../../extensions/messages/api.ts'
 import { context } from '../../server/harness.ts'
 import { fauxServer, post, removeTemp, temp, until } from '../helpers.ts'
 
-const decisions =
-  "The preview is ready.\n\nDecisions:\n1. **Branch starts in the context:** (a) one-line intent plus breadcrumb; (b) drop them, rely on abstracts; (c) leave as is.\n2. **Boxer's copied `agents/ultimate.md`:** (a) assess a way to add tools without forking it; (b) leave it.\n3. **Land it:** (a) yes; (b) no, change something first.\n\nMy picks: 1a 2a 3a."
+const questions: JsonValue[] = [
+  {
+    text: 'Branch starts in the context',
+    kind: 'choice',
+    ref: '1',
+    options: [
+      { label: 'one-line intent plus breadcrumb', key: 'a', recommended: true },
+      { label: 'drop them, rely on abstracts', key: 'b' },
+      { label: 'leave as is', key: 'c' },
+    ],
+  },
+  {
+    text: "Boxer's copied agents/ultimate.md",
+    kind: 'choice',
+    ref: '2',
+    options: [
+      { label: 'assess a way to add tools without forking it', key: 'a', recommended: true },
+      { label: 'leave it', key: 'b' },
+    ],
+  },
+  {
+    text: 'Land it',
+    kind: 'choice',
+    ref: '3',
+    options: [
+      { label: 'yes', key: 'a', recommended: true },
+      { label: 'no, change something first', key: 'b' },
+    ],
+  },
+]
 
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
@@ -36,9 +65,12 @@ it('answers a decisions card with letters, arrows and Enter', async () => {
     server.host.faux!.appendResponses([route])
     const last = transcript.messages.at(-1)!
     return last.role === 'user' && last.content === 'ask'
-      ? fauxAssistantMessage([fauxToolCall('message', { to: 'user', text: decisions })], {
-          stopReason: 'toolUse',
-        })
+      ? fauxAssistantMessage(
+          [fauxToolCall('message', { to: 'user', text: 'The preview is ready.', questions })],
+          {
+            stopReason: 'toolUse',
+          },
+        )
       : fauxAssistantMessage('Noted.')
   }
   server.host.faux!.setResponses([route])
@@ -75,15 +107,19 @@ it('answers a decisions card with letters, arrows and Enter', async () => {
     expect.stringContaining('assess a way to add tools'),
     expect.stringContaining('no, change something first'),
   ])
-  // Enter moves on to the last question, then sends.
+  // `/` opens the note field without choosing anything; Enter there sends, past the undo window.
+  await page.keyboard.press('/')
+  await page.keyboard.type('Also rename the tab.')
+  await page.keyboard.press('Shift+Enter')
+  await page.keyboard.type('And soon.')
   await page.keyboard.press('Enter')
-  await page.keyboard.press('Enter')
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.press('Enter')
   const answer = async () =>
     (await log())?.messages.find((m) => m.re === asked.id && m.from === 'user')
   await until(async () => !!(await answer()))
   expect((await answer())!.text).toBe(
-    "1c. Branch starts in the context: leave as is\n\n2a. Boxer's copied agents/ultimate.md: assess a way to add tools without forking it\n\n3b. Land it: no, change something first",
+    "1c. Branch starts in the context: leave as is\n\n2a. Boxer's copied agents/ultimate.md: assess a way to add tools without forking it\n\n3b. Land it: no, change something first\n\nNote: Also rename the tab.\nAnd soon.",
   )
   await card.waitFor({ state: 'detached' })
   // @ultimate's turn on the answer must end first: an ask submitted while it runs steers into that turn, which

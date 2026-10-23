@@ -39,8 +39,8 @@ Each distinct `host.notice` message of a facet is also recorded as an `ultimate.
 Keep events few and small: they are history.
 
 The events today: `lineage.branched` and `lineage.rooted` (lineage has conversations mark the intent title as
-generated), `workspaces.landed` (lineage notes the submitter's tree root), `board.asked` (questions extracts the
-message's answer card) and `models.login-changed` (health resets the provider's record). Recorded for the history and
+generated), `workspaces.landed` (lineage notes the submitter's tree root) and `models.login-changed` (health resets
+the provider's record). Recorded for the history and
 the system stream: `ultimate.started` (storage opened: generation, build), `subagents.started` (a subagent,
 automation run, new standing agent or branch configured: agent, model, thinking, parent), `board.sent` (a message
 posted: ids, `reply`, `steer`, never the text), `workspaces.check` (each lander check run: command, result, ms),
@@ -91,7 +91,7 @@ extension depending on an optional one. The core layers, lowest first, each depe
 Where a lower extension needs something a higher one knows, it declares the contract and the higher one fills it:
 server extension points (`conversations.trees` and `conversations.release` from conversations, `workspaces.handoff`
 from workspaces), web points (`conversations.phase`, `conversations.task`, `conversations.unsummarized`,
-`messages.answers`, `lineage.empty-root`, `workspaces.review`), or durable events (`board.asked`,
+`messages.answers`, `lineage.empty-root`, `workspaces.review`), or durable events (`workspaces.landed`,
 `models.login-changed`). Optional extensions plug into the core the same way: phase, plan and questions provide
 points and react to events; the core never imports them. A web point is `definePoint` in the owner's `ui.tsx`,
 rendered with `<Provided>` and filled by `provides` in another facet (see

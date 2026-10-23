@@ -1,7 +1,7 @@
 import type { Question } from '../messages/refs.ts'
 
 /**
- * A choice on the card: an extracted option, Yes/No for a confirmation, a step of a scale, or the typed
+ * A choice on the card: a declared option, Yes/No for a confirmation, a step of a scale, or the typed
  * "Something else…".
  */
 export type Choice = {
