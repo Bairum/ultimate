@@ -99,6 +99,8 @@ async function fixture() {
     invoke,
     open,
     close,
+    /** What a facet reload does: onOpen again on the open harness. */
+    reopen: () => opener(),
     get harness() {
       return opened.harness
     },
@@ -361,6 +363,23 @@ it.each([true, false])(
     expect(lock.busy).toBe(false)
   },
 )
+
+it('keeps a running chapter change and its session when a facet reload runs onOpen again', async () => {
+  const f = await fixture()
+  const sleep = { chapter: 'next', phase: 'switching' as const, at: 1 }
+  await f.harness.commit(async (tx) => {
+    await startSession(tx, 1)
+    ;(await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions[0].sleep = sleep
+  }, context)
+  const lock = f.host.resource('dream.switching', () => ({ busy: false }))
+  lock.busy = true
+  // A reinstalled facet's onOpen on the same, still open harness.
+  await f.reopen()
+  expect(lock.busy).toBe(true)
+  expect(
+    (await f.harness.snapshot(Sessions, ROOT_CONVERSATION_ID, context))!.sessions[0].sleep,
+  ).toEqual(sleep)
+})
 
 it('rolls back the entire application when a required document is unavailable', async () => {
   const f = await fixture()

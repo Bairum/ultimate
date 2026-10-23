@@ -261,8 +261,12 @@ export function toolStats(database: string, enabled: readonly string[]): ToolSta
 const ultimateOf = async (tx: Tx) => (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
 
 /** Serialize chapter-changing user actions, including their asynchronous gate and backup. */
+/** The chapter-change lock, and the harness it was last settled for; kept across facet reloads. */
+const switching = (host: ExtensionHost) =>
+  host.resource('dream.switching', (): { busy: boolean; harness?: object } => ({ busy: false }))
+
 async function changing<T>(host: ExtensionHost, run: () => Promise<T>) {
-  const state = host.resource('dream.switching', () => ({ busy: false }))
+  const state = switching(host)
   if (state.busy) throw new Error('A chapter change is already running')
   state.busy = true
   try {
@@ -329,7 +333,13 @@ async function restartChapter(
  * came back here. The chapter-change lock of that failed attempt goes too: its promise never settles.
  */
 async function settleSleep(host: ExtensionHost) {
-  host.resource('dream.switching', () => ({ busy: false })).busy = false
+  // Only a harness that really opened again settles: a facet reload runs onOpen on the same harness while a chapter
+  // change may still be running, and that change keeps its lock.
+  const state = switching(host)
+  const harness = host.harness()
+  if (state.harness === harness) return
+  state.harness = harness
+  state.busy = false
   const { chapters } = await readChapters(host.home)
   await host.harness().commit(async (tx) => {
     for (const found of (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions) {
