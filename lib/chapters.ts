@@ -23,9 +23,13 @@ export interface Chapters {
   active: string
   chapters: Chapter[]
 }
-/** `<home>/pending-chapter.json`: the switch the next open finishes. */
+/**
+ * `<home>/pending-chapter.json`: the switch the next open finishes. `by` is the process that asked for it through a
+ * restart: when that same process opens storage again, the restart failed and it took the home back, so it stays.
+ */
 export interface PendingChapter {
   to: string
+  by?: number
 }
 
 /** A chapter name: 1–40 lowercase letters, digits and dashes, starting with a letter or digit. */
@@ -62,14 +66,17 @@ export async function activeChapter(home: string) {
  * Journal a switch to chapter `to`, new or existing; the next open of the home finishes it. Refuses while `to` has
  * work in flight, which would resume the moment it opens; the caller checks the active chapter's own work.
  */
-export async function requestChapter(home: string, to: string) {
+export async function requestChapter(home: string, to: string, by?: number) {
   const name = chapterName(to)
   const busy = inFlight(chapterFiles(home, name).database)
   if (busy.length)
     throw new Error(
       `Chapter ${name} has work in flight in ${busy.map((id) => `${name}#${id}`).join(', ')}; it resumes when that chapter opens, so finish or stop it there first`,
     )
-  await writeJson(join(home, PENDING_CHAPTER), { to: name } satisfies PendingChapter)
+  await writeJson(join(home, PENDING_CHAPTER), {
+    to: name,
+    ...(by === undefined ? {} : { by }),
+  } satisfies PendingChapter)
 }
 
 /** Conversations of `database` with a live foreground task: work that resumes when it opens. */
@@ -104,6 +111,11 @@ export async function finishChapterSwitch(
 ) {
   const pending = await readJson<PendingChapter | undefined>(join(home, PENDING_CHAPTER), undefined)
   if (!pending) return undefined
+  if (pending.by === process.pid) {
+    // The restart that was to finish it failed after its approval, and this process reopens the chapter it had.
+    await rm(join(home, PENDING_CHAPTER))
+    return undefined
+  }
   const to = chapterName(pending.to)
   const chapters = await readChapters(home)
   const target = chapterFiles(home, to)

@@ -196,10 +196,15 @@ export async function applySeed(host: ExtensionHost) {
   for (const automation of seed.automations) {
     const receipt = await harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context)
     if (receipt?.automations.includes(automation.name)) continue
-    // Names are unique in a seed and the destination starts empty. A matching name is a create whose receipt was lost.
-    const current = (await host.invoke('automations', 'list', null, signal)) as { name: string }[]
-    if (!current.some((item) => item.name === automation.name))
-      await host.invoke('automations', 'create', automation, signal)
+    if (seed.gate) {
+      // The gate's preview runs against the real project: it checks each schedule but creates nothing that could fire.
+      await host.invoke('automations', 'describe', { schedule: automation.schedule }, signal)
+    } else {
+      // Names are unique in a seed and the destination starts empty: a matching name is a create whose receipt was lost.
+      const current = (await host.invoke('automations', 'list', null, signal)) as { name: string }[]
+      if (!current.some((item) => item.name === automation.name))
+        await host.invoke('automations', 'create', automation, signal)
+    }
     await harness.commit(async (tx) => {
       const saved = await tx.doc(SeedState, ROOT_CONVERSATION_ID)
       if (!saved.automations.includes(automation.name)) saved.automations.push(automation.name)

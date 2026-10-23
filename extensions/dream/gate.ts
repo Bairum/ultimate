@@ -48,7 +48,7 @@ export async function gate(
   let instance: { id: string; url: string } | undefined
   const check = (name: string, ok: boolean, detail: string) => checks.push({ name, ok, detail })
   try {
-    await writeSeed(chapterFiles(home, chapter).dir, seed)
+    await writeSeed(chapterFiles(home, chapter).dir, { ...seed, gate: true })
     await requestChapter(home, chapter)
     instance = await instances.start({ home })
     check('boot', true, 'Instance API is ready')
@@ -57,7 +57,8 @@ export async function gate(
       postAction(target, 'codemode', 'read', { op: 'doc', args: [kind, 1] }) as Promise<T>
     const memory = await doc<{ memories: Record<string, MemoryItem> }>('lineage.memory')
     const todos = await doc<{ items: { done?: number }[] }>('todos')
-    const automations = (await postAction(target, 'automations', 'list', null)) as unknown[]
+    // The preview creates no automation that could fire against the real project; it checks each and records it.
+    const automations = (await doc<{ automations: string[] }>('dream.seed')).automations
     const standing = await doc<{ ultimate?: number }>('ultimate.standing-agents')
     const count = (name: string, actual: number, expected: number) =>
       check(name, actual === expected, `${actual} present; expected ${expected}`)

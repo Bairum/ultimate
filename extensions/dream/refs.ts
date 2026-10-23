@@ -28,7 +28,8 @@ export type Journal = { learned: string[]; text: string; chapter?: string; at: n
 export type GateResult = { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] }
 export type Sleep = {
   chapter: string
-  phase: 'seeding' | 'checking' | 'backing up' | 'switching' | 'failed'
+  /** `asleep`: the switch happened; this session's chapter is the one it left. */
+  phase: 'seeding' | 'checking' | 'backing up' | 'switching' | 'asleep' | 'failed'
   checks?: GateResult['checks']
   backup?: { id?: string; skipped?: string }
   error?: string

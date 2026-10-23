@@ -7,6 +7,8 @@ import type { Journal, Proposal } from './refs.ts'
 
 /** Everything a dream carries to a fresh chapter; no runtime ids for schedules or subscribers. */
 export type Seed = {
+  /** Written only by the gate: the preview checks automations' schedules instead of creating them. */
+  gate?: true
   from: { name: string; number: number }
   session: number
   journal: Journal & { proposals: Proposal[] }

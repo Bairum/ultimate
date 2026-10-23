@@ -280,14 +280,71 @@ async function idle(host: ExtensionHost, tx: Tx) {
     )
 }
 
-/** A successful restart never returns; any return or rejection leaves the current chapter active. */
-async function restartChapter(host: ExtensionHost, name: string): Promise<never> {
-  await requestChapter(host.home, name)
+/**
+ * The final cloud backup of the current chapter before a switch touches another store, or why there is none. A failed
+ * backup throws: no switch without it.
+ */
+async function finalBackup(host: ExtensionHost): Promise<NonNullable<Sleep['backup']>> {
+  const cloud = host.want(CloudApi)
+  const status = await cloud?.status()
+  if (status === 'on') return { id: (await cloud!.backup()).id }
+  return {
+    skipped:
+      status === undefined
+        ? 'Cloud extension is not enabled'
+        : status === 'off'
+          ? 'Cloud backups are off'
+          : 'Project has no GitHub origin; cloud backup is local-only',
+  }
+}
+
+/**
+ * Journal the switch and restart into it. A successful restart never returns; a refused one returns its reason, and
+ * the journal goes. Once the supervisor approves, nothing new starts here: the approval checks once more that nothing
+ * else is busy and holds the scheduler until the new core takes over. A restart that fails after its approval reopens
+ * this process, which drops its own journal (`by`) and settles the session (`settleSleep`).
+ */
+async function restartChapter(
+  host: ExtensionHost,
+  name: string,
+  before?: () => Promise<unknown>,
+): Promise<never> {
+  await requestChapter(host.home, name, process.pid)
   try {
-    throw new Error(await host.restart(async () => {}))
+    await before?.()
+    throw new Error(
+      await host.restart(async () => {
+        await host.harness().commit((tx) => idle(host, tx), context)
+        // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched Harness.hold() keeps the scheduler from starting tasks.
+        host.harness().hold()
+      }),
+    )
   } finally {
     await rm(join(host.home, PENDING_CHAPTER), { force: true })
   }
+}
+
+/**
+ * On open, a sleep left `switching` either switched (its chapter now exists) or failed after the restart's approval and
+ * came back here. The chapter-change lock of that failed attempt goes too: its promise never settles.
+ */
+async function settleSleep(host: ExtensionHost) {
+  host.resource('dream.switching', () => ({ busy: false })).busy = false
+  const { chapters } = await readChapters(host.home)
+  await host.harness().commit(async (tx) => {
+    for (const found of (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions) {
+      const sleep = found.sleep
+      if (sleep?.phase !== 'switching') continue
+      found.sleep = chapters.some((chapter) => chapter.name === sleep.chapter)
+        ? { ...sleep, phase: 'asleep', at: Date.now() }
+        : {
+            ...sleep,
+            phase: 'failed',
+            error: 'The restart into the new chapter failed',
+            at: Date.now(),
+          }
+    }
+  }, context)
 }
 
 export const actions = {
@@ -308,7 +365,8 @@ export const actions = {
       if (!chapters.chapters.some((item) => item.name === name))
         throw new Error(`Unknown chapter ${name}`)
       await host.harness().commit((tx) => idle(host, tx), context)
-      return restartChapter(host, name)
+      // Once the target is known to be free, the current chapter is backed up before the switch touches any store.
+      return restartChapter(host, name, () => finalBackup(host))
     }),
   ),
   asleep: implementAction(AsleepAction, async (args, { host }) =>
@@ -356,20 +414,7 @@ export const actions = {
             }),
           }
         await progress({ phase: 'backing up', checks: result.checks })
-        const cloud = host.want(CloudApi)
-        const status = await cloud?.status()
-        const backup =
-          status === 'on'
-            ? { id: (await cloud!.backup()).id }
-            : {
-                skipped:
-                  status === undefined
-                    ? 'Cloud extension is not enabled'
-                    : status === 'off'
-                      ? 'Cloud backups are off'
-                      : 'Project has no GitHub origin; cloud backup is local-only',
-              }
-        await progress({ backup })
+        await progress({ backup: await finalBackup(host) })
         // The gate and backup can take time; work started since admission must also finish before we switch.
         await host.harness().commit((tx) => idle(host, tx), context)
         await progress({ phase: 'switching' })
@@ -447,7 +492,10 @@ export const actions = {
 }
 
 export default function dream(host: ExtensionHost) {
-  host.onOpen(() => applySeed(host))
+  host.onOpen(async () => {
+    await settleSleep(host)
+    await applySeed(host)
+  })
   // Approved proposals are followed to landing: their branch's landing settles them.
   host.react('landed', [SubmissionLanded], (tx, { data }) =>
     landed(tx, data.conversationId, data.sha, Date.now()),
