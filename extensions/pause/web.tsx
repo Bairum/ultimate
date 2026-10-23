@@ -23,12 +23,18 @@ import { ConversationRef } from '../conversations/ui.tsx'
 import { lasted } from './lasted.ts'
 import { parkedConversations } from './parked.ts'
 import { PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
-import type { PauseNote, PauseState } from './refs.ts'
+import type { PauseNote, PauseState, RateLimit } from './refs.ts'
 
 const statusButton =
   '-mx-1 flex cursor-pointer items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent'
 
 const tasks = (count: number) => `${count} ${count === 1 ? 'task' : 'tasks'}`
+
+/** What the provider said: the upstream message a relay wraps (Claude Code's), a JSON body's message, or the error. */
+const said = (error: string) =>
+  /upstream said: (.+)\)$/s.exec(error)?.[1] ??
+  /"message"\s*:\s*"((?:[^"\\]|\\.)+)"/.exec(error)?.[1]?.replaceAll('\\"', '"') ??
+  error
 
 /** Whether the host is paused, live from the root's pause document. */
 const usePaused = () => useDocOf(1, PauseDoc)?.paused === true
@@ -90,12 +96,31 @@ function Popup({
 }) {
   const now = useNow(1000, state.paused)
   const pausing = state.paused && state.running.length > 0
+  const { limit } = state
   return (
     <>
       <div className="border-b border-border/70 px-3 py-2 text-[10.5px] tracking-wider text-muted-foreground uppercase">
-        Pause
+        {limit ? 'Rate limited' : 'Pause'}
       </div>
       <div className="space-y-2 px-3 py-2 text-[11.5px] leading-[1.55]">
+        {limit && (
+          <div className="space-y-1" data-pause-limit-detail>
+            <div>
+              <span className="text-warning">{limit.provider}</span> rate limited{' '}
+              <span className="text-muted-foreground">{limit.model}</span>
+              {state.since !== undefined && (
+                <span className="text-muted-foreground"> · {lasted(now - state.since)} ago</span>
+              )}
+            </div>
+            <div className="break-words text-muted-foreground" title={limit.error}>
+              “{said(limit.error)}”
+            </div>
+            <div className="text-muted-foreground">
+              No reset time given: nothing retries until Play. A model you switch meanwhile applies
+              on Play.
+            </div>
+          </div>
+        )}
         {!state.paused ? (
           <div className="text-muted-foreground">
             Pause stops new work: running tasks finish, nothing new starts, messages queue until
@@ -109,6 +134,11 @@ function Popup({
             </div>
             <Running state={state} />
           </>
+        ) : limit ? (
+          <div>
+            <span className="text-warning">Paused · safe</span>: held runs continue where they
+            stopped on Play.
+          </div>
         ) : (
           <div>
             <span className="text-warning">Paused · safe</span>: nothing runs.{' '}
@@ -169,6 +199,11 @@ function Item() {
             <>
               <HourglassIcon className="size-3" />
               Pausing…<span className="max-md:hidden"> {tasks(state.running.length)} running</span>
+            </>
+          ) : state.limit ? (
+            <>
+              <PauseIcon className="size-3" />
+              Rate limited<span className="max-md:hidden"> · {state.limit.provider}</span>
             </>
           ) : state.paused ? (
             <>
@@ -250,6 +285,81 @@ function Note({ entry }: { entry: EntryRecord }) {
   )
 }
 
+/** The card a rate limit leaves in @ultimate's transcript: who limited what, and Play while this pause holds. */
+function Limit({ entry }: { entry: EntryRecord }) {
+  const limit = (entry.data ?? {}) as Partial<RateLimit>
+  const doc = useDocOf(1, PauseDoc)
+  const holding = doc?.paused === true && doc.limit?.at === limit.at
+  const now = useNow(1000, holding)
+  const { switchConversation } = useUltimate()
+  const [busy, setBusy] = useState(false)
+  if (limit.error === undefined || limit.conversationId === undefined) return null
+  const conversationId = limit.conversationId
+  return (
+    <section
+      className="min-w-0 rounded-md border border-border border-l-2 border-l-warning/60 bg-muted/20"
+      data-pause-limit
+    >
+      <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+        <PauseIcon className="size-3.5 text-warning" />
+        <span className="text-foreground">{limit.provider}</span>
+        <span>rate limited · Ultimate paused</span>
+        <span className="ml-auto truncate">{limit.model}</span>
+      </header>
+      <div className="space-y-2 px-3 py-3 text-[13px] leading-relaxed">
+        <p className="whitespace-pre-wrap text-warning" title={limit.error}>
+          {said(limit.error)}
+        </p>
+        <p className="flex flex-wrap items-center gap-1 font-mono text-[11px] text-muted-foreground">
+          first hit in
+          <button
+            className="min-w-0 cursor-pointer text-foreground hover:underline"
+            onClick={() => switchConversation(conversationId)}
+            type="button"
+          >
+            <ConversationRef id={conversationId} />
+          </button>
+          · no reset time given
+        </p>
+        <p className="text-[12px] text-muted-foreground">
+          Nothing retries until you press Play; held runs then continue where they stopped. A model
+          you switch meanwhile applies on Play.
+        </p>
+      </div>
+      <footer className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+        {holding ? (
+          <>
+            <span>paused for {lasted(Math.max(0, now - (doc.since ?? now)))}</span>
+            <Button
+              className="h-7 font-sans text-[12px]"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true)
+                void api
+                  .action(PlayAction)
+                  .catch((error: unknown) =>
+                    store.notify({ level: 'error', message: errorMessage(error) }),
+                  )
+                  .finally(() => setBusy(false))
+              }}
+              size="sm"
+              variant="outline"
+            >
+              <PlayIcon className="size-3" />
+              Play
+            </Button>
+          </>
+        ) : (
+          <span className="flex items-center gap-1.5">
+            <PlayIcon className="size-3" />
+            continued after Play
+          </span>
+        )}
+      </footer>
+    </section>
+  )
+}
+
 const paused = () => getState().docsOf[1]?.[PauseDoc.kind]?.paused === true
 
 /** The conversations this pause parked, for the transcript and the lists of conversations. */
@@ -268,7 +378,7 @@ export default defineWebExtension({
     ],
     'composer.status': [Hint],
   },
-  entries: { 'pause.note': Note },
+  entries: { 'pause.note': Note, 'pause.limit': Limit },
   commands: [
     {
       id: 'pause.pause',

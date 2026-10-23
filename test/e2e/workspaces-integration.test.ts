@@ -1366,6 +1366,21 @@ it('leaves a landed branch open while it waits on a reply it asked for', async (
   expect(concluded).not.toHaveBeenCalled()
   expect(await concludedIds(f)).not.toContain(id)
 })
+it('leaves a landed branch open when its report run fails with a provider error', async () => {
+  const { f, id, concluded } = await concluding()
+  f.prepared.faux!.setResponses([
+    () =>
+      fauxAssistantMessage('', {
+        stopReason: 'error',
+        errorMessage: 'invalid_request_error: messages: text content blocks must be non-empty',
+      }),
+  ])
+  await f.service.submit(id, 'None', context)
+  // The conclude task finishes without concluding: the run that should have told @ultimate failed.
+  await until(async () => (await concludeTask(f, id))?.state.status === 'terminal')
+  expect(concluded).not.toHaveBeenCalled()
+  expect(await concludedIds(f)).not.toContain(id)
+})
 it('reports a landing with a deploy warning when the handoff itself fails', async () => {
   const f = await lander({ deploy: { agent: 'deploy-test', paths: ['cloud/'] } }, undefined, true)
   await mkdir(join(f.directory, '.ultimate/agents'), { recursive: true })
