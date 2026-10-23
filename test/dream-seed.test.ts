@@ -245,7 +245,14 @@ it('carries the seed into a fresh chapter once, including user memory and its pa
   }
   await until(async () => (await chapterEntries()).length === 1)
   const entry = (await chapterEntries())[0]
-  expect(entry.data).toEqual({ from: seed.from, number: 2, name: 'fresh-roots', session: 1 })
+  expect(entry.data).toEqual({
+    from: seed.from,
+    number: 2,
+    name: 'fresh-roots',
+    session: 1,
+    learned: seed.journal.learned,
+    carried: seed.counts,
+  })
   expect(JSON.stringify(entry.model)).toContain('the-beginning#123')
   for (const line of seed.journal.learned) expect(JSON.stringify(entry.model)).toContain(line)
   expect(JSON.stringify(entry.model)).toContain(

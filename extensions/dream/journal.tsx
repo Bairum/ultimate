@@ -8,6 +8,7 @@ import { api, cn, formatTime, useDocOf, useUltimate } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { MoonRow, Passes, passLabels } from './moon.tsx'
+import { FallAsleep } from './sleep.tsx'
 import { DreamDoc, EndAction } from './refs.ts'
 import type { Proposal, Session, SessionEntry } from './refs.ts'
 
@@ -95,6 +96,8 @@ export function JournalCard({ entry }: { entry: EntryRecord }) {
   const { session: id } = entry.data as SessionEntry
   const session = useSession(id)
   const journal = session?.journal
+  // Only the newest session falls asleep; an older one keeps the record of the sleep it took.
+  const newest = useDocOf(1, DreamDoc)?.sessions.at(-1)?.id === id
   return (
     <Card
       header={
@@ -119,6 +122,7 @@ export function JournalCard({ entry }: { entry: EntryRecord }) {
           <Text text={journal.text} />
           {session.proposals.length > 0 && <Proposals session={session} />}
           <Footer session={session} />
+          {(newest || session.sleep) && <FallAsleep session={session} />}
         </>
       )}
     </Card>
