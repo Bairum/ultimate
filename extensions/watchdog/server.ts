@@ -84,6 +84,27 @@ async function boundary(tx: Tx, task: Generation, next?: Generation) {
   return { upper, assistant }
 }
 
+/**
+ * What a failed run's error asks for: a broken login needs the user, so it reports at once with a hint to log in again;
+ * an incomplete Claude Code relay response (status 200 or unknown) is a dropped stream, so it retries like Pi's own
+ * retryable errors.
+ */
+export function diagnose(error: string, assistant?: AssistantMessage) {
+  if (/not logged in/i.test(error))
+    return { hint: 'Run `claude auth login` in a terminal', temporary: false }
+  const provider = /OAuth refresh failed for ([\w-]+)/i.exec(error)?.[1] ?? assistant?.provider
+  if (/OAuth refresh failed|invalid_grant/i.test(error))
+    return {
+      hint: `Log in to ${provider ?? 'the provider'} again: ⌘K → Log in to a provider`,
+      temporary: false,
+    }
+  return {
+    temporary:
+      /^Incomplete Claude Code upstream response \(status (200|unknown),/.test(error) ||
+      !!(assistant && isRetryableAssistantError(assistant)),
+  }
+}
+
 type Generation = TaskRecord<JsonValue, JsonValue, JsonValue>
 /** Live commits give us the exact settled inputs. On reopen, only model_error/no_model
  * submissions matter: their entries lie between consecutive failed-run boundaries.
@@ -248,9 +269,7 @@ export default function watchdog(host: ExtensionHost) {
         throw new Error('Watchdog needs @ultimate to report a failed run')
       if (task.state.status !== 'terminal' || task.state.outcome.status !== 'failed') return
       const error = task.state.outcome.error.message
-      const hint = /not logged in/i.test(error)
-        ? 'Run `claude auth login` in a terminal'
-        : undefined
+      const { hint, temporary } = diagnose(error, info.assistant)
       await tx.createTask(
         Watchdog,
         {
@@ -262,7 +281,7 @@ export default function watchdog(host: ExtensionHost) {
           step: info.step,
           ...(hint ? { hint } : {}),
           retried: runInputs.some((input) => input.requestId?.startsWith('watchdog-retry:')),
-          temporary: !!hint || !!(info.assistant && isRetryableAssistantError(info.assistant)),
+          temporary,
           until: (task.endedAt ?? Date.now()) + 60_000,
         },
         { conversationId: recipient, ownership: { kind: 'conversation' }, background: true },
