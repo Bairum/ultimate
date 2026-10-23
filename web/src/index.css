@@ -285,3 +285,65 @@
     @apply px-3 py-1.5 text-[13px];
   }
 }
+
+/*
+ * Conversation prose reads larger than the dense chrome around it: Inter at 15/24 with optical sizing and roomier
+ * spacing, across the full card width. Tool output keeps the dense `.markdown` above.
+ */
+[role='log'] .markdown:not(.group\/tool .markdown) {
+  font-size: 15px;
+  line-height: 1.6;
+  letter-spacing: -0.003em;
+  font-optical-sizing: auto;
+  font-feature-settings: normal;
+  & :is(p, ul, ol, blockquote) {
+    margin-block: 0.8em;
+  }
+  & [data-streamdown='list-item'] {
+    padding-block: 0.2em;
+  }
+  & :is(h1, h2, h3, h4, h5, h6) {
+    margin-top: 1.4em;
+    margin-bottom: 0.5em;
+    line-height: 1.35;
+    letter-spacing: -0.012em;
+  }
+  & h1 {
+    font-size: 1.27em;
+  }
+  & h2 {
+    font-size: 1.13em;
+  }
+  & :is(h3, h4, h5, h6) {
+    font-size: 1em;
+  }
+  & > :first-child {
+    margin-top: 0;
+  }
+  & > :last-child {
+    margin-bottom: 0;
+  }
+  & :is(code, pre) {
+    letter-spacing: 0;
+  }
+  & [data-streamdown='code-block-body'] {
+    font-size: 12.5px;
+  }
+  & :is([data-streamdown='table-header-cell'], [data-streamdown='table-cell']) {
+    font-size: 13.5px;
+    letter-spacing: 0;
+  }
+}
+
+/* Thinking stays a quieter aside, a step below the prose. */
+[role='log'] .group\/reasoning .markdown {
+  font-size: 13.5px;
+}
+
+/* The user's own turns read at the same size. */
+[role='log'] .is-user > div > p {
+  font-size: 15px;
+  line-height: 1.6;
+  letter-spacing: -0.003em;
+  font-feature-settings: normal;
+}
