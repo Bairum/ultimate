@@ -46,6 +46,7 @@ export type ExtensionHost = Pick<
   | 'models'
   | 'skills'
   | 'restart'
+  | 'chapter'
 > & {
   access: Pick<Access, 'allow'>
   notice(message: string): void
@@ -167,6 +168,9 @@ export async function loadExtensions(
     let sharedResource = false
     const facetHost = {
       ...extensionHost,
+      get chapter() {
+        return extensionHost.chapter
+      },
       provide: (serviceName, value) => {
         provided.get(facetHost)!.set(serviceName, value)
         if (facetHosts.get(name) === facetHost)
@@ -360,6 +364,9 @@ export async function loadExtensions(
     models: () => host.models(),
     skills: (cwd) => host.skills(cwd),
     restart: (approved) => host.restart(approved),
+    get chapter() {
+      return host.chapter
+    },
     harness: runtime.harness,
     system: runtime.system,
     conversations: runtime.conversations,

@@ -4,7 +4,6 @@
  * ones are followed until their branches land. Nothing here changes code, memory or storage by itself.
  */
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import {
@@ -365,7 +364,7 @@ export const actions = {
   ),
   stats: implementAction(StatsAction, (_args, { host }) =>
     toolStats(
-      join(host.home, 'trace.sqlite'),
+      host.chapter.trace,
       host
         .extensions()
         .filter((item) => item.enabled)

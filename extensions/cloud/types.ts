@@ -13,6 +13,8 @@ export interface CloudState {
   status: 'off' | 'local' | 'on'
   /** The project's name, the folder name the restore command takes. */
   name: string
+  /** The active chapter, whose own backup chain this is. */
+  chapter?: { name: string; number: number }
   machine?: string
   /** The backup this home last uploaded or restored from: the parent of its next backup. */
   lastBackup?: LastBackup

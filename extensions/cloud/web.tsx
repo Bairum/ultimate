@@ -237,13 +237,16 @@ function CloudStatus() {
       </span>
     )
   const uploading = !!state.backup
-  const label = uploading
+  const status = uploading
     ? 'backing up…'
     : state.conflict
       ? 'backup refused'
       : state.lastBackup
         ? `backed up ${since(state.lastBackup.at)}`
         : 'no backup yet'
+  // The first chapter's backups are the project's; later chapters name theirs.
+  const label =
+    state.chapter && state.chapter.number > 1 ? `${state.chapter.name} · ${status}` : status
   return (
     <Popover>
       <PopoverTrigger asChild>

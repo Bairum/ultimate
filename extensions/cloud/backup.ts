@@ -7,7 +7,7 @@ import { uploadSnapshot } from './snapshot.ts'
 import type { LastBackup } from './types.ts'
 
 /**
- * `<home>/cloud-backup.json`: the project key, `parent` (the snapshot this home last uploaded or restored from, which
+ * `cloud-backup.json` in the chapter's folder (the home for the first chapter): the chapter's key, `parent` (the snapshot this home last uploaded or restored from, which
  * the next backup builds on) and that backup's facts.
  */
 export interface BackupFile {
@@ -15,17 +15,24 @@ export interface BackupFile {
   parent: string
   last: LastBackup
 }
-export const backupPath = (home: string) => join(home, 'cloud-backup.json')
+export const backupPath = (dir: string) => join(dir, 'cloud-backup.json')
 
-/** This home's backup record for project `key`; undefined without one, or for another project. */
-export async function readBackup(home: string, key: string) {
+/**
+ * The backup key of a chapter: the project's key for the first chapter, `<key>@<chapter>` for the others, so each
+ * chapter keeps its own chain and retention in the Worker.
+ */
+export const chapterKey = (key: string, chapter: string, first: boolean) =>
+  first ? key : `${key}@${chapter}`
+
+/** The backup record in chapter folder `dir` for `key`; undefined without one, or for another key. */
+export async function readBackup(dir: string, key: string) {
   // An unreadable record counts as none: the next backup's parent check names what the cloud holds.
-  const file = await readJson<Partial<BackupFile> | undefined>(backupPath(home), undefined).catch(
+  const file = await readJson<Partial<BackupFile> | undefined>(backupPath(dir), undefined).catch(
     () => undefined,
   )
   return file?.key === key && file.parent && file.last ? (file as BackupFile) : undefined
 }
-export const writeBackup = (home: string, file: BackupFile) => writeJson(backupPath(home), file)
+export const writeBackup = (dir: string, file: BackupFile) => writeJson(backupPath(dir), file)
 
 /** The backup a forced one replaces, as the Worker's 409 names it. */
 export type Latest = Pick<LastBackup, 'id' | 'machine' | 'at'>
@@ -45,8 +52,10 @@ export interface BackupOptions {
   /** `ULTIMATE_CLOUD_SNAPSHOT_KEY`. */
   secret: string
   machine: string
+  /** The chapter's key (`chapterKey`). */
   key: string
-  home: string
+  /** The active chapter's folder: its `state.sqlite` and `cloud-backup.json`. */
+  dir: string
   projectRoot: string
   /** Replace the latest backup even when it is not this home's parent. */
   force?: boolean
@@ -57,7 +66,7 @@ export interface BackupOptions {
 }
 
 /**
- * Upload a snapshot of `<home>/state.sqlite` and the `ultimate/*` branches, then `POST /sync/backups/<p>/<id>` with the
+ * Upload a snapshot of the chapter's `state.sqlite` and the `ultimate/*` branches, then `POST /sync/backups/<p>/<id>` with the
  * parent from `cloud-backup.json`. On 200 the record names the new backup as parent; on 409 it stays and `Conflict`
  * carries the Worker's sentence. Uploaded chunks of a refused backup stay for the Worker's retention.
  *
@@ -66,14 +75,14 @@ export interface BackupOptions {
  * adopted as the parent, and the commit retried once on it.
  */
 export async function backUp(o: BackupOptions): Promise<LastBackup> {
-  const record = await readBackup(o.home, o.key)
+  const record = await readBackup(o.dir, o.key)
   const manifest = await uploadSnapshot({
     url: o.url,
     token: o.token,
     secret: o.secret,
     key: o.key,
     machine: o.machine,
-    database: join(o.home, 'state.sqlite'),
+    database: join(o.dir, 'state.sqlite'),
     repo: o.projectRoot,
     root: o.projectRoot,
     signal: o.signal,
@@ -115,7 +124,7 @@ export async function backUp(o: BackupOptions): Promise<LastBackup> {
     const { id, machine, at } = latest
     // A retry after the Worker registered this backup but failed to answer: the latest is ours.
     if (id === done.id) {
-      await writeBackup(o.home, { key: o.key, parent: done.id, last: done })
+      await writeBackup(o.dir, { key: o.key, parent: done.id, last: done })
       return done
     }
     // This machine's previous backup, registered on top of our parent though its answer was lost: build on it.
@@ -127,7 +136,7 @@ export async function backUp(o: BackupOptions): Promise<LastBackup> {
       typeof at === 'number'
     ) {
       parent = id
-      await writeBackup(o.home, {
+      await writeBackup(o.dir, {
         key: o.key,
         parent: id,
         last: { id, at, machine, bytes: latest.bytes ?? 0, uploaded: latest.uploaded ?? 0 },
@@ -144,7 +153,7 @@ export async function backUp(o: BackupOptions): Promise<LastBackup> {
   }
   if (!response.ok)
     throw new Error(`POST /sync/backups returned ${response.status}: ${await response.text()}`)
-  await writeBackup(o.home, { key: o.key, parent: done.id, last: done })
+  await writeBackup(o.dir, { key: o.key, parent: done.id, last: done })
   return done
 }
 

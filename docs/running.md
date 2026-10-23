@@ -27,7 +27,8 @@
 ## Starting fresh
 
 `pnpm reset [dir] [--dry-run] [--yes]` starts a project's Ultimate from an empty state. It deletes nothing: `state.sqlite`, `trace.sqlite`, parked `state.stale-*` databases (each with its
-`-wal`/`-shm`), `conversations.json`, `previews.json` and `supervisor.log` move to
+`-wal`/`-shm`), every later chapter (`chapters/`, `chapters.json`, `pending-chapter.json`), `conversations.json`,
+`previews.json` and `supervisor.log` move to
 `~/.ultimate/backups/reset-<time>/<home>/`, and it prints that folder and the `mv` that restores it.
 
 - Stop Ultimate first (`systemctl --user stop ultimate`); it refuses while the

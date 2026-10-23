@@ -10,7 +10,9 @@ import { backUp, backupPath, classify, Conflict, readBackup } from '../extension
 import { BackupEvent } from '../extensions/cloud/refs.ts'
 import { uploadSnapshot } from '../extensions/cloud/snapshot.ts'
 import { git } from '../lib/git.ts'
-import { prepareHarness } from '../server/harness.ts'
+import { chapterFiles, FIRST_CHAPTER, readChapters, requestChapter } from '../lib/chapters.ts'
+import { context, prepareHarness } from '../server/harness.ts'
+import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { acquireLock } from '../server/lock.ts'
 import { findProject, main, restore } from '../scripts/restore.ts'
 import { cloudStub } from './cloud-stub.ts'
@@ -23,11 +25,12 @@ const cloud = { url: 'ws://127.0.0.1:8787', token: 'dev', secret: 'snapshot secr
 beforeAll(() => vi.stubGlobal('fetch', stub.fetch))
 afterAll(() => vi.unstubAllGlobals())
 
-/** A project checkout named `app` and its home holding `notes` rows. */
+/** A project checkout named `app` and its home: a Pi store, as every backup is, holding `notes` rows. */
 async function machine(notes: string[]) {
   const projectRoot = join(await temp('ultimate-backup-project-'), 'app')
   await git(await temp(), 'init', '-q', '-b', 'main', projectRoot)
   const home = await temp('ultimate-backup-home-')
+  await (await openNodeSqliteStorage(join(home, 'state.sqlite'))).close(context)
   const db = new DatabaseSync(join(home, 'state.sqlite'))
   db.exec('CREATE TABLE notes (body TEXT)')
   for (const note of notes) db.prepare('INSERT INTO notes VALUES (?)').run(note)
@@ -49,7 +52,7 @@ const back = (
   at: { projectRoot: string; home: string },
   name: string,
   extra: { force?: boolean; tailnet?: string; key?: string; fetch?: typeof fetch } = {},
-) => backUp({ ...cloud, key, machine: name, ...at, ...extra })
+) => backUp({ ...cloud, key, machine: name, dir: at.home, projectRoot: at.projectRoot, ...extra })
 /** A project of its own for each test, so earlier backups never make its first one stale. */
 let projects = 0
 const own = () => `github.com/o/other-${++projects}`
@@ -117,7 +120,14 @@ it('takes a 409 naming this very backup as latest for success: a retried commit 
     await stub.fetch(input, init)
     return stub.fetch(input, init)
   }
-  const done = await backUp({ ...cloud, key: other, machine: 'desk', ...a, fetch: retried })
+  const done = await backUp({
+    ...cloud,
+    key: other,
+    machine: 'desk',
+    dir: a.home,
+    projectRoot: a.projectRoot,
+    fetch: retried,
+  })
   expect(stub.register.projects.find((project) => project.key === other)?.latest.id).toBe(done.id)
   expect(await readBackup(a.home, other)).toEqual({ key: other, parent: done.id, last: done })
 })
@@ -272,6 +282,25 @@ it('restores into a home: moves the old state aside, installs the backup and rec
   expect(await readBackup(target.home, other)).toEqual({ key: other, parent: done.id, last: done })
 })
 
+it('refuses to restore while a chapter switch is pending, and moves nothing', async () => {
+  const source = await machine(['a'])
+  const other = own()
+  const done = await back(source, 'desk', { key: other })
+  const target = await machine(['kept'])
+  await requestChapter(target.home, 'next')
+  await expect(
+    restore({
+      ...cloud,
+      key: other,
+      id: done.id,
+      home: target.home,
+      projectRoot: source.projectRoot,
+      backups: await temp(),
+    }),
+  ).rejects.toThrow('A chapter switch is pending')
+  expect(notes(target.home)).toEqual(['kept'])
+})
+
 it.each(['ultimate.lock', 'storage.lock'])(
   'refuses to restore while Ultimate holds the home’s %s, and moves nothing',
   async (name) => {
@@ -320,9 +349,11 @@ it('refuses a backup taken of a checkout at another path, before writing anythin
     `app was backed up from ${source.projectRoot}; restore it into a checkout at that path (paths in conversations and worktrees are absolute)`,
   )
   expect(notes(target.home)).toEqual(['mine'])
-  expect((await readdir(target.home)).filter((file) => !file.includes('.lock'))).toEqual([
-    'state.sqlite',
-  ])
+  expect(
+    (await readdir(target.home)).filter(
+      (file) => !file.includes('.lock') && !/-(wal|shm)$/.test(file),
+    ),
+  ).toEqual(['state.sqlite'])
 })
 
 /** A checkout of `project` with a commit, as `pnpm restore` needs to read its identity. */
@@ -360,6 +391,139 @@ async function cli(user: string, home: string, ...args: string[]) {
     vi.unstubAllEnvs()
   }
 }
+
+it('restores chapters by name, explicit key and snapshot, defaulting to the active chapter', async () => {
+  const worker = cloudStub()
+  vi.stubGlobal('fetch', worker.fetch)
+  try {
+    const other = own()
+    const source = await checkout(other)
+    const first = await back(source, 'desk', { key: other })
+    const chapter = 'fresh-roots'
+    const chapterKey = `${other}@${chapter}`
+    const chapterSource = await machine(['chapter notes'])
+    const next = await backUp({
+      ...cloud,
+      key: chapterKey,
+      machine: 'desk',
+      dir: chapterSource.home,
+      projectRoot: source.projectRoot,
+    })
+    const target = await machine(['keep first'])
+    const user = await temp()
+    const files = chapterFiles(target.home, chapter)
+    const printed = await cli(
+      user,
+      target.home,
+      'app',
+      '--chapter',
+      chapter,
+      '--dir',
+      source.projectRoot,
+      '--yes',
+    )
+    expect(printed).toContain(`Installed backup ${next.id}`)
+    expect(printed).toContain(files.database)
+    expect(notes(files.dir)).toEqual(['chapter notes'])
+    expect(notes(target.home)).toEqual(['keep first'])
+    expect(await readBackup(files.dir, chapterKey)).toEqual({
+      key: chapterKey,
+      parent: next.id,
+      last: next,
+    })
+    expect(await readChapters(target.home)).toMatchObject({
+      active: chapter,
+      chapters: [{ name: FIRST_CHAPTER }, { name: chapter }],
+    })
+    // No flag now selects the active chapter, including for a named snapshot.
+    expect(
+      await cli(user, target.home, '--snapshot', next.id, '--dir', source.projectRoot, '--yes'),
+    ).toContain(`Installed backup ${next.id}`)
+    expect(await readBackup(files.dir, chapterKey)).toMatchObject({
+      key: chapterKey,
+      parent: next.id,
+    })
+    expect(notes(target.home)).toEqual(['keep first'])
+    // Default register lookup also follows the active chapter.
+    expect(await cli(user, target.home, '--dir', source.projectRoot, '--yes')).toContain(
+      `Installed backup ${next.id}`,
+    )
+    // Restoring the first chapter leaves later chapters where they are, and makes the first active.
+    expect(
+      await cli(
+        user,
+        target.home,
+        '--chapter',
+        FIRST_CHAPTER,
+        '--dir',
+        source.projectRoot,
+        '--yes',
+      ),
+    ).toContain(`Installed backup ${first.id}`)
+    expect(notes(files.dir)).toEqual(['chapter notes'])
+    expect((await readChapters(target.home)).active).toBe(FIRST_CHAPTER)
+    // A chapter key by itself derives the chapter, even in a fresh home.
+    const fresh = await temp()
+    expect(await cli(user, fresh, chapterKey, '--dir', source.projectRoot, '--yes')).toContain(
+      `Installed backup ${next.id}`,
+    )
+    expect(notes(chapterFiles(fresh, chapter).dir)).toEqual(['chapter notes'])
+    expect((await readChapters(fresh)).active).toBe(chapter)
+    // The shared project name is not ambiguous: the first chapter still selects the bare key.
+    const firstHome = await temp()
+    expect(await cli(user, firstHome, 'app', '--dir', source.projectRoot, '--yes')).toContain(
+      `Installed backup ${first.id}`,
+    )
+    expect(await readBackup(firstHome, other)).toEqual({
+      key: other,
+      parent: first.id,
+      last: first,
+    })
+    expect(existsSync(join(firstHome, 'chapters.json'))).toBe(false)
+  } finally {
+    vi.stubGlobal('fetch', stub.fetch)
+  }
+})
+
+it('finishes an interrupted chapter restore under the home journal without moving other chapters', async () => {
+  const other = own()
+  const source = await checkout(other)
+  const nextKey = `${other}@next`
+  const snapshot = await back(source, 'desk', { key: nextKey })
+  const target = await machine(['first stays'])
+  const files = chapterFiles(target.home, 'next')
+  await mkdir(files.dir, { recursive: true })
+  await writeFile(join(files.dir, 'state.sqlite'), 'old chapter')
+  const backups = await temp()
+  const now = new Date('2026-10-21T11:00:00Z')
+  const backup = join(backups, 'restore-2026-10-21T11-00-00-000Z', 'next')
+  await mkdir(backup, { recursive: true })
+  await writeFile(join(backup, 'state.sqlite'), 'blocks move')
+  await expect(
+    restore({
+      ...cloud,
+      key: nextKey,
+      id: snapshot.id,
+      home: target.home,
+      chapter: 'next',
+      projectRoot: source.projectRoot,
+      backups,
+      now,
+    }),
+  ).rejects.toThrow('refusing to overwrite the backup')
+  expect(JSON.parse(await readFile(join(target.home, 'reset.json'), 'utf8'))).toMatchObject({
+    chapter: 'next',
+  })
+  expect((await readChapters(target.home)).active).toBe(FIRST_CHAPTER)
+  await rm(join(backup, 'state.sqlite'))
+  // A rerun needs neither the chapter flag nor the cloud register.
+  await cli(await temp(), target.home, '--dir', source.projectRoot, '--yes')
+  expect(notes(target.home)).toEqual(['first stays'])
+  expect(notes(files.dir)).toEqual([])
+  expect((await readChapters(target.home)).active).toBe('next')
+  expect(await readBackup(files.dir, nextKey)).toMatchObject({ key: nextKey, parent: snapshot.id })
+  expect(existsSync(join(target.home, 'reset.json'))).toBe(false)
+})
 
 it('restores a named snapshot the register never listed, and warns that it lacks its path', async () => {
   const other = own()
