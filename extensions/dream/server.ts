@@ -6,13 +6,8 @@
 import { existsSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import {
-  defineDoc,
-  defineExtension,
-  defineTask,
-  ROOT_CONVERSATION_ID,
-} from '@earendil-works/pi-durable'
-import type { ConversationId, Tx } from '@earendil-works/pi-durable'
+import { defineDoc, defineExtension, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { Tx } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Standing, SubagentsApi } from '../subagents/api.ts'
@@ -28,6 +23,8 @@ import {
 } from './refs.ts'
 import type { PassState, Proposal, Session, ToolStats } from './refs.ts'
 import { busyElsewhere, PASSES } from './types.ts'
+import { deliver, deliverTask } from './delivery.ts'
+import { applySeed, SeedState } from './seed.ts'
 import type { PassName } from './types.ts'
 
 export const Sessions = defineDoc<{ next: number; sessions: Session[] }>({
@@ -39,7 +36,7 @@ export const Sessions = defineDoc<{ next: number; sessions: Session[] }>({
   fork: 'initial',
   initial: () => ({ next: 1, sessions: [] }),
 })
-export const docs = [Sessions]
+export const docs = [Sessions, SeedState]
 export const userActions = ['start', 'end']
 
 const LEARNED_LINES = 3
@@ -245,65 +242,6 @@ export function toolStats(database: string, enabled: readonly string[]): ToolSta
   }
 }
 
-type Delivery = {
-  to: number
-  type: 'input' | 'write'
-  session: number
-  kind: 'dream.started' | 'dream.journal'
-  content: string
-}
-
-/**
- * Submits one dream entry to @ultimate; created in the commit that records it, so a crash cannot lose it. The host's
- * conversation handle, not the task runtime's, admits a passive write.
- */
-const deliverTask = (host: Pick<ExtensionHost, 'harness'>) =>
-  defineTask<Delivery, { phase: 'submit' }, null>({
-    name: 'dream.deliver',
-    version: 1,
-    initial: () => ({ phase: 'submit' }),
-    phases: {
-      submit: async (task, runtime, ctx) => {
-        const { to, type, session, kind, content } = task.input
-        const requestId = `${kind}:${session}`
-        const data = { session }
-        const target = (await host.harness().conversation(to as ConversationId, ctx))!
-        if (type === 'input')
-          await target.submit(
-            { type: 'input', requestId, content, entry: { kind, data }, whenBusy: 'followUp' },
-            ctx,
-          )
-        else
-          await target.submit(
-            {
-              type: 'write',
-              requestId,
-              entry: { kind, data, model: [{ role: 'user', content, timestamp: Date.now() }] },
-            },
-            ctx,
-          )
-        await runtime.commit(
-          () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
-          ctx,
-        )
-      },
-    },
-    abort: (_task, runtime, ctx) =>
-      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
-  })
-
-const deliver = (
-  host: Pick<ExtensionHost, 'harness'>,
-  tx: Tx,
-  to: number,
-  delivery: Omit<Delivery, 'to'>,
-) =>
-  tx.createTask(
-    deliverTask(host),
-    { to, ...delivery },
-    { conversationId: to as ConversationId, ownership: { kind: 'conversation' }, background: true },
-  )
-
 const ultimateOf = async (tx: Tx) => (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
 
 export const actions = {
@@ -374,6 +312,7 @@ export const actions = {
 }
 
 export default function dream(host: ExtensionHost) {
+  host.onOpen(() => applySeed(host))
   // Approved proposals are followed to landing: their branch's landing settles them.
   host.react('landed', [SubmissionLanded], (tx, { data }) =>
     landed(tx, data.conversationId, data.sha, Date.now()),

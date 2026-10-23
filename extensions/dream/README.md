@@ -22,8 +22,8 @@ for @ultimate and the dream branch, is in [DREAM.md](DREAM.md); this file is the
 6. Reactor `dream/landed` marks approved proposals `landed` with the sha when their branch's submission lands. A
    session ends once its journal is filed and no proposal is open or approved; the user can `end` it earlier.
 
-Nothing here edits code, memory or storage. Phase 2 (a new chapter: a fresh database seeded from the session) is
-being built; its storage layer is below.
+The session flow does not edit code, memory or storage. Chapter storage and seed application are below; the gate
+and user action that start a new chapter are not wired yet.
 
 ## Chapters
 
@@ -44,6 +44,27 @@ made active again (`lib/chapters.ts`).
 - Cloud backups are per chapter: the first chapter keeps the project key and `<home>/cloud-backup.json`; a later one
   backs up as `<key>@<name>` with its record in its own folder. The status line names a later chapter.
 - `pnpm reset` moves every chapter aside with the first.
+
+### Seed
+
+`seed.ts` builds a JSON manifest with `buildSeed(host, session)` and atomically writes it with
+`writeSeed(chapterDir, seed)` to `seed.json`. It carries the journal and proposal statuses, every root's memories
+(slug collisions keep the newest `updated`, including `about-*`), open to-dos and questions, and enabled automations
+and subscriptions, with counts for the later gate. Conversation docs are read through the host's exported tokens;
+the session-scoped automation and subscription ledgers are read through their list actions.
+
+On open, dream applies a chapter's seed in one commit with `dream.seed.applied` on conversation 1: memories keep
+their sources, to-dos get fresh ids, questions become user-owned to-dos naming the old chapter and message id, and a
+`dream.deliver` task writes one passive `dream.chapter` entry into @ultimate's conversation. Its text names the old
+chapter's read APIs, the three learned lines and the carried counts. Reopening does not reapply those documents.
+
+Automations are recreated through their create action after the commit, with per-name receipts in `dream.seed`.
+A seed carries at most one enabled automation per name: building rejects duplicates. The destination starts empty;
+before each create, dream checks existing names, so a create committed just before a crash is not repeated when its
+receipt is missing. Seed application must finish before users create unrelated automations with matching names.
+Project subscriptions are rediscovered, stopped, from trusted `.ultimate/subscriptions` manifests by subscriptions'
+own open hook. There is no user-subscription adoption path: each enabled user subscription becomes an
+@ultimate-owned “Recreate subscription” to-do rather than a fabricated ledger record.
 
 ## Actions
 

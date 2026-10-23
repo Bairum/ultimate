@@ -158,6 +158,7 @@ it('delivers the start and the journal to @ultimate once, through a real harness
     conversations: () => [],
     need: () => ({ standing: async () => ultimate }),
     react: () => {},
+    onOpen: () => {},
   } as unknown as ExtensionHost
   registry.install(dream(host))
   const call = { host } as ActionContext
