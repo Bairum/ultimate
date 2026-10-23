@@ -37,30 +37,26 @@ import {
   SummaryDiscarded,
 } from '../extensions/conversations/summary.ts'
 
-it.each(['agent', 'lander'])(
-  'never schedules summaries for a standing %s',
-  async (label) => {
-    const f = await launch(false, true)
-    await f.server.harness.commit(async (tx) => {
-      Object.assign(await tx.doc(Metadata, f.server.root.id), { label, title: `@${label}` })
-    }, context)
-    f.server.host.faux!.setResponses([fauxAssistantMessage('A finished answer.')])
-    const input = await f.server.root.submit({ type: 'input', content: 'Continue.' }, context)
-    expect((await input.wait(context)).status).toBe('done')
-    await f.spawn((await f.entries()).findLast((entry) => entry.kind === 'pi.assistant')!.id)
-    const tasks = await f.server.harness.commit(
-      (tx) =>
-        tx.scanTasks({ conversationId: f.server.root.id, kind: 'conversations.summary' }, 100),
-      context,
-    )
-    expect(tasks.items).toEqual([])
-    expect(await f.read()).toBeUndefined()
-    expect(f.generated).not.toHaveBeenCalled()
-    expect(await f.server.harness.snapshot(Metadata, f.server.root.id, context)).toMatchObject({
-      title: `@${label}`,
-    })
-  },
-)
+it.each(['agent', 'lander'])('never schedules summaries for a standing %s', async (label) => {
+  const f = await launch(false, true)
+  await f.server.harness.commit(async (tx) => {
+    Object.assign(await tx.doc(Metadata, f.server.root.id), { label, title: `@${label}` })
+  }, context)
+  f.server.host.faux!.setResponses([fauxAssistantMessage('A finished answer.')])
+  const input = await f.server.root.submit({ type: 'input', content: 'Continue.' }, context)
+  expect((await input.wait(context)).status).toBe('done')
+  await f.spawn((await f.entries()).findLast((entry) => entry.kind === 'pi.assistant')!.id)
+  const tasks = await f.server.harness.commit(
+    (tx) => tx.scanTasks({ conversationId: f.server.root.id, kind: 'conversations.summary' }, 100),
+    context,
+  )
+  expect(tasks.items).toEqual([])
+  expect(await f.read()).toBeUndefined()
+  expect(f.generated).not.toHaveBeenCalled()
+  expect(await f.server.harness.snapshot(Metadata, f.server.root.id, context)).toMatchObject({
+    title: `@${label}`,
+  })
+})
 
 it.each(['agent', 'lander'])(
   'ends a summary admitted before the conversation became a standing %s without writing it',
@@ -446,50 +442,47 @@ it.each([false, true])(
   },
 )
 
-it.each(['rename', 'newer'] as const)(
-  'protects a held spawn result after %s',
-  async (change) => {
-    const fixture = await launch()
-    await fixture.exchange()
-    const answer = (await fixture.read())!.lastAnswer!
-    let release!: () => void
-    const gate = new Promise<void>((done) => {
-      release = done
-    })
-    fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
-      await held(gate, signal)
-      return {
-        activity: 'Must not publish',
-        title: 'Old spawn title',
-        summary: 'Old spawn summary',
-      }
-    })
-    await fixture.spawn(answer)
-    await until(() => fixture.generated.mock.calls.length === 2)
-    try {
-      if (change === 'rename') await fixture.action('rename', 'Manual title')
-      else await fixture.exchange()
-    } finally {
-      release()
+it.each(['rename', 'newer'] as const)('protects a held spawn result after %s', async (change) => {
+  const fixture = await launch()
+  await fixture.exchange()
+  const answer = (await fixture.read())!.lastAnswer!
+  let release!: () => void
+  const gate = new Promise<void>((done) => {
+    release = done
+  })
+  fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
+    await held(gate, signal)
+    return {
+      activity: 'Must not publish',
+      title: 'Old spawn title',
+      summary: 'Old spawn summary',
     }
-    await until(
-      async () => Object.values((await fixture.server.harness.inspect(context)).tasks).length === 0,
-    )
-    await until(async () => !(await fixture.read())?.pending)
-    const state = await fixture.read()
-    const title = (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))
-      ?.title
-    expect(state?.activity).not.toBe('Must not publish')
-    expect(title).toBe(change === 'rename' ? 'Manual title' : 'Improve the conversation sidebar')
-    expect(state?.summary).toBe(
-      {
-        rename: 'Old spawn summary',
-        newer: 'Added concise summaries to the sidebar.',
-      }[change],
-    )
-    expect(state?.exchanges).toBe({ rename: 1, newer: 2 }[change])
-  },
-)
+  })
+  await fixture.spawn(answer)
+  await until(() => fixture.generated.mock.calls.length === 2)
+  try {
+    if (change === 'rename') await fixture.action('rename', 'Manual title')
+    else await fixture.exchange()
+  } finally {
+    release()
+  }
+  await until(
+    async () => Object.values((await fixture.server.harness.inspect(context)).tasks).length === 0,
+  )
+  await until(async () => !(await fixture.read())?.pending)
+  const state = await fixture.read()
+  const title = (await fixture.server.harness.snapshot(Metadata, fixture.server.root.id, context))
+    ?.title
+  expect(state?.activity).not.toBe('Must not publish')
+  expect(title).toBe(change === 'rename' ? 'Manual title' : 'Improve the conversation sidebar')
+  expect(state?.summary).toBe(
+    {
+      rename: 'Old spawn summary',
+      newer: 'Added concise summaries to the sidebar.',
+    }[change],
+  )
+  expect(state?.exchanges).toBe({ rename: 1, newer: 2 }[change])
+})
 
 it.each([2, 3])(
   'settles a held spawn superseded by reply-only exchange %s without changing cadence',
@@ -1289,70 +1282,67 @@ it('publishes initial intent while the main model request is blocked, once acros
   expect(await intents()).toEqual(entries)
 })
 
-it.each(['newer', 'spawn'] as const)(
-  'rejects a held initial intent after %s',
-  async (change) => {
-    const fixture = await launch(false, true)
-    let release!: () => void
-    const gate = new Promise<void>((done) => {
-      release = done
-    })
-    fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
-      await held(gate, signal)
-      return { activity: '', title: 'Stale intent', summary: 'Stale intent' }
-    })
-    // Hold the main request too, so the intent starts before any reply can supersede it.
-    let resume!: () => void
-    const main = new Promise<void>((done) => {
-      resume = done
-    })
-    fixture.server.host.registry.install(
-      defineExtension({
-        ...fixture.server.host.registry.snapshot().extension('conversations')!,
-        hooks: [
-          ...fixture.server.host.registry.snapshot().extension('conversations')!.hooks!,
-          hook(GenerationTask, {
-            beforeRequest: async (_request, _api, caller) => {
-              await awaitWithContext(main, caller)
-              return undefined
-            },
-          }),
-        ],
-      }),
-    )
-    fixture.server.host.faux!.setResponses([fauxAssistantMessage('Final reply.')])
-    await fixture.server.root.submit({ type: 'input', content: 'Initial goal' }, context)
-    await until(() => fixture.generated.mock.calls.length === 1)
-    try {
-      if (change === 'newer')
-        await fixture.server.root.submit({ type: 'input', content: 'Changed goal' }, context)
-      else if (change === 'spawn') {
-        const entries = await fixture.server.root.context(context)
-        await fixture.spawn(entries.entries.find((entry) => entry.kind === 'pi.user')!.id)
-      }
-      release()
-      await until(
-        async () =>
-          Object.values((await fixture.server.harness.inspect(context)).tasks).filter(
-            (task) => task.record.kind === 'conversations.summary',
-          ).length === 0,
-      )
-      const entries = await fixture.server.harness.commit(
-        (tx) => tx.scanEntries({ conversationId: fixture.server.root.id }, 100),
-        context,
-      )
-      expect(entries.items.filter((entry) => IntentSummarized.is(entry))).toEqual([])
-      expect((await fixture.read())?.summary).not.toBe('Stale intent')
-    } finally {
-      release()
-      resume()
-      fixture.server.host.faux!.appendResponses([
-        fauxAssistantMessage('Final reply.'),
-        fauxAssistantMessage('Final reply.'),
-      ])
+it.each(['newer', 'spawn'] as const)('rejects a held initial intent after %s', async (change) => {
+  const fixture = await launch(false, true)
+  let release!: () => void
+  const gate = new Promise<void>((done) => {
+    release = done
+  })
+  fixture.generated.mockImplementationOnce(async (_models, _input, signal) => {
+    await held(gate, signal)
+    return { activity: '', title: 'Stale intent', summary: 'Stale intent' }
+  })
+  // Hold the main request too, so the intent starts before any reply can supersede it.
+  let resume!: () => void
+  const main = new Promise<void>((done) => {
+    resume = done
+  })
+  fixture.server.host.registry.install(
+    defineExtension({
+      ...fixture.server.host.registry.snapshot().extension('conversations')!,
+      hooks: [
+        ...fixture.server.host.registry.snapshot().extension('conversations')!.hooks!,
+        hook(GenerationTask, {
+          beforeRequest: async (_request, _api, caller) => {
+            await awaitWithContext(main, caller)
+            return undefined
+          },
+        }),
+      ],
+    }),
+  )
+  fixture.server.host.faux!.setResponses([fauxAssistantMessage('Final reply.')])
+  await fixture.server.root.submit({ type: 'input', content: 'Initial goal' }, context)
+  await until(() => fixture.generated.mock.calls.length === 1)
+  try {
+    if (change === 'newer')
+      await fixture.server.root.submit({ type: 'input', content: 'Changed goal' }, context)
+    else if (change === 'spawn') {
+      const entries = await fixture.server.root.context(context)
+      await fixture.spawn(entries.entries.find((entry) => entry.kind === 'pi.user')!.id)
     }
-  },
-)
+    release()
+    await until(
+      async () =>
+        Object.values((await fixture.server.harness.inspect(context)).tasks).filter(
+          (task) => task.record.kind === 'conversations.summary',
+        ).length === 0,
+    )
+    const entries = await fixture.server.harness.commit(
+      (tx) => tx.scanEntries({ conversationId: fixture.server.root.id }, 100),
+      context,
+    )
+    expect(entries.items.filter((entry) => IntentSummarized.is(entry))).toEqual([])
+    expect((await fixture.read())?.summary).not.toBe('Stale intent')
+  } finally {
+    release()
+    resume()
+    fixture.server.host.faux!.appendResponses([
+      fauxAssistantMessage('Final reply.'),
+      fauxAssistantMessage('Final reply.'),
+    ])
+  }
+})
 
 it('keeps an exchange answered across a mid-run compaction and reopen; only a reset ends it', async () => {
   const fixture = await launch()
