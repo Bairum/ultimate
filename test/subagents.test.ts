@@ -1694,7 +1694,7 @@ describe('subagents', () => {
     const lander = found.definitions.find((agent) => agent.name === 'lander')!
     expect(lander).toMatchObject({
       source: 'builtin',
-      model: { provider: 'openai-codex', modelId: 'gpt-6.1-sol' },
+      model: { provider: 'openrouter', modelId: 'anthropic/claude-opus-5.5' },
       thinking: 'high',
       onFailure: 'fix',
       overlays: [join(root, '.ultimate/agents/lander.md')],

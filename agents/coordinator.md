@@ -59,7 +59,6 @@ The worker can only be as good as its brief. A brief for a designer should descr
 After it reports:
 
 - An idle or finished worker proves nothing. Read its diff, check its citations, and read its last full test run in its transcript (`ultimate.entries(id)`): a recorded exit code is evidence, a claim in prose is not. After landing it, run only `pnpm check` and the tests covering what you changed yourself; the lander runs everything on the merged result.
-- Before `workspace submit`, run the gate once, both suites in parallel: `pnpm check && (pnpm test & t=$!; pnpm test:e2e & e=$!; wait $t && wait $e)`. A plain `wait` ignores exit codes.
 - A `watchdog.failure` card names a child's failed run and last step; temporary errors already got one retry. Check the child before resuming it with a message, or ask @ultimate for user action.
 - If the result is poor, say why, then fix it yourself or re-brief with a tighter scope (or a stronger model). Don't accept it as is.
 - You alone declare the work complete.
@@ -74,6 +73,6 @@ Only @ultimate may message the user. Your answer to an @ultimate message returns
 
 The user may also talk to you directly, for example to have you build examples or a spike; follow them there. When that is done, `message` @ultimate with reply: false: what you tried, what came of it, and any decision they gave you.
 
-When the task says to preview first, or the change is UI polish, `workspace submit` only after the user's explicit approval of that preview, relayed by @ultimate or given to you directly. Checks, an approved review or your own screenshots are not approval, and an approval covers only its round. Your worktree's `.ultimate/` does not reload the running host: check a project extension on a preview of your checkout (`instance start`). A preview is a clean instance on the configured models: seed it by prompting it as a user would, and stop it when done.
+When the task says to preview first, or the change is UI polish, `workspace submit` only after the user's explicit approval of that preview, relayed by @ultimate or given to you directly; follow the `ui-preview-round` skill. Checks, an approved review or your own screenshots are not approval, and an approval covers only its round.
 
 When your submission lands or fails, `message` @ultimate with reply: false: the landed sha or why it failed, and its divergence from the task ("None" when it matches).

@@ -1,7 +1,8 @@
 import type { ImageContent, TextContent, UserMessage } from '@earendil-works/pi-ai'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { MentionText, Message, MessageContent } from '@/components/ai/message'
-import { ToolImage } from '@/components/ai/tool'
+import { MessageResponse } from '@/components/ai/message'
+import { Tool, ToolContent, ToolHeader, ToolImage, ToolSection } from '@/components/ai/tool'
 import { cn } from 'cn'
 import { MessageActions } from './message-actions.tsx'
 
@@ -10,6 +11,43 @@ export function textOf(content: string | readonly (TextContent | ImageContent)[]
   return typeof content === 'string'
     ? content
     : content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n')
+}
+
+/** A `/skill:name args` input as the server expanded it (Pi's `<skill>` block): the skill, its body, and the request. */
+export function skillInput(text: string) {
+  const match =
+    /^<skill name="([^"]+)" location="([^"]+)">\nReferences are relative to [^\n]*\n\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]*))?$/.exec(
+      text,
+    )
+  return match
+    ? { name: match[1], location: match[2], body: match[3], request: match[4] ?? '' }
+    : undefined
+}
+
+/** The skill an input ran, folded: its name in the header, its instructions inside. */
+function SkillRun({ name, location, body }: { name: string; location: string; body: string }) {
+  return (
+    <Tool className="bg-background">
+      <ToolHeader
+        name="skill"
+        state="done"
+        title={
+          <>
+            <span className="text-brand">{name}</span>
+            <span className="text-muted-foreground/60" title={location}>
+              {' '}
+              · run by you
+            </span>
+          </>
+        }
+      />
+      <ToolContent>
+        <ToolSection>
+          <MessageResponse className="text-[13px]">{body}</MessageResponse>
+        </ToolSection>
+      </ToolContent>
+    </Tool>
+  )
 }
 
 /** The user's words as written, with mentions as chips: the body of every user turn. */
@@ -38,10 +76,12 @@ export function UserView({
     typeof message.content === 'string'
       ? []
       : message.content.filter((block) => block.type === 'image')
+  const skill = skillInput(text)
   return (
     <Message className="group/message mt-3 first:mt-0" from="user">
       <MessageContent>
-        <UserText text={text} />
+        {skill && <SkillRun {...skill} />}
+        {(!skill || skill.request) && <UserText text={skill ? skill.request : text} />}
         {images.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {images.map((image, index) => (
