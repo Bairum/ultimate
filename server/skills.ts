@@ -18,13 +18,13 @@ export function projectSkills(
   host: { ultimateRoot: string; projectRoot: string; userHome: string },
   cwd = host.projectRoot,
 ) {
-  // `.agents/skills` are the Agent Skills folders other tools share; the project's loads with `.ultimate/skills`, once
-  // the project is trusted.
+  // A project's `.agents/skills` (the Agent Skills folder other tools share) loads with its `.ultimate/skills`, once the
+  // project is trusted. The personal `~/.agents/skills` does not: personal skills for Ultimate live in
+  // `~/.ultimate/skills`.
   const trusted = useProjectSetup(host.projectRoot, host.userHome)
   const layers: [string, SkillScope][] = [
     [join(host.ultimateRoot, 'skills'), 'clone'],
     [join(cwd, '.pi/skills'), 'project'],
-    [join(host.userHome, '.agents/skills'), 'user'],
     [join(host.userHome, '.ultimate/skills'), 'user'],
     ...(trusted
       ? ([

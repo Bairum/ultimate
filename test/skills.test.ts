@@ -30,9 +30,10 @@ async function setup() {
     join(host.userHome, '.ultimate/skills/ship/SKILL.md'),
     'name: ship\ndescription: User ship',
   )
+  // The personal Agent Skills folder belongs to other agents and is never read.
   await skill(
     join(host.userHome, '.agents/skills/shared/SKILL.md'),
-    'name: shared\ndescription: From the Agent Skills folder',
+    'name: shared\ndescription: Personal Agent Skills folder',
   )
   await skill(
     join(host.projectRoot, '.agents/skills/team/SKILL.md'),
@@ -47,10 +48,9 @@ it('loads every scope, lets later scopes override and keeps Pi diagnostics', asy
   const untrusted = skillInfo(projectSkills(host))
   // The project's .agents and .ultimate skills wait for the project to be trusted.
   expect(untrusted.skills.map((s) => [s.name, s.scope, s.description])).toEqual([
-    ['shared', 'user', 'From the Agent Skills folder'],
     ['ship', 'user', 'User ship'],
   ])
-  expect(untrusted.skills[1]?.overrides).toEqual([join(host.ultimateRoot, 'skills/ship/SKILL.md')])
+  expect(untrusted.skills[0]?.overrides).toEqual([join(host.ultimateRoot, 'skills/ship/SKILL.md')])
   expect(untrusted.skillDiagnostics).toEqual([])
 
   new ProjectTrustStore(join(host.userHome, '.ultimate')).set(host.projectRoot, true)
@@ -59,7 +59,7 @@ it('loads every scope, lets later scopes override and keeps Pi diagnostics', asy
     scope: 'project',
     manual: true,
   })
-  expect(trusted.skills.some((s) => s.name === 'broken')).toBe(false)
+  expect(trusted.skills.some((s) => s.name === 'broken' || s.name === 'shared')).toBe(false)
   expect(trusted.skillDiagnostics).toEqual([
     {
       type: 'warning',

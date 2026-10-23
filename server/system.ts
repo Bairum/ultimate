@@ -174,7 +174,6 @@ export async function createSystem(
       join(host.projectRoot, '.ultimate'),
       join(host.userHome, '.ultimate/extensions'),
       join(host.userHome, '.ultimate/skills'),
-      join(host.userHome, '.agents/skills'),
       join(host.projectRoot, '.agents/skills'),
       join(host.projectRoot, '.pi/skills'),
     ])
