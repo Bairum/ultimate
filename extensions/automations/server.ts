@@ -50,12 +50,27 @@ import type { Args, Automation, AutomationListItem, Effect, Run, Manifest } from
 import { isSlug } from './types.ts'
 export type { Automation, Run } from './types.ts'
 export { launchHandshake } from './supervisor.ts'
-export const Automations = defineDoc<{ next: number; automations: Record<string, Automation> }>({
+type Ledger = { next: number; automations: Record<string, Automation> }
+export const Automations = defineDoc<Ledger>({
   kind: 'ultimate.automations',
   checkpointWhen: () => false,
-  version: 1,
+  version: 2,
   scope: 'session',
   initial: () => ({ next: 1, automations: {} }),
+  // Version 1 also holds schedule records from before scripts and subscribers. Pi Durable stores the migrated
+  // value as a version 2 base on the ledger's next write.
+  migrate: (value) => {
+    const ledger = value as unknown as Ledger
+    for (const a of Object.values(ledger.automations)) {
+      a.subscribers ??= []
+      if (a.fires !== undefined) continue
+      // Old records counted fires only as runs; the last run anchors the next interval, as it did then.
+      a.fires = a.runs.length
+      const last = a.runs.at(-1)
+      if (last) a.lastFireAt = last.firedAt
+    }
+    return ledger
+  },
 })
 type Change = { result: JsonValue; abort?: TaskId; effect?: Effect }
 const Receipt = defineDoc<Partial<Change>>({
