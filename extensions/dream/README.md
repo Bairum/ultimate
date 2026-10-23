@@ -23,7 +23,27 @@ for @ultimate and the dream branch, is in [DREAM.md](DREAM.md); this file is the
    session ends once its journal is filed and no proposal is open or approved; the user can `end` it earlier.
 
 Nothing here edits code, memory or storage. Phase 2 (a new chapter: a fresh database seeded from the session) is
-not built.
+being built; its storage layer is below.
+
+## Chapters
+
+A chapter is one database of a project home; one is active at a time and the others stay live, so any chapter can be
+made active again (`lib/chapters.ts`).
+
+- The first chapter, `the-beginning`, is the home itself: `<home>/state.sqlite` and `trace.sqlite`. A home that never
+  switched has no `chapters.json` and nothing moves. Later chapters live in `<home>/chapters/<name>/`.
+- `<home>/chapters.json` `{ active, chapters: [{ name, createdAt? }] }` lists them in creation order; the newest is
+  the last.
+- A switch is journaled: `requestChapter(home, name)` writes `pending-chapter.json` `{ to }`, then the host restarts.
+  `prepareHarness.open` finishes the journal before storage opens: a new chapter gets its database, with record ids
+  continuing after every earlier chapter's, so `#123` names one conversation whichever chapter is open. An
+  interrupted switch finishes on the next open.
+- `requestChapter` refuses while the target chapter has a live foreground task: that work would resume the moment it
+  opens.
+- The host exposes the active chapter as `host.chapter` (`name`, `number`, `newest`, `dir`, `database`, `trace`).
+- Cloud backups are per chapter: the first chapter keeps the project key and `<home>/cloud-backup.json`; a later one
+  backs up as `<key>@<name>` with its record in its own folder. The status line names a later chapter.
+- `pnpm reset` moves every chapter aside with the first.
 
 ## Actions
 

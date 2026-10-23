@@ -25,7 +25,7 @@
 - `extensions/context/breakdown.ts` — internal remove-all pi.system entry immediately precedes a reordered re-add, folded into the re-add's diff here. Drop when Pi exposes prompt reorder metadata instead of requiring entry-sequence inference.
 - `extensions/fast/server.ts` — sets service_tier through onPayload because pi-ai's simple stream options drop serviceTier. Drop when buildBaseOptions forwards serviceTier and Pi Durable stream settings accept it.
 - `server/tool-arguments.ts` — ends degenerate tool-call argument streams with an error worded to match pi-ai's retryable error pattern, so the generation retries it. Drop the wording when Pi Durable lets a stream mark its error retryable.
-- `lib/chapters.ts` — raises a new chapter's durable_metadata.next_id so record ids continue across chapters. Drop when Pi Durable takes a first record id when it creates storage.
+- `lib/chapters.ts` — raises a new chapter's durable_metadata.next_id so record ids continue across chapters, and reads a closed chapter's live foreground tasks from the tasks table to refuse a switch into it. Drop when Pi Durable takes a first record id when it creates storage and reads a closed store's task graph.
 - `extensions/subagents/server.ts` — internal ToolTaskInput.assistant locates the calling assistant for history forks. Drop when ToolExecutionApi exposes the calling assistant entry ID.
 
 On a Pi upgrade, run `rg "Pi upstream:"` and recheck each marked item against the new version; test/e2e/pi-upstream.test.ts checks that every tracked marker matches the installed package version and its path appears in this list, and every backticked path in this list is tracked and contains a marker.

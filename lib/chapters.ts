@@ -58,9 +58,35 @@ export async function activeChapter(home: string) {
   }
 }
 
-/** Journal a switch to chapter `to`, new or existing; the next open of the home finishes it. */
+/**
+ * Journal a switch to chapter `to`, new or existing; the next open of the home finishes it. Refuses while `to` has
+ * work in flight, which would resume the moment it opens; the caller checks the active chapter's own work.
+ */
 export async function requestChapter(home: string, to: string) {
-  await writeJson(join(home, PENDING_CHAPTER), { to: chapterName(to) } satisfies PendingChapter)
+  const name = chapterName(to)
+  const busy = inFlight(chapterFiles(home, name).database)
+  if (busy.length)
+    throw new Error(
+      `Chapter ${name} has work in flight in ${busy.map((id) => `${name}#${id}`).join(', ')}; it resumes when that chapter opens, so finish or stop it there first`,
+    )
+  await writeJson(join(home, PENDING_CHAPTER), { to: name } satisfies PendingChapter)
+}
+
+/** Conversations of `database` with a live foreground task: work that resumes when it opens. */
+export function inFlight(database: string): number[] {
+  if (!existsSync(database)) return []
+  // Pi upstream: @earendil-works/pi-durable@1.4.0 src/storage/sqlite/migrations.ts — tasks.status is terminal once a task ended; background tasks (schedules, watchers) always live. Drop when Pi Durable reads a closed store's task graph.
+  const db = new DatabaseSync(database, { readOnly: true })
+  try {
+    return db
+      .prepare(
+        "SELECT DISTINCT conversation_id AS id FROM tasks WHERE status != 'terminal' AND background = 0 ORDER BY id",
+      )
+      .all()
+      .map((row) => Number(row.id))
+  } finally {
+    db.close()
+  }
 }
 
 /**

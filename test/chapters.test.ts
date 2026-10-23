@@ -3,12 +3,14 @@ import { existsSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { expect, it } from 'vitest'
 import {
   activeChapter,
   chapterName,
   finishChapterSwitch,
   FIRST_CHAPTER,
+  inFlight,
   readChapters,
   requestChapter,
 } from '../lib/chapters.ts'
@@ -99,6 +101,29 @@ it('finishes a switch interrupted after the new database was created', async () 
   expect((await activeChapter(home)).name).toBe('next')
   expect(id).toBeGreaterThan(first)
   expect(await readdir(join(home, 'chapters'))).toEqual(['next'])
+})
+
+it('refuses to switch into a chapter with foreground work in flight', async () => {
+  const home = await temp('ultimate-chapters-')
+  const prepared = await prepare(home)
+  const first = await conversationIn(prepared)
+  await requestChapter(home, 'next')
+  await (await prepared.open(false)).close()
+  // The first chapter, now closed, holds a running turn and a background schedule.
+  const db = new DatabaseSync(join(home, 'state.sqlite'))
+  const insert = db.prepare(
+    "INSERT INTO tasks (id, conversation_id, kind, status, abort_requested, background, record) VALUES (?, ?, 'k', ?, 0, ?, '{}')",
+  )
+  insert.run(900001, 7, 'terminal', 0)
+  insert.run(900002, 8, 'waiting', 1)
+  insert.run(900003, first, 'pending', 0)
+  db.close()
+
+  expect(inFlight(join(home, 'state.sqlite'))).toEqual([first])
+  await expect(requestChapter(home, FIRST_CHAPTER)).rejects.toThrow(
+    `Chapter ${FIRST_CHAPTER} has work in flight in ${FIRST_CHAPTER}#${first}`,
+  )
+  expect(existsSync(join(home, 'pending-chapter.json'))).toBe(false)
 })
 
 it('refuses names that are not slugs', () => {
