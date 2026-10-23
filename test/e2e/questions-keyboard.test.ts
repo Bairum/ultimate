@@ -86,6 +86,9 @@ it('answers a decisions card with letters, arrows and Enter', async () => {
     "1c. Branch starts in the context: leave as is\n\n2a. Boxer's copied agents/ultimate.md: assess a way to add tools without forking it\n\n3b. Land it: no, change something first",
   )
   await card.waitFor({ state: 'detached' })
+  // @ultimate's turn on the answer must end first: an ask submitted while it runs steers into that turn, which
+  // then answers "Noted." instead of asking again.
+  await until(async () => (await answer())!.state === 'answered')
 
   // A fresh card: Accept picks, then a single Enter sends.
   await (await conversation.submit({ type: 'input', content: 'ask' }, context)).wait(context)
