@@ -197,6 +197,13 @@ function Failed({ sleep }: { sleep: Sleep }) {
       {failing.length > 0 && (
         <Checks checks={sleep.checks!.filter((item) => !item.ok)} className="mt-1.5" />
       )}
+      {step !== 'checking' && sleep.checks && (
+        <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+          {sleep.checks.length} checks passed
+          {sleep.backup?.id && ` · backed up ${sleep.backup.id.slice(0, 12)}`}
+          {sleep.backup?.skipped && ` · backup skipped: ${sleep.backup.skipped}`}
+        </p>
+      )}
       {sleep.error && step !== 'checking' && (
         <p className="mt-1.5 font-mono text-[11px] leading-relaxed break-words text-error/90">
           {sleep.error.replace(/^Error: /, '')}
