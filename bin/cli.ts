@@ -59,7 +59,7 @@ export function cliArgs(host: CliHost, args: string[]) {
   return [
     '--no-context-files',
     '--no-skills',
-    ...projectSkills(host).flatMap((skill) => ['--skill', skill.filePath]),
+    ...projectSkills(host).skills.flatMap((skill) => ['--skill', skill.filePath]),
     '--no-extensions',
     '--extension',
     claudeCode,

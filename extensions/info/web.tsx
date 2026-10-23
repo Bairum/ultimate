@@ -19,6 +19,7 @@ import type { SystemInfo, Usage } from '@/sdk'
 import { Row, Rows } from '@/components/ui/rows'
 import { useWorkspacesMeta, Workspaces as WorkspaceRows } from '../workspaces/ui.tsx'
 import { Copy, ErrorText, Meter, Section } from './ui.tsx'
+import { SkillPicker, skillDialog } from './skill-picker.tsx'
 
 const pad = (value: number) => String(value).padStart(2, '0')
 
@@ -344,10 +345,12 @@ function Described({
   name,
   description,
   path,
+  tags,
 }: {
   name: string
   description: string
   path: string
+  tags?: ReactNode
 }) {
   return (
     <div className="min-w-0 font-mono text-[11px]">
@@ -355,6 +358,7 @@ function Described({
         <Copy className="text-foreground/90" value={path}>
           {name}
         </Copy>
+        {tags}
       </div>
       {description && (
         <p className="line-clamp-2 font-sans text-[11.5px] leading-snug text-muted-foreground">
@@ -375,9 +379,29 @@ function Skills({ system }: { system: SystemInfo }) {
             key={skill.path}
             name={skill.name}
             path={skill.path}
+            tags={
+              <span className="truncate text-muted-foreground/60">
+                {skill.scope}
+                {skill.manual && ' · manual'}
+                {skill.overrides.length > 0 &&
+                  ` · overrides ${skill.overrides.length === 1 ? 'one' : skill.overrides.length}`}
+              </span>
+            }
           />
         ))}
         {system.skills.length === 0 && <Empty>no skills</Empty>}
+        {system.skillDiagnostics.map((diagnostic) => (
+          <div
+            className={`font-mono text-[11px] leading-snug ${diagnostic.type === 'error' ? 'text-destructive' : 'text-amber-600 dark:text-amber-400'}`}
+            key={`${diagnostic.path ?? ''}:${diagnostic.message}`}
+            title={diagnostic.path}
+          >
+            {diagnostic.path && (
+              <span className="text-foreground/70">{shortSkill(diagnostic.path)} </span>
+            )}
+            {diagnostic.message}
+          </div>
+        ))}
       </div>
     </Section>
   )
@@ -407,6 +431,12 @@ function Workspaces() {
   )
 }
 
+/** `…/name/SKILL.md` as `name`, any other file by its name. */
+function shortSkill(path: string) {
+  const parts = path.split('/')
+  return parts.at(-1) === 'SKILL.md' ? (parts.at(-2) ?? path) : (parts.at(-1) ?? path)
+}
+
 function Empty({ children }: { children: ReactNode }) {
   return <div className="font-mono text-[11px] text-muted-foreground/60">{children}</div>
 }
@@ -433,11 +463,17 @@ function InfoPanel() {
 
 export default defineWebExtension({
   panels: [{ id: 'info', title: 'Info', icon: InfoIcon, component: InfoPanel, order: 5 }],
+  slots: { overlay: [SkillPicker] },
   commands: [
     {
       id: 'info.open',
       title: 'Show system info',
       run: (context) => context.openPanel('info'),
+    },
+    {
+      id: 'info.skill',
+      title: 'Run a skill',
+      run: (context) => context.open(skillDialog),
     },
   ],
 })

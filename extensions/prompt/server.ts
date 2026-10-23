@@ -263,7 +263,10 @@ export default function prompt(host: ExtensionHost) {
       ),
       section('skills', (input) => {
         const skills = host.skills(input.env?.cwd ?? input.agent.cwd ?? host.projectRoot)
-        return formatSkillsForPrompt(skills)
+        // As Pi's buildSystemPromptSections: name the tool the agent can load a skill with, and list none without one.
+        const names = new Set((input.agent.tools ?? []).map((tool) => tool.name))
+        const reader = (['read', 'bash'] as const).find((name) => names.has(name))
+        return reader ? formatSkillsForPrompt(skills, reader).trim() || undefined : undefined
       }),
       section('building_blocks', () => {
         const off = host.extensions().filter((extension) => !extension.enabled)
