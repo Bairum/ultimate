@@ -55,6 +55,7 @@ type Pending = {
   verb: 'asleep' | 'switch'
   /** The process that was serving when the switch began; another one serving means the switch happened. */
   pid?: number
+  since: number
 }
 
 /** Latched until the page reloads: the new chapter's documents no longer show the sleep that started it. */
@@ -81,7 +82,7 @@ export const cutOff = (error: unknown) => error instanceof ActionError && error.
 
 /** Restart into existing chapter `name`; resolves with the refusal, or never while the server switches. */
 export async function switchChapter(label: string, name: string, pid?: number) {
-  setPending({ to: label, verb: 'switch', pid })
+  setPending({ to: label, verb: 'switch', pid, since: Date.now() })
   try {
     await api.action(SwitchAction, { chapter: name })
     // `switch` never returns on success; an answer is a refusal.
@@ -104,7 +105,7 @@ export async function fallAsleep(session: number, label: string, name: string, p
     return undefined
   } catch (error) {
     if (!cutOff(error)) return errorMessage(error)
-    setPending({ to: label, verb: 'asleep', pid })
+    setPending({ to: label, verb: 'asleep', pid, since: Date.now() })
     return undefined
   }
 }
@@ -121,7 +122,6 @@ export function SwitchVeil() {
   const sleep = sessions?.find((item) => item.sleep?.phase === 'switching')?.sleep
   const current = useChapters()
   const now = useNow(1000, ours !== undefined)
-  const [since] = useState(() => Date.now())
   const pid = system?.process.pid
   useEffect(() => {
     if (sleep && !pending && current)
@@ -129,6 +129,7 @@ export function SwitchVeil() {
         to: chapterLabel(current.chapters.length + 1, sleep.chapter),
         verb: 'asleep',
         pid,
+        since: Date.now(),
       })
   }, [sleep, current, pid])
   useEffect(() => {
@@ -144,7 +145,7 @@ export function SwitchVeil() {
     location.replace('/')
   }, [pid, connection.status])
   if (!ours) return null
-  const slow = now - since > 90_000
+  const slow = now - ours.since > 90_000
   return (
     <div
       aria-live="polite"
