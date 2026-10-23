@@ -15,8 +15,9 @@ import { basename, join, resolve as resolvePath } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { Context } from '@earendil-works/chord'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type { ConversationId, ToolExecutionApi } from '@earendil-works/pi-durable'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -28,6 +29,7 @@ import { cleanPreview, sweepPreviews } from './cleanup.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { spawnGroup, stopGroup } from '../../lib/process-group.ts'
 import type { Group, GroupProcess } from '../../lib/process-group.ts'
+import { InstanceApi } from './api.ts'
 import { ListAction } from './refs.ts'
 
 /** A preview keeps ordinary parent variables, but gets its own host identity and no inherited cloud settings. */
@@ -69,7 +71,7 @@ interface Instance {
   pid: number
   temporary: boolean
   /** The conversation whose workspace it previews, or which started it in the shared checkout. */
-  conversationId: number
+  conversationId?: number
   child: GroupProcess
   group: Group
   output: string
@@ -96,7 +98,15 @@ function running(host: Pick<ExtensionHost, 'resource' | 'onClose' | 'home'>) {
   return instances
 }
 /** What `list` shows of a preview. */
-const listed = ({ id, url, conversationId }: Pick<Instance, 'id' | 'url' | 'conversationId'>) => ({
+const listed = ({
+  id,
+  url,
+  conversationId,
+}: {
+  id: string
+  url: string
+  conversationId: number
+}) => ({
   id,
   url,
   conversationId,
@@ -122,9 +132,10 @@ export function remember(
   host: Pick<ExtensionHost, 'resource' | 'home'>,
   item: Pick<Instance, 'id' | 'url' | 'conversationId'>,
 ) {
+  if (item.conversationId === undefined) return
   const byPort = stopped(host)
   byPort.delete(portOf(item.url))
-  byPort.set(portOf(item.url), listed(item))
+  byPort.set(portOf(item.url), listed({ ...item, conversationId: item.conversationId }))
   for (const port of [...byPort.keys()].slice(0, -50)) byPort.delete(port)
   writeFileSync(join(host.home, 'previews.json'), JSON.stringify([...byPort.values()]))
 }
@@ -176,9 +187,9 @@ export const actions: Record<string, ExtensionAction> = {
     const addresses = await tailnet(host)
     return [
       ...[...running(host).values()]
-        .filter((item) => item.url)
+        .filter((item) => item.url && item.conversationId !== undefined)
         .map((item) => ({
-          ...listed(item),
+          ...listed({ ...item, conversationId: item.conversationId! }),
           running: live(item),
           ...(live(item) && addresses.has(item.pid) && { tailnet: addresses.get(item.pid) }),
         })),
@@ -214,6 +225,7 @@ export default function instanceExtension(
   host: Pick<
     ExtensionHost,
     | 'need'
+    | 'implement'
     | 'want'
     | 'resource'
     | 'onClose'
@@ -241,6 +253,193 @@ export default function instanceExtension(
       host.notice(`Preview sweep failed: ${String(error)}`)
     })
   })
+  async function start(
+    args: { home?: string },
+    context: Context,
+    prepare: () => Promise<{ cwd: string; project: string; conversationId?: number }>,
+    output: (text: string) => void = () => {},
+  ) {
+    let reserved = false
+    let pendingHome: string | undefined
+    try {
+      context.abortSignal?.throwIfAborted()
+      if ([...instances.values()].filter(live).length + starts.pending >= 3)
+        throw new Error('At most three instances may run at once')
+      starts.pending++
+      reserved = true
+      const { cwd, project, conversationId } = await prepare()
+      let home: string
+      if (args.home) {
+        await mkdir(resolvePath(args.home), { recursive: true })
+        home = await realpath(resolvePath(args.home))
+      } else {
+        // Publish only after the parent's lease exists, so another host's sweep cannot race startup.
+        const staging = await mkdtemp(join(tmpdir(), '.ultimate-instance-'))
+        home = join(tmpdir(), basename(staging).slice(1))
+        try {
+          await writeFile(join(staging, 'ultimate.lock'), JSON.stringify({ pid: process.pid }))
+          await writeFile(join(staging, 'project.json'), JSON.stringify({ root: project }))
+          await rename(staging, home)
+          pendingHome = home
+        } catch (error) {
+          await rm(staging, { recursive: true, force: true })
+          throw error
+        }
+      }
+      if (home === (await realpath(host.home)))
+        throw new Error('A test instance cannot share the running server home')
+      if ([...instances.values()].some((item) => item.home === home && live(item)))
+        throw new Error('Home is already owned by an instance')
+      context.abortSignal?.throwIfAborted()
+      // Explicit homes are retained even when their name matches the automatic sweep's prefix.
+      if (args.home) await writeFile(join(home, 'instance-preserve'), '')
+      const env = previewEnv(process.env, {
+        home,
+        project,
+        userHome: host.userHome,
+        ownerPid: process.pid,
+      })
+      // No pid file: a preview exits by itself once its owner is gone (ULTIMATE_INSTANCE_OWNER).
+      const group = spawnGroup(process.execPath, ['server/main.ts'], {
+        cwd,
+        env,
+        grace: 5000,
+      })
+      const { child } = group
+      const id = randomUUID()
+      const item: Instance = {
+        id,
+        url: '',
+        home,
+        pid: child.pid ?? 0,
+        temporary: !args.home,
+        conversationId,
+        child,
+        group,
+        output: '',
+      }
+      instances.set(id, item)
+      pendingHome = undefined
+      starts.pending--
+      reserved = false
+      const append = (chunk: Buffer) => {
+        item.output = (item.output + chunk.toString())
+          .split('\n')
+          .slice(-200)
+          .join('\n')
+          .slice(-100000)
+      }
+      let stdout = ''
+      child.stdout?.on('data', (chunk: Buffer) => {
+        append(chunk)
+        stdout += chunk.toString()
+        const lines = stdout.split('\n')
+        stdout = lines.pop()!.slice(-10000)
+        for (const line of lines) {
+          const match = /^Ultimate: (http:\/\/127\.0\.0\.1:([1-9]\d*))\r?$/.exec(line)
+          if (match) item.url = match[1]
+        }
+      })
+      child.stderr?.on('data', append)
+      let failed = false
+      child.on('error', (error) => {
+        failed = true
+        item.output += String(error)
+      })
+      try {
+        output(`Starting ${id}\n`)
+        const deadline = Date.now() + 60000
+        let ready = false
+        while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
+          context.abortSignal?.throwIfAborted()
+          if (failed) break
+          try {
+            const response = item.url
+              ? await fetch(`${item.url}/api/models`, {
+                  signal: context.abortSignal
+                    ? AbortSignal.any([context.abortSignal, AbortSignal.timeout(1000)])
+                    : AbortSignal.timeout(1000),
+                })
+              : undefined
+            if (response?.ok && !failed && child.exitCode === null && child.signalCode === null) {
+              ready = true
+              break
+            }
+          } catch {
+            /* server is still booting */
+          }
+          await sleep(250, undefined, { signal: context.abortSignal })
+        }
+        context.abortSignal?.throwIfAborted()
+        if (!ready) throw new Error(`Instance did not become ready:\n${item.output}`)
+        return info(item)
+      } catch (error) {
+        await stop(instances, id)
+        throw error
+      }
+    } catch (error) {
+      if (pendingHome) {
+        await unlink(join(pendingHome, 'ultimate.lock'))
+        await cleanPreview(pendingHome)
+      }
+      throw error
+    } finally {
+      if (reserved) starts.pending--
+    }
+  }
+
+  async function toolWorkspace(
+    args: { subagent?: number },
+    api: ToolExecutionApi,
+    context: Context,
+  ) {
+    let cwd = host.ultimateRoot
+    let project = host.projectRoot
+    let conversationId = api.conversationId
+    if (args.subagent !== undefined) {
+      const child = (await api.snapshot(Subagents, api.conversationId, context))?.agents[
+        String(args.subagent)
+      ]
+      if (!child) throw new Error(`Unknown subagent: ${args.subagent}`)
+      conversationId = child.conversationId
+    }
+    const workspace =
+      args.subagent === undefined
+        ? await previewWorkspace(host, workspaces, conversationId, context)
+        : await workspaces.get(conversationId, context)
+    if (args.subagent !== undefined && !workspace)
+      throw new Error('Subagent must have an active worktree isolate')
+    if (workspace) {
+      if (workspace.state !== 'ready')
+        throw new Error('Preview requires an active, ready workspace')
+      project = workspace.path
+      // In another project the workspace holds that project, so the host's Ultimate runs it.
+      if (ownSource) {
+        cwd = workspace.path
+        for (const [path, directory, message] of [
+          ['server/main.ts', false, 'Worktree is not Ultimate: missing server/main.ts'],
+          ['node_modules', true, 'Worktree has no node_modules; run pnpm install first'],
+        ] as const) {
+          const entry = await stat(join(cwd, path)).catch(
+            // An unreadable prerequisite fails the explicit preview validation below.
+            () => undefined,
+          )
+          if (!entry || (directory ? !entry.isDirectory() : !entry.isFile()))
+            throw new Error(message)
+        }
+      }
+    }
+    return { cwd, project, conversationId }
+  }
+
+  host.implement(InstanceApi, {
+    start: (args) =>
+      start(args, BACKGROUND_CONTEXT, async () => ({
+        cwd: host.ultimateRoot,
+        project: host.projectRoot,
+      })),
+    stop: (id) => stop(instances, id),
+  })
   return defineExtension({
     name: 'instance',
     sections: [
@@ -264,8 +463,6 @@ export default function instanceExtension(
           subagent: Type.Optional(Type.Integer({ minimum: 1 })),
         }),
         async execute(args, api, context) {
-          let reserved = false
-          let pendingHome: string | undefined
           try {
             context.abortSignal?.throwIfAborted()
             let result: unknown
@@ -280,177 +477,16 @@ export default function instanceExtension(
               if (!item) throw new Error(`Unknown instance: ${args.id}`)
               result = item.output.split('\n').slice(-200).join('\n')
             } else {
-              if ([...instances.values()].filter(live).length + starts.pending >= 3)
-                throw new Error('At most three instances may run at once')
-              starts.pending++
-              reserved = true
-              let cwd = host.ultimateRoot
-              let project = host.projectRoot
-              let conversationId = api.conversationId
-              if (args.subagent !== undefined) {
-                const child = (await api.snapshot(Subagents, api.conversationId, context))?.agents[
-                  String(args.subagent)
-                ]
-                if (!child) throw new Error(`Unknown subagent: ${args.subagent}`)
-                conversationId = child.conversationId
-              }
-              const workspace =
-                args.subagent === undefined
-                  ? await previewWorkspace(host, workspaces, conversationId, context)
-                  : await workspaces.get(conversationId, context)
-              if (args.subagent !== undefined && !workspace)
-                throw new Error('Subagent must have an active worktree isolate')
-              if (workspace) {
-                if (workspace.state !== 'ready')
-                  throw new Error('Preview requires an active, ready workspace')
-                project = workspace.path
-                // In another project the workspace holds that project, so the host's Ultimate runs it.
-                if (ownSource) {
-                  cwd = workspace.path
-                  for (const [path, directory, message] of [
-                    ['server/main.ts', false, 'Worktree is not Ultimate: missing server/main.ts'],
-                    ['node_modules', true, 'Worktree has no node_modules; run pnpm install first'],
-                  ] as const) {
-                    const entry = await stat(join(cwd, path)).catch(
-                      // An unreadable prerequisite fails the explicit preview validation below.
-                      () => undefined,
-                    )
-                    if (!entry || (directory ? !entry.isDirectory() : !entry.isFile()))
-                      throw new Error(message)
-                  }
-                }
-              }
-              let home: string
-              if (args.home) {
-                await mkdir(resolvePath(args.home), { recursive: true })
-                home = await realpath(resolvePath(args.home))
-              } else {
-                // Publish only after the parent's lease exists, so another host's sweep cannot race startup.
-                const staging = await mkdtemp(join(tmpdir(), '.ultimate-instance-'))
-                home = join(tmpdir(), basename(staging).slice(1))
-                try {
-                  await writeFile(
-                    join(staging, 'ultimate.lock'),
-                    JSON.stringify({ pid: process.pid }),
-                  )
-                  await writeFile(join(staging, 'project.json'), JSON.stringify({ root: project }))
-                  await rename(staging, home)
-                  pendingHome = home
-                } catch (error) {
-                  await rm(staging, { recursive: true, force: true })
-                  throw error
-                }
-              }
-              if (home === (await realpath(host.home)))
-                throw new Error('A test instance cannot share the running server home')
-              if ([...instances.values()].some((item) => item.home === home && live(item)))
-                throw new Error('Home is already owned by an instance')
-              context.abortSignal?.throwIfAborted()
-              // Explicit homes are retained even when their name matches the automatic sweep's prefix.
-              if (args.home) await writeFile(join(home, 'instance-preserve'), '')
-              const env = previewEnv(process.env, {
-                home,
-                project,
-                userHome: host.userHome,
-                ownerPid: process.pid,
-              })
-              // No pid file: a preview exits by itself once its owner is gone (ULTIMATE_INSTANCE_OWNER).
-              const group = spawnGroup(process.execPath, ['server/main.ts'], {
-                cwd,
-                env,
-                grace: 5000,
-              })
-              const { child } = group
-              const id = randomUUID()
-              const item: Instance = {
-                id,
-                url: '',
-                home,
-                pid: child.pid ?? 0,
-                temporary: !args.home,
-                conversationId,
-                child,
-                group,
-                output: '',
-              }
-              instances.set(id, item)
-              pendingHome = undefined
-              starts.pending--
-              reserved = false
-              const append = (chunk: Buffer) => {
-                item.output = (item.output + chunk.toString())
-                  .split('\n')
-                  .slice(-200)
-                  .join('\n')
-                  .slice(-100000)
-              }
-              let stdout = ''
-              child.stdout?.on('data', (chunk: Buffer) => {
-                append(chunk)
-                stdout += chunk.toString()
-                const lines = stdout.split('\n')
-                stdout = lines.pop()!.slice(-10000)
-                for (const line of lines) {
-                  const match = /^Ultimate: (http:\/\/127\.0\.0\.1:([1-9]\d*))\r?$/.exec(line)
-                  if (match) item.url = match[1]
-                }
-              })
-              child.stderr?.on('data', append)
-              let failed = false
-              child.on('error', (error) => {
-                failed = true
-                item.output += String(error)
-              })
-              try {
-                api.output(`Starting ${id}\n`)
-                const deadline = Date.now() + 60000
-                let ready = false
-                while (
-                  Date.now() < deadline &&
-                  child.exitCode === null &&
-                  child.signalCode === null
-                ) {
-                  context.abortSignal?.throwIfAborted()
-                  if (failed) break
-                  try {
-                    const response = item.url
-                      ? await fetch(`${item.url}/api/models`, {
-                          signal: context.abortSignal
-                            ? AbortSignal.any([context.abortSignal, AbortSignal.timeout(1000)])
-                            : AbortSignal.timeout(1000),
-                        })
-                      : undefined
-                    if (
-                      response?.ok &&
-                      !failed &&
-                      child.exitCode === null &&
-                      child.signalCode === null
-                    ) {
-                      ready = true
-                      break
-                    }
-                  } catch {
-                    /* server is still booting */
-                  }
-                  await sleep(250, undefined, { signal: context.abortSignal })
-                }
-                context.abortSignal?.throwIfAborted()
-                if (!ready) throw new Error(`Instance did not become ready:\n${item.output}`)
-                result = info(item)
-              } catch (error) {
-                await stop(instances, id)
-                throw error
-              }
+              result = await start(
+                args,
+                context,
+                () => toolWorkspace(args, api, context),
+                (text) => api.output(text),
+              )
             }
             return { output: [{ type: 'text', text: JSON.stringify(result) }] }
           } catch (error) {
-            if (pendingHome) {
-              await unlink(join(pendingHome, 'ultimate.lock'))
-              await cleanPreview(pendingHome)
-            }
             return { isError: true, output: [{ type: 'text', text: String(error) }] }
-          } finally {
-            if (reserved) starts.pending--
           }
         },
       }),

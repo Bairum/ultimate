@@ -8,7 +8,7 @@ until they land. Nothing changes code, memory or storage by itself.
 Session N lives in the `dream.sessions` document (`refs.ts`) on conversation 1: read it with codemode
 `ultimate.doc('dream.sessions', 1)`. Actions, called with codemode
 `ultimate.action('dream', name, args)`: `pass {session, pass, status, note?}`, `journal {session, learned, text,
-proposals}`, `decide {session, proposal, status, branch?}` and `stats` (tool numbers from the trace, no model). The trace keeps only about the last 7 days, so
+proposals, chapter?}`, `decide {session, proposal, status, branch?}` and `stats` (tool numbers from the trace, no model). The trace keeps only about the last 7 days, so
 `stats` and `ultimate.trace` see only that window, and `stats` counts only tool calls; older failures and model
 errors are found in conversation entries.
 
@@ -42,7 +42,8 @@ dream's own bookkeeping (`pass`, `journal`) is part of the job, not a change.
 3. Merge them into the journal and file it with `journal`: `learned` is exactly three short lines in Ultimate's own
    voice ("I learned…", "I keep…", "I'd like…"); `text` is Markdown with one section per pass; `proposals` lists each
    proposed change once: `id` (a slug), `pass`, `title` (one line saying what changes), `size` (S/M/L), `risk`, and
-   `retire` (the memory slug it makes redundant) for codify proposals.
+   `retire` (the memory slug it makes redundant) for codify proposals. Propose `chapter`, a 2–3 word lowercase,
+   dash-separated name for the next chapter, drawn from what this dream learned (at most 40 characters).
 4. Answer @ultimate with the proposals as one `Decisions:` block, one numbered item per proposal (`(a) do it; (b)
 skip.`), each naming its id, then `My picks:`.
 
