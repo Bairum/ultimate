@@ -33,6 +33,14 @@ Only inside codemode (not standalone model tools):
 - `ultimate.search(text, { conversationId?, limit? })` — case-sensitive substring over stored entry JSON, including pre-reset/pre-compaction history.
 - `ultimate.taskGraph()` — live tasks and ownership graph.
 
+### Other chapters
+
+`conversations`, `entries` and `search` also take `{ chapter: '<name>' }`. Omitted or the active chapter's name reads
+live storage as usual; another listed chapter reads its database read-only, without starting tasks. Entries keep the
+same `kind`/`data`/`model` records and fork-aware order as live history. Closed conversations include their stored
+identity/owner and metadata title, label and input time when present, not live activity. Unknown names list the
+available chapters. `chapter` and `project` cannot be combined. Cross-chapter links are written `<chapter>#123`.
+
 ### Other projects
 
 `conversations`, `entries`, `search`, `trace`, `traceTree` and `doc` take `{ project }` in their options object (`ultimate.conversations({ project })`, `ultimate.traceTree(id, { project })`, `ultimate.doc('todos', 1, { project })`) and then read that project instead, read-only; `doc` there reads conversation 1 unless one is named. `project` is a name (`poe2-rust`) or a key (`github.com/hazat/poe2-rust`), case-insensitive. Only a running instance answers:

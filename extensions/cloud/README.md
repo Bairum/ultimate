@@ -60,7 +60,7 @@ its machine and size, **Back up now** with the upload's progress, a refused back
 **Restore** on another machine, with Ultimate stopped in that checkout:
 
 ```sh
-pnpm restore [name|key] [--snapshot <id>] [--dir <project dir>] [--yes] [--dry-run]
+pnpm restore [name|key] [--snapshot <id>] [--chapter <name>] [--dir <project dir>] [--yes] [--dry-run]
 ```
 
 It reads the checkout's key (`--dir`, else the current directory) and finds the project in the register (by name or
@@ -75,6 +75,13 @@ worktrees name absolute paths (backups without `root` restore with a warning). T
 the journal. While the journal exists no Ultimate opens the home; `pnpm restore` again finishes the interrupted restore
 into the same backup folder from the download it kept. It prints the backup folder and the `mv` that undoes it.
 `ULTIMATE_HOME` selects the home like `pnpm reset`.
+
+Restore defaults to the home's active chapter (`the-beginning` if there is no `chapters.json`). `--chapter <name>`
+selects another; an explicit `<key>@<name>` also selects that chapter. Later chapters use the cloud key `<key>@<name>`
+(including with `--snapshot`), install into `<home>/chapters/<name>/state.sqlite`, and keep `cloud-backup.json` there.
+Only that chapter's old state moves aside, into `~/.ultimate/backups/restore-<time>/<name>/`; the home-wide journal and
+locks still guard the restore. Restoring a later chapter registers it in `chapters.json` if needed and makes it active.
+The first chapter keeps the original key, paths and restore behaviour.
 
 **Join** (⌘K → **Join cloud fleet**, or **Join** on the setup row) asks for the cloud URL, machine name and both
 secrets, checks `GET /sync/register` with the token (401: "The cloud refused the token"; anything else but 200:
