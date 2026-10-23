@@ -33,7 +33,7 @@ import { isolatable } from '../../lib/git.ts'
 
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import { locate, postAction, selfAddress } from '../../lib/remote.ts'
-import { discoverAgents } from '../../lib/agents.ts'
+import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
 import { parseDecisions } from '../../lib/decisions.ts'
 import { LineageApi, Roots } from '../lineage/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
@@ -1360,6 +1360,16 @@ export default function messages(host: ExtensionHost) {
             )
             const coordinator = definitions.find((definition) => definition.name === 'coordinator')
             if (!coordinator) throw new Error('Missing coordinator definition')
+            // The model and thinking level the definition pins, thinking clamped to what the model supports; without a
+            // pin, the root's own, which the fork inherits anyway.
+            const rootAgent = await (await host
+              .harness()
+              .conversation(root as ConversationId, ctx))!.agent(ctx)
+            const { model, thinkingLevel } = definitionAgent(
+              coordinator,
+              rootAgent,
+              host.modelRuntime,
+            )
             const branch = await lineage.branch(
               {
                 from: root,
@@ -1369,10 +1379,12 @@ export default function messages(host: ExtensionHost) {
                 deliver: false,
                 by: from,
                 receipt: { taskId: api.taskId, callId: api.callId },
+                ...(model ? { model } : {}),
+                ...(thinkingLevel ? { thinkingLevel } : {}),
               },
               ctx,
             )
-            // The fork has no input yet. Only instructions change: its model and tools stay inherited.
+            // The fork has no input yet. Its instructions come from the definition; its tools stay inherited.
             await host.harness().commit(async (tx) => {
               await configure(tx, branch.id, { instructions: coordinator.instructions })
               ;(await tx.doc(host.metadata, branch.id)).label = 'coordinator'
