@@ -37,7 +37,7 @@ import {
   SummaryDiscarded,
 } from '../extensions/conversations/summary.ts'
 
-it.concurrent.each(['agent', 'lander'])(
+it.each(['agent', 'lander'])(
   'never schedules summaries for a standing %s',
   async (label) => {
     const f = await launch(false, true)
@@ -62,7 +62,7 @@ it.concurrent.each(['agent', 'lander'])(
   },
 )
 
-it.concurrent.each(['agent', 'lander'])(
+it.each(['agent', 'lander'])(
   'ends a summary admitted before the conversation became a standing %s without writing it',
   async (label) => {
     const f = await launch()
@@ -298,7 +298,7 @@ it('does not request question extraction after an accepted reply summary', async
   expect(f.questionsRequested).not.toHaveBeenCalled()
 })
 
-it.concurrent.each([false, true])(
+it.each([false, true])(
   'refreshes during an actual subagent start, background=%s, while parent and child are busy',
   async (background) => {
     const fixture = await launch(true)
@@ -446,7 +446,7 @@ it.concurrent.each([false, true])(
   },
 )
 
-it.concurrent.each(['rename', 'newer'] as const)(
+it.each(['rename', 'newer'] as const)(
   'protects a held spawn result after %s',
   async (change) => {
     const fixture = await launch()
@@ -491,7 +491,7 @@ it.concurrent.each(['rename', 'newer'] as const)(
   },
 )
 
-it.concurrent.each([2, 3])(
+it.each([2, 3])(
   'settles a held spawn superseded by reply-only exchange %s without changing cadence',
   async (exchange) => {
     const fixture = await launch()
@@ -545,7 +545,7 @@ it.concurrent.each([2, 3])(
   },
 )
 
-it.concurrent('summarizes the first, fourth and seventh completed exchanges, not tools, streams or idle time; persists across reopen', async () => {
+it('summarizes the first, fourth and seventh completed exchanges, not tools, streams or idle time; persists across reopen', async () => {
   const fixture = await launch()
   const { server } = fixture
   let generation = 0
@@ -620,7 +620,7 @@ it.concurrent('summarizes the first, fourth and seventh completed exchanges, not
   expect(await fixture.titleChanges()).toEqual(changes)
 })
 
-it.concurrent('logs each accepted title change once, but not a manual rename to the generated title', async () => {
+it('logs each accepted title change once, but not a manual rename to the generated title', async () => {
   const fixture = await launch()
   const started = Date.now()
   await fixture.exchange()
@@ -657,7 +657,7 @@ it.concurrent('logs each accepted title change once, but not a manual rename to 
   expect(await fixture.titleChanges()).toEqual(changes)
 })
 
-it.concurrent('keeps an explicit API title even when it equals the first input', async () => {
+it('keeps an explicit API title even when it equals the first input', async () => {
   const fixture = await launch()
   const text = 'This preexisting title equals the prompt.'
   const created = await post(fixture.server, '/api/conversations', { title: text })
@@ -678,7 +678,7 @@ it.concurrent('keeps an explicit API title even when it equals the first input',
   expect(await fixture.titleChanges(id)).toEqual([])
 })
 
-it.concurrent('protects preexisting and in-flight manual titles, and blank rename restores automatic naming', async () => {
+it('protects preexisting and in-flight manual titles, and blank rename restores automatic naming', async () => {
   const fixture = await launch()
   await fixture.server.harness.commit(async (tx) => {
     ;(await tx.doc(Metadata, fixture.server.root.id)).title = 'Existing title'
@@ -727,7 +727,7 @@ it.concurrent('protects preexisting and in-flight manual titles, and blank renam
   expect(await fixture.titleChanges()).toHaveLength(1)
 })
 
-it.concurrent('isolates provider errors', async () => {
+it('isolates provider errors', async () => {
   const fixture = await launch(false, false, false, true)
   fixture.generated.mockRejectedValueOnce(new Error('Provider offline'))
   fixture.generated.mockRejectedValueOnce(new Error('Provider offline'))
@@ -748,7 +748,7 @@ it.concurrent('isolates provider errors', async () => {
   expect(fixture.generated).toHaveBeenCalledTimes(4)
 })
 
-it.concurrent('assesses owned children without renaming them, summarizes ownerless forks, and does not backfill', async () => {
+it('assesses owned children without renaming them, summarizes ownerless forks, and does not backfill', async () => {
   const fixture = await launch()
   const root = fixture.server.root
   await fixture.server.harness.commit(
@@ -844,7 +844,7 @@ it.concurrent('assesses owned children without renaming them, summarizes ownerle
   expect(fixture.generated.mock.calls.filter((call) => call[5] === 'intent')).toHaveLength(1)
 })
 
-it.concurrent.each([false, true])(
+it.each([false, true])(
   'does not request abstracts without a branch, lineage=%s',
   async (lineage) => {
     const fixture = await launch(false, false, lineage)
@@ -855,7 +855,7 @@ it.concurrent.each([false, true])(
   },
 )
 
-it.concurrent('writes each branch abstract atomically with its accepted answer and reuses it next time', async () => {
+it('writes each branch abstract atomically with its accepted answer and reuses it next time', async () => {
   const fixture = await launch(false, false, false, true)
   await fixture.exchange()
   const state = await fixture.read()
@@ -875,7 +875,7 @@ it.concurrent('writes each branch abstract atomically with its accepted answer a
   expect(fixture.generated.mock.calls[1][3]).toBe(false)
 })
 
-it.concurrent.each(['error', 'aborted'] as const)(
+it.each(['error', 'aborted'] as const)(
   'does not abstract an %s main answer',
   async (stopReason) => {
     const fixture = await launch(false, false, false, true)
@@ -891,7 +891,7 @@ it.concurrent.each(['error', 'aborted'] as const)(
   },
 )
 
-it.concurrent('rejects an older response after a newer scheduled summary has completed', async () => {
+it('rejects an older response after a newer scheduled summary has completed', async () => {
   const fixture = await launch()
   let release!: () => void
   const gate = new Promise<void>((done) => {
@@ -924,7 +924,7 @@ it.concurrent('rejects an older response after a newer scheduled summary has com
   expect(await fixture.titleChanges()).toHaveLength(1)
 })
 
-it.concurrent.each(['reply', 'spawn'] as const)(
+it.each(['reply', 'spawn'] as const)(
   'resumes pending %s generation after shutdown without a stuck checkpoint',
   async (mode) => {
     const fixture = await launch()
@@ -954,7 +954,7 @@ it.concurrent.each(['reply', 'spawn'] as const)(
   },
 )
 
-it.concurrent.each(['none', 'legacy'])(
+it.each(['none', 'legacy'])(
   'skips summaries and assessments when the chosen Codex Luna is unavailable (%s)',
   async (available) => {
     const fixture = await launch()
@@ -1001,7 +1001,7 @@ it.concurrent.each(['none', 'legacy'])(
   },
 )
 
-it.concurrent.each([
+it.each([
   ['  Conversation\n sidebar\t rendering extra words  ', 'Conversation sidebar rendering'],
   ['ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 extra words', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456'],
   ['Conversation-specific Rendering UI', 'Conversation-specific Rendering'],
@@ -1037,7 +1037,7 @@ it.concurrent.each([
 
 const userMessage = (content: string) => ({ role: 'user' as const, content, timestamp: 1 })
 
-it.concurrent('leaves a Play note out of what names and summarizes a conversation', () => {
+it('leaves a Play note out of what names and summarizes a conversation', () => {
   const user = userMessage
   const entries = [
     { kind: 'pi.user', model: [user('phases demo')] },
@@ -1049,14 +1049,14 @@ it.concurrent('leaves a Play note out of what names and summarizes a conversatio
   expect(input).not.toContain('Paused for')
 })
 
-it.concurrent('includes the previous feature next to the previous summary in model input', () => {
+it('includes the previous feature next to the previous summary in model input', () => {
   expect(summaryInput([], 'Previous work.', 'Bash rendering')).toContain(
     'Previous summary: Previous work.\n\nPrevious feature: Bash rendering',
   )
   expect(summaryInput([])).not.toContain('Previous feature:')
 })
 
-it.concurrent('keeps the start and end of a long reply and marks what it left out', () => {
+it('keeps the start and end of a long reply and marks what it left out', () => {
   const report = `Verdict: NEEDS CHANGES\n${'finding '.repeat(500)}\nResidual risks: none.`
   const input = summaryInput([
     { role: 'assistant', content: [{ type: 'text', text: report }] } as never,
@@ -1066,7 +1066,7 @@ it.concurrent('keeps the start and end of a long reply and marks what it left ou
   expect(input.endsWith('Residual risks: none.')).toBe(true)
 })
 
-it.concurrent('asks a root for the feature its whole tree builds', async () => {
+it('asks a root for the feature its whole tree builds', async () => {
   const branch = await launch()
   await branch.exchange()
   expect(branch.generated.mock.calls.at(-1)![6]).toBeFalsy()
@@ -1075,7 +1075,7 @@ it.concurrent('asks a root for the feature its whole tree builds', async () => {
   expect(root.generated.mock.calls.at(-1)![6]).toBe(true)
 })
 
-it.concurrent('stores and exposes a feature and keeps it when omitted', async () => {
+it('stores and exposes a feature and keeps it when omitted', async () => {
   const fixture = await launch()
   fixture.generated.mockResolvedValueOnce({
     activity: 'Added labels.',
@@ -1100,7 +1100,7 @@ it.concurrent('stores and exposes a feature and keeps it when omitted', async ()
   ).toBe('Improve the conversation sidebar')
 })
 
-it.concurrent('validates reply-only JSON and rejects a malformed activity', async () => {
+it('validates reply-only JSON and rejects a malformed activity', async () => {
   let output: unknown = {
     activity: 'Asked the coordinator to choose a deployment target.',
   }
@@ -1211,7 +1211,7 @@ it.concurrent('validates reply-only JSON and rejects a malformed activity', asyn
   }
 })
 
-it.concurrent('publishes initial intent while the main model request is blocked, once across retries and reopen', async () => {
+it('publishes initial intent while the main model request is blocked, once across retries and reopen', async () => {
   const fixture = await launch(false, true)
   const { server } = fixture
   let release!: () => void
@@ -1289,7 +1289,7 @@ it.concurrent('publishes initial intent while the main model request is blocked,
   expect(await intents()).toEqual(entries)
 })
 
-it.concurrent.each(['newer', 'spawn'] as const)(
+it.each(['newer', 'spawn'] as const)(
   'rejects a held initial intent after %s',
   async (change) => {
     const fixture = await launch(false, true)
@@ -1354,7 +1354,7 @@ it.concurrent.each(['newer', 'spawn'] as const)(
   },
 )
 
-it.concurrent('keeps an exchange answered across a mid-run compaction and reopen; only a reset ends it', async () => {
+it('keeps an exchange answered across a mid-run compaction and reopen; only a reset ends it', async () => {
   const fixture = await launch()
   const { server } = fixture
   let release!: () => void
@@ -1432,7 +1432,7 @@ it.concurrent('keeps an exchange answered across a mid-run compaction and reopen
   expect((await row())?.answerId).toBeUndefined()
 })
 
-it.concurrent('derives the same overview rows live and from a fresh open, with no summary model available', async () => {
+it('derives the same overview rows live and from a fresh open, with no summary model available', async () => {
   const fixture = await launch()
   const install = () => {
     const registry = fixture.server.host.registry
@@ -1559,7 +1559,7 @@ it.concurrent('derives the same overview rows live and from a fresh open, with n
   expect(await rows()).toEqual(built)
 })
 
-it.concurrent('records an accepted reply summary as an entry traced to its summary and generation tasks', async () => {
+it('records an accepted reply summary as an entry traced to its summary and generation tasks', async () => {
   const fixture = await launch()
   await fixture.exchange()
   const state = (await fixture.read())!
@@ -1594,7 +1594,7 @@ it.concurrent('records an accepted reply summary as an entry traced to its summa
   expect(JSON.stringify(view.messages)).not.toContain('Added concise summaries')
 })
 
-it.concurrent.each(['answers', 'fails'] as const)(
+it.each(['answers', 'fails'] as const)(
   'follows an older follow-up delivered after a newer steer when it %s, live and after reopen',
   async (outcome) => {
     const fixture = await launch()
