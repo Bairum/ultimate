@@ -33,6 +33,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
+import { shortTitle } from '../../lib/title.ts'
 import { apiSource, apiSummaries } from '../../lib/api-files.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { ActionContext } from '../../server/actions.ts'
@@ -149,7 +150,10 @@ function localReads(host: ExtensionHost, context: Context) {
     }
     return matches
   }
-  /** Every conversation with its summary (title, label, cwd, busy, latest input) and whether it is concluded. */
+  /**
+   * Every conversation with its summary (title, label, cwd, busy, latest input) and whether it is concluded.
+   * Titles are shortened: old subagent titles hold whole prompts and would push the listing past the read limit.
+   */
   const listed = async () => {
     const summaries = new Map(host.conversations().map((summary) => [summary.id, summary]))
     const concluded = (await host.uiState(context))['ext.conversations.concluded']
@@ -159,7 +163,7 @@ function localReads(host: ExtensionHost, context: Context) {
       return {
         ...record,
         ...(summary && {
-          title: summary.title,
+          title: summary.title === undefined ? undefined : shortTitle(summary.title),
           label: summary.label,
           cwd: summary.cwd,
           busy: summary.busy,
