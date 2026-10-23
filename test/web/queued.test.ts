@@ -43,6 +43,15 @@ describe('previewParts', () => {
   it('marks line breaks with ↵ so a merged steer shows its seams', () => {
     expect(previewParts('first\nsecond \n third')).toEqual({ head: 'first ↵ second ↵ third' })
   })
+  it('keeps a short merged line whole in the tail, seam included', () => {
+    const merged = `${'first steer '.repeat(10)}\nsecond: END`
+    expect(previewParts(merged)).toEqual({
+      head: 'first steer '.repeat(10).trimEnd(),
+      tail: ' ↵ second: END',
+    })
+    const longLast = `${'a'.repeat(30)}\n${'b'.repeat(100)}`
+    expect(previewParts(longLast).tail).toBe('b'.repeat(40))
+  })
 })
 
 describe('atFirstLine', () => {

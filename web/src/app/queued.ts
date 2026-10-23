@@ -25,7 +25,8 @@ export const queuedLine = (text: string) => text.replace(/\s*\n\s*/g, ' ↵ ')
 
 /**
  * The queued line as a head that may truncate and a tail that always shows, so a long text keeps its start and its
- * end with the ellipsis between them. Short texts are all head.
+ * end with the ellipsis between them. A short last line is the tail with its seam, so a merged steer shows what was
+ * added. Short texts are all head.
  */
 export function previewParts(
   text: string,
@@ -33,7 +34,9 @@ export function previewParts(
 ): { head: string; tail?: string } {
   const line = queuedLine(text)
   if (line.length <= limit) return { head: line }
-  return { head: line.slice(0, -tail), tail: line.slice(-tail) }
+  const seam = line.lastIndexOf(' ↵ ')
+  const at = seam >= 0 && line.length - seam <= tail * 1.5 ? seam : line.length - tail
+  return { head: line.slice(0, at), tail: line.slice(at) }
 }
 
 /** Whether the caret sits on the first line of `value`, where ↑ has nowhere to go. */

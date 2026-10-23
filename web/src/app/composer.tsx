@@ -128,6 +128,11 @@ function Inbox({ items }: { items: readonly InboxItem[] }) {
           )
         })}
       </div>
+      <div className="mt-0.5 flex justify-end text-[11px] text-muted-foreground/70 pointer-coarse:hidden">
+        <span>
+          <Kbd>↑</Kbd> edit queued
+        </span>
+      </div>
       {error && <p className="mt-1 text-error">{error}</p>}
     </div>
   )
@@ -367,12 +372,6 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
                 (busy && !target ? (
                   <span className="pointer-coarse:hidden">
                     <Kbd>↵</Kbd> steer · <Kbd>{alt} ↵</Kbd> follow-up · <Kbd>esc</Kbd> stop
-                    {queued.length > 0 && (
-                      <>
-                        {' '}
-                        · <Kbd>↑</Kbd> edit queued
-                      </>
-                    )}
                   </span>
                 ) : null)}
             </span>
