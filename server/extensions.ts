@@ -168,6 +168,9 @@ export async function loadExtensions(
     let sharedResource = false
     const facetHost = {
       ...extensionHost,
+      get chapter() {
+        return extensionHost.chapter
+      },
       provide: (serviceName, value) => {
         provided.get(facetHost)!.set(serviceName, value)
         if (facetHosts.get(name) === facetHost)

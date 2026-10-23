@@ -21,6 +21,7 @@ import {
   post,
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
+import { FIRST_CHAPTER, requestChapter } from '../lib/chapters.ts'
 import { Store, SummaryDoc } from '../extensions/codemode/server.ts'
 import { Summarized } from '../extensions/codemode/refs.ts'
 import planExtension from '../extensions/plan/server.ts'
@@ -60,7 +61,7 @@ async function fixture() {
       .replace("'../../lib/agents.ts'", JSON.stringify(resolve('lib/agents.ts')))
       .replace("'../../lib/api-files.ts'", JSON.stringify(resolve('lib/api-files.ts'))),
   )
-  for (const file of ['api.ts', 'projects.ts', 'refs.ts', 'summary.ts'])
+  for (const file of ['api.ts', 'chapters.ts', 'projects.ts', 'refs.ts', 'summary.ts'])
     await cp(resolve('extensions/codemode', file), join(ultimateRoot, 'extensions/codemode', file))
   const options = {
     ultimateRoot,
@@ -79,6 +80,44 @@ async function fixture() {
   await writeFile(join(server.host.home, 'scratch.txt'), 'before\n')
   return { server, options }
 }
+it('reads an inactive chapter through the sandbox and rejects project with chapter', async () => {
+  const { server, options } = await fixture()
+  await server.harness.commit(async (tx) => {
+    await tx.appendEntry(server.root.id, {
+      kind: 'chapter.note',
+      data: { text: 'closed-chapter-needle' },
+    })
+  }, context)
+  const live = (await server.root.entries({}, 100, undefined, context)).items.filter(
+    (entry) => entry.kind === 'chapter.note',
+  )
+  await server.vite.watcher.close()
+  await server.close()
+  servers.splice(servers.indexOf(server), 1)
+  await requestChapter(options.home, 'next')
+  const next = await createServer(options)
+  servers.push(next)
+  const result = await run(
+    next,
+    `return {
+    entries: await ultimate.entries(${server.root.id}, { chapter: '${FIRST_CHAPTER}', kinds: ['chapter.note'] }),
+    search: await ultimate.search('closed-chapter-needle', { chapter: '${FIRST_CHAPTER}', limit: 1 }),
+    conversations: await ultimate.conversations({ chapter: '${FIRST_CHAPTER}' })
+  };`,
+  )
+  expect(result.data.isError).not.toBe(true)
+  expect(result.data.details.value).toMatchObject({
+    entries: live,
+    search: live,
+    conversations: expect.arrayContaining([expect.objectContaining({ id: server.root.id })]),
+  })
+  const conflict = await run(
+    next,
+    `return await ultimate.entries(1, { project: 'anything', chapter: '${FIRST_CHAPTER}' });`,
+  )
+  expect(conflict.data.details.error).toContain('chapter and project cannot be used together')
+})
+
 it('keeps codemode guidance without repeating top-level tool schemas', async () => {
   const { server } = await fixture()
   const agent = await server.root.agent(context)

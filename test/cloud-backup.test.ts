@@ -10,6 +10,7 @@ import { backUp, backupPath, classify, Conflict, readBackup } from '../extension
 import { BackupEvent } from '../extensions/cloud/refs.ts'
 import { uploadSnapshot } from '../extensions/cloud/snapshot.ts'
 import { git } from '../lib/git.ts'
+import { chapterFiles, FIRST_CHAPTER, readChapters } from '../lib/chapters.ts'
 import { prepareHarness } from '../server/harness.ts'
 import { acquireLock } from '../server/lock.ts'
 import { findProject, main, restore } from '../scripts/restore.ts'
@@ -367,6 +368,125 @@ async function cli(user: string, home: string, ...args: string[]) {
     vi.unstubAllEnvs()
   }
 }
+
+it('restores chapters by name, explicit key and snapshot, defaulting to the active chapter', async () => {
+  const worker = cloudStub()
+  vi.stubGlobal('fetch', worker.fetch)
+  try {
+    const other = own()
+    const source = await checkout(other)
+    const first = await back(source, 'desk', { key: other })
+    const chapter = 'fresh-roots'
+    const chapterKey = `${other}@${chapter}`
+    const chapterSource = await machine(['chapter notes'])
+    const next = await backUp({
+      ...cloud,
+      key: chapterKey,
+      machine: 'desk',
+      dir: chapterSource.home,
+      projectRoot: source.projectRoot,
+    })
+    const target = await machine(['keep first'])
+    const user = await temp()
+    const files = chapterFiles(target.home, chapter)
+    const printed = await cli(
+      user,
+      target.home,
+      'app',
+      '--chapter',
+      chapter,
+      '--dir',
+      source.projectRoot,
+      '--yes',
+    )
+    expect(printed).toContain(`Installed backup ${next.id}`)
+    expect(printed).toContain(files.database)
+    expect(notes(files.dir)).toEqual(['chapter notes'])
+    expect(notes(target.home)).toEqual(['keep first'])
+    expect(await readBackup(files.dir, chapterKey)).toEqual({
+      key: chapterKey,
+      parent: next.id,
+      last: next,
+    })
+    expect(await readChapters(target.home)).toMatchObject({
+      active: chapter,
+      chapters: [{ name: FIRST_CHAPTER }, { name: chapter }],
+    })
+    // No flag now selects the active chapter, including for a named snapshot.
+    expect(
+      await cli(user, target.home, '--snapshot', next.id, '--dir', source.projectRoot, '--yes'),
+    ).toContain(`Installed backup ${next.id}`)
+    expect(await readBackup(files.dir, chapterKey)).toMatchObject({
+      key: chapterKey,
+      parent: next.id,
+    })
+    expect(notes(target.home)).toEqual(['keep first'])
+    // Default register lookup also follows the active chapter.
+    expect(await cli(user, target.home, '--dir', source.projectRoot, '--yes')).toContain(
+      `Installed backup ${next.id}`,
+    )
+    // A chapter key by itself derives the chapter, even in a fresh home.
+    const fresh = await temp()
+    expect(await cli(user, fresh, chapterKey, '--dir', source.projectRoot, '--yes')).toContain(
+      `Installed backup ${next.id}`,
+    )
+    expect(notes(chapterFiles(fresh, chapter).dir)).toEqual(['chapter notes'])
+    expect((await readChapters(fresh)).active).toBe(chapter)
+    // The shared project name is not ambiguous: the first chapter still selects the bare key.
+    const firstHome = await temp()
+    expect(await cli(user, firstHome, 'app', '--dir', source.projectRoot, '--yes')).toContain(
+      `Installed backup ${first.id}`,
+    )
+    expect(await readBackup(firstHome, other)).toEqual({
+      key: other,
+      parent: first.id,
+      last: first,
+    })
+    expect(existsSync(join(firstHome, 'chapters.json'))).toBe(false)
+  } finally {
+    vi.stubGlobal('fetch', stub.fetch)
+  }
+})
+
+it('finishes an interrupted chapter restore under the home journal without moving other chapters', async () => {
+  const other = own()
+  const source = await checkout(other)
+  const nextKey = `${other}@next`
+  const snapshot = await back(source, 'desk', { key: nextKey })
+  const target = await machine(['first stays'])
+  const files = chapterFiles(target.home, 'next')
+  await mkdir(files.dir, { recursive: true })
+  await writeFile(join(files.dir, 'state.sqlite'), 'old chapter')
+  const backups = await temp()
+  const now = new Date('2026-10-21T11:00:00Z')
+  const backup = join(backups, 'restore-2026-10-21T11-00-00-000Z', 'next')
+  await mkdir(backup, { recursive: true })
+  await writeFile(join(backup, 'state.sqlite'), 'blocks move')
+  await expect(
+    restore({
+      ...cloud,
+      key: nextKey,
+      id: snapshot.id,
+      home: target.home,
+      chapter: 'next',
+      projectRoot: source.projectRoot,
+      backups,
+      now,
+    }),
+  ).rejects.toThrow('refusing to overwrite the backup')
+  expect(JSON.parse(await readFile(join(target.home, 'reset.json'), 'utf8'))).toMatchObject({
+    chapter: 'next',
+  })
+  expect((await readChapters(target.home)).active).toBe(FIRST_CHAPTER)
+  await rm(join(backup, 'state.sqlite'))
+  // A rerun needs neither the chapter flag nor the cloud register.
+  await cli(await temp(), target.home, '--dir', source.projectRoot, '--yes')
+  expect(notes(target.home)).toEqual(['first stays'])
+  expect(notes(files.dir)).toEqual([])
+  expect((await readChapters(target.home)).active).toBe('next')
+  expect(await readBackup(files.dir, nextKey)).toMatchObject({ key: nextKey, parent: snapshot.id })
+  expect(existsSync(join(target.home, 'reset.json'))).toBe(false)
+})
 
 it('restores a named snapshot the register never listed, and warns that it lacks its path', async () => {
   const other = own()
