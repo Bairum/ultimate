@@ -106,6 +106,9 @@ See [integration details](docs/worktrees.md#standing-permission-to-push-this-rep
 
 ## Review quality
 
+Rules about how agents behave live in prompts and agent definitions, not in code. Code checks protect only safety and
+invalid states: data loss, security, impossible states. Lint enforces only what the user explicitly asked for.
+
 A swallowed error needs a reason comment explaining why ignoring it is correct; `ultimate/no-silent-catch` enforces this for empty catch blocks and empty or `undefined`-returning `.catch` handlers.
 
 Reject slop and jargon: keep code and explanations direct, minimal, and grounded in evidence. No backward-compatibility

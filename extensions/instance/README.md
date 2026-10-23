@@ -10,6 +10,8 @@ home after stopping the instance.
 
 Start uses a temporary home unless a separate home is supplied. A preview cannot share the host's home or another running preview's home. The child binds to localhost port zero; the tool reads its `Ultimate: <URL>` stdout line and checks `/api/models`. Startup has a 60-second deadline, with the output tail included in errors.
 
+A preview runs `server/main.ts` without the supervisor, so it cannot restart: verify restart and chapter-switch flows on a supervised scratch server instead (`ULTIMATE_HOME=$(mktemp -d) pnpm start --port <free port> --no-open`, see `docs/running.md`), and delete its home afterwards. A state no server can reach is reported as unverified, never faked by injecting entries.
+
 A preview runs the configured models and spends tokens: seed it by prompting it as a user would. Provider logins are read from `~/.pi/agent`, never copied. No state is copied; a workspace preview follows its main checkout's project decision, as every linked worktree does. Each preview keeps its own SQLite storage and Vite cache.
 
 Logs returns the last 200 lines; list shows running instances. At most three may run, including starts in progress; shutdown stops them all. Logs are available until stop. After the child exits, stop and host shutdown remove tool-created temporary homes, their registered Git worktrees (including dirty preview scratch) and workspace branches named with that preview home's hash. Any foreign branch checked out in a preview is preserved. An explicitly supplied `home` is preserved, including its worktrees and branches, for reuse or inspection.
