@@ -1368,6 +1368,8 @@ function pauser(f: Awaited<ReturnType<typeof fixture>>) {
       return resources.get(key) as T
     },
     onOpen: () => {},
+    onClose: () => {},
+    onRelease: () => {},
     // Pause fills Messages’ `messages.gate` point; the fixture's `want` hands it to Messages.
     implement: (api: { name: string }, value: unknown) => void f.provided.set(api.name, value),
     conversations: () => [],
