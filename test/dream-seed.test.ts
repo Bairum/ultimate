@@ -109,6 +109,8 @@ async function fixture() {
             updated: 10,
           },
           lesson: { kind: 'lesson', line: 'Read first', body: 'Read the code.', updated: 20 },
+          // A valid slug that a plain object would shadow with its prototype's.
+          constructor: { kind: 'fact', line: 'Builds', body: 'Constructors.', updated: 30 },
         }
         const todos = await tx.doc(Todos, ROOT_CONVERSATION_ID)
         todos.items.push(
@@ -135,6 +137,16 @@ async function fixture() {
             { text: `Choose ${id}?`, kind: 'confirm' },
           ]
         }
+        // Open, but its questions were never extracted: the message itself is the question.
+        board.messages.push({
+          id: 103,
+          from: 1,
+          to: 'user',
+          text: 'Question 103',
+          at: 1,
+          reply: true,
+          state: 'delivered',
+        })
         await startSession(tx, 1)
         await fileJournal(
           tx,
@@ -167,14 +179,18 @@ it('carries the seed into a fresh chapter once, including user memory and its pa
   ] as Subscription[])
   const seed = await buildSeed(f.host, 1)
   expect(seed.counts).toEqual({
-    memories: 2,
+    memories: 3,
     todos: 1,
-    questions: 1,
+    questions: 2,
     automations: 1,
     subscriptions: 2,
   })
+  expect(seed.memories.constructor).toMatchObject({ line: 'Builds' })
   expect(seed.journal.proposals[0].status).toBe('open')
-  expect(seed.questions).toEqual([{ text: 'Choose 100?', ref: '#100' }])
+  expect(seed.questions).toEqual([
+    { text: 'Choose 100?', ref: '#100' },
+    { text: 'Question 103', ref: '#103' },
+  ])
   expect(seed.todos).toEqual([{ text: 'Keep this', owner: 'ultimate' }])
   expect(seed.automations).toEqual([
     { name: 'Daily', prompt: 'Review', schedule: { kind: 'every', ms: 86400000 } },
@@ -199,9 +215,10 @@ it('carries the seed into a fresh chapter once, including user memory and its pa
   expect(after.todos.items.map(({ text, owner }) => ({ text, owner }))).toEqual([
     { text: 'Keep this', owner: 'ultimate' },
     { text: 'Open question (the-beginning#100): Choose 100?', owner: 'user' },
+    { text: 'Open question (the-beginning#103): Question 103', owner: 'user' },
     { text: 'Recreate subscription S1 (Watch it): Watch the build', owner: 'ultimate' },
   ])
-  expect(after.todos.next).toBe(4)
+  expect(after.todos.next).toBe(5)
   expect(after.seed.applied).toBeGreaterThan(0)
   expect(after.seed.automations).toEqual(['Daily'])
   const chapterEntries = async () => {
@@ -220,7 +237,7 @@ it('carries the seed into a fresh chapter once, including user memory and its pa
   expect(JSON.stringify(entry.model)).toContain('the-beginning#123')
   for (const line of seed.journal.learned) expect(JSON.stringify(entry.model)).toContain(line)
   expect(JSON.stringify(entry.model)).toContain(
-    '2 memories, 1 todos, 1 questions, 1 automations, 2 subscriptions',
+    '3 memories, 1 todos, 2 questions, 1 automations, 2 subscriptions',
   )
   // Simulate the crash window: creation committed but dream did not record its automation receipt.
   await f.harness.commit(async (tx) => {

@@ -7,7 +7,8 @@ import { readJson, writeJson } from '../../lib/json-file.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import type { MemoryItem } from '../lineage/refs.ts'
 import type { Todo } from '../todos/refs.ts'
-import type { Message } from '../messages/refs.ts'
+import { Roots } from '../lineage/api.ts'
+import { Messages } from '../messages/api.ts'
 import type { Question } from '../questions/types.ts'
 import type { Subscription } from '../subscriptions/types.ts'
 import { deliver } from './delivery.ts'
@@ -48,11 +49,10 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
       await document<{ sessions: Session[] }>(host, tx, 'dream.sessions')
     ).sessions.find((item) => item.id === session)
     if (!found?.journal) throw new Error(`Dream session ${session} has no journal`)
-    const roots = (await document<{ roots: number[] }>(host, tx, 'lineage.roots')).roots
-    const memories: Record<string, MemoryItem> = {}
+    const roots = (await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots
+    // A null prototype: `constructor` and the like are valid memory slugs.
+    const memories = Object.create(null) as Record<string, MemoryItem>
     const about = new Set<string>()
-    const questions: Seed['questions'] = []
-    const messages = (await document<{ messages: Message[] }>(host, tx, 'board')).messages
     for (const root of roots) {
       const source = await document<{ memories: Record<string, MemoryItem> }>(
         host,
@@ -64,20 +64,17 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
         if (slug.startsWith('about-')) about.add(slug)
         if (!memories[slug] || memory.updated > memories[slug].updated) memories[slug] = memory
       }
-      const board = await document<{ asked: Record<string, Question[]> }>(
-        host,
-        tx,
-        'questions.board',
-        root,
-      )
-      for (const message of messages) {
-        if (message.to !== 'user' || !message.reply || message.state !== 'delivered') continue
-        for (const question of board.asked[String(message.id)] ?? []) {
-          const ref = `#${message.id}`
-          if (!questions.some((item) => item.ref === ref && item.text === question.text))
-            questions.push({ text: question.text, ref })
-        }
-      }
+    }
+    // Open questions are the user's unanswered messages, as the To-dos panel lists them: their extracted questions, or
+    // the message itself when extraction is off, pending or failed. Both live on conversation 1.
+    const board = await document<{ asked: Record<string, Question[]> }>(host, tx, 'questions.board')
+    const questions: Seed['questions'] = []
+    for (const message of (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages) {
+      if (message.to !== 'user' || !message.reply || message.state !== 'delivered') continue
+      const ref = `#${message.id}`
+      const extracted = board.asked[String(message.id)] ?? []
+      if (extracted.length) for (const { text } of extracted) questions.push({ text, ref })
+      else questions.push({ text: message.text, ref })
     }
     for (const slug of about)
       if (!memories[slug]) throw new Error(`Chapter seed lost user memory ${slug}`)
