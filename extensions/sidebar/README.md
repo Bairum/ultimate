@@ -90,7 +90,8 @@ A row switches to its child, highlights selection and keeps the top-level summar
 invented delegation edges. Expansion is persisted in `ext.conversations.expanded`; buttons support keyboard access.
 
 @ultimate starts coordinator branches; there are no manual creation commands or isolation preferences. The sidebar
-header's Workspaces button opens the read-only checkout panel.
+header names the project's path (`<project> #<worktree>` in a branch checkout), the full path on hover; Info's first
+section lists the checkouts.
 Conclude releases clean, fully landed checkouts, including owned subagent checkouts. Uncommitted files,
 unlanded commits, and busy checkouts are kept.
 Info's Workspace section shows checkouts read-only.

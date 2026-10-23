@@ -133,6 +133,9 @@ function Overlay({
 }
 
 /** The `sidebar` slot as a left column (`mod+b`), or over the conversation on a phone; gone while nothing is in it. */
+/** The docked sidebar's width; the title bar's left part takes it too, so the surface tabs start where the sidebar ends. */
+export const sidebarWidth = 'w-72'
+
 export function Sidebar() {
   useMountRegion('sidebar')
   const open = useRegionOpen('sidebar')
@@ -148,7 +151,7 @@ export function Sidebar() {
     )
   if (!open) return null
   return (
-    <aside className={cn('flex w-72 shrink-0 flex-col border-r', look)}>
+    <aside className={cn('flex shrink-0 flex-col border-r', sidebarWidth, look)}>
       <Slot name="sidebar" />
     </aside>
   )

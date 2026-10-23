@@ -14,10 +14,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import type { SystemInfo } from '../../../shared/protocol.ts'
 import { actions } from '../sdk/actions.ts'
 import { shortenPath } from '../sdk/format.ts'
-import { useExtensions, useStore, useSystem } from '../sdk/hooks.ts'
+import { useExtensions, useRegionOpen, useStore, useSystem } from '../sdk/hooks.ts'
 import { HOME, slotItems, surfaceItems } from '../sdk/registry.ts'
+import { overlays, useViewport } from '../sdk/viewport.ts'
 import { Slot } from './boundary.tsx'
 import { Shortcut } from './palette.tsx'
+import { sidebarWidth } from './primitives.tsx'
+import { useRegion } from './surface.ts'
 
 /**
  * The project as tabs name it: its folder from home. A branch's checkout (`<home>/worktrees/<id>`) is the project's
@@ -38,18 +41,24 @@ export function projectTitle(system: SystemInfo | undefined) {
     : `preview · ${project}`
 }
 
-/** The project's name as the title bar's chip says it: the folder, or `<project> #<worktree>` for a branch's checkout. */
+/**
+ * The project as the title bar's chip says it beside the wordmark: another project's name, a branch checkout's
+ * `#<worktree>`; nothing for Ultimate's own checkout, whose name the wordmark already says.
+ */
 export function projectName(system: SystemInfo | undefined) {
-  if (!system) return undefined
+  if (!system) return ''
   const worktree = /\/\.ultimate\/projects\/(.+)-[\da-f]{8}\/worktrees\/(\d+)$/.exec(
     system.project.root,
   )
-  return worktree ? `${worktree[1]} #${worktree[2]}` : system.project.name
+  const name = worktree?.[1] ?? system.project.name
+  const own = name.toLowerCase() === 'ultimate'
+  return [own ? '' : name, worktree ? `#${worktree[2]}` : ''].filter(Boolean).join(' ')
 }
 
 /**
- * The title bar's project chip: the name, its full path in the tooltip. Pass `menu` to show a chevron and act as a
- * dropdown trigger (spread the trigger's props through); without it the chip is plain text.
+ * The title bar's project chip: `projectName`, its full path in the tooltip; nothing when that is empty and nothing
+ * else is in it. Pass `menu` to show a chevron and act as a dropdown trigger (spread the trigger's props through);
+ * without it the chip is plain text.
  */
 export const ProjectChip = forwardRef<
   HTMLButtonElement,
@@ -57,13 +66,15 @@ export const ProjectChip = forwardRef<
 >(function ProjectChip({ menu, className, children, ...props }, ref) {
   const system = useSystem()
   const name = projectName(system)
-  if (!name) return null
   const preview =
     system && !system.persistence.path.startsWith(`${system.machine.home}/.ultimate/projects/`)
+  if (!system || (!name && !preview && !menu)) return null
   const body = (
     <>
-      {preview && <span className="text-muted-foreground max-md:hidden">preview ·</span>}
-      <span className="truncate">{name}</span>
+      {preview && (
+        <span className="text-muted-foreground max-md:hidden">preview{name && ' ·'}</span>
+      )}
+      {name && <span className="truncate">{name}</span>}
       {children}
       {menu && <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />}
     </>
@@ -92,6 +103,15 @@ export const ProjectChip = forwardRef<
     </button>
   )
 })
+
+/** Whether the shown surface docks an open sidebar beside the conversation. */
+function useDockedSidebar() {
+  const rendered = useRegion('sidebar')
+  const open = useRegionOpen('sidebar')
+  const viewport = useViewport()
+  const filled = slotItems(useExtensions(), 'sidebar').length > 0
+  return rendered && open && filled && !overlays('sidebar', viewport)
+}
 
 /** The project chip, or what extensions put in its place (`titlebar.project`), such as the chip with a menu. */
 function Project() {
@@ -221,14 +241,24 @@ function SurfaceItems() {
  * project chip, `titlebar.left`, the surfaces; then `titlebar.right` and the command palette.
  */
 export function TitleBar() {
+  const docked = useDockedSidebar()
   return (
-    <div className="flex h-9 shrink-0 items-center gap-3 overflow-hidden border-b border-border/70 bg-sidebar px-3 font-mono text-[11.5px] text-muted-foreground">
-      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden whitespace-nowrap">
-        <Brand />
-        <Project />
-        <Slot name="titlebar.left" variant="inline" />
-        <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border max-md:hidden" />
-        <SurfaceItems />
+    <div className="flex h-9 shrink-0 items-center gap-3 overflow-hidden border-b border-border/70 bg-sidebar pr-3 font-mono text-[11.5px] text-muted-foreground">
+      <div className="flex min-w-0 flex-1 items-center overflow-hidden whitespace-nowrap">
+        {/* As wide as a docked sidebar, so the surfaces start where the conversation does. */}
+        <div
+          className={cn(
+            'flex min-w-0 items-center gap-2 overflow-hidden pl-3',
+            docked ? cn(sidebarWidth, 'shrink-0 pr-2') : 'shrink pr-3',
+          )}
+        >
+          <Brand />
+          <Project />
+          <Slot name="titlebar.left" variant="inline" />
+        </div>
+        <div className={cn('flex shrink-0 items-center', docked && 'pl-2')}>
+          <SurfaceItems />
+        </div>
       </div>
       <div className="flex shrink-0 items-center gap-3 whitespace-nowrap">
         <Slot name="titlebar.right" variant="inline" />
