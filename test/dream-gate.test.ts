@@ -26,7 +26,7 @@ function instance() {
       })
       expect(
         await readJson<Seed | null>(join(home, 'chapters/fresh-roots/seed.json'), null),
-      ).toEqual(seed)
+      ).toEqual({ ...seed, gate: true })
       return { id: 'gate', url: 'http://127.0.0.1:12345' }
     }),
     stop: vi.fn<InstanceService['stop']>(async () => {}),
@@ -54,7 +54,7 @@ it('boots the switch-shaped scratch home, checks every invariant through HTTP, t
 it.each([
   ['memories', { 'lineage.memory': { memories: {} } }],
   ['todos', { todos: { items: [{}, {}] } }],
-  ['automations', { automations: [] }],
+  ['automations', { 'dream.seed': { automations: [] } }],
   [
     'memory brief',
     {
@@ -77,18 +77,15 @@ it.each([
 })
 
 it('fails a missing chapter entry after the passive effects deadline', async () => {
-  vi.useFakeTimers()
+  vi.useFakeTimers({ toFake: ['Date'] })
   const f = instance()
-  const firstSearch = Promise.withResolvers<void>()
   inspection(
     () => f.seed,
     () => ({ entries: [] }),
-    () => firstSearch.resolve(),
+    // The search returns at the deadline; no real timer (node:timers/promises) needs to elapse.
+    () => vi.setSystemTime(Date.now() + 10_000),
   )
-  const pending = gate(f.seed, 'fresh-roots', f.api)
-  await firstSearch.promise
-  await vi.advanceTimersByTimeAsync(10_100)
-  const result = await pending
+  const result = await gate(f.seed, 'fresh-roots', f.api)
   expect(result.checks.find((item) => item.name === 'chapter entry')?.ok).toBe(false)
   expect(f.api.stop).toHaveBeenCalledOnce()
   expect(existsSync(f.home())).toBe(false)

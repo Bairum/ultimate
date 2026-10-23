@@ -2,8 +2,9 @@ import { join } from 'node:path'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Tx } from '@earendil-works/pi-durable'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { requestChapter } from '../lib/chapters.ts'
+import { writeJson } from '../lib/json-file.ts'
 import { context, prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
@@ -40,12 +41,25 @@ async function fixture() {
   let opener: () => Promise<void>
   let subscriptions: Subscription[] = []
   const tokens = [...lineageDocs, Messages, MessageQuestions, Todos, Sessions]
+  const resources = new Map<string, unknown>()
+  const invoke = vi.fn<ExtensionHost['invoke']>(async (extension, action, args) => {
+    if (extension === 'subscriptions' && action === 'list') return subscriptions
+    if (extension !== 'automations' || !['list', 'create', 'describe'].includes(action))
+      throw new Error(`Unexpected action ${extension}/${action}`)
+    return automationActions[action as 'list' | 'create' | 'describe'](args, {
+      host,
+    } as ActionContext)
+  })
   const host = {
     ...prepared,
     get chapter() {
       return prepared.chapter
     },
     harness: () => opened.harness,
+    resource: (key: string, create: () => unknown) => {
+      if (!resources.has(key)) resources.set(key, create())
+      return resources.get(key)
+    },
     metadata: Metadata,
     extensions: () => [{ name: 'subagents', enabled: true }],
     doc: (kind: string) => tokens.find((token) => token.definition.kind === kind),
@@ -65,12 +79,7 @@ async function fixture() {
           return standing.ultimate
         }, context),
     }),
-    invoke: async (extension: string, action: string, args: unknown) => {
-      if (extension === 'subscriptions' && action === 'list') return subscriptions
-      if (extension !== 'automations' || (action !== 'list' && action !== 'create'))
-        throw new Error(`Unexpected action ${extension}/${action}`)
-      return automationActions[action](args as never, { host } as ActionContext)
-    },
+    invoke,
   } as unknown as ExtensionHost
   prepared.registry.install(automations(host))
   prepared.registry.install(dream(host))
@@ -87,6 +96,7 @@ async function fixture() {
   return {
     home,
     host,
+    invoke,
     open,
     close,
     get harness() {
@@ -256,6 +266,101 @@ it('carries the seed into a fresh chapter once, including user memory and its pa
   expect(again.automations).toEqual(after.automations)
   expect(await chapterEntries()).toEqual([entry])
 })
+
+it('checks gate automation schedules without creating any and records receipts exactly once', async () => {
+  const f = await fixture()
+  await f.source()
+  const seed = await buildSeed(f.host, 1)
+  seed.gate = true
+  seed.automations = [
+    {
+      name: 'Daily',
+      prompt: 'Review',
+      schedule: { kind: 'every', ms: 86400000 },
+    },
+    {
+      name: 'Weekly',
+      prompt: 'Read',
+      schedule: { kind: 'cron', expr: '0 9 * * 1', tz: 'Europe/Vienna' },
+    },
+  ]
+  seed.counts.automations = 2
+  await writeSeed(join(f.home, 'chapters', 'preview'), seed)
+  await f.close()
+  await requestChapter(f.home, 'preview')
+  f.invoke.mockClear()
+  await f.open()
+  await applySeed(f.host)
+
+  expect(await automationActions.list(null, { host: f.host } as ActionContext)).toEqual([])
+  expect(
+    f.invoke.mock.calls.map(([extension, action, args]) => ({
+      extension,
+      action,
+      args,
+    })),
+  ).toEqual(
+    seed.automations.map(({ schedule }) => ({
+      extension: 'automations',
+      action: 'describe',
+      args: { schedule },
+    })),
+  )
+  expect((await f.harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context))?.automations).toEqual(
+    ['Daily', 'Weekly'],
+  )
+})
+
+it.each([true, false])(
+  'settles switching sessions on open and clears the chapter-change lock: switched = %s',
+  async (switched) => {
+    const f = await fixture()
+    const sleep = {
+      chapter: 'next',
+      phase: 'switching' as const,
+      backup: { id: 'final' },
+      checks: [],
+      at: 1,
+    }
+    await f.harness.commit(async (tx) => {
+      await startSession(tx, 1)
+      const sessions = (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions
+      sessions[0].endedAt = 2
+      await startSession(tx, 3)
+      sessions[1].endedAt = 4
+      sessions[0].sleep = sleep
+      sessions[1].sleep = {
+        ...sleep,
+        phase: 'failed',
+        error: 'Earlier failure',
+      }
+    }, context)
+    const lock = f.host.resource('dream.switching', () => ({ busy: false }))
+    lock.busy = true
+    await f.close()
+    if (switched)
+      await writeJson(join(f.home, 'chapters.json'), {
+        active: 'the-beginning',
+        chapters: [{ name: 'the-beginning' }, { name: 'next' }],
+      })
+    await f.open()
+
+    const sessions = (await f.harness.snapshot(Sessions, ROOT_CONVERSATION_ID, context))!.sessions
+    expect(sessions[0].sleep).toEqual({
+      ...sleep,
+      phase: switched ? 'asleep' : 'failed',
+      ...(switched ? {} : { error: 'The restart into the new chapter failed' }),
+      at: expect.any(Number),
+    })
+    expect(sessions[0].sleep!.at).toBeGreaterThan(sleep.at)
+    expect(sessions[1].sleep).toEqual({
+      ...sleep,
+      phase: 'failed',
+      error: 'Earlier failure',
+    })
+    expect(lock.busy).toBe(false)
+  },
+)
 
 it('rolls back the entire application when a required document is unavailable', async () => {
   const f = await fixture()

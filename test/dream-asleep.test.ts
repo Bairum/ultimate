@@ -69,11 +69,13 @@ async function fixture() {
   }
   const cloud = {
     status: vi.fn<CloudService['status']>(async () => 'on'),
-    backup: vi.fn<CloudService['backup']>(async () => {
-      expect(existsSync(join(home, 'pending-chapter.json'))).toBe(false)
-      expect(phases.at(-1)?.phase).toBe('backing up')
-      return { id: 'final', at: 1, machine: 'here', bytes: 1, uploaded: 1 }
-    }),
+    backup: vi.fn<CloudService['backup']>(async () => ({
+      id: 'final',
+      at: 1,
+      machine: 'here',
+      bytes: 1,
+      uploaded: 1,
+    })),
   }
   const services = new Map<unknown, unknown>([
     [InstanceApi, instances],
@@ -86,6 +88,7 @@ async function fixture() {
       return []
     },
   )
+  const hold = vi.fn<() => void>()
   const host = {
     home,
     chapter: { name: 'the-beginning', number: 1 },
@@ -96,6 +99,7 @@ async function fixture() {
       return resources.get(key)
     },
     harness: () => ({
+      hold,
       commit: async (run: Parameters<Harness['commit']>[0]) => {
         const result = await harness.commit(run, context)
         const sleep = (await harness.snapshot(Sessions, ROOT_CONVERSATION_ID, context))?.sessions[0]
@@ -112,8 +116,11 @@ async function fixture() {
     restart: vi.fn<ExtensionHost['restart']>(async () => {
       expect(await readJson(join(home, 'pending-chapter.json'), null)).toEqual({
         to: 'fresh-roots',
+        by: process.pid,
       })
-      expect(await readJson(join(home, 'chapters/fresh-roots/seed.json'), null)).toEqual(current)
+      const saved = await readJson<Seed | null>(join(home, 'chapters/fresh-roots/seed.json'), null)
+      expect(saved?.gate).toBeUndefined()
+      expect({ ...saved, gate: true }).toEqual(current)
       return 'Restart refused'
     }),
   } as unknown as ExtensionHost
@@ -156,6 +163,7 @@ async function fixture() {
     phases,
     invoke,
     fetcher,
+    hold,
     current: () => current,
     attempts: () => attempts,
   }
@@ -210,6 +218,11 @@ it.each(['no journal', 'open', 'approved', 'busy', 'no name', 'existing'])(
 it('commits each sleep phase, takes the final backup before journaling, and records restart failure with no pending switch', async () => {
   const f = await fixture()
   await f.journal()
+  f.cloud.backup.mockImplementation(async () => {
+    expect(existsSync(join(f.home, 'pending-chapter.json'))).toBe(false)
+    expect(f.phases.at(-1)?.phase).toBe('backing up')
+    return { id: 'final', at: 1, machine: 'here', bytes: 1, uploaded: 1 }
+  })
   // @ultimate itself may be busy, as when the user invokes the action from its conversation.
   f.host.conversations = () => [{ id: 20, busy: true }] as never
   const result = await actions.asleep({ session: 1 }, f.call)
@@ -357,6 +370,8 @@ it('lists numbered chapters and refuses active, unknown, busy and in-flight swit
   await expect(actions.switch({ chapter: 'the-beginning' }, f.call)).rejects.toThrow(
     'work in flight',
   )
+  expect(f.cloud.status).not.toHaveBeenCalled()
+  expect(f.cloud.backup).not.toHaveBeenCalled()
   expect(f.host.restart).not.toHaveBeenCalled()
   expect(existsSync(join(f.home, 'pending-chapter.json'))).toBe(false)
 })
@@ -372,6 +387,7 @@ it.each(['return', 'throw'])(
     f.host.restart = vi.fn<ExtensionHost['restart']>(async () => {
       expect(await readJson(join(f.home, 'pending-chapter.json'), null)).toEqual({
         to: 'fresh-roots',
+        by: process.pid,
       })
       if (failure === 'throw') throw new Error('Restart failed')
       return 'Restart failed'
@@ -379,6 +395,68 @@ it.each(['return', 'throw'])(
     await expect(actions.switch({ chapter: 'fresh-roots' }, f.call)).rejects.toThrow(
       'Restart failed',
     )
+    expect(existsSync(join(f.home, 'pending-chapter.json'))).toBe(false)
+  },
+)
+
+it.each([true, false])(
+  'rechecks idleness at restart approval and holds only an idle scheduler: busy = %s',
+  async (busy) => {
+    const f = await fixture()
+    await writeJson(join(f.home, 'chapters.json'), {
+      active: 'the-beginning',
+      chapters: [{ name: 'the-beginning' }, { name: 'fresh-roots' }],
+    })
+    f.host.restart = vi.fn<ExtensionHost['restart']>(async (approved) => {
+      f.host.conversations = () =>
+        busy
+          ? ([{ id: 30, busy: true, title: 'Late work' }] as never)
+          : ([{ id: 20, busy: true }] as never)
+      await approved(2)
+      expect(f.hold).toHaveBeenCalledOnce()
+      return 'Restart refused'
+    })
+
+    await expect(actions.switch({ chapter: 'fresh-roots' }, f.call)).rejects.toThrow(
+      busy ? '#30 Late work' : 'Restart refused',
+    )
+    expect(f.host.restart).toHaveBeenCalledOnce()
+    expect(f.hold).toHaveBeenCalledTimes(busy ? 0 : 1)
+    expect(existsSync(join(f.home, 'pending-chapter.json'))).toBe(false)
+  },
+)
+
+it.each([true, false])(
+  'backs up before switch restart without recording sleep progress: cloud = %s',
+  async (enabled) => {
+    const f = await fixture()
+    await writeJson(join(f.home, 'chapters.json'), {
+      active: 'the-beginning',
+      chapters: [{ name: 'the-beginning' }, { name: 'fresh-roots' }],
+    })
+    const before = await f.harness.snapshot(Sessions, ROOT_CONVERSATION_ID, context)
+    const order: string[] = []
+    if (!enabled) f.services.delete(CloudApi)
+    f.cloud.backup.mockImplementation(async () => {
+      expect(await readJson(join(f.home, 'pending-chapter.json'), null)).toEqual({
+        to: 'fresh-roots',
+        by: process.pid,
+      })
+      order.push('backup')
+      return { id: 'final', at: 1, machine: 'here', bytes: 1, uploaded: 1 }
+    })
+    f.host.restart = vi.fn<ExtensionHost['restart']>(async () => {
+      order.push('restart')
+      return 'Restart refused'
+    })
+
+    await expect(actions.switch({ chapter: 'fresh-roots' }, f.call)).rejects.toThrow(
+      'Restart refused',
+    )
+    expect(order).toEqual(enabled ? ['backup', 'restart'] : ['restart'])
+    expect(f.cloud.backup).toHaveBeenCalledTimes(enabled ? 1 : 0)
+    expect(await f.harness.snapshot(Sessions, ROOT_CONVERSATION_ID, context)).toEqual(before)
+    expect(f.phases).toEqual([])
     expect(existsSync(join(f.home, 'pending-chapter.json'))).toBe(false)
   },
 )

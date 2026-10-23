@@ -51,23 +51,22 @@ export function inspection(
           ),
         },
         'ultimate.standing-agents': { ultimate: 20 },
-        automations: current.automations,
+        'dream.seed': {
+          automations: current.automations.map((item) => item.name),
+        },
         entries: [{ kind: 'dream.chapter', conversationId: 20 }],
         ...overrides(),
       }
       let result: unknown
-      if (input.endsWith('/automations/actions/list')) result = values.automations
-      else {
-        expect(input).toBe('http://127.0.0.1:12345/api/extensions/codemode/actions/read')
-        if (args.op === 'search') {
-          expect(args.args).toEqual(['"kind":"dream.chapter"', { conversationId: 20, limit: 1 }])
-          searched()
-          result = values.entries
-        } else {
-          expect(args.op).toBe('doc')
-          expect(args.args[1]).toBe(1)
-          result = values[args.args[0]]
-        }
+      expect(input).toBe('http://127.0.0.1:12345/api/extensions/codemode/actions/read')
+      if (args.op === 'search') {
+        expect(args.args).toEqual(['"kind":"dream.chapter"', { conversationId: 20, limit: 1 }])
+        searched()
+        result = values.entries
+      } else {
+        expect(args.op).toBe('doc')
+        expect(args.args[1]).toBe(1)
+        result = values[args.args[0]]
       }
       return new Response(JSON.stringify({ result }))
     },

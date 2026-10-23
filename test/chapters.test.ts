@@ -15,6 +15,7 @@ import {
   readChapters,
   requestChapter,
 } from '../lib/chapters.ts'
+import { readJson } from '../lib/json-file.ts'
 import { context, prepareHarness } from '../server/harness.ts'
 import { temp } from './helpers.ts'
 
@@ -83,6 +84,34 @@ it('switches to a new chapter on the next open, continuing ids, and back again',
     chapters: [{ name: FIRST_CHAPTER }, { name: 'fresh-roots' }],
   })
 })
+
+it.each([true, false])(
+  'drops only its own failed restart journal on open: own = %s',
+  async (own) => {
+    const home = await temp('ultimate-chapters-')
+    const prepared = await prepare(home)
+    await conversationIn(prepared)
+    const by = own ? process.pid : process.pid + 1
+    await requestChapter(home, 'next', by)
+    expect(await readJson(join(home, 'pending-chapter.json'), null)).toEqual({
+      to: 'next',
+      by,
+    })
+
+    const opened = await prepared.open(false)
+    try {
+      expect(prepared.chapter.name).toBe(own ? FIRST_CHAPTER : 'next')
+      expect((await activeChapter(home)).name).toBe(own ? FIRST_CHAPTER : 'next')
+      expect(existsSync(join(home, 'pending-chapter.json'))).toBe(false)
+      expect(existsSync(join(home, 'chapters/next/state.sqlite'))).toBe(!own)
+      expect(prepared.database).toBe(
+        own ? join(home, 'state.sqlite') : join(home, 'chapters/next/state.sqlite'),
+      )
+    } finally {
+      await opened.close()
+    }
+  },
+)
 
 it('finishes a switch whose new database was left without its schema', async () => {
   const home = await temp('ultimate-chapters-')
