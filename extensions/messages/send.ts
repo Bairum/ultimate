@@ -105,8 +105,8 @@ export async function send(
       if (!original || !openQuestion(original))
         throw new Error('These questions are no longer open')
     }
-    if (input.images !== undefined && (from === 'user' || to === 'user'))
-      throw new Error('images go along only to conversations and agents')
+    if (input.images !== undefined && from === 'user')
+      throw new Error('your images go along with what you submit, not with a message')
     const images =
       input.images === undefined
         ? undefined

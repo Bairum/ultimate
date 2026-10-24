@@ -15,11 +15,13 @@ import {
   SendIcon,
   SquareArrowOutUpRightIcon,
 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { ToolImage } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
+  api,
   Card,
   cn,
   events,
@@ -55,6 +57,7 @@ import {
   sentBy,
   sentStatus,
 } from './data.tsx'
+import { imagesOf } from '../../lib/entries.ts'
 import { callerOf } from './caller.ts'
 import { MessagesDoc } from './refs.ts'
 import type { Message, Remote } from './refs.ts'
@@ -221,6 +224,7 @@ export function Bubble({
         )}
       </header>
       <Body text={text} />
+      {message?.images && <MessageImages conversation={from} entry={message.images.entry} />}
       {children}
       {answer && <AttachedAnswer answer={answer} question={message!} />}
       {(shown || message?.error) && (
@@ -708,12 +712,31 @@ const useCaller = (call: string) => callerOf(useTranscript(), call)
 const imageCount = (count: number) => `${count} image${count === 1 ? '' : 's'}`
 
 /** Images forwarded with a message, from its input's model content, as thumbnails that open full size. */
-function InputImages({ entry }: { entry: EntryRecord }) {
-  const message = entry.model?.[0]
-  const images =
-    message?.role === 'user' && typeof message.content !== 'string'
-      ? message.content.flatMap((block) => (block.type === 'image' ? [block] : []))
-      : []
+const InputImages = ({ entry }: { entry: EntryRecord }) => <Thumbnails images={imagesOf(entry)} />
+
+/**
+ * The images a message to you carries: they stay in the sender's entry `entry` (a screenshot, a pasted input), read from
+ * the loaded transcript or else fetched from its stored history.
+ */
+function MessageImages({ conversation, entry }: { conversation: number; entry: number }) {
+  const loaded = useTranscript().find(
+    (item) => item.conversationId === conversation && item.id === entry,
+  )
+  const [fetched, setFetched] = useState<EntryRecord>()
+  useEffect(() => {
+    if (loaded) return undefined
+    const controller = new AbortController()
+    api.history(conversation, entry + 1, controller.signal, entry).then(
+      (page) => setFetched(page.entries.find((item) => item.id === entry)),
+      // Without its entry the message still reads; only the thumbnails are missing.
+      () => undefined,
+    )
+    return () => controller.abort()
+  }, [conversation, entry, loaded])
+  return <Thumbnails images={imagesOf(loaded ?? fetched)} />
+}
+
+function Thumbnails({ images }: { images: readonly { data: string; mimeType: string }[] }) {
   if (!images.length) return null
   return (
     <div className="flex flex-wrap gap-2 border-t border-border/60 px-3 py-2">

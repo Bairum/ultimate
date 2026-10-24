@@ -1226,13 +1226,18 @@ it('refuses image references that do not resolve or exceed the limits', async ()
   expect(f.observed.join('\n')).toContain(`entry ${plain} has no images`)
   await submitWithImages(f, `SEND ${JSON.stringify({ to, text: 'Too many', images: 'latest' })}`, 5)
   expect(f.observed.join('\n')).toContain('has 5 images; at most 4 go along')
-  await submitWithImages(
+  expect((await f.log())?.messages ?? []).toHaveLength(0)
+})
+it("lets @ultimate's message to the user carry its images", async () => {
+  const f = await fixture()
+  const shot = await submitWithImages(
     f,
     `SEND ${JSON.stringify({ to: 'user', text: 'Look', images: 'latest' })}`,
     1,
   )
-  expect(f.observed.join('\n')).toContain('images go along only to conversations and agents')
-  expect((await f.log())?.messages ?? []).toHaveLength(0)
+  expect((await f.log())!.messages).toMatchObject([
+    { from: 1, to: 'user', text: 'Look', images: { entry: shot, count: 1 } },
+  ])
 })
 const result = (images: object[]) => [
   {
