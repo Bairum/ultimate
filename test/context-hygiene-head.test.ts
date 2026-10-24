@@ -17,6 +17,7 @@ it('opens the new-context gate for a compaction head retaining warm assistants',
     harness: () => harness,
     implement: () => {},
     notice: (notice) => notices.push(notice),
+    projectSettings: async () => ({}),
     projectRoot: '/nonexistent',
     userHome: '/nonexistent',
   })
@@ -27,6 +28,8 @@ it('opens the new-context gate for a compaction head retaining warm assistants',
       agent: { model: { provider: 'faux', modelId: 'faux-1' }, extensions: [extension] },
     })
     await harness.commit(async (tx) => {
+      const ledger = await tx.doc(Ledger, root.id)
+      ledger.decisions.removed = { reason: 'empty', tokens: 1, state: 'applied', at: 1 }
       const start = await tx.appendEntry(root.id, {
         kind: 'test.start',
         model: [{ role: 'user', content: 'begin', timestamp: 1 }],
@@ -70,6 +73,7 @@ it('opens the new-context gate for a compaction head retaining warm assistants',
     await (await root.submit({ type: 'input', content: 'continue' }, context)).wait(context)
     expect(notices).toEqual([])
     expect((await harness.snapshot(Ledger, root.id, context))?.decisions.a.state).toBe('applied')
+    expect((await harness.snapshot(Ledger, root.id, context))?.decisions.removed).toBeUndefined()
     expect((await root.context(context)).head?.kind).toBe('pi.compaction')
   } finally {
     await harness.close(context)

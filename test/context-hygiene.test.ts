@@ -1,3 +1,7 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { JsonObject } from '@earendil-works/pi-durable'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import type { Message } from '@earendil-works/pi-ai'
@@ -32,8 +36,12 @@ const detect = (messages: Message[]) => candidates([...messages, tail], '/work',
 it('detects covering resolved reads, whole reads, and the edited-between partial exception', () => {
   expect(
     detect([
-      ...read('a', { path: './x', offset: 5, limit: 5 }),
-      ...read('b', { path: '/work/x', offset: 1, limit: 20 }),
+      ...read('a', { path: './x', offset: 5, limit: 5 }, 'a\na\na\na\na'),
+      ...read(
+        'b',
+        { path: '/work/x', offset: 1, limit: 20 },
+        Array.from({ length: 20 }, () => 'b').join('\n'),
+      ),
     ]).a.reason,
   ).toBe('superseded')
   const mutation = read('edit', { path: 'x' })
@@ -41,11 +49,18 @@ it('detects covering resolved reads, whole reads, and the edited-between partial
     mutation[0].content[0].name = 'edit'
   const before = read('a', { path: 'x', offset: 5, limit: 5 }, 'before')
   expect(
-    detect([...before, ...mutation, ...read('b', { path: 'x', offset: 1, limit: 20 }, 'after')]).a,
+    detect([
+      ...before,
+      ...mutation,
+      ...read('b', { path: 'x', offset: 1, limit: 20 }, 'after\n'.repeat(19) + 'after'),
+    ]).a,
   ).toBeUndefined()
   expect(detect([...before, ...mutation, ...read('b')]).a.reason).toBe('superseded')
   expect(
-    detect([...read('a'), ...read('b', { path: 'x', offset: 1, limit: 20 }, 'after')]).a,
+    detect([
+      ...read('a', { path: 'x' }, 'before\n'.repeat(30)),
+      ...read('b', { path: 'x', offset: 1, limit: 20 }, 'after'),
+    ]).a,
   ).toBeUndefined()
 })
 it('opts into empty results and elides older exact duplicates independent of argument key order', () => {
@@ -107,7 +122,11 @@ it('preserves all message pairing, order and metadata without mutating source me
   expect(rewrite(messages, structuredClone(decisions))).toEqual(output)
 })
 
-async function fixture(fail = false, contextWindow = 128000) {
+async function fixture(
+  fail = false,
+  contextWindow = 128000,
+  settings: { userHome: string; project: JsonObject } = { userHome: '/nonexistent', project: {} },
+) {
   const models = createModels(),
     faux = fauxProvider({
       tokensPerSecond: 0,
@@ -127,8 +146,9 @@ async function fixture(fail = false, contextWindow = 128000) {
     },
     implement: () => {},
     notice: (message) => notices.push(message),
+    projectSettings: async () => settings.project,
     projectRoot: '/nonexistent',
-    userHome: '/nonexistent',
+    userHome: settings.userHome,
   })
   registry.install(extension)
   const options = { models, registry, settings: { compaction: { enabled: false } } }
@@ -208,6 +228,50 @@ it('protects recent decisions only when pressure is the gate that opens', async 
     await f.harness.close(context)
   }
 })
+it('honours read truncation details carried by actual request messages', async () => {
+  const f = await fixture()
+  try {
+    const later = read('b', { path: 'x' }, 'new\n'.repeat(20))
+    if (later[1].role === 'toolResult')
+      later[1].details = {
+        truncation: { truncated: true, outputLines: 20, firstLineExceedsLimit: false },
+      }
+    await f.seed(true, [...read('a', { path: 'x', offset: 30, limit: 1 }, 'old'), ...later, tail])
+    await f.submit()
+    expect((await f.harness.snapshot(Ledger, f.root.id, context))?.decisions.a).toBeUndefined()
+    expect(
+      f.sent[0].find((message) => message.role === 'toolResult' && message.toolCallId === 'a'),
+    ).toMatchObject({ content: [{ type: 'text', text: 'old' }] })
+  } finally {
+    await f.harness.close(context)
+  }
+})
+it('merges trusted project threshold keys over user settings without replacing the user object', async () => {
+  const userHome = await mkdtemp(join(tmpdir(), 'context-hygiene-settings-'))
+  await mkdir(join(userHome, '.ultimate'))
+  await writeFile(
+    join(userHome, '.ultimate/settings.json'),
+    JSON.stringify({ contextHygiene: { suffixSavings: 1000000 } }),
+  )
+  const project: JsonObject = { contextHygiene: { suffixTokens: 100000 } }
+  const f = await fixture(false, 128000, { userHome, project })
+  try {
+    await f.seed(false)
+    await f.submit()
+    expect((await f.harness.snapshot(Ledger, f.root.id, context))?.decisions.a.state).toBe(
+      'pending',
+    )
+    project.contextHygiene = { suffixTokens: 100000, suffixSavings: 0 }
+    await f.submit()
+    expect((await f.harness.snapshot(Ledger, f.root.id, context))?.decisions.a.state).toBe(
+      'applied',
+    )
+    expect(f.notices).toEqual([])
+  } finally {
+    await f.harness.close(context)
+    await rm(userHome, { recursive: true, force: true })
+  }
+})
 it('keeps stored entries unchanged, holds warm pending decisions, and fails open with diagnostics', async () => {
   for (const fail of [false, true]) {
     const f = await fixture(fail)
@@ -262,6 +326,9 @@ it('applies cold decisions durably, sends identical retry bytes after restart, a
     ).toEqual(firstSent)
     expect((await f.harness.snapshot(Ledger, f.root.id, context))!.decisions.a.state).toBe(
       'applied',
+    )
+    expect((await f.harness.snapshot(Ledger, f.root.id, context))!.stats.requests).toBe(
+      ledger.stats.requests,
     )
     const root = (await f.harness.conversation(f.root.id, context))!
     const earlier = await root.fork(beforeDecision, { ownership: { kind: 'ownerless' } }, context)

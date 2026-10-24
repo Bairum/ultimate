@@ -1,4 +1,3 @@
-import { join } from 'node:path'
 import { defineExtension, GenerationTask, hook } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
@@ -8,7 +7,10 @@ import { candidates, defaults, estimate, gateOpen, rewrite } from './rewrite.ts'
 
 export const docs = [Ledger]
 export default function contextHygiene(
-  host: Pick<ExtensionHost, 'harness' | 'implement' | 'notice' | 'projectRoot' | 'userHome'>,
+  host: Pick<
+    ExtensionHost,
+    'harness' | 'implement' | 'notice' | 'projectRoot' | 'userHome' | 'projectSettings'
+  >,
 ) {
   host.implement(ContextHygiene, { gateOpen, rewrite })
   return defineExtension({
@@ -17,18 +19,19 @@ export default function contextHygiene(
       hook(GenerationTask, {
         beforeRequest: async ({ messages }, api, ctx) => {
           try {
-            const settings = {
-              ...(await readSettings(userSettingsPath(host.userHome))),
-              ...(await readSettings(join(host.projectRoot, '.ultimate/settings.json'))),
-            }
             const thresholds = { ...defaults }
-            const configured = settings.contextHygiene
-            if (configured && typeof configured === 'object' && !Array.isArray(configured))
-              for (const key of Object.keys(defaults) as (keyof Thresholds)[]) {
-                const value = configured[key]
-                if (typeof value === 'number' && Number.isFinite(value) && value >= 0)
-                  thresholds[key] = value
-              }
+            for (const settings of [
+              await readSettings(userSettingsPath(host.userHome)),
+              await host.projectSettings(),
+            ]) {
+              const configured = settings.contextHygiene
+              if (configured && typeof configured === 'object' && !Array.isArray(configured))
+                for (const key of Object.keys(defaults) as (keyof Thresholds)[]) {
+                  const value = configured[key]
+                  if (typeof value === 'number' && Number.isFinite(value) && value >= 0)
+                    thresholds[key] = value
+                }
+            }
             const conversation = await host.harness().conversation(api.conversationId, ctx)
             if (!conversation) throw new Error('Conversation unavailable')
             const agent = await conversation.agent(ctx)
@@ -37,9 +40,24 @@ export default function contextHygiene(
               : undefined
             const view = await conversation.context(ctx)
             const now = Date.now()
-            const found = candidates(messages, agent.cwd ?? host.projectRoot, now)
+            const previous = await api.snapshot(Ledger, api.conversationId, ctx)
+            const found = candidates(
+              messages,
+              agent.cwd ?? host.projectRoot,
+              now,
+              previous?.decisions,
+            )
             const decisions = await host.harness().commit(async (tx) => {
               const ledger = await tx.doc(Ledger, api.conversationId)
+              if (view.head?.kind === 'pi.compaction') {
+                const present = new Set(
+                  messages.flatMap((message) =>
+                    message.role === 'toolResult' ? [message.toolCallId] : [],
+                  ),
+                )
+                for (const id of Object.keys(ledger.decisions))
+                  if (!present.has(id)) delete ledger.decisions[id]
+              }
               for (const [id, decision] of Object.entries(found)) ledger.decisions[id] ??= decision
               // Gate costs describe the bytes already shortened by earlier applied decisions.
               const current = rewrite(messages, ledger.decisions)
@@ -87,20 +105,14 @@ export default function contextHygiene(
                     },
                     thresholds,
                   )
-                )
+                ) {
+                  if (eligible.length) ledger.stats.requests++
                   for (const { decision } of eligible) {
                     decision.state = 'applied'
                     ledger.stats.appliedTokens += decision.tokens
                   }
+                }
               }
-              if (
-                messages.some(
-                  (message) =>
-                    message.role === 'toolResult' &&
-                    ledger.decisions[message.toolCallId]?.state === 'applied',
-                )
-              )
-                ledger.stats.requests++
               return Object.fromEntries(
                 Object.entries(ledger.decisions).map(([id, decision]) => [id, { ...decision }]),
               )

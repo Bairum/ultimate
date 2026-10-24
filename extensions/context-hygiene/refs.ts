@@ -4,6 +4,7 @@ import { docRef } from '../../shared/extension-api.ts'
 export type Decision = {
   reason: 'superseded' | 'empty' | 'duplicate'
   by?: string
+  path?: string
   tokens: number
   state: 'pending' | 'applied'
   at: number

@@ -26,7 +26,7 @@ export type GateInput = {
 export const Ledger = defineDoc<LedgerState>({
   kind: 'context-hygiene.ledger',
   version: 1,
-  checkpointWhen: () => false,
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 64,
   scope: 'conversation',
   history: 'rewindable',
   fork: 'asOf',

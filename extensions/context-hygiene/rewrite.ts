@@ -31,7 +31,7 @@ export function gateOpen(input: GateInput, thresholds: Thresholds): boolean {
 function placeholder(decision: Decision): string {
   switch (decision.reason) {
     case 'superseded':
-      return '[Elided from context: superseded by a later read of the same path. Read it again if you need it.]'
+      return `[Elided from context: superseded by a later read of ${decision.path}. Read it again if you need it.]`
     case 'empty':
       return '[Elided: empty result]'
     case 'duplicate':
@@ -44,9 +44,16 @@ export function rewrite(
   messages: readonly Message[],
   decisions: LedgerState['decisions'],
 ): readonly Message[] {
+  const counts = resultCounts(messages)
   return messages.map((message) => {
     const decision = message.role === 'toolResult' ? decisions[message.toolCallId] : undefined
-    if (message.role !== 'toolResult' || decision?.state !== 'applied' || !safe(message))
+    if (
+      message.role !== 'toolResult' ||
+      !message.toolCallId ||
+      counts.get(message.toolCallId) !== 1 ||
+      decision?.state !== 'applied' ||
+      !safe(message)
+    )
       return message
     return { ...message, content: [{ type: 'text', text: placeholder(decision) }] }
   })
@@ -64,25 +71,82 @@ function canonical(value: unknown): string {
 function pathOf(call: ToolCall, cwd: string) {
   return typeof call.arguments.path === 'string' ? resolve(cwd, call.arguments.path) : undefined
 }
-function range(call: ToolCall) {
-  const start = typeof call.arguments.offset === 'number' ? call.arguments.offset : 1
-  const end = typeof call.arguments.limit === 'number' ? start + call.arguments.limit : Infinity
+function resultCounts(messages: readonly Message[]) {
+  const counts = new Map<string, number>()
+  for (const message of messages)
+    if (message.role === 'toolResult')
+      counts.set(message.toolCallId, (counts.get(message.toolCallId) ?? 0) + 1)
+  return counts
+}
+function range(call: ToolCall, result: Extract<Message, { role: 'toolResult' }>) {
+  const start = typeof call.arguments.offset === 'number' ? Math.max(1, call.arguments.offset) : 1
+  const details = result.details
+  const truncation =
+    details && typeof details === 'object' && 'truncation' in details
+      ? details.truncation
+      : undefined
+  if (truncation !== undefined) {
+    if (
+      !truncation ||
+      typeof truncation !== 'object' ||
+      !('outputLines' in truncation) ||
+      typeof truncation.outputLines !== 'number' ||
+      !Number.isSafeInteger(truncation.outputLines) ||
+      truncation.outputLines <= 0 ||
+      ('firstLineExceedsLimit' in truncation && truncation.firstLineExceedsLimit === true)
+    )
+      return undefined
+    if (!('truncated' in truncation) || typeof truncation.truncated !== 'boolean') return undefined
+    return {
+      start,
+      end: start + truncation.outputLines,
+      whole:
+        !truncation.truncated &&
+        call.arguments.offset === undefined &&
+        call.arguments.limit === undefined,
+    }
+  }
+  // Pi omits details for untruncated text. Remove its user-limit continuation notice.
+  const output = text(result).replace(
+    /\n\n\[\d+ more lines in file\. Use offset=\d+ to continue\.\]$/,
+    '',
+  )
+  if (!output || /\[Showing lines |exceeds .* limit\. Use bash:/.test(output)) return undefined
   return {
     start,
-    end,
+    end: start + output.split('\n').length,
     whole: call.arguments.offset === undefined && call.arguments.limit === undefined,
   }
 }
-export function candidates(messages: readonly Message[], cwd: string, now: number) {
+export function candidates(
+  messages: readonly Message[],
+  cwd: string,
+  now: number,
+  decided: LedgerState['decisions'] = {},
+) {
   const calls = new Map<string, { call: ToolCall; index: number }>()
+  const callCounts = new Map<string, number>()
+  const results = resultCounts(messages)
+  const canonicalArgs = new Map<string, string>()
   messages.forEach((message, index) => {
     if (message.role === 'assistant')
       for (const part of message.content)
-        if (part.type === 'toolCall') calls.set(part.id, { call: part, index })
+        if (part.type === 'toolCall') {
+          calls.set(part.id, { call: part, index })
+          callCounts.set(part.id, (callCounts.get(part.id) ?? 0) + 1)
+          canonicalArgs.set(part.id, canonical(part.arguments))
+        }
   })
+  const unique = (id: string) => id !== '' && callCounts.get(id) === 1 && results.get(id) === 1
   const decisions: LedgerState['decisions'] = {}
   messages.forEach((message, index) => {
-    if (message.role !== 'toolResult' || !safe(message)) return
+    if (
+      message.role !== 'toolResult' ||
+      !safe(message) ||
+      !unique(message.toolCallId) ||
+      decided[message.toolCallId]
+    )
+      return
     const own = calls.get(message.toolCallId)
     if (!own) return
     let reason: Decision['reason'] | undefined
@@ -97,12 +161,12 @@ export function candidates(messages: readonly Message[], cwd: string, now: numbe
       reason = 'empty'
     for (let j = index + 1; j < messages.length; j++) {
       const later = messages[j]
-      if (later.role !== 'toolResult' || !safe(later)) continue
+      if (later.role !== 'toolResult' || !safe(later) || !unique(later.toolCallId)) continue
       const next = calls.get(later.toolCallId)
       if (!next) continue
       if (
         message.toolName === later.toolName &&
-        canonical(own.call.arguments) === canonical(next.call.arguments) &&
+        canonicalArgs.get(message.toolCallId) === canonicalArgs.get(later.toolCallId) &&
         text(message) === text(later)
       ) {
         reason = 'duplicate'
@@ -111,14 +175,12 @@ export function candidates(messages: readonly Message[], cwd: string, now: numbe
       if (own.call.name !== 'read' || next.call.name !== 'read') continue
       const path = pathOf(own.call, cwd)
       if (!path || path !== pathOf(next.call, cwd)) continue
-      const a = range(own.call),
-        b = range(next.call)
+      const a = range(own.call, message),
+        b = range(next.call, later)
+      if (!a || !b) continue
       const edited = [...calls.values()].some(
         ({ call, index: at }) =>
-          at > own.index &&
-          at < next.index &&
-          (call.name === 'edit' || call.name === 'write') &&
-          pathOf(call, cwd) === path,
+          at >= own.index && at <= next.index && !['read', 'grep'].includes(call.name),
       )
       if (b.whole || (!edited && b.start <= a.start && b.end >= a.end)) {
         reason = 'superseded'
@@ -129,6 +191,9 @@ export function candidates(messages: readonly Message[], cwd: string, now: numbe
       const decision: Decision = {
         reason,
         ...(by ? { by } : {}),
+        ...(reason === 'superseded' && typeof own.call.arguments.path === 'string'
+          ? { path: own.call.arguments.path }
+          : {}),
         tokens: 0,
         state: 'pending',
         at: now,
