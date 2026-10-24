@@ -73,7 +73,9 @@ async function fixture() {
     onClose: () => {},
     projectSetup: async () => ({ decision: false }),
     extensions: () => [{ name: 'subagents', enabled: true }],
-    doc: (kind: string) => tokens.find((token) => token.definition.kind === kind),
+    doc: (kind: string) =>
+      tokens.find((token) => token.definition.kind === kind) ??
+      eventHost(() => opened.harness, 'automations').doc(kind),
     onOpen: (callback: () => Promise<void>) => {
       opener = callback
     },

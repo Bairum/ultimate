@@ -154,21 +154,6 @@ it('matches only new events, strict filters and excludes its own run conversatio
   await f.emit('workspaces.check', { result: 'failed' })
   await f.settle()
   expect((await f.record(a.id)).fires).toBe(1)
-  await f.harness.commit(async (tx) => {
-    ;(await tx.doc(Automations)).automations[a.id].runs.push({
-      id: 'own',
-      firedAt: Date.now(),
-      conversationId: f.target,
-      status: 'done',
-    })
-  }, context)
-  const trace = callTrace(join(f.root, 'trace.sqlite'))
-  await trace.run(
-    { kind: 'action', caller: 'test', callee: 'test', name: 'emit', conversationId: f.target },
-    () => f.emit('workspaces.check', { result: 'failed' }),
-  )
-  await f.settle()
-  expect((await f.record(a.id)).fires).toBe(1)
   await f.action('pause', { id: a.id })
   await f.stopEvents()
   await f.emit('workspaces.check', { result: 'failed' })
@@ -178,6 +163,34 @@ it('matches only new events, strict filters and excludes its own run conversatio
   expect((await f.record(a.id)).fires).toBe(1)
   await f.action('run', { id: a.id })
   expect((await f.record(a.id)).fires).toBe(2)
+})
+
+it('skips events from its own prompt runs, by trace or by the conversation they name, however old', async () => {
+  const f = await fixture()
+  const own = (await f.action('create', {
+    name: 'Own',
+    event: { name: 'conversations.compacted' },
+    prompt: 'Look at the compaction',
+  })) as Automation
+  await f.action('run', { id: own.id })
+  await until(async () => (await f.record(own.id)).runs[0]?.status === 'done')
+  const run = (await f.record(own.id)).runs[0].conversationId!
+  // Pushed out of the bounded run history: ownership, not the history, says it is this automation's run.
+  await f.harness.commit(async (tx) => {
+    ;(await tx.doc(Automations)).automations[own.id].runs = []
+  }, context)
+  await f.emit('conversations.compacted', { conversation: run, reason: 'threshold' })
+  const trace = callTrace(join(f.root, 'trace.sqlite'))
+  await trace.run(
+    { kind: 'action', caller: 'test', callee: 'test', name: 'emit', conversationId: run },
+    () => f.emit('conversations.compacted', { conversation: f.target }),
+  )
+  await f.settle()
+  expect((await f.record(own.id)).fires).toBe(1)
+  // Another conversation's compaction does fire it.
+  await f.emit('conversations.compacted', { conversation: f.target })
+  await f.settle()
+  expect((await f.record(own.id)).fires).toBe(2)
 })
 
 it('fires multiple prompt automations for one event in the same transaction', async () => {
@@ -283,6 +296,20 @@ it('uses context hysteresis and cooldown and catches a missed crossing on open o
   expect((await f.record(a.id)).fires).toBe(3)
   await f.opener()
   expect((await f.record(a.id)).fires).toBe(3)
+})
+
+it('sees a re-arm and the crossing after it even when both commit before evaluation', async () => {
+  const f = await fixture()
+  const a = (await f.action('create', {
+    name: 'Lagging',
+    condition: { metric: 'context', of: '@ultimate', above: 80, cooldownMs: 0 },
+  })) as Automation
+  await f.usage(81)
+  await until(async () => (await f.record(a.id)).fires === 1)
+  // Both measurements are in before the watcher's queue reaches either.
+  await Promise.all([f.usage(69), f.usage(81)])
+  await until(async () => (await f.record(a.id)).fires === 2)
+  expect((await f.record(a.id)).condition?.armed).toBe(false)
 })
 
 it('evaluates on create and resume, including a numeric conversation target', async () => {

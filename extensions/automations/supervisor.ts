@@ -89,7 +89,6 @@ export type Prepared = {
   parent?: Agent
   slug?: string
   target?: number
-  sinceEvent?: number
 }
 type Run = {
   child: GroupProcess

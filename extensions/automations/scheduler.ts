@@ -10,6 +10,7 @@ import { SubagentsApi } from '../subagents/api.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { nextAt } from './schedule.ts'
 import type { Automation, Run } from './types.ts'
+import { RUN_TASK } from './types.ts'
 import type { Automations as Ledger } from './server.ts'
 import { Escalated, Fired } from './refs.ts'
 const owner = {
@@ -44,7 +45,7 @@ export function scheduler(
     { phase: 'create' } | { phase: 'deliver'; conversationId: ConversationId },
     null
   >({
-    name: 'ultimate.automation-run',
+    name: RUN_TASK,
     version: 1,
     initial: () => ({ phase: 'create' }),
     phases: {
@@ -183,7 +184,7 @@ export function scheduler(
       let cursor: Cursor | undefined
       do {
         const page = await tx.scanTasks(
-          { conversationId: ROOT_CONVERSATION_ID, kind: 'ultimate.automation-run', status },
+          { conversationId: ROOT_CONVERSATION_ID, kind: RUN_TASK, status },
           100,
           cursor,
         )

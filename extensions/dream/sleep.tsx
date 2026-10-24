@@ -20,7 +20,7 @@ import { Moon } from './moon.tsx'
 import { Granted } from './morning.tsx'
 import type { Session, Sleep } from './refs.ts'
 
-type Step = Exclude<Sleep['phase'], 'asleep' | 'failed'>
+type Step = Exclude<Sleep['phase'], 'waiting' | 'asleep' | 'failed'>
 const STEPS: Step[] = ['seeding', 'checking', 'backing up', 'switching']
 
 const titles: Record<Step, string> = {
@@ -239,6 +239,25 @@ function Progress({ session, sleep }: { session: Session; sleep: Sleep }) {
   // A running sleep makes the next chapter; a finished one names it as listed (by name alone if it is gone).
   const number = running ? (chapters?.chapters.length ?? 0) + 1 : target?.number
   const label = number ? chapterLabel(number, sleep.chapter) : sleep.chapter
+  if (sleep.phase === 'waiting')
+    return (
+      <section
+        className="border-t border-border/60 px-4 py-2.5 text-[12px]"
+        data-dream-sleep="waiting"
+        data-session={session.id}
+      >
+        <p className="flex items-center gap-2 text-muted-foreground">
+          <LoaderCircleIcon className="size-3.5 animate-spin text-brand" />
+          Waiting for every conversation to finish, then falling asleep into{' '}
+          <span className="text-foreground">{label}</span>
+        </p>
+        {sleep.by && (
+          <div className="mt-1.5">
+            <Granted by={sleep.by} what="started this" />
+          </div>
+        )}
+      </section>
+    )
   if (!running)
     return (
       <section

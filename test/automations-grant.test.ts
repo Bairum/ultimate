@@ -164,15 +164,21 @@ it('allows only what the grant names: a dream grant never falls asleep or compac
   await expect(act(f.host, id, 'compact', f.ultimate)).rejects.toThrow('no grant for compact')
   expect(f.dream.asleep).not.toHaveBeenCalled()
   const result = await act(f.host, id, 'dream', f.ultimate, 11)
-  expect(result).toMatchObject({ action: 'dream', session: 7, by: { automation: id } })
+  expect(result).toMatchObject({ action: 'dream', session: 7, automation: id })
   expect(f.dream.start).toHaveBeenCalledWith(
+    expect.anything(),
     expect.objectContaining({ automation: id, name: 'Dream at 80%' }),
     f.ultimate,
   )
-  // Once per fire: another call is refused; the same tool call replayed gets its claim back.
+  // Once per fire: another call is refused. The same tool call replayed returns its recorded result and does not
+  // start a second dream.
   await expect(act(f.host, id, 'dream', f.ultimate, 12)).rejects.toThrow('already used')
-  await act(f.host, id, 'dream', f.ultimate, 11)
+  expect(await act(f.host, id, 'dream', f.ultimate, 11)).toMatchObject({ session: 7 })
+  expect(f.dream.start).toHaveBeenCalledOnce()
   expect(await f.acted()).toHaveLength(1)
+  // Saving the grant again, or widening it, does not hand back the act this fire already used.
+  await f.action('grant', { id, actions: ['dream', 'compact'] })
+  await expect(act(f.host, id, 'dream', f.ultimate, 14)).rejects.toThrow('already used')
   // The next fire may act again.
   await f.action('run', { id })
   await act(f.host, id, 'dream', f.ultimate, 13)
@@ -185,6 +191,7 @@ it('passes a granted Fall asleep to dream, which runs every gate', async () => {
   await expect(act(f.host, id, 'dream', f.ultimate)).rejects.toThrow('no grant for dream')
   expect(await act(f.host, id, 'asleep', f.ultimate)).toMatchObject({ action: 'asleep' })
   expect(f.dream.asleep).toHaveBeenCalledWith(
+    expect.anything(),
     expect.objectContaining({ automation: id, name: 'Dream at 80%' }),
     {},
   )
@@ -213,8 +220,14 @@ it('refuses a conversation it does not wake, a paused automation and a stale fir
 it('compacts the conversation a context trigger watches', async () => {
   const f = await fixture()
   const id = await f.fired(['compact'])
-  const result = (await act(f.host, id, 'compact', f.ultimate)) as { taskId: number }
+  const result = (await act(f.host, id, 'compact', f.ultimate, 21)) as unknown as {
+    taskId: number
+  }
   expect(result).toMatchObject({ action: 'compact', conversation: f.ultimate })
   const task = await f.harness().getTask(result.taskId as never, context)
   expect(task).toMatchObject({ conversationId: f.ultimate })
+  // A replay of the call returns the same compaction, created once with the act.
+  expect(await act(f.host, id, 'compact', f.ultimate, 21)).toMatchObject({
+    taskId: result.taskId,
+  })
 })

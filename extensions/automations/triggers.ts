@@ -4,10 +4,12 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { defineEvent } from '../../shared/events.ts'
 import type { EventRecord } from '../../shared/events.ts'
 import { ContextUsageDoc } from '../conversations/api.ts'
+import type { ContextUsage } from '../conversations/api.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { describeSchedule } from './schedule.ts'
 import type { Automations as Ledger } from './server.ts'
 import type { Automation, TriggerEvent } from './types.ts'
+import { RUN_TASK } from './types.ts'
 export const TRIGGER_EVENTS: TriggerEvent[] = [
   {
     name: 'workspaces.landed',
@@ -94,9 +96,10 @@ export function triggers(
     if (/^#[1-9]\d*$/.test(of)) return Number(of.slice(1)) as ConversationId
     return undefined
   }
-  async function evaluate(tx: Tx, a: Automation, id?: number) {
+  /** Evaluate `a`'s condition on `usage`, the measurement a commit published, else the conversation's current one. */
+  async function evaluate(tx: Tx, a: Automation, id?: number, measured?: ContextUsage) {
     if (!a.enabled || !a.condition || !id) return
-    const usage = await tx.doc(ContextUsageDoc, id as ConversationId)
+    const usage = measured ?? (await tx.doc(ContextUsageDoc, id as ConversationId))
     if (usage.percent === undefined) return
     const condition = a.condition
     condition.value = usage.percent
@@ -121,7 +124,12 @@ export function triggers(
   let stop: (() => void) | undefined
   let queue = Promise.resolve()
   let closed = false
-  async function check(changed?: Set<number>) {
+  /**
+   * Evaluate every enabled context condition: on the measurements one commit published (`changed`, by conversation),
+   * or on each conversation's current one. Each commit's measurements are evaluated in commit order, so a drop below
+   * the re-arm line followed by a crossing is seen as both, however far evaluation lags.
+   */
+  async function check(changed?: Map<number, ContextUsage>) {
     const state = await host.harness().snapshot(Automations, BACKGROUND_CONTEXT)
     for (const a of Object.values(state?.automations ?? {})) {
       if (closed || !a.enabled || !a.condition) continue
@@ -129,9 +137,35 @@ export function triggers(
       if (!target || (changed && !changed.has(target))) continue
       await host.harness().commit(async (tx) => {
         const current = (await tx.doc(Automations)).automations[a.id]
-        if (current?.condition?.of === a.condition!.of) await evaluate(tx, current, target)
+        if (current?.condition?.of === a.condition!.of)
+          await evaluate(tx, current, target, changed?.get(target))
       }, BACKGROUND_CONTEXT)
     }
+  }
+  /**
+   * Whether `event` came from one of `a`'s own prompt runs: its trace's conversation, or the conversation it is about
+   * (`conversation`, `conversationId` in its data), is a run conversation owned by one of `a`'s run tasks. Read from
+   * the conversation's owner, not the bounded run history, so an old or long run still counts.
+   */
+  async function fromOwnRun(tx: Tx, a: Automation, event: EventRecord) {
+    if (!a.prompt) return false
+    const data = event.data as Record<string, unknown>
+    const ids = new Set(
+      [event.context?.conversationId, data.conversation, data.conversationId].filter(
+        (id): id is number => typeof id === 'number',
+      ),
+    )
+    for (const id of ids) {
+      const creator = (await tx.conversation(id as ConversationId))?.owner
+      if (!creator) continue
+      const owner = await tx.task(creator.taskId)
+      if (
+        owner?.kind === RUN_TASK &&
+        (owner.input as { automation?: { id?: string } }).automation?.id === a.id
+      )
+        return true
+    }
+    return false
   }
   function install() {
     // Tokens name public events without loading other extensions' runtime refs.
@@ -140,20 +174,18 @@ export function triggers(
       TRIGGER_EVENTS.map(({ name }) => defineEvent(name)),
       async (tx, event) => {
         const state = await tx.doc(Automations)
-        const matching = Object.values(state.automations).filter((a) => {
-          if (!a.enabled || a.event?.name !== event.name || event.id <= a.event.sinceEvent)
-            return false
+        const matching: Automation[] = []
+        // Every read before the first fire: a transaction may not scan tasks after it wrote.
+        for (const a of Object.values(state.automations)) {
+          if (!a.enabled || a.event?.name !== event.name || event.id <= a.event.sinceEvent) continue
           if (
             !Object.entries(a.event.where ?? {}).every(
               ([key, value]) => (event.data as Record<string, unknown>)[key] === value,
             )
           )
-            return false
-          return (
-            event.context?.conversationId === undefined ||
-            !a.runs.some((run) => run.conversationId === event.context!.conversationId)
-          )
-        })
+            continue
+          if (!(await fromOwnRun(tx, a, event))) matching.push(a)
+        }
         if (matching.some((a) => a.prompt)) await prepareFires(tx)
         for (const a of matching) await fire(tx, a, Date.now(), summary(event))
       },
@@ -165,14 +197,15 @@ export function triggers(
     stop?.()
     // Not a reactor: context usage is a document, not a domain event.
     stop = host.harness().subscribeCommits((publication) => {
-      const changed = new Set<number>()
+      const changed = new Map<number, ContextUsage>()
       for (const change of publication.changes)
         if (
           change.type === 'document' &&
-          change.record.kind === 'conversations.context' &&
-          change.conversationId !== undefined
+          change.record.kind === ContextUsageDoc.definition.kind &&
+          change.conversationId !== undefined &&
+          change.value
         )
-          changed.add(change.conversationId)
+          changed.set(change.conversationId, structuredClone(change.value as ContextUsage))
       if (changed.size)
         queue = queue
           .then(() => check(changed))

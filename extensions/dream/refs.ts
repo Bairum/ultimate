@@ -30,10 +30,15 @@ export type GateResult = { ok: boolean; checks: { name: string; ok: boolean; det
 export type GrantedBy = { automation: string; name: string; at: number }
 export type Sleep = {
   chapter: string
-  /** `asleep`: the switch happened; this session's chapter is the one it left. */
-  phase: 'seeding' | 'checking' | 'backing up' | 'switching' | 'asleep' | 'failed'
+  /**
+   * `waiting`: a granted Fall asleep holds the session until no conversation works. `asleep`: the switch happened;
+   * this session's chapter is the one it left.
+   */
+  phase: 'waiting' | 'seeding' | 'checking' | 'backing up' | 'switching' | 'asleep' | 'failed'
   /** The granted automation that started this Fall asleep; absent when the user did. */
   by?: GrantedBy
+  /** The granted attempt (its task) that holds this sleep; only it writes the sleep while `waiting`. */
+  attempt?: number
   checks?: GateResult['checks']
   backup?: { id?: string; skipped?: string }
   error?: string

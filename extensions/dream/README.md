@@ -102,11 +102,15 @@ the 20 most frequent errors, and enabled tools never called in the trace's windo
 The user can grant an automation `dream` and, separately, `asleep` (`extensions/automations/README.md` "Grants"). Dream
 provides the `automations.dream` point for them; the user-only actions stay user-only.
 
-- `start(by, acting)` is the Dream button's own path (`startDream`), with the same refusals; only the acting
+Both run inside automations' `act` transaction, so the effect commits with the act's record.
+
+- `start(tx, by, acting)` is the Dream button's own path (`startDreamIn`), with the same refusals; only the acting
   conversation's own turn does not count as busy. The session records `by`, and its started card names the automation.
-- `asleep(by, {session?})` checks the session at once (a filed journal, every proposal settled, not already asleep),
-  answers, then waits up to 30 minutes for every conversation to finish, the acting agent's turn included. It then admits
-  and runs every gate of Fall asleep exactly as the user's action does: idle, seed, scratch preview with one repair,
-  final backup, idle again, journaled restart that rolls back on failure. A wait that runs out, or any refusal, records
-  a failed sleep with `by`; nothing switches. The sleep and the seed carry `by`, so the progress, the outcome and the
-  next chapter's morning card say which automation fell asleep, under the user's grant, and when.
+- `asleep(tx, by, {session?})` checks the session (a filed journal, every proposal settled, no sleep under way),
+  reserves it as `waiting` for this attempt and creates the durable `dream.granted-sleep` task. The task looks every
+  15 seconds, for up to 30 minutes, until no conversation works (the acting agent's turn included), then admits and runs
+  every gate of Fall asleep exactly as the user's action does: idle, seed, scratch preview with one repair, final
+  backup, idle again, journaled restart that rolls back on failure. While it waits, neither the user nor another grant
+  can start a second sleep of that session. A wait that runs out, a refusal or an abort records a failed sleep, but only
+  while this attempt still holds it; nothing switches. The sleep and the seed carry `by`, so the progress, the outcome
+  and the next chapter's morning card say which automation fell asleep, under the user's grant, and when.

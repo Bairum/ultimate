@@ -335,7 +335,7 @@ it.each([
         name: 'automation',
         args: { action: 'act', id: 'A4', do: action },
         status: 'done',
-        output: `Did ${action} under the user's grant on automation A4: ${JSON.stringify({ by: { name: 'Context care' }, conversation: 7 })}`,
+        output: `Did ${action} under the user's grant on automation A4: ${JSON.stringify({ action, automation: 'A4', name: 'Context care', conversation: 7 })}`,
         images: [],
         diagnostics: [],
       },

@@ -113,7 +113,7 @@ export function AutomationCall({ call }: { call: ToolCallView }) {
 function ActCard({ call }: { call: ToolCallView }) {
   const open = useOpenAutomation()
   const id = touched(call)
-  let result: { by?: { name: string }; conversation?: number } | undefined
+  let result: { name?: string; conversation?: number } | undefined
   const json = call.output.indexOf('{')
   if (json >= 0)
     try {
@@ -146,7 +146,7 @@ function ActCard({ call }: { call: ToolCallView }) {
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-medium">{title}</p>
           <p className="mt-0.5 text-[11.5px] break-words text-muted-foreground">
-            {done ? `Under your grant on ${result?.by?.name ?? id}` : `Requested action on ${id}`} ·{' '}
+            {done ? `Under your grant on ${result?.name ?? id}` : `Requested action on ${id}`} ·{' '}
             {action === 'asleep' ? 'switch chapter after every gate passes' : action}
           </p>
         </div>

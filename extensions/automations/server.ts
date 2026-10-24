@@ -7,15 +7,19 @@ import type { JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
 import {
   AgentDoc,
+  CompactionTask,
   defineDoc,
   defineExtension,
   defineTool,
+  LiveDoc,
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
 import type { TaskId, Tx, ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
+import { EVENT_FEED } from '../../shared/events.ts'
+import type { EventRecord } from '../../shared/events.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { actingAs } from '../../lib/acting-as.ts'
 import { discoverAgents } from '../../lib/agents.ts'
@@ -43,7 +47,7 @@ import {
   Escalated,
   EventsAction,
   GrantRef,
-  Acted,
+  Acted as ActedEvent,
 } from './refs.ts'
 import { describeSchedule, nextAt, parseSchedule } from './schedule.ts'
 import { scheduler } from './scheduler.ts'
@@ -51,6 +55,7 @@ import { triggers, TRIGGER_EVENTS, describeTrigger } from './triggers.ts'
 import { supervisor } from './supervisor.ts'
 import type { Prepared } from './supervisor.ts'
 import type {
+  Acted,
   Args,
   Automation,
   AutomationListItem,
@@ -443,8 +448,6 @@ function backend(host: ExtensionHost) {
     }
     if (args.action === 'events') return {}
     const prepared: Prepared = args.action === 'create' ? {} : await prepareScript(args, caller)
-    if (args.action === 'create' || args.action === 'resume')
-      prepared.sinceEvent = (await host.eventLog.recent({ limit: 1 }))[0]?.id ?? 0
     const condition =
       args.condition ??
       (args.action === 'resume'
@@ -524,7 +527,7 @@ function backend(host: ExtensionHost) {
         throw new Error('At least one of prompt or subscribers is required')
       if (args.schedule !== undefined) a.schedule = parseSchedule(args.schedule)
       if (args.event !== undefined)
-        a.event = { ...args.event, sinceEvent: a.event?.sinceEvent ?? prepared.sinceEvent ?? 0 }
+        a.event = { ...args.event, sinceEvent: a.event?.sinceEvent ?? (await newestEvent(tx)) }
       if (args.condition !== undefined)
         a.condition = {
           ...a.condition,
@@ -556,7 +559,7 @@ function backend(host: ExtensionHost) {
     } else if (args.action === 'pause') a.enabled = false
     else if (args.action === 'resume') a.enabled = true
     else throw new Error(`Unknown action: ${args.action}`)
-    if (args.action === 'resume' && a.event) a.event.sinceEvent = prepared.sinceEvent!
+    if (args.action === 'resume' && a.event) a.event.sinceEvent = await newestEvent(tx)
     if (args.action === 'create' || args.action === 'resume')
       await trigger.evaluate(tx, a, prepared.target)
     a.updatedAt = Date.now()
@@ -591,6 +594,18 @@ function backend(host: ExtensionHost) {
       return json(await scripts.status(required(args.id, 'id')))
     return receipt.result
   }
+  /**
+   * The newest event committed before `tx`: an event trigger activated in `tx` handles only later ones. Read from the
+   * root's event feed, which every emit appends to in its own commit.
+   */
+  async function newestEvent(tx: Tx) {
+    const feed = host.doc(EVENT_FEED)
+    if (!feed) throw new Error('The event feed is not available')
+    return (
+      ((await tx.doc(feed, ROOT_CONVERSATION_ID)) as { events: EventRecord[] }).events.at(-1)?.id ??
+      0
+    )
+  }
   /** Set the user's grant on `id`: the actions its woken agent may take without asking. Only the user calls this. */
   async function grant(id: string, actions: unknown, source: unknown) {
     if (!Array.isArray(actions) || actions.some((item) => !GRANT_ACTIONS.includes(item)))
@@ -612,20 +627,31 @@ function backend(host: ExtensionHost) {
     }, BACKGROUND_CONTEXT)
   }
   /**
-   * Conversation `caller` asks to do `action` for the user under automation `id`'s grant. Refused unless the user
-   * granted that action, the automation is enabled and fired within the last six hours, `caller` is one it wakes (a
-   * subscriber or its run), and that action was not already taken on this fire. The claim commits before the act, so a
-   * repeat on the same fire is refused even after a crash. `task` keys the claim to the tool call, so a replay of that
-   * call gets its own claim back instead of a refusal.
+   * Subscriber `caller` asks to do `action` for the user under automation `id`'s grant. Refused unless the user granted
+   * that action, the automation is enabled and fired within the last six hours, `caller` is one of the conversations it
+   * wakes, and that action was not already taken on this fire. The check, the effect (a compaction task, a dream
+   * session, a granted Fall asleep task) and the record of the act commit in one transaction, so a crash leaves either
+   * all or nothing. `task` keys the act to its tool call: a replay of that call returns the recorded result instead of
+   * acting again.
    */
   async function act(id: string, action: unknown, caller: number | undefined, task?: number) {
     if (!GRANT_ACTIONS.includes(action as GrantAction))
       throw new Error(`do must be one of ${GRANT_ACTIONS.join(', ')}`)
     const name = action as GrantAction
     if (caller === undefined) throw new Error('act needs the conversation that was woken')
-    const by = await host.harness().commit(async (tx): Promise<GrantedBy> => {
+    const dream = name === 'compact' ? undefined : host.want(DreamGrant)
+    if (name !== 'compact' && !dream) throw new Error('The dream extension is not enabled')
+    const status = await scripts.status(id)
+    // The conversation a context trigger watches, else the woken one itself.
+    const target =
+      (status.condition && (await trigger.resolve(status.condition.of))) ??
+      (caller as ConversationId)
+    return host.harness().commit(async (tx) => {
       const a = (await tx.doc(Automations)).automations[validId(id)]
       if (!a) throw new Error(`Unknown automation: ${id}`)
+      const done = a.acted?.[name]
+      if (task !== undefined && done?.task === task && done.fire === a.fires)
+        return { action: name, ...done.result, automation: a.id, name: a.name }
       if (!a.grant?.actions.includes(name))
         throw new Error(
           `Automation ${a.id} has no grant for ${name}: ask the user instead. Only the user grants it, in the Automations panel.`,
@@ -634,53 +660,54 @@ function backend(host: ExtensionHost) {
       const now = Date.now()
       if (a.lastFireAt === undefined || now - a.lastFireAt > 6 * 3600_000)
         throw new Error(`Automation ${a.id} has not fired in the last six hours`)
-      if (
-        !a.subscribers.includes(caller) &&
-        !a.runs.some((run) => run.conversationId === caller && run.firedAt === a.lastFireAt)
-      )
-        throw new Error(`#${caller} is not woken by automation ${a.id}`)
-      const used = a.grant.used?.[name]
-      if (used?.fire === a.fires && (task === undefined || used.task !== task))
+      if (!a.subscribers.includes(caller))
+        throw new Error(
+          `#${caller} is not woken by automation ${a.id}; only its subscribers act on a grant`,
+        )
+      if (done?.fire === a.fires)
         throw new Error(`Automation ${a.id} already used its ${name} grant on this fire`)
-      if (used?.fire !== a.fires) {
-        a.grant.used = {
-          ...a.grant.used,
-          [name]: { fire: a.fires, at: now, ...(task ? { task } : {}) },
-        }
-        await host.emit(tx, Acted, { id: a.id, action: name, fire: a.fires, by: caller })
+      const by: GrantedBy = { automation: a.id, name: a.name, at: now }
+      // Every task scan before the first write: Pi refuses scans after a write in one transaction.
+      const result: Acted['result'] =
+        name === 'compact'
+          ? { conversation: target, taskId: await compactIn(tx, target) }
+          : name === 'dream'
+            ? await dream!.start(tx, by, caller)
+            : await dream!.asleep(tx, by, {})
+      a.acted = {
+        ...a.acted,
+        [name]: { fire: a.fires, at: now, by: caller, ...(task ? { task } : {}), result },
       }
-      return { automation: a.id, name: a.name, at: a.grant.used![name]!.at }
+      await host.emit(tx, ActedEvent, { id: a.id, action: name, fire: a.fires, by: caller })
+      return { action: name, ...result, automation: a.id, name: a.name }
     }, BACKGROUND_CONTEXT)
-    if (name === 'compact') {
-      // The conversation a context trigger watches, else the woken one itself. Pi admits a manual compaction while it
-      // works and places the summary at its next boundary; lineage wakes @ultimate once its summary is in. A root's
-      // tally compacts through lineage, which gives it the root's focus.
-      const status = await scripts.status(id)
-      const target =
-        (status.condition && (await trigger.resolve(status.condition.of))) ??
-        (caller as ConversationId)
-      if ((await host.need(LineageApi).rootOf(target, BACKGROUND_CONTEXT)) === target) {
-        const result = (await host.invoke(
-          'lineage',
-          'compact',
-          { id: target },
-          new AbortController().signal,
-          caller,
-        )) as { taskId: number }
-        return { action: name, by, conversation: target, ...result }
-      }
-      const conversation = await host.harness().conversation(target, BACKGROUND_CONTEXT)
-      if (!conversation) throw new Error(`Conversation #${target} is missing`)
-      const taskId = await conversation.compact(undefined, BACKGROUND_CONTEXT)
-      return { action: name, by, conversation: target, taskId: Number(taskId) }
-    }
-    const dream = host.want(DreamGrant)
-    if (!dream) throw new Error('The dream extension is not enabled')
-    // Granted dreams do not wait on the caller's own turn: it is the turn that asked.
-    const result = name === 'dream' ? await dream.start(by, caller) : await dream.asleep(by, {})
-    return { action: name, by, ...result }
   }
   return { ...schedule, ...scripts, prepare, change, apply, operate, trigger, grant, act }
+}
+/**
+ * Admit a manual compaction of conversation `id` inside `tx`, refusing one already running. A root's tally gets its
+ * root focus from lineage's compaction hook, and @ultimate its wake-up once the summary is in.
+ */
+async function compactIn(tx: Tx, id: ConversationId) {
+  for (const status of ['pending', 'running', 'waiting', 'completing'] as const)
+    if (
+      (await tx.scanTasks({ conversationId: id, kind: CompactionTask.definition.name, status }, 1))
+        .items.length
+    )
+      throw new Error(`#${id} is already compacting`)
+  // Pi upstream: @earendil-works/pi-durable@1.4.0 src/harness/compaction.ts — inline unexported createCompaction for atomic admission.
+  const created = await tx.createTask(
+    CompactionTask,
+    { reason: 'manual' },
+    { ownership: { kind: 'conversation' }, conversationId: id, background: false },
+  )
+  ;((await tx.doc(LiveDoc, id)).compactions ??= []).push({
+    taskId: created,
+    reason: 'manual',
+    blocking: false,
+    attempt: 1,
+  })
+  return Number(created)
 }
 function input(args: unknown, action: string): Args {
   return { ...(args as Omit<Args, 'action'>), action }
@@ -884,7 +911,7 @@ export default function automations(host: ExtensionHost) {
                 output: [
                   {
                     type: 'text' as const,
-                    text: `Did ${acted.action} under the user's grant on automation ${acted.by.automation}: ${JSON.stringify(acted)}`,
+                    text: `Did ${acted.action} under the user's grant on automation ${acted.automation}: ${JSON.stringify(acted)}`,
                   },
                 ],
               },

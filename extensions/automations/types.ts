@@ -34,6 +34,11 @@ export type Automation = {
   recentFires?: number[]
   /** What the user allowed this automation's woken agent to do for them on a fire; only the user sets it. */
   grant?: Grant
+  /**
+   * The fire each granted action last acted on, and what it did: one act per action and fire. Kept apart from `grant`,
+   * so editing the grant never allows a second act on the same fire.
+   */
+  acted?: Partial<Record<GrantAction, Acted>>
   script?: {
     ask: string
     once: boolean
@@ -111,13 +116,19 @@ export type GrantedBy = { automation: string; name: string; at: number }
  */
 export const GRANT_ACTIONS = ['dream', 'compact', 'asleep'] as const
 export type GrantAction = (typeof GRANT_ACTIONS)[number]
+/** The user's grant: the `actions` allowed, in `source` the user's words or where they set it, `at` when. */
+export type Grant = { actions: GrantAction[]; source: string; at: number }
 /**
- * The user's grant: the `actions` allowed, in `source` the user's words or where they set it, `at` when. `used` keeps
- * the fire each action last acted on: one act per action and fire.
+ * One granted act: on fire `fire`, at `at`, by conversation `by`, in tool task `task` when a tool call asked, with the
+ * `result` it committed together with its effect (a replay of that call returns it).
  */
-export type Grant = {
-  actions: GrantAction[]
-  source: string
+export type Acted = {
+  fire: number
   at: number
-  used?: Partial<Record<GrantAction, { fire: number; at: number; task?: number }>>
+  by: number
+  task?: number
+  result: { [key: string]: string | number }
 }
+
+/** The task kind of an automation's prompt run, which owns the run's conversation. */
+export const RUN_TASK = 'ultimate.automation-run'
