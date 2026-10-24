@@ -8,6 +8,8 @@ import { ExtensionsAction } from './refs.ts'
 export const projectDialog = 'onboarding.project'
 /** The start page's Isolated switch entry point; the overlay routes it to @ultimate. */
 export const gitDialog = 'onboarding.git'
+/** ⌘K Get ready…: the first run again, whatever the recorded state. */
+export const firstRunDialog = 'onboarding.first-run'
 
 export const sources: Record<ExtensionInfo['source'], string> = {
   builtin: 'built-in',

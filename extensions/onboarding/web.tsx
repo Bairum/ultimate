@@ -22,7 +22,7 @@ import { IsolationAction } from '../workspaces/ui.tsx'
 import { EmptyRoot } from '../lineage/ui.tsx'
 import { Familiarize } from './survey.tsx'
 import { ExtensionsPanel } from './panel.tsx'
-import { gitDialog, projectDialog } from './parts.tsx'
+import { firstRunDialog, gitDialog, projectDialog } from './parts.tsx'
 import { ChooseAction, HelpAction, StartAction, StatusAction, WalkthroughAction } from './refs.ts'
 
 function useIsolation() {
@@ -55,6 +55,7 @@ function Onboarding() {
   // Existing panel/start-page entry points now ask @ultimate too; no setup dialogs remain.
   const [projectOpen, setProjectOpen] = useDialog(projectDialog)
   const [gitOpen, setGitOpen] = useDialog(gitDialog)
+  const [again, setAgain] = useDialog(firstRunDialog)
   const [error, setError] = useState<string>()
   useEffect(() => {
     if (!projectOpen && !gitOpen) return
@@ -70,7 +71,7 @@ function Onboarding() {
   return (
     <>
       <FirstRun
-        open={!navigator.webdriver && status.data?.firstRun === true && !finished}
+        open={again || (!navigator.webdriver && status.data?.firstRun === true && !finished)}
         onClosed={() => ui.focusComposer()}
         onDone={async (skipped) => {
           if (!skipped) {
@@ -79,6 +80,7 @@ function Onboarding() {
             ui.showSurface('agent')
           }
           setFinished(true)
+          setAgain(false)
         }}
       />
       {error && (
@@ -251,6 +253,11 @@ export default defineWebExtension({
       id: 'onboarding.extensions',
       title: 'Extensions…',
       run: (context) => context.openPanel('extensions'),
+    },
+    {
+      id: 'onboarding.first-run',
+      title: 'Get ready…',
+      run: (context) => context.open(firstRunDialog),
     },
     {
       id: 'onboarding.walkthrough',
