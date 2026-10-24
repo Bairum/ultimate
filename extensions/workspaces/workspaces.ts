@@ -17,6 +17,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { WorkspacesDoc } from './refs.ts'
 import { setup } from './setup.ts'
+import { cloneMode, populate } from './clone.ts'
 import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
 import type {
   LandResult,
@@ -317,7 +318,10 @@ export function workspaces(host: Host) {
       prepare: async (task, runtime, context) => {
         const workspace = (await get(task.input.id, context))!
         let created = false
+        let populated = false
         try {
+          const settings = await host.projectSettings()
+          const mode = cloneMode(settings)
           // Git reads every `.git/worktrees/<name>` on list and add, and fails on one a concurrent add has only half
           // written ("failed to read .git/worktrees/<name>/locked"), so preparations of one source take turns.
           await serial(workspace.source, async () => {
@@ -354,6 +358,7 @@ export function workspaces(host: Host) {
                 workspace.source,
                 'worktree',
                 'add',
+                '--no-checkout',
                 ...(task.input.preserve
                   ? [workspace.path, workspace.branch]
                   : [
@@ -366,12 +371,18 @@ export function workspaces(host: Host) {
             }
           })
           created = true
-          await setup(
-            workspace.source,
-            workspace.path,
-            await host.projectSettings(),
-            runtime.signal,
-          )
+          // A crash mid-clone leaves the registered checkout half filled; populate starts over by clearing it.
+          populated = (await runtime.memo<boolean>('populated', context)) ?? false
+          if (!populated) {
+            const result = await populate(workspace.source, workspace.path, mode)
+            if (result.reason)
+              host.notice(
+                `Worktree ${workspace.path} used ${result.backend} checkout: ${result.reason}`,
+              )
+            await runtime.memo('populated', true, context)
+            populated = true
+          }
+          await setup(workspace.source, workspace.path, settings, runtime.signal)
           await runtime.commit(async (tx) => {
             ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(task.input.id)].state =
               'ready'
@@ -390,7 +401,15 @@ export function workspaces(host: Host) {
               )
             if (created) {
               if (registered)
-                await git(workspace.source, 'worktree', 'remove', workspace.path).catch(
+                // A half-filled copy has no index and looks dirty but holds nothing of its own, so it is forced;
+                // once populated, Git's refusal keeps a failed setup's dirty output.
+                await git(
+                  workspace.source,
+                  'worktree',
+                  'remove',
+                  ...(populated ? [] : ['--force']),
+                  workspace.path,
+                ).catch(
                   // Best-effort rollback: the preparation error is recorded below and must not be replaced.
                   () => undefined,
                 )
