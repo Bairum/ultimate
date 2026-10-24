@@ -2,7 +2,12 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { CompactionTask, configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import {
+  CompactionTask,
+  configure,
+  defineExtension,
+  ROOT_CONVERSATION_ID,
+} from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import {
@@ -22,6 +27,7 @@ import type { LandedData } from '../extensions/workspaces/api.ts'
 import { emit, EventFeed, EventLog } from '../server/events.ts'
 import { context } from '../server/harness.ts'
 import { fauxServer, post, seedTally, sourceCopy, temp, until } from './helpers.ts'
+import { anchor } from './lineage-fixture.ts'
 
 let ultimateRoot: string
 beforeAll(async () => {
@@ -698,6 +704,17 @@ it.concurrent('lets any conversation compact itself with the tool and wakes it t
   expect(textOf(woken[0].model?.[0]?.content)).toBe(
     'Your context was just compacted. Read the summary above, then continue where you left off.',
   )
+  // A subagent's report is its run's answer: it does not compact itself into a second run.
+  server.host.registry.install(defineExtension({ name: 'lineage-test', tasks: [anchor] }))
+  const child = await server.harness.commit(async (tx) => {
+    const owner = await tx.createTask(anchor, null, {
+      ownership: { kind: 'conversation' },
+      conversationId: other.id,
+      background: true,
+    })
+    return (await tx.createConversation({ ownership: { kind: 'task', taskId: owner } })).id
+  }, context)
+  await expect(run(server, 'compact', {}, child)).rejects.toThrow('A subagent does not compact')
 })
 
 it.concurrent('completes a landing task without asking when no summary model runs', async () => {

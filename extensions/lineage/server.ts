@@ -1651,26 +1651,27 @@ export default function lineageExtension(host: ExtensionHost) {
           'Compact your own context: older turns become a summary, recent ones stay verbatim, full history stays in storage. Use instructions to guide the summary. It runs after this turn; end the turn, and you are woken once it is done.',
         parameters: Type.Object({ instructions: Type.Optional(Type.String()) }),
         async execute({ instructions }, api, ctx) {
-          if (
-            await api.commit(
-              (tx) => liveTask(tx, api.conversationId, CompactionTask.definition.name),
-              ctx,
-            )
-          )
-            throw new Error('Already compacting')
-          const conversation = await host.harness().conversation(api.conversationId, ctx)
-          const taskId = await conversation!.compact(instructions, ctx)
-          // @ultimate's own hook wakes it after any manual compaction; anyone else is woken for this call.
-          await host.harness().commit(async (tx) => {
-            const id = api.conversationId
-            if ((await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate === id) return
-            const receipt = await tx.doc(WokenReceipt, id, String(taskId), null)
-            if (receipt.task !== undefined) return
-            receipt.task = await tx.createTask(
-              Woken,
-              { id, compaction: taskId },
-              { conversationId: id, ownership: { kind: 'conversation' }, background: true },
-            )
+          const id = api.conversationId
+          // The compaction and its wake-up commit together, so no crash leaves one without the other. @ultimate's own
+          // hook wakes it after any manual compaction; anyone else is woken here.
+          const taskId = await host.harness().commit(async (tx) => {
+            // A subagent's report is its run's answer: a wake-up after the compaction would start a run whose answer
+            // never reaches its parent. Its automatic compaction continues the run instead.
+            if ((await tx.conversation(id))?.owner)
+              throw new Error(
+                'A subagent does not compact itself: its automatic compaction continues the run. Finish and report instead.',
+              )
+            if (await liveTask(tx, id, CompactionTask.definition.name))
+              throw new Error('Already compacting')
+            const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate === id
+            const created = await admitCompaction(tx, id, instructions)
+            if (!ultimate)
+              (await tx.doc(WokenReceipt, id, String(created), null)).task = await tx.createTask(
+                Woken,
+                { id, compaction: created },
+                { conversationId: id, ownership: { kind: 'conversation' }, background: true },
+              )
+            return created
           }, ctx)
           return { output: [{ type: 'text', text: JSON.stringify({ taskId }) }] }
         },

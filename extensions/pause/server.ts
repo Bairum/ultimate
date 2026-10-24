@@ -270,7 +270,9 @@ function arm(host: Host, doc: PauseDocState) {
 
 /**
  * Play the pause by itself once its time came (`now`, for tests), once: Play ends the pause, and a limit that still
- * holds pauses again with a new start and a full grace period. Tells @ultimate with a `pause.autoplay` entry.
+ * holds pauses again with a new start and a full grace period. Tells @ultimate with a `pause.autoplay` entry first,
+ * while the pause is still recorded: a crash before Play reopens paused, re-arms the timer, and the entry's request ID
+ * keeps the second announcement from repeating.
  */
 export async function autoPlay(host: Host, now = Date.now()) {
   return serial(host, async () => {
@@ -278,7 +280,6 @@ export async function autoPlay(host: Host, now = Date.now()) {
     const at = autoPlayAt(doc)
     if (at === undefined || now < at) return false
     const data: AutoPlayed = { since: doc.since!, at: now, minutes: doc.autoPlay! }
-    await play(host, true)
     const harness = host.harness()
     const ultimate = (await harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
     if (ultimate !== undefined)
@@ -302,6 +303,7 @@ export async function autoPlay(host: Host, now = Date.now()) {
         },
         context,
       )
+    await play(host, true)
     return true
   })
 }
