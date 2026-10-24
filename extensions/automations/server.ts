@@ -41,9 +41,11 @@ import {
   ScriptAction,
   EscalateAction,
   Escalated,
+  EventsAction,
 } from './refs.ts'
 import { describeSchedule, nextAt, parseSchedule } from './schedule.ts'
 import { scheduler } from './scheduler.ts'
+import { triggers, TRIGGER_EVENTS, describeTrigger } from './triggers.ts'
 import { supervisor } from './supervisor.ts'
 import type { Prepared } from './supervisor.ts'
 import type { Args, Automation, AutomationListItem, Effect, Run, Manifest } from './types.ts'
@@ -86,6 +88,7 @@ function required(v: unknown, field: string): string {
   return v.trim()
 }
 const operations = [
+  'events',
   'list',
   'create',
   'update',
@@ -103,6 +106,7 @@ const operations = [
 function backend(host: ExtensionHost) {
   const schedule = scheduler(host, Automations, (...args) => scripts.deliver(...args))
   const scripts = supervisor(host, Automations, schedule.fire)
+  const trigger = triggers(host, Automations, schedule.fire, schedule.prepareFires)
   const {
     trusted,
     agentFor,
@@ -349,11 +353,14 @@ function backend(host: ExtensionHost) {
       throw new Error('Unknown model')
     if (args.action === 'create') {
       required(args.name, 'name')
-      if ((args.schedule !== undefined) === (args.ask !== undefined))
-        throw new Error('Exactly one of schedule or ask is required')
+      if (
+        [args.schedule, args.ask, args.event, args.condition].filter((value) => value !== undefined)
+          .length !== 1
+      )
+        throw new Error('Exactly one of schedule, ask, event or condition is required')
       if (args.scope !== undefined && args.scope !== 'user' && args.scope !== 'project')
         throw new Error('scope must be user or project')
-      if (args.scope === 'project' && args.schedule !== undefined)
+      if (args.scope === 'project' && args.ask === undefined)
         throw new Error('Project scope is only supported for script triggers')
       if (args.slug !== undefined && args.scope !== 'project')
         throw new Error('slug is only for project automations')
@@ -371,6 +378,26 @@ function backend(host: ExtensionHost) {
         if (!(await host.harness().conversation(id as ConversationId, BACKGROUND_CONTEXT)))
           throw new Error(`Unknown subscriber #${id}`)
     }
+    if (args.event !== undefined) {
+      const event = TRIGGER_EVENTS.find(({ name }) => name === args.event!.name)
+      if (!event) throw new Error(`Unknown event: ${args.event.name}`)
+      for (const [key, value] of Object.entries(args.event.where ?? {})) {
+        if (!Object.hasOwn(event.fields, key)) throw new Error(`Unknown where field: ${key}`)
+        if (!['string', 'number', 'boolean'].includes(typeof value))
+          throw new Error('where values must be strings, numbers or booleans')
+      }
+    }
+    if (args.condition !== undefined) {
+      const c = args.condition
+      if (c.metric !== 'context') throw new Error('condition metric must be context')
+      if (!Number.isInteger(c.above) || c.above < 1 || c.above > 99)
+        throw new Error('above must be an integer from 1 to 99')
+      if (c.cooldownMs !== undefined && (!Number.isFinite(c.cooldownMs) || c.cooldownMs < 0))
+        throw new Error('cooldownMs must be non-negative')
+      const target = typeof c.of === 'string' ? await trigger.resolve(c.of) : undefined
+      if (!target || !(await host.harness().conversation(target, BACKGROUND_CONTEXT)))
+        throw new Error(`Unknown of: ${c.of}`)
+    }
     if (args.name !== undefined) required(args.name, 'name')
     // An empty prompt on update removes the run action; create needs a real one.
     if (args.prompt !== undefined && (args.action === 'create' || args.prompt !== ''))
@@ -385,7 +412,12 @@ function backend(host: ExtensionHost) {
     args.secrets?.forEach(validateName)
     if (args.action === 'update') {
       const a = await scripts.status(required(args.id, 'id'))
-      if ((args.ask !== undefined && !a.script) || (args.schedule !== undefined && !a.schedule))
+      if (
+        (args.ask !== undefined && !a.script) ||
+        (args.schedule !== undefined && !a.schedule) ||
+        (args.event !== undefined && !a.event) ||
+        (args.condition !== undefined && !a.condition)
+      )
         throw new Error('Cannot change trigger kind')
       if (args.ask !== undefined) required(args.ask, 'ask')
     }
@@ -397,8 +429,17 @@ function backend(host: ExtensionHost) {
       await scripts.discover()
       return {}
     }
-    if (args.action === 'create') return {}
-    return prepareScript(args, caller)
+    if (args.action === 'events') return {}
+    const prepared: Prepared = args.action === 'create' ? {} : await prepareScript(args, caller)
+    if (args.action === 'create' || args.action === 'resume')
+      prepared.sinceEvent = (await host.eventLog.recent({ limit: 1 }))[0]?.id ?? 0
+    const condition =
+      args.condition ??
+      (args.action === 'resume'
+        ? (await scripts.status(required(args.id, 'id'))).condition
+        : undefined)
+    if (condition) prepared.target = await trigger.resolve(condition.of)
+    return prepared
   }
   async function change(
     tx: Tx,
@@ -406,6 +447,7 @@ function backend(host: ExtensionHost) {
     prepared: Awaited<ReturnType<typeof prepare>>,
     caller?: number,
   ): Promise<Change> {
+    if (args.action === 'events') return { result: json(TRIGGER_EVENTS) }
     const state = await tx.doc(Automations)
     if (args.action === 'list') return changeScript(tx, args, prepared, caller)
     if (args.action === 'create' && args.ask !== undefined)
@@ -416,7 +458,7 @@ function backend(host: ExtensionHost) {
       state.automations[id] = {
         id,
         name: required(args.name, 'name'),
-        schedule: parseSchedule(args.schedule!),
+        ...(args.schedule !== undefined ? { schedule: parseSchedule(args.schedule) } : {}),
         enabled: true,
         createdAt: now,
         updatedAt: now,
@@ -430,7 +472,7 @@ function backend(host: ExtensionHost) {
     const a = state.automations[id]
     if (!a) throw new Error(`Unknown automation: ${id}`)
     if (args.action === 'runs') return { result: a.runs }
-    if (args.action === 'run' && a.schedule)
+    if (args.action === 'run' && !a.script)
       return { result: await schedule.fire(tx, a, Date.now()) }
     if (args.action === 'abort') {
       const run = a.runs.find((r) => r.id === args.runId)
@@ -469,6 +511,15 @@ function backend(host: ExtensionHost) {
       if (!a.prompt && !a.subscribers.length)
         throw new Error('At least one of prompt or subscribers is required')
       if (args.schedule !== undefined) a.schedule = parseSchedule(args.schedule)
+      if (args.event !== undefined)
+        a.event = { ...args.event, sinceEvent: a.event?.sinceEvent ?? prepared.sinceEvent ?? 0 }
+      if (args.condition !== undefined)
+        a.condition = {
+          ...a.condition,
+          ...args.condition,
+          cooldownMs: args.condition.cooldownMs ?? a.condition?.cooldownMs ?? 3600000,
+          armed: a.condition?.armed ?? true,
+        }
       if (a.script) {
         if (args.ask !== undefined) a.script.ask = required(args.ask, 'ask')
         if (args.once !== undefined) a.script.once = args.once
@@ -493,6 +544,9 @@ function backend(host: ExtensionHost) {
     } else if (args.action === 'pause') a.enabled = false
     else if (args.action === 'resume') a.enabled = true
     else throw new Error(`Unknown action: ${args.action}`)
+    if (args.action === 'resume' && a.event) a.event.sinceEvent = prepared.sinceEvent!
+    if (args.action === 'create' || args.action === 'resume')
+      await trigger.evaluate(tx, a, prepared.target)
     a.updatedAt = Date.now()
     if (effect) await deliver(tx, a, `update:${a.updatedAt}`, 'writing', a.script!.ask)
     if (!isDeepStrictEqual(a.schedule, oldSchedule)) delete a.nextAt
@@ -525,12 +579,13 @@ function backend(host: ExtensionHost) {
       return json(await scripts.status(required(args.id, 'id')))
     return receipt.result
   }
-  return { ...schedule, ...scripts, prepare, change, apply, operate }
+  return { ...schedule, ...scripts, prepare, change, apply, operate, trigger }
 }
 function input(args: unknown, action: string): Args {
   return { ...(args as Omit<Args, 'action'>), action }
 }
 export const actions = {
+  events: implementAction(EventsAction, () => TRIGGER_EVENTS),
   list: implementAction(
     ListAction,
     async (args, { host }) =>
@@ -618,9 +673,17 @@ export default function automations(host: ExtensionHost) {
     run: async (id) => (await api.operate({ action: 'run', id }), api.status(id)),
     status: api.status,
   })
-  host.onOpen(api.open)
-  host.onRelease(api.close)
-  host.onClose(api.close)
+  api.trigger.install()
+  host.onOpen(async () => {
+    await api.open()
+    await api.trigger.open()
+  })
+  const close = async () => {
+    await api.trigger.close()
+    await api.close()
+  }
+  host.onRelease(close)
+  host.onClose(close)
   return defineExtension({
     name: 'automations',
     tasks: [api.Scheduler, api.RunTask, api.Deliver],
@@ -629,10 +692,7 @@ export default function automations(host: ExtensionHost) {
         const state = await read.snapshot(Automations, context)
         const lines = Object.values(state?.automations ?? {})
           .filter((a) => a.enabled)
-          .map(
-            (a) =>
-              `${a.id} ${a.name}: ${a.schedule ? describeSchedule(a.schedule) : a.script!.state}`,
-          )
+          .map((a) => `${a.id} ${a.name}: ${describeTrigger(a)}`)
         return lines.length ? lines.join('\n') : undefined
       }),
     ],
@@ -642,13 +702,32 @@ export default function automations(host: ExtensionHost) {
         // Receipts deduplicate ledger changes; process effects reuse their committed pid on replay.
         replay: 'safe',
         description:
-          'Automate background work with one trigger (schedule or ask) and one or both actions (prompt, subscribers). create {name,schedule?|ask?,once?,secrets?,prompt?,agent?,model?,thinking?,subscribers?,scope?,slug?}. ask starts a watcher that writes a supervised script: stdout FIRE wakes subscribers and/or starts a prompt run; DONE then exit 0 stops recurring scripts. Scripts spend tokens only on setup and repair; prompt runs spend tokens every fire. Schedules: cron "0 9 * * 1-5" Europe/Vienna, at 2026-12-01T09:00:00Z, in 30m, every 15m. IDs A<n>, or lowercase slugs for project scripts in <project>/.ultimate/automations/<slug>/. Project scripts never start themselves. list; update; pause/resume; run (fire schedule now or relaunch script); runs; log {id,lines?}; abort {id,runId}; escalate {id,reason}; subscribe/unsubscribe {id,to?: "#id"|"@name"} (default caller); delete (keeps files and conversations). Without prompt or subscribers, caller subscribes. Optional agent selects an existing definition (isolates ignored), model {provider,modelId} and thinking override it; otherwise runs copy the root agent. Failures wake only the watcher; escalation notifies subscribers and @ultimate.',
+          'Automate background work with one trigger (schedule, ask, event or condition) and one or both actions (prompt, subscribers). create {name,schedule?|ask?|event?|condition?,once?,secrets?,prompt?,agent?,model?,thinking?,subscribers?,scope?,slug?}. ask starts a watcher that writes a supervised script: stdout FIRE wakes subscribers and/or starts a prompt run; DONE then exit 0 stops recurring scripts. event {name,where?} watches domain events; events lists names and fields. condition {metric:"context",of:"@name"|"#id",above:1-99,cooldownMs?} watches context fill. Scripts spend tokens only on setup and repair; prompt runs spend tokens every fire. Schedules: cron "0 9 * * 1-5" Europe/Vienna, at 2026-12-01T09:00:00Z, in 30m, every 15m. IDs A<n>, or lowercase slugs for project scripts in <project>/.ultimate/automations/<slug>/. Project scripts never start themselves. list; update; pause/resume; run (fire trigger now or relaunch script); runs; log {id,lines?}; abort {id,runId}; escalate {id,reason}; subscribe/unsubscribe {id,to?: "#id"|"@name"} (default caller); delete (keeps files and conversations). Without prompt or subscribers, caller subscribes. Optional agent selects an existing definition (isolates ignored), model {provider,modelId} and thinking override it; otherwise runs copy the root agent. Failures wake only the watcher; escalation notifies subscribers and @ultimate.',
         parameters: Type.Object({
           action: Type.Union(operations.map((v) => Type.Literal(v))),
           id: Type.Optional(Type.String()),
           name: Type.Optional(Type.String()),
           schedule: Type.Optional(Type.String()),
           ask: Type.Optional(Type.String()),
+          event: Type.Optional(
+            Type.Object({
+              name: Type.String(),
+              where: Type.Optional(
+                Type.Record(
+                  Type.String(),
+                  Type.Union([Type.String(), Type.Number(), Type.Boolean()]),
+                ),
+              ),
+            }),
+          ),
+          condition: Type.Optional(
+            Type.Object({
+              metric: Type.Literal('context'),
+              of: Type.String(),
+              above: Type.Integer({ minimum: 1, maximum: 99 }),
+              cooldownMs: Type.Optional(Type.Number({ minimum: 0 })),
+            }),
+          ),
           once: Type.Optional(Type.Boolean()),
           secrets: Type.Optional(Type.Array(Type.String())),
           prompt: Type.Optional(Type.String()),
@@ -720,7 +799,7 @@ function concise(value: JsonValue): string {
   if (Array.isArray(value)) return value.length ? value.map(concise).join('\n') : 'None.'
   if (value && typeof value === 'object' && 'enabled' in value) {
     const a = value as Automation
-    return `${a.id} ${a.name} — ${a.schedule ? describeSchedule(a.schedule) : a.script!.state} — ${a.enabled ? 'enabled' : 'paused'}`
+    return `${a.id} ${a.name} — ${describeTrigger(a)} — ${a.enabled ? 'enabled' : 'paused'}`
   }
   if (value && typeof value === 'object' && typeof value.text === 'string') return value.text
   return JSON.stringify(value)

@@ -1,6 +1,7 @@
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { TaskId, ConversationId } from '@earendil-works/pi-durable'
 
+export type TriggerEvent = { name: string; description: string; fields: Record<string, string> }
 export type Schedule =
   | { kind: 'cron'; expr: string; tz: string }
   | { kind: 'at'; time: string }
@@ -21,6 +22,16 @@ export type Automation = {
   createdAt: number
   updatedAt: number
   schedule?: Schedule
+  event?: { name: string; where?: Record<string, string | number | boolean>; sinceEvent: number }
+  condition?: {
+    metric: 'context'
+    of: string
+    above: number
+    cooldownMs: number
+    armed: boolean
+    value?: number
+  }
+  recentFires?: number[]
   script?: {
     ask: string
     once: boolean
@@ -50,6 +61,8 @@ export type CreateArgs = {
   name: string
   schedule?: string | Schedule
   ask?: string
+  event?: { name: string; where?: Record<string, string | number | boolean> }
+  condition?: { metric: 'context'; of: string; above: number; cooldownMs?: number }
   once?: boolean
   secrets?: string[]
   prompt?: string

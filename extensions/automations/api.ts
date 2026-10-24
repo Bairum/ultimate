@@ -1,4 +1,4 @@
-/** Automations: resume, pause, run and inspect scheduled or supervised script triggers. */
+/** Automations: resume, pause, run and inspect scheduled, event, context or supervised script triggers. */
 import { defineApi } from '../../shared/extension-api.ts'
 import type { AutomationListItem } from './types.ts'
 export type AutomationsService = {
@@ -6,7 +6,7 @@ export type AutomationsService = {
   resume(id: string): Promise<AutomationListItem>
   /** Pause a trigger and terminate its script process group. Commits. */
   pause(id: string): Promise<AutomationListItem>
-  /** Fire a schedule now, or relaunch a script. Commits. */
+  /** Fire a schedule, event or condition now, or relaunch a script. Commits. */
   run(id: string): Promise<AutomationListItem>
   /** The record, including whether its script process is alive. */
   status(id: string): Promise<AutomationListItem>

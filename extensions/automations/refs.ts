@@ -1,10 +1,19 @@
 /** Automations: durable triggers, actions, runs and script lifecycle events. Browser-safe. */
 import { actionRef } from '../../shared/extension-api.ts'
 import { defineEvent } from '../../shared/events.ts'
-import type { Automation, AutomationListItem, CreateArgs, Run, Schedule } from './types.ts'
+import type {
+  Automation,
+  AutomationListItem,
+  CreateArgs,
+  Run,
+  Schedule,
+  TriggerEvent,
+} from './types.ts'
 export type { Automation, AutomationListItem, CreateArgs, Run, Schedule } from './types.ts'
 export type Described = { schedule: Schedule; description: string; next: number[] }
 type Id = { id: string }
+/** Available domain event triggers and filter fields. */
+export const EventsAction = actionRef<null, TriggerEvent[]>('automations', 'events')
 /** No arguments → all automations, with process-local alive. */
 export const ListAction = actionRef<null, AutomationListItem[]>('automations', 'list')
 /** Flat trigger and action arguments → new automation. */
@@ -18,7 +27,7 @@ export const UpdateAction = actionRef<
 export const PauseAction = actionRef<Id, Automation>('automations', 'pause')
 /** Resume a trigger; scripts require an executable run file. */
 export const ResumeAction = actionRef<Id, Automation>('automations', 'resume')
-/** Fire a schedule now, or relaunch a script. */
+/** Fire a schedule, event or condition now, or relaunch a script. */
 export const RunAction = actionRef<Id, Run | Automation | Id>('automations', 'run')
 /** Delete a record; files and conversations remain. */
 export const DeleteAction = actionRef<Id, Id>('automations', 'delete')
@@ -56,5 +65,5 @@ export const Exited = defineEvent<{ id: string; code: number | null; signal?: st
 )
 /** Recurring script printed DONE and exited 0. */
 export const Done = defineEvent<{ id: string; text?: string }>('automations.done')
-/** Watcher could not recover its script. */
+/** Watcher could not recover its script, or a trigger exceeded its hourly fire cap. */
 export const Escalated = defineEvent<{ id: string; reason: string }>('automations.escalated')

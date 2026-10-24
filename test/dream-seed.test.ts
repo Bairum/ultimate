@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import type { JsonValue } from '@earendil-works/chord'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Tx } from '@earendil-works/pi-durable'
@@ -329,6 +330,63 @@ it('carries subscriber-only schedules as to-dos instead of recreating stale conv
   ).toBe(true)
   expect((await f.harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context))!.automations).toEqual(
     [],
+  )
+})
+
+it('carries event and standing context triggers, but leaves numeric context targets for recreation', async () => {
+  const f = await fixture()
+  await f.source()
+  const signal = new AbortController().signal
+  const triggers: JsonValue[] = [
+    {
+      name: 'Landed',
+      prompt: 'Review landing',
+      event: { name: 'workspaces.landed', where: { target: 'main' } },
+      thinking: 'high',
+    },
+    {
+      name: 'Standing context',
+      prompt: 'Review context',
+      condition: { metric: 'context', of: '@ultimate', above: 80 },
+    },
+    {
+      name: 'Old context',
+      prompt: 'Review old context',
+      condition: { metric: 'context', of: '#1', above: 80 },
+    },
+  ]
+  for (const args of triggers) await f.host.invoke('automations', 'create', args, signal)
+  const seed = await buildSeed(f.host, 1)
+  expect(seed.counts.automations).toBe(3)
+  expect(seed.automations[0]).toEqual({
+    name: 'Landed',
+    prompt: 'Review landing',
+    event: { name: 'workspaces.landed', where: { target: 'main' } },
+    thinking: 'high',
+  })
+  expect(seed.automations[1].condition).toEqual({
+    metric: 'context',
+    of: '@ultimate',
+    above: 80,
+    cooldownMs: 3600000,
+  })
+  await writeSeed(join(f.home, 'chapters', 'triggers'), seed)
+  await f.close()
+  await requestChapter(f.home, 'triggers')
+  await f.open()
+  await applySeed(f.host)
+  const carried = await automationActions.list(null, { host: f.host } as ActionContext)
+  expect(carried.map((a) => a.name)).toEqual(['Landed', 'Standing context'])
+  expect(carried[0].event).toMatchObject({ name: 'workspaces.landed', where: { target: 'main' } })
+  expect(carried[1].condition).toMatchObject({ of: '@ultimate', armed: true })
+  const todos = (await f.harness.snapshot(Todos, ROOT_CONVERSATION_ID, context))!.items
+  expect(
+    todos.some((item) =>
+      item.text.includes('Recreate context automation (Old context) with new conversation target'),
+    ),
+  ).toBe(true)
+  expect((await f.harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context))?.automations).toEqual(
+    ['Landed', 'Standing context'],
   )
 })
 
