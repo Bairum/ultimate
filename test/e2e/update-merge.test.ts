@@ -1,11 +1,12 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, realpath, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, expect, it } from 'vitest'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import { git } from '../lib/git.ts'
-import { context } from '../server/harness.ts'
-import { Standing } from '../extensions/subagents/api.ts'
-import { fauxServer, post, sourceCopy, temp } from './helpers.ts'
+import { git } from '../../lib/git.ts'
+import { context } from '../../server/harness.ts'
+import { Standing } from '../../extensions/subagents/api.ts'
+import { Workspaces } from '../../extensions/workspaces/workspaces.ts'
+import { fauxServer, post, sourceCopy, temp } from '../helpers.ts'
 
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 afterAll(async () => {
@@ -74,6 +75,22 @@ it.concurrent('asks @ultimate once to merge origin into a diverged clone that is
   const refused = await post(server, '/api/extensions/update/actions/merge', {})
   expect(refused.status).not.toBe(200)
   expect(JSON.stringify(refused.data)).toContain('The checkout has uncommitted changes')
+})
+
+it.concurrent('offers no merge while the lander is landing into the clone', async () => {
+  const home = await temp()
+  const root = await diverged(home)
+  const server = await serve(home, root, root)
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.push({
+      source: await realpath(root),
+      state: 'landing',
+    } as never)
+  }, context)
+  const state = await post(server, '/api/extensions/update/actions/state', {})
+  expect(state.data.result).toMatchObject({ refused: 'main has diverged from origin/main' })
+  expect(state.data.result.merge).toBeUndefined()
+  expect((await post(server, '/api/extensions/update/actions/merge', {})).status).not.toBe(200)
 })
 
 it.concurrent('offers no merge where the clone is not the project', async () => {
