@@ -89,6 +89,13 @@ it('walks the sidebar from the handoff to the switch, naming the one thing to do
     text: 'Writing my handoff',
   })
   expect(stepOf({ sessions: [session(1)] })?.stage).toBe('dreaming')
+  // A second dream asked for while the first still waits on Fall asleep (seen in a preview).
+  expect(
+    stepOf({
+      sessions: [session(1, { journal, endedAt: 2 })],
+      waiting: { at: 3, task: 8 },
+    })?.stage,
+  ).toBe('handoff')
   expect(
     stepOf({ sessions: [session(1, { journal, proposals: proposals('open', 'landed') })] }),
   ).toMatchObject({ stage: 'deciding', action: 'decide', text: '1 proposal to decide' })

@@ -111,10 +111,11 @@ export type DreamStep = {
 }
 
 export function stepOf(doc?: { sessions: Session[]; waiting?: Waiting }): DreamStep | undefined {
+  // A new dream waiting on its handoff comes before a settled session still pinned for Fall asleep.
+  const waiting = doc?.waiting && !doc.waiting.gaveUp ? doc.waiting : undefined
   const session = pinnedOf(doc?.sessions)
-  if (!session) {
-    const waiting = doc?.waiting
-    if (!waiting || waiting.gaveUp) return undefined
+  if (!session || (waiting && session.endedAt !== undefined)) {
+    if (!waiting) return undefined
     return {
       stage: 'handoff',
       text: waiting.handoff
