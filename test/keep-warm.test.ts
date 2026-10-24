@@ -28,6 +28,25 @@ it('does not retry after a failed ping until a newer request', () => {
   expect(due({ now, lastRequest, inputAt, failedAfter: lastRequest - 1 })).toBe(true)
 })
 
+it('counts only answers that read or wrote the current model’s cache', () => {
+  const answer = (change: Record<string, unknown>) =>
+    ({
+      role: 'assistant',
+      provider: 'claude-code',
+      model: 'claude-opus-5-5',
+      stopReason: 'stop',
+      usage: { cacheRead: 500_000, cacheWrite: 2_000 },
+      ...change,
+    }) as unknown as Parameters<typeof keepWarm.cached>[0]
+  expect(keepWarm.cached(answer({}), 'claude-opus-5-5')).toBe(true)
+  expect(keepWarm.cached(answer({ stopReason: 'error' }), 'claude-opus-5-5')).toBe(false)
+  expect(keepWarm.cached(answer({ model: 'claude-fable-5-1' }), 'claude-opus-5-5')).toBe(false)
+  expect(keepWarm.cached(answer({ provider: 'openai-codex' }), 'claude-opus-5-5')).toBe(false)
+  expect(
+    keepWarm.cached(answer({ usage: { cacheRead: 0, cacheWrite: 0 } }), 'claude-opus-5-5'),
+  ).toBe(false)
+})
+
 it('leaves the switch to the user', () => {
   expect(keepWarm.userActions).toEqual(['set'])
 })

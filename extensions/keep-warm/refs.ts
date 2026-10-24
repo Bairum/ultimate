@@ -1,11 +1,17 @@
 /** Keep warm in the browser: whether @ultimate's prompt cache is kept warm, and the last ping. Browser-safe. */
 import { actionRef, docRef } from '../../shared/extension-api.ts'
 
-/** One keep-warm request: when, what it read from and wrote to the cache, or why it failed. */
-export type Ping = { at: number; read?: number; write?: number; error?: string }
+/**
+ * One keep-warm request: when, on which model, what it read from and wrote to the cache, or why it failed. Recorded as
+ * `interrupted` before it is sent, so a crash mid-request counts as a failure.
+ */
+export type Ping = { at: number; model: string; read?: number; write?: number; error?: string }
 
-/** On conversation 1. `off` when the user turned it off (it is on by default); the last ping and how many ran. */
-export type WarmDocState = { off?: true; last?: Ping; pings?: number }
+/**
+ * On conversation 1. `off` when the user turned it off (it is on by default); the user's latest input to @ultimate
+ * (ms, from `user.input` events); the last ping and how many ran.
+ */
+export type WarmDocState = { off?: true; inputAt?: number; last?: Ping; pings?: number }
 
 export type WarmState = {
   on: boolean
