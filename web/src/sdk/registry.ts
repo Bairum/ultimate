@@ -42,6 +42,7 @@ export interface SlotItem {
   extension: string
   version: number
   component: ComponentType
+  phone: boolean
 }
 export interface PanelItem extends PanelContribution {
   extension: string
@@ -89,13 +90,14 @@ const objectOf =
   (value) =>
     isObject(value) && !Array.isArray(value) && Object.values(value).every(item)
 const isContribution: Check = (value) =>
-  isFunction(value) || fields({ component: isComponent, order: optional(isNumber) })(value)
+  isFunction(value) ||
+  fields({ component: isComponent, order: optional(isNumber), phone: optional(isBoolean) })(value)
 
 /** What each contribution must look like; a facet that does not match keeps its previous version installed. */
 const shapes: Record<keyof WebExtension, [Check, string]> = {
   slots: [
     objectOf((value) => isContribution(value) || arrayOf(isContribution)(value)),
-    'an object of slot name → a component, { component, order? }, or an array of them',
+    'an object of slot name → a component, { component, order?, phone? }, or an array of them',
   ],
   panels: [
     arrayOf(
@@ -323,7 +325,9 @@ function normalize(value: Contribution | readonly Contribution[] | undefined) {
   if (!value) return []
   const list: readonly Contribution[] = Array.isArray(value) ? value : [value as Contribution]
   return list.map((item) =>
-    typeof item === 'function' ? { component: item, order: 0 } : { order: 0, ...item },
+    typeof item === 'function'
+      ? { component: item, order: 0, phone: false }
+      : { order: 0, phone: false, ...item },
   )
 }
 
@@ -337,6 +341,7 @@ export function slotItems(records: readonly ExtensionRecord[], slot: SlotName): 
         version,
         component: item.component,
         order: item.order ?? 0,
+        phone: item.phone ?? false,
       })),
     )
     .toSorted((a, b) => a.order - b.order)

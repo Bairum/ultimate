@@ -300,22 +300,22 @@ in parallel, installing independently; contributions follow discovery order: bui
 Components mounted in named places of the shell, on every surface that renders the primitive holding them, and in the
 title bar the host shows above every surface.
 
-| Slot                   | Where                                                                                          |
-| ---------------------- | ---------------------------------------------------------------------------------------------- |
-| `sidebar`              | Left column (`<Sidebar />`); it disappears while nothing is in it                              |
-| `sidebar.top`          | Agent sidebar, after the Agents group and before the roots: background work such as watches    |
-| `titlebar.brand`       | Title bar, the wordmark beyond a phone; render `Wordmark` from `@/sdk` with an `onClick`       |
-| `titlebar.project`     | Title bar, in place of the project chip; render `ProjectChip` from `@/sdk` with a menu         |
-| `titlebar.left`        | Title bar above every surface, after the project chip; monospace, one line                     |
-| `titlebar.right`       | Title bar, right, before the palette button                                                    |
-| `header.right`         | Right side of the header, before the panel toggle (`<Header>`)                                 |
-| `statusline.left`      | Bottom status line, left; monospace, one line (`<StatusLine />`)                               |
-| `statusline.right`     | Bottom status line, right (`<StatusLine />`)                                                   |
-| `composer.toolbar`     | Left of the composer's footer; a size container, condense with `@max-md:` (`<Conversation />`) |
-| `composer.status`      | Line under the composer; conversation-specific, monospace, one line (`<Conversation />`)       |
-| `conversation.overlay` | Over the transcript and the composer (`<Conversation />`); position it `absolute inset-0`      |
-| `transcript.start`     | Above a transcript's first row once its whole history is loaded; `useTranscript()` inside      |
-| `overlay`              | Always mounted at the root, above every surface: dialogs, toasts, global effects               |
+| Slot                   | Where                                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `sidebar`              | Left column (`<Sidebar />`); it disappears while nothing is in it                                            |
+| `sidebar.top`          | Agent sidebar, after the Agents group and before the roots: background work such as watches                  |
+| `titlebar.brand`       | Title bar, the wordmark beyond a phone; render `Wordmark` from `@/sdk` with an `onClick`                     |
+| `titlebar.project`     | Title bar, in place of the project chip; render `ProjectChip` from `@/sdk` with a menu                       |
+| `titlebar.left`        | Title bar above every surface, after the project chip; monospace, one line                                   |
+| `titlebar.right`       | Title bar, right, before the palette button                                                                  |
+| `header.right`         | Right side of the header, before the panel toggle (`<Header>`)                                               |
+| `statusline.left`      | Bottom status line, left; monospace, one line (`<StatusLine />`)                                             |
+| `statusline.right`     | Bottom status line, right (`<StatusLine />`); on a phone only `phone: true` items stay, the rest go behind ⋯ |
+| `composer.toolbar`     | Left of the composer's footer; a size container, condense with `@max-md:` (`<Conversation />`)               |
+| `composer.status`      | Line under the composer; conversation-specific, monospace, one line (`<Conversation />`)                     |
+| `conversation.overlay` | Over the transcript and the composer (`<Conversation />`); position it `absolute inset-0`                    |
+| `transcript.start`     | Above a transcript's first row once its whole history is loaded; `useTranscript()` inside                    |
+| `overlay`              | Always mounted at the root, above every surface: dialogs, toasts, global effects                             |
 
 ```tsx
 slots: { 'header.right': [Badge], sidebar: { component: Conversations, order: -1 } }

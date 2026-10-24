@@ -190,10 +190,15 @@
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
       env(safe-area-inset-left);
   }
-  /* Installed, the bottom line sits on the screen's rounded corners: lift it until the curve clears its ends. */
+  /* Installed on iOS with a translucent status bar, 100dvh comes up short by the status bar's height and leaves an
+     empty band under the bottom line; pinned to the edges, the shell fills the whole screen. */
   @media (display-mode: standalone) {
-    .safe-area {
-      padding-bottom: calc(max(env(safe-area-inset-bottom), 34px) + 12px);
+    @supports (-webkit-touch-callout: none) {
+      .safe-area {
+        position: fixed;
+        inset: 0;
+        height: auto;
+      }
     }
   }
   .safe-area:has(textarea:focus, input:focus, [contenteditable]:focus) {

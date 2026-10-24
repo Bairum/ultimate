@@ -20,8 +20,13 @@ export type SlotName =
   | 'transcript.start'
   | 'overlay'
 
-/** A slot component, optionally with an `order` (default 0; ties keep folder-name order). */
-export type Contribution = ComponentType | { component: ComponentType; order?: number }
+/**
+ * A slot component, optionally with an `order` (default 0; ties keep folder-name order). In the status line, `phone`
+ * keeps the item on the line on a phone; the others move behind its ⋯ popover there.
+ */
+export type Contribution =
+  | ComponentType
+  | { component: ComponentType; order?: number; phone?: boolean }
 
 /** A tab in the right panel. */
 export interface PanelContribution {
