@@ -4,8 +4,7 @@
  * Memory panel's header point.
  */
 import type { ReactNode } from 'react'
-import { definePoint, getState, useDocOf, useUltimate } from '@/sdk'
-import { uiState } from '@/sdk/client'
+import { definePoint, getState, useDocOf, useUiState, useUltimate } from '@/sdk'
 import { RootsDoc } from './refs.ts'
 
 export {
@@ -27,8 +26,9 @@ export const MEMORY_FOCUS = 'ext.lineage.memoryFocus'
 /** A function that opens the Memory panel on memory `slug`, unfolded. */
 export function useOpenMemory() {
   const { openPanel } = useUltimate()
+  const [, setFocus] = useUiState<string | null>(MEMORY_FOCUS, null)
   return (slug: string) => {
-    uiState.set(MEMORY_FOCUS, slug)
+    setFocus(slug)
     openPanel(MEMORY_PANEL)
   }
 }

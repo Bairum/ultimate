@@ -5,8 +5,10 @@ import {
   hook,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { EntryRecord } from '@earendil-works/pi-durable'
+import type { ContextView, EntryRecord } from '@earendil-works/pi-durable'
 import type { Message } from '@earendil-works/pi-ai'
+import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate'
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { isInput } from '../../lib/entries.ts'
 import { ClassifyApi } from '../classify/api.ts'
@@ -21,8 +23,8 @@ import { RECALL_ENTRY } from './types.ts'
 import type { Recalled } from './types.ts'
 
 /** Below this context fill a memory is still fresh in the prompt: nothing is recalled. */
-export const FROM_PERCENT = 0 // PREVIEW ONLY: revert to 20 before submit
-/** A memory recalled within this share of the context window is not recalled again. */
+export const FROM_PERCENT = 20
+/** A memory recalled within the last this share of the context window, still in context, is not recalled again. */
 const AGAIN_AFTER = 0.3
 /** Tuned on 55 labelled messages from three chapters: precision 0.77, recall 0.62 (`extensions/recall/README.md`). */
 export const THRESHOLD = 0.25
@@ -35,7 +37,7 @@ export const Recall = defineDoc<RecallState>({
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
-  initial: () => ({ injected: {} }),
+  initial: () => ({}),
 })
 export const docs = [Recall]
 
@@ -61,6 +63,32 @@ const textOf = (entry: EntryRecord) =>
           : message.content.flatMap((block) => (block.type === 'text' ? [block.text] : [])),
     )
     .join('\n')
+
+/**
+ * The message a run's input brings, from the live context: the user's prompt, a branch's message, or for a triaged
+ * report's wake the report it points at (placed just before as context). Undefined for any other input.
+ */
+function messageOf(view: ContextView, input: EntryRecord) {
+  if (input.kind === 'pi.user' || input.kind === 'board.message') return input
+  if (input.kind !== 'board.wake') return undefined
+  const id = (input.data as { id?: unknown } | undefined)?.id
+  return view.entries.findLast(
+    (entry) => entry.kind === 'board.message' && (entry.data as { id?: unknown }).id === id,
+  )
+}
+
+/** The slugs recalled in the live context within the last `limit` tokens: a compacted recall has faded. */
+function recentlyRecalled(view: ContextView, limit: number) {
+  const slugs = new Set<string>()
+  let after = 0
+  for (let index = view.entries.length - 1; index >= 0 && after < limit; index--) {
+    const entry = view.entries[index]
+    if (entry.kind === RECALL_ENTRY)
+      for (const { slug } of (entry.data as Recalled).memories) slugs.add(slug)
+    after += view.contributions[index].reduce((sum, m) => sum + estimateMessageTokens(m), 0)
+  }
+  return slugs
+}
 
 /** Who an input is from, in the classifier's words: the user, or the branch that messaged. */
 function senderOf(entry: EntryRecord) {
@@ -97,23 +125,23 @@ export default function recall(host: ExtensionHost) {
           if (!classify) return undefined
           if ((await api.snapshot(Standing, ROOT_CONVERSATION_ID, ctx))?.ultimate !== id)
             return undefined
-          const conversation = await host.harness().conversation(id, ctx)
-          const page = await conversation!.entries({ order: 'descending' }, 32, undefined, ctx)
-          const input = page.items.find(isInput)
-          if (!input || (input.kind !== 'pi.user' && input.kind !== 'board.message'))
-            return undefined
+          // The live context: what compaction removed is gone from it, recalls included.
+          const view = await (await host.harness().conversation(id, ctx))!.context(ctx)
+          const input = view.entries.findLast(isInput)
+          const message = input && messageOf(view, input)
+          if (!input || !message) return undefined
           const state = await api.snapshot(Recall, id, ctx)
           if (state?.last !== undefined && state.last >= input.id) {
-            // A request resent after a restart keeps the cutoff it had before its recall was placed: add it again.
-            const placed = page.items.find(
-              (entry) => entry.kind === RECALL_ENTRY && (entry.data as Recalled).input === input.id,
-            )?.model?.[0]
+            // A request resent after a restart has the cutoff it had before its recall was placed: add it again,
+            // only while the recall is the live context's newest entry, so it lands exactly where it is stored.
+            const placed = view.entries.at(-1)
             if (
-              !placed ||
-              request.messages.some((message) => message.timestamp === placed.timestamp)
+              placed?.kind !== RECALL_ENTRY ||
+              (placed.data as Recalled).input !== message.id ||
+              request.messages.length >= view.messages.length
             )
               return undefined
-            return { messages: [...request.messages, placed] }
+            return { messages: [...request.messages, ...placed.model!] }
           }
           const usage = await api.snapshot(ContextUsageDoc, id, ctx)
           const lineage = host.need(LineageApi)
@@ -133,13 +161,13 @@ export default function recall(host: ExtensionHost) {
             return undefined
           }
           await host.harness().commit(async (tx) => {
-            ;(await tx.doc(Recall, id)).pending = input.id
+            ;(await tx.doc(Recall, id)).pending = message.id
           }, ctx)
           let probabilities: Record<string, number> = {}
           try {
             const result = await classify.ask(
               {
-                state: { from: senderOf(input), message: textOf(input).slice(0, 4000) },
+                state: { from: senderOf(message), message: textOf(message).slice(0, 4000) },
                 questions: { memory: recallQuestion(memories) },
               },
               AbortSignal.any([
@@ -150,29 +178,34 @@ export default function recall(host: ExtensionHost) {
             const answer = result.answers.memory
             if (answer.type === 'choice') probabilities = answer.probabilities
           } catch (error) {
-            if (ctx.abortSignal?.aborted) throw error
+            if (ctx.abortSignal?.aborted) {
+              // A stopped run never reaches the commit below: end the check, or the bubble keeps shimmering.
+              await host.harness().commit(async (tx) => {
+                const doc = await tx.doc(Recall, id)
+                if (doc.pending === message.id) delete doc.pending
+              }, BACKGROUND_CONTEXT)
+              throw error
+            }
             // Recall is advisory: a provider failure or timeout leaves the run as it was.
           }
           const window = usage?.window ?? tokens / (percent / 100)
-          const recent = (at: number | undefined) =>
-            at !== undefined && at <= tokens && tokens - at < AGAIN_AFTER * window
+          const recent = recentlyRecalled(view, AGAIN_AFTER * window)
           const picked = Object.entries(probabilities)
             .filter(
-              ([slug, p]) =>
-                Object.hasOwn(memories, slug) && p >= THRESHOLD && !recent(state?.injected[slug]),
+              ([slug, p]) => Object.hasOwn(memories, slug) && p >= THRESHOLD && !recent.has(slug),
             )
             .toSorted((a, b) => b[1] - a[1])
             .slice(0, TOP)
             .map(([slug, confidence]) => ({ slug, item: memories[slug], confidence }))
-          let message: Message | undefined
+          let recalled: Message | undefined
           await host.harness().commit(async (tx) => {
             const doc = await tx.doc(Recall, id)
             delete doc.pending
             doc.last = input.id
             if (!picked.length) return
-            message = { role: 'user', content: recallText(picked), timestamp: Date.now() }
+            recalled = { role: 'user', content: recallText(picked), timestamp: Date.now() }
             const data: Recalled = {
-              input: input.id,
+              input: message.id,
               root: found!.root,
               memories: picked.map(({ slug, item, confidence }) => ({
                 slug,
@@ -180,14 +213,9 @@ export default function recall(host: ExtensionHost) {
                 confidence: Math.round(confidence * 100) / 100,
               })),
             }
-            await tx.appendEntry(id, {
-              kind: RECALL_ENTRY,
-              data,
-              model: [message],
-            })
-            for (const { slug } of picked) doc.injected[slug] = tokens
+            await tx.appendEntry(id, { kind: RECALL_ENTRY, data, model: [recalled] })
           }, ctx)
-          return message ? { messages: [...request.messages, message] } : undefined
+          return recalled ? { messages: [...request.messages, recalled] } : undefined
         },
       }),
     ],

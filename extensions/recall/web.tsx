@@ -20,13 +20,16 @@ function RecallBubble({ entry }: { entry: EntryRecord }) {
   const [watched, setWatched] = useState(false)
   // A check takes about 0.2 s: the light runs at least one lap so it reads as a check, not a flicker.
   const [lap, setLap] = useState(false)
+  // Started when the check starts and left running when it ends early; only unmounting cancels it.
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
   useEffect(() => {
-    if (!pending) return undefined
+    if (!pending) return
     setWatched(true)
     setLap(true)
-    const timer = setTimeout(() => setLap(false), 1200)
-    return () => clearTimeout(timer)
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => setLap(false), 1200)
   }, [pending])
+  useEffect(() => () => clearTimeout(timer.current), [])
   const checking = pending || lap
   return (
     <>

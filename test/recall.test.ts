@@ -119,6 +119,5 @@ it('recalls a memory after the input, already in the first request and at the sa
     root: 1,
     memories: [{ slug: 'night-watch', line: memories['night-watch'].line, confidence: 0.84 }],
   })
-  expect(await f.state()).toMatchObject({ last: input.id, injected: { 'night-watch': 40_000 } })
-  expect((await f.state())?.pending).toBeUndefined()
+  expect(await f.state()).toEqual({ last: input.id })
 })
