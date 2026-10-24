@@ -21,7 +21,6 @@ import {
   formatTime,
   useAction,
   useDocOf,
-  useNow,
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
@@ -169,7 +168,6 @@ export function StartedCard({ entry }: { entry: EntryRecord }) {
   const { goal: id } = entry.data as GoalEntry
   const goal = useGoal(id)
   const open = !!goal && !goal.ended
-  const now = useNow(60_000, open)
   return (
     <Card
       goal={id}
@@ -180,7 +178,7 @@ export function StartedCard({ entry }: { entry: EntryRecord }) {
           {goal && (
             <span>
               {open
-                ? `working for ${formatDuration(now - goal.startedAt)}`
+                ? `since ${formatTime(goal.startedAt)}`
                 : `ended ${formatTime(goal.ended!.at)} · report below`}
             </span>
           )}
