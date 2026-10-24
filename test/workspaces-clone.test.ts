@@ -1,8 +1,9 @@
-import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { backend, cloneMode, populate } from '../extensions/workspaces/clone.ts'
 import { git } from '../lib/git.ts'
+import { removeWorktree } from '../extensions/workspaces/remove.ts'
 import * as gitModule from '../lib/git.ts'
 import { removeTemps, temp } from './helpers.ts'
 
@@ -52,18 +53,21 @@ it('refuses a git file that points at the source repository itself', async () =>
 
 it('clones a repository whose file list exceeds 1 MiB', async () => {
   const { src, path } = await source()
-  await mkdir(join(src, 'many'))
-  // About 120 bytes per `ls-files -s -z` entry: 10,000 files list 1.2 MB.
-  const name = 'x'.repeat(60)
-  await Promise.all(
-    Array.from({ length: 10_000 }, (_, i) => writeFile(join(src, 'many', `${name}${i}`), '')),
-  )
+  // Four long components put 1,200 entries over 1 MiB while staying under macOS's 1,024-byte path limit.
+  const directory = join(src, 'many', ...Array.from({ length: 4 }, () => 'x'.repeat(210)))
+  await mkdir(directory, { recursive: true })
+  await Promise.all(Array.from({ length: 1_200 }, (_, i) => writeFile(join(directory, `${i}`), '')))
   await git(src, 'add', 'many')
+  expect(
+    Buffer.byteLength(
+      await git({ cwd: src, maxBuffer: 1024 ** 3 }, 'ls-files', '-s', '-z', 'many'),
+    ),
+  ).toBeGreaterThan(1024 ** 2)
   await git(src, 'commit', '--quiet', '-m', 'many')
   await git(path, 'reset', '--soft', '--quiet', await git(src, 'rev-parse', 'HEAD'))
   const { backend: used, reason } = await populate(src, path, 'auto')
-  expect(reason).toBeUndefined()
-  expect(used).toBe(backend('auto'))
+  expect(reason ?? '').not.toMatch(/maxBuffer/i)
+  expect(used).toBe(reason ? 'git' : (backend('auto') ?? 'git'))
   expect(await git(path, 'status', '--porcelain')).toBe('')
 })
 
@@ -79,21 +83,62 @@ it('falls back visibly on a failed gitlink listing, but explicit backends throw'
     reason: 'listing failed',
   })
   expect(await readFile(join(path, 'tracked'), 'utf8')).toBe('committed\n')
-  await expect(populate(src, path, 'apfs')).rejects.toThrow('listing failed')
+  await expect(populate(src, path, backend('auto') ?? 'apfs')).rejects.toThrow('listing failed')
 })
 
 it('refreshes the copied index before resetting, so unchanged cloned files are not rewritten', async () => {
   const { src, path } = await source()
-  const calls: string[] = []
+  const clean = join(src, '.gitignore')
+  await utimes(clean, new Date('2000-01-01'), new Date('2000-01-01'))
+  const { backend: used } = await populate(src, path, 'auto')
+  expect(await readFile(join(path, '.gitignore'), 'utf8')).toBe(await readFile(clean, 'utf8'))
+  expect(used === 'git' ? null : (await stat(join(path, '.gitignore'))).mtimeMs).toBe(
+    used === 'git' ? null : (await stat(clean)).mtimeMs,
+  )
+})
+
+it('rolls back a failed copy with no index and can retry the same path and branch', async () => {
+  const { src, path } = await source()
   const original = gitModule.git
-  vi.spyOn(gitModule, 'git').mockImplementation((cwd, ...args) => {
-    const dir = typeof cwd === 'string' ? cwd : cwd.cwd
-    if (dir === path && (args[0] === 'update-index' || args[0] === 'reset')) calls.push(args[0])
+  const copy = vi.spyOn(gitModule, 'git').mockImplementation(async (cwd, ...args) => {
+    if (args[0] === 'ls-files') {
+      // Simulate a copy that filled the checkout but failed before installing its index.
+      await writeFile(join(path, 'partial'), 'copied before disk filled\n')
+      throw new Error('copy failed')
+    }
     return original(cwd, ...args)
   })
-  const { backend: used } = await populate(src, path, 'auto')
-  expect(calls).toEqual(used === 'git' ? ['reset'] : ['update-index', 'reset'])
+  await expect(populate(src, path, backend('auto') ?? 'apfs')).rejects.toThrow('copy failed')
+  expect(await readFile(join(path, 'partial'), 'utf8')).toContain('copied')
+  await expect(git(src, 'worktree', 'remove', path)).rejects.toThrow(/modified or untracked files/)
+  await removeWorktree(src, path, { discardCreated: true })
+  await git(src, 'branch', '-D', 'feature')
+  expect(await git(src, 'worktree', 'list')).not.toContain(path)
+  expect(await git(src, 'branch', '--list', 'feature')).toBe('')
+  await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' })
+  copy.mockRestore()
+  await git(src, 'worktree', 'add', '--quiet', '--no-checkout', '-b', 'feature', path, 'HEAD')
+  await populate(src, path, 'auto')
+  expect(await git(path, 'status', '--porcelain')).toBe('')
 })
+
+it.each([false, true])(
+  'removes an ignored linked worktree (relative gitdir: %s) without changing its source index',
+  async (relative) => {
+    const { src, path } = await source()
+    const inner = join(src, 'deps', 'inner')
+    await git(src, 'worktree', 'add', '--quiet', '-b', 'inner', inner, 'HEAD')
+    if (relative) await writeFile(join(inner, '.git'), 'gitdir: ../../.git/worktrees/inner\n')
+    await writeFile(join(inner, 'tracked'), 'staged in inner\n')
+    await git(inner, 'add', 'tracked')
+    const index = join(src, '.git', 'worktrees', 'inner', 'index')
+    const before = await readFile(index)
+    await populate(src, path, 'auto')
+    await expect(stat(join(path, 'deps', 'inner'))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(index)).toEqual(before)
+    expect(await git(inner, 'diff', '--cached', '--name-only')).toBe('tracked')
+  },
+)
 
 it('reads the setting and picks the platform backend', () => {
   expect(cloneMode({})).toBe('auto')

@@ -17,8 +17,10 @@ copy-on-write (APFS `clonefile` on macOS, `cp --reflink=always` on Linux), ignor
 included and submodules left out, then resets tracked files to the branch and removes untracked ones; when cloning
 fails it checks out plainly and reports the backend and reason in a notice. Repository identity failures always
 abort before destructive operations. Absolute symlinks pointing inside the source are removed after copying
-(tracked links are restored by reset), so ignored links cannot lead back into the source. `apfs` and `reflink` insist on their backend; `git` always checks out plainly. The
-lander's checkout always checks out plainly. `du` counts cloned blocks in full, so the disk row overstates on APFS.
+(tracked links are restored by reset), so ignored links cannot lead back into the source. Copied nested worktrees
+whose gitdirs point into the source's common Git directory are removed too. `apfs` and `reflink` insist on their
+backend; `git` always checks out plainly. The lander's checkout always checks out plainly. `du` counts cloned blocks
+in full, so the disk row overstates on APFS.
 It then runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout.
 Setup commands must be safe to repeat after interruption.
 What a project's setup should do (dependencies, `.env`, a copy-on-write SQLite clone, a dev port per worktree, skipping

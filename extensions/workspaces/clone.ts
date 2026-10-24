@@ -1,5 +1,15 @@
 import type { JsonObject } from '@earendil-works/pi-durable'
-import { copyFile, lstat, mkdir, readdir, readlink, realpath, rm, statfs } from 'node:fs/promises'
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  realpath,
+  rm,
+  statfs,
+} from 'node:fs/promises'
 import { isAbsolute, join, relative as relativePath, resolve } from 'node:path'
 import { exec } from '../../lib/exec.ts'
 import { git } from '../../lib/git.ts'
@@ -96,7 +106,7 @@ async function clone(source: string, path: string, kind: 'apfs' | 'reflink') {
   if (kind === 'apfs' && (await statfs(path)).type !== APFS)
     throw new Error('The volume does not support APFS clones')
   for (const key of ['core.sparseCheckout', 'core.splitIndex'])
-    if ((await git(source, 'config', '--bool', key).catch(() => 'false')) === 'true')
+    if ((await git(source, 'config', '--type=bool', '--default=false', key)) === 'true')
       throw new Error(`Cannot clone a checkout with ${key} enabled`)
   // Gitlinks stay out: their .git files point into the source's module store.
   // Every tracked file is listed, about 80 bytes each: allow far more than git()'s 1 MiB default.
@@ -121,7 +131,14 @@ async function clone(source: string, path: string, kind: 'apfs' | 'reflink') {
         'cp',
         kind === 'apfs'
           ? ['-c', '-R', '-P', join(source, name), join(path, name)]
-          : ['-R', '-P', '--reflink=always', join(source, name), join(path, name)],
+          : [
+              '-R',
+              '-P',
+              '--preserve=timestamps',
+              '--reflink=always',
+              join(source, name),
+              join(path, name),
+            ],
         { timeout: 600_000 },
       )
     }
@@ -134,12 +151,32 @@ async function clone(source: string, path: string, kind: 'apfs' | 'reflink') {
       const inside = relativePath(root, resolve(target))
       return inside !== '..' && !inside.startsWith('../') && !isAbsolute(inside)
     })
+  const common = await commonDir(source)
   const removeSourceLinks = async (directory: string) => {
     for (const entry of await readdir(directory)) {
       if (directory === path && entry === '.git') continue
       const name = join(directory, entry)
       const stat = await lstat(name)
-      if (stat.isDirectory()) await removeSourceLinks(name)
+      if (entry === '.git' && stat.isFile()) {
+        const gitdir = (await readFile(name, 'utf8')).match(/^gitdir: (.+)\s*$/)?.[1]?.trim()
+        if (!gitdir) continue
+        // Relative gitdirs belong to the original folder, not its copy. Linked worktrees share the source's admin dir.
+        const original = join(source, relativePath(path, directory))
+        const target = await realpath(resolve(original, gitdir)).catch(
+          (error: NodeJS.ErrnoException) => {
+            // An unrelated repository may already have a dangling gitdir; it cannot point into the source's admin dir.
+            if (error.code !== 'ENOENT') throw error
+            return undefined
+          },
+        )
+        if (target) {
+          const inside = relativePath(common, target)
+          if (inside !== '..' && !inside.startsWith('../') && !isAbsolute(inside)) {
+            await rm(directory, { recursive: true, force: true })
+            return
+          }
+        }
+      } else if (stat.isDirectory()) await removeSourceLinks(name)
       else if (stat.isSymbolicLink()) {
         const target = await readlink(name)
         if (isAbsolute(target) && into(target)) await rm(name)
