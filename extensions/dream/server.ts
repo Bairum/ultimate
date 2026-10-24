@@ -361,6 +361,16 @@ async function settleSleep(host: ExtensionHost) {
   await host.harness().commit(async (tx) => {
     for (const found of (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions) {
       const sleep = found.sleep
+      // A restart stopped the gates: nothing switched, and nothing will continue them.
+      if (sleep && ['seeding', 'checking', 'backing up'].includes(sleep.phase)) {
+        found.sleep = {
+          ...sleep,
+          phase: 'failed',
+          error: 'A restart stopped Fall asleep before the switch; nothing moved',
+          at: Date.now(),
+        }
+        continue
+      }
       if (sleep?.phase !== 'switching') continue
       found.sleep = chapters.some((chapter) => chapter.name === sleep.chapter)
         ? { ...sleep, phase: 'asleep', at: Date.now() }
@@ -665,16 +675,25 @@ export async function sleepWhenIdle(
       )
     return 'done'
   }
-  changing(host, async () =>
-    fallAsleep(host, await admitSleep(host, { session: input.session }, attempt)),
-  ).catch((error: unknown) =>
+  // Admission commits inside this step, so the task never ends while the session is still reserved as `waiting`.
+  const state = switching(host)
+  let admitted: { session: number; name: string }
+  try {
+    if (state.busy) throw new Error('A chapter change is already running')
+    state.busy = true
+    admitted = await admitSleep(host, { session: input.session }, attempt)
+  } catch (error) {
+    if (state.busy) state.busy = false
     // Refused before its gates began (busy again, a chapter change running): the reservation is still this attempt's.
-    // Once admitted, fallAsleep records its own failures, and releaseSleep leaves an admitted sleep alone.
-    host
-      .harness()
-      .commit((tx) => releaseSleep(tx, input, attempt, String(error)), context)
-      .catch((failure: unknown) => host.notice(`Granted Fall asleep: ${String(failure)}`)),
-  )
+    await host.harness().commit((tx) => releaseSleep(tx, input, attempt, String(error)), context)
+    return 'done'
+  }
+  // Only the gates run on: fallAsleep records its own failures, and a crash in them is settled on the next open.
+  fallAsleep(host, admitted)
+    .catch((error: unknown) => host.notice(`Granted Fall asleep: ${String(error)}`))
+    .finally(() => {
+      state.busy = false
+    })
   return 'started'
 }
 

@@ -1,5 +1,10 @@
 import { fauxProvider, fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai/providers/faux'
-import { configure } from '@earendil-works/pi-durable'
+import {
+  configure,
+  defineExtension,
+  defineTask,
+  ROOT_CONVERSATION_ID,
+} from '@earendil-works/pi-durable'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -21,6 +26,15 @@ import automations, {
 import type { Automation } from '../extensions/automations/types.ts'
 import { temp, eventHost, apis } from './helpers.ts'
 
+/** Waits forever: it only carries a task-scoped receipt, as a running tool call's task does. */
+const ToolCall = defineTask<Record<string, never>, { phase: 'wait' }, null>({
+  name: 'grant-test.call',
+  version: 1,
+  initial: () => ({ phase: 'wait' }),
+  phases: { wait: (_task, runtime, ctx) => runtime.sleepUntil(8.64e15, { phase: 'wait' }, ctx) },
+  abort: (_task, runtime, ctx) =>
+    runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+})
 const closes: (() => Promise<void>)[] = []
 afterEach(async () => {
   for (const close of closes.splice(0)) await close()
@@ -79,6 +93,7 @@ async function fixture() {
       createChild(host, tx, options),
   })
   prepared.registry.install(automations(host as unknown as ExtensionHost))
+  prepared.registry.install(defineExtension({ name: 'grant-test', tasks: [ToolCall] }))
   const answer = () => {
     prepared.faux!.appendResponses([answer])
     return fauxAssistantMessage([fauxText('OK')])
@@ -115,6 +130,23 @@ async function fixture() {
     await action('run', { id: a.id })
     return a.id
   }
+  /** A real task standing in for one `automation act` tool call: its receipt lives on it. */
+  const call = () =>
+    opened.harness.commit(
+      async (tx) =>
+        Number(
+          await tx.createTask(
+            ToolCall,
+            {},
+            {
+              conversationId: ROOT_CONVERSATION_ID,
+              ownership: { kind: 'conversation' },
+              background: true,
+            },
+          ),
+        ),
+      context,
+    )
   const acted = async () =>
     (await host.eventLog.recent({ events: [defineEvent('automations.acted')] })).map(
       (event) => event.data,
@@ -125,6 +157,7 @@ async function fixture() {
     record,
     fired,
     acted,
+    call,
     dream,
     ultimate,
     stranger,
@@ -163,7 +196,13 @@ it('allows only what the grant names: a dream grant never falls asleep or compac
   await expect(act(f.host, id, 'asleep', f.ultimate)).rejects.toThrow('no grant for asleep')
   await expect(act(f.host, id, 'compact', f.ultimate)).rejects.toThrow('no grant for compact')
   expect(f.dream.asleep).not.toHaveBeenCalled()
-  const result = await act(f.host, id, 'dream', f.ultimate, 11)
+  const [first, second, third, fourth] = [
+    await f.call(),
+    await f.call(),
+    await f.call(),
+    await f.call(),
+  ]
+  const result = await act(f.host, id, 'dream', f.ultimate, first)
   expect(result).toMatchObject({ action: 'dream', session: 7, automation: id })
   expect(f.dream.start).toHaveBeenCalledWith(
     expect.anything(),
@@ -172,20 +211,44 @@ it('allows only what the grant names: a dream grant never falls asleep or compac
   )
   // Once per fire: another call is refused. The same tool call replayed returns its recorded result and does not
   // start a second dream.
-  await expect(act(f.host, id, 'dream', f.ultimate, 12)).rejects.toThrow('already used')
-  expect(await act(f.host, id, 'dream', f.ultimate, 11)).toMatchObject({ session: 7 })
+  await expect(act(f.host, id, 'dream', f.ultimate, second)).rejects.toThrow('already used')
+  expect(await act(f.host, id, 'dream', f.ultimate, first)).toMatchObject({ session: 7 })
   expect(f.dream.start).toHaveBeenCalledOnce()
   expect(await f.acted()).toHaveLength(1)
   // Saving the grant again, or widening it, does not hand back the act this fire already used.
   await f.action('grant', { id, actions: ['dream', 'compact'] })
-  await expect(act(f.host, id, 'dream', f.ultimate, 14)).rejects.toThrow('already used')
+  await expect(act(f.host, id, 'dream', f.ultimate, fourth)).rejects.toThrow('already used')
   // The next fire may act again. A replay of the first call after it still returns the first call's result.
   await f.action('run', { id })
-  expect(await act(f.host, id, 'dream', f.ultimate, 11)).toMatchObject({ session: 7 })
+  expect(await act(f.host, id, 'dream', f.ultimate, first)).toMatchObject({ session: 7 })
   expect(f.dream.start).toHaveBeenCalledOnce()
-  await act(f.host, id, 'dream', f.ultimate, 13)
+  await act(f.host, id, 'dream', f.ultimate, third)
   expect(f.dream.start).toHaveBeenCalledTimes(2)
   expect(await f.acted()).toHaveLength(2)
+})
+
+it('keeps each call its own receipt however many acts follow, in any task order', async () => {
+  const f = await fixture()
+  const id = await f.fired(['dream'])
+  // An early call that acts late: many later calls, and later fires, act in between.
+  const late = await f.call()
+  const others = []
+  for (let i = 0; i < 25; i++) others.push(await f.call())
+  for (const call of others) {
+    await act(f.host, id, 'dream', f.ultimate, call)
+    await f.action('resume', { id })
+    await f.harness().commit(async (tx) => {
+      // A new fire without the hourly cap: this test is about receipts, not floods.
+      const a = (await tx.doc(Automations)).automations[id]
+      a.fires++
+      a.recentFires = []
+    }, context)
+  }
+  await act(f.host, id, 'dream', f.ultimate, late)
+  const calls = f.dream.start.mock.calls.length
+  for (const call of [late, ...others])
+    expect(await act(f.host, id, 'dream', f.ultimate, call)).toMatchObject({ action: 'dream' })
+  expect(f.dream.start).toHaveBeenCalledTimes(calls)
 })
 
 it('passes a granted Fall asleep to dream, which runs every gate', async () => {
@@ -223,14 +286,15 @@ it('refuses a conversation it does not wake, a paused automation and a stale fir
 it('compacts the conversation a context trigger watches', async () => {
   const f = await fixture()
   const id = await f.fired(['compact'])
-  const result = (await act(f.host, id, 'compact', f.ultimate, 21)) as unknown as {
+  const call = await f.call()
+  const result = (await act(f.host, id, 'compact', f.ultimate, call)) as unknown as {
     taskId: number
   }
   expect(result).toMatchObject({ action: 'compact', conversation: f.ultimate })
   const task = await f.harness().getTask(result.taskId as never, context)
   expect(task).toMatchObject({ conversationId: f.ultimate })
   // A replay of the call returns the same compaction, created once with the act.
-  expect(await act(f.host, id, 'compact', f.ultimate, 21)).toMatchObject({
+  expect(await act(f.host, id, 'compact', f.ultimate, call)).toMatchObject({
     taskId: result.taskId,
   })
 })

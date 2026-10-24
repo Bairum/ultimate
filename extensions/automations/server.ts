@@ -97,6 +97,14 @@ const Receipt = defineDoc<Partial<Change>>({
   scope: 'task',
   initial: () => ({}),
 })
+/** What one `act` tool call did, on its own tool task, written with the effect: a replay returns it, at any later time. */
+const ActReceipt = defineDoc<{ result?: Acted['result'] }>({
+  kind: 'ultimate.automation-act',
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'task',
+  initial: () => ({}),
+})
 const json = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 function required(v: unknown, field: string): string {
   if (typeof v !== 'string' || !v.trim()) throw new Error(`${field} is required`)
@@ -649,8 +657,9 @@ function backend(host: ExtensionHost) {
       const a = (await tx.doc(Automations)).automations[validId(id)]
       if (!a) throw new Error(`Unknown automation: ${id}`)
       // The tool call's own receipt, written with its effect: a replay returns it whatever fired since.
-      const receipt = task === undefined ? undefined : a.receipts?.[String(task)]
-      if (receipt) return { action: name, ...receipt, automation: a.id, name: a.name }
+      const receipt = task === undefined ? undefined : await tx.doc(ActReceipt, task as TaskId)
+      if (receipt?.result)
+        return { action: name, ...json(receipt.result), automation: a.id, name: a.name }
       const done = a.acted?.[name]
       if (!a.grant?.actions.includes(name))
         throw new Error(
@@ -678,10 +687,7 @@ function backend(host: ExtensionHost) {
         ...a.acted,
         [name]: { fire: a.fires, at: now, by: caller, ...(task ? { task } : {}), result },
       }
-      if (task !== undefined)
-        a.receipts = Object.fromEntries(
-          [...Object.entries(a.receipts ?? {}), [String(task), result] as const].slice(-20),
-        )
+      if (receipt) receipt.result = result
       await host.emit(tx, ActedEvent, { id: a.id, action: name, fire: a.fires, by: caller })
       return { action: name, ...result, automation: a.id, name: a.name }
     }, BACKGROUND_CONTEXT)

@@ -928,7 +928,8 @@ export function AutomationForm({
               <GrantEditor automation={automation} />
             ) : (
               <GrantSwitches
-                actions={grants}
+                // A new automation that wakes no one gets no grant: the switches show it, nothing is skipped silently.
+                actions={!prompt || (wakeable && draft.wake) ? grants : []}
                 busy={saving}
                 // Without a prompt the caller is woken; with one, only when "Wake this conversation" is on.
                 wakes={!prompt || (wakeable && draft.wake)}

@@ -112,5 +112,10 @@ Both run inside automations' `act` transaction, so the effect commits with the a
   every gate of Fall asleep exactly as the user's action does: idle, seed, scratch preview with one repair, final
   backup, idle again, journaled restart that rolls back on failure. While it waits, neither the user nor another grant
   can start a second sleep of that session. A wait that runs out, a refusal or an abort records a failed sleep, but only
-  while this attempt still holds it; nothing switches. The sleep and the seed carry `by`, so the progress, the outcome
-  and the next chapter's morning card say which automation fell asleep, under the user's grant, and when.
+  while this attempt still holds it; nothing switches. The task's step commits the admission itself, then leaves only
+  the gates running, so a successful switch's restart never waits on a task step and no reservation outlives its task.
+  The sleep and the seed carry `by`, so the progress, the outcome and the next chapter's morning card say which
+  automation fell asleep, under the user's grant, and when.
+
+On open, a sleep a restart stopped during its gates (`seeding`, `checking`, `backing up`), for the user or a grant,
+becomes `failed`: nothing switched, and Fall asleep can be tried again.

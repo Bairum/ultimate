@@ -302,7 +302,15 @@ const grantActions: { action: GrantAction; label: string; hint: string }[] = [
 
 export function GrantBadge({ automation }: { automation: Automation }) {
   // Only a woken subscriber can act on a grant; prompt runs never do.
-  if (!automation.subscribers.length && !automation.grant?.actions.length) return null
+  if (!automation.subscribers.length)
+    return automation.grant?.actions.length ? (
+      <p
+        className="mt-1 w-fit max-w-full text-[11.5px] break-words text-muted-foreground"
+        data-automation-grant={automation.id}
+      >
+        Granted, but unused: it wakes no conversation
+      </p>
+    ) : null
   return (
     <p
       className={cn(
@@ -336,10 +344,7 @@ export function GrantSwitches({
   onChange: (actions: GrantAction[]) => void
 }) {
   return (
-    <fieldset
-      className="flex flex-col gap-2 rounded-md border border-border/80 bg-card/40 p-2.5"
-      disabled={!wakes && !actions.length}
-    >
+    <fieldset className="flex flex-col gap-2 rounded-md border border-border/80 bg-card/40 p-2.5">
       <legend className="px-1 text-[12.5px] font-medium">May act without asking</legend>
       {!wakes && (
         <p className="text-[11.5px] text-muted-foreground">
@@ -352,6 +357,8 @@ export function GrantSwitches({
             aria-label={label}
             checked={actions.includes(action)}
             busy={busy}
+            // Without a woken conversation a permission can be withdrawn but not added.
+            disabled={!wakes && !actions.includes(action)}
             onCheckedChange={(checked) =>
               onChange(checked ? [...actions, action] : actions.filter((item) => item !== action))
             }
