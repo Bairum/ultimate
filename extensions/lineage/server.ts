@@ -406,7 +406,7 @@ function lineage(host: ExtensionHost) {
   })
   const Notify = defineTask<
     { target: ConversationId; wake: boolean },
-    { phase: 'wait' } | { phase: 'deliver'; title?: string; text: string; answer?: number },
+    { phase: 'wait' } | { phase: 'deliver'; title?: string; text: string; answer: number },
     null
   >({
     name: 'lineage.notify',
@@ -474,11 +474,10 @@ function lineage(host: ExtensionHost) {
       },
       deliver: async (task, runtime, ctx) => {
         const { target, wake } = task.input
-        // A checkpoint from before answers were tracked has none: it delivers as it did then and records nothing.
         const { title, text, answer } = task.state.checkpoint as {
           title?: string
           text: string
-          answer?: number
+          answer: number
         }
         // Keyed by the answer, so a task that replaced one aborted between submit and record finds its delivery.
         const requestId = answer
@@ -518,7 +517,7 @@ function lineage(host: ExtensionHost) {
             requestId,
           })
         await runtime.commit(async (tx) => {
-          if (answer !== undefined) (await tx.doc(Notified, caller)).answers[target] = answer
+          ;(await tx.doc(Notified, caller)).answers[target] = answer
           return { status: 'terminal', outcome: { status: 'completed', result: null } }
         }, ctx)
       },
