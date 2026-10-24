@@ -23,6 +23,7 @@ import {
 import { HandoffCard, JournalCard, SettledCard, StartedCard } from './journal.tsx'
 import { MorningCard } from './morning.tsx'
 import { DreamDialog, dreamDialog } from './modal.tsx'
+import { DreamStatus, JournalDialog } from './pinned.tsx'
 import { DreamDoc } from './refs.ts'
 
 /** Above this share of its context window, a compacted @ultimate has lived long enough to be worth a dream. */
@@ -133,8 +134,12 @@ export default defineWebExtension({
   },
   slots: {
     'sidebar.top': [{ component: OlderChapterBanner, order: -30 }],
-    'statusline.right': [TimeToDream, OlderChapterStatus],
-    overlay: [DreamDialog, ChaptersDialog, SwitchVeil, WakeUp],
+    'statusline.right': [
+      { component: DreamStatus, order: -10, phone: true },
+      TimeToDream,
+      OlderChapterStatus,
+    ],
+    overlay: [DreamDialog, JournalDialog, ChaptersDialog, SwitchVeil, WakeUp],
   },
   commands: [
     { id: 'dream.open', title: 'Dream…', run: (context) => context.open(dreamDialog) },
