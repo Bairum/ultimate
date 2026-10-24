@@ -31,9 +31,9 @@ call `asleep { session, name? }` to start a new chapter. The name defaults to th
 
 ## Dream before compaction
 
-When @ultimate's context passes 80%, it writes a handoff while it still remembers everything, and then a dream starts
+When @ultimate's context passes 70%, it writes a handoff while it still remembers everything, and then a dream starts
 by itself (`before-compaction.ts`). Dream ships the trigger as an ordinary context automation, **Dream before
-compaction** (`condition {metric: 'context', of: '@ultimate', above: 80}`, subscriber @ultimate), made once per
+compaction** (`condition {metric: 'context', of: '@ultimate', above: 70}`, subscriber @ultimate), made once per
 chapter when the harness opens or @ultimate first starts; its id is kept in `dream.after-compaction` on conversation 1
 (the kind keeps its first name). It shows in the Automations panel like any other: the threshold is edited there,
 pausing it stops the dreams, deleting it is remembered (dream does not make it again), and a new chapter makes it

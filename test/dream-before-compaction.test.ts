@@ -227,7 +227,7 @@ it('ships one enabled "Dream before compaction" automation that wakes @ultimate,
   expect(made).toMatchObject({
     name: AUTOMATION_NAME,
     enabled: true,
-    condition: { metric: 'context', of: '@ultimate', above: 80, armed: true },
+    condition: { metric: 'context', of: '@ultimate', above: 70, armed: true },
     subscribers: [f.ultimate],
   })
   expect(made.event).toBeUndefined()
@@ -270,7 +270,7 @@ it('migrates the old "Dream after compaction" in place: same id, enabled state, 
     enabled: false,
     grant: { actions: ['dream', 'asleep'] },
     subscribers: [f.ultimate],
-    condition: { metric: 'context', of: '@ultimate', above: 80 },
+    condition: { metric: 'context', of: '@ultimate', above: 70 },
   })
   expect(migrated.event).toBeUndefined()
   // A migration whose receipt was lost (the old record, no id in dream's document) is migrated, not duplicated.
@@ -288,23 +288,23 @@ it('migrates the old "Dream after compaction" in place: same id, enabled state, 
   await ensureAutomation(f.host)
   expect(await f.own()).toBe(id)
   expect(Object.keys((await f.harness.snapshot(Automations, context))!.automations)).toEqual([id])
-  expect((await f.record(id)).condition?.above).toBe(80)
-  // The user's threshold stays: a later check leaves a migrated automation as it is.
-  await f.action('update', { id, condition: { metric: 'context', of: '@ultimate', above: 70 } })
-  await ensureAutomation(f.host)
   expect((await f.record(id)).condition?.above).toBe(70)
+  // The user's threshold stays: a later check leaves a migrated automation as it is.
+  await f.action('update', { id, condition: { metric: 'context', of: '@ultimate', above: 60 } })
+  await ensureAutomation(f.host)
+  expect((await f.record(id)).condition?.above).toBe(60)
 })
 
-it('fires once at 80% and re-arms below 70%, asking for one handoff per fire', async () => {
+it('fires once at 70% and re-arms below 60%, asking for one handoff per fire', async () => {
   const f = await fixture()
   const id = (await f.own())!
   f.busy([{ id: 50, busy: true, title: 'A branch at work' }])
   // The scheduler runs the deliveries and the wait, as on a real host.
   f.host.harness().resume()
-  await f.usage(79)
-  await until(async () => (await f.record(id)).condition?.value === 79)
+  await f.usage(69)
+  await until(async () => (await f.record(id)).condition?.value === 69)
   expect(await f.waiting()).toBeUndefined()
-  await f.usage(81)
+  await f.usage(71)
   await f.settle()
   await until(async () => (await f.waiting()) !== undefined)
   const first = (await f.waiting())!
@@ -313,12 +313,12 @@ it('fires once at 80% and re-arms below 70%, asking for one handoff per fire', a
   await until(async () => (await f.submitted(`dream.handoff:${first.task}`)) !== undefined)
   expect((await f.submitted(`dream.handoff:${first.task}`))?.type).toBe('write')
   // Still above: no second fire, no second request.
-  await f.usage(85)
-  await until(async () => (await f.record(id)).condition?.value === 85)
+  await f.usage(75)
+  await until(async () => (await f.record(id)).condition?.value === 75)
   expect((await f.record(id)).fires).toBe(1)
   expect(await f.waits()).toHaveLength(1)
-  // Below 70 re-arms it; a second fire while the first request waits makes no second request.
-  await f.usage(69)
+  // Below 60 re-arms it; a second fire while the first request waits makes no second request.
+  await f.usage(59)
   await until(async () => (await f.record(id)).condition?.armed === true)
   expect((await f.waiting())?.task).toBe(first.task)
 })
@@ -572,9 +572,11 @@ it('never adopts a same-name automation that watches something else', async () =
   expect((await f.record(other.id)).event?.name).toBe('conversations.compacted')
 })
 
-it('adopts its own automation after a lost receipt, even with changed subscribers and paused', async () => {
+it('adopts its own automation after a lost receipt, even with changed subscribers, threshold and paused', async () => {
   const f = await fixture()
   const id = (await f.own())!
+  // Made at the old default of 80%, or set so by hand.
+  await f.action('update', { id, condition: { metric: 'context', of: '@ultimate', above: 80 } })
   await f.action('unsubscribe', { id })
   await f.action('pause', { id })
   // The create committed but its receipt was lost.
@@ -585,6 +587,7 @@ it('adopts its own automation after a lost receipt, even with changed subscriber
   expect(await f.own()).toBe(id)
   expect(Object.keys((await f.harness.snapshot(Automations, context))!.automations)).toEqual([id])
   expect((await f.record(id)).enabled).toBe(false)
+  expect((await f.record(id)).condition?.above).toBe(80)
 })
 
 it('keeps a chapter seed paused whichever check runs first', async () => {

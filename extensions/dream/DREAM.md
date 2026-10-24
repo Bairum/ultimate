@@ -15,7 +15,7 @@ errors are found in conversation entries.
 ## For @ultimate
 
 A dream starts with your **handoff**. The user pressed Dream (a `dream.handoff` input asks for it), or the built-in
-"Dream before compaction" automation fired because your context passed its threshold (80% by default; a `dream.handoff`
+"Dream before compaction" automation fired because your context passed its threshold (70% by default; a `dream.handoff`
 entry beside the fire carries the same ask, and the fire's turn is the one to write it in; never `act` on the fire).
 Write it in that same turn, while your context
 still holds everything: what you worked on, what is still open (branches, questions, to-dos) and how far each got,

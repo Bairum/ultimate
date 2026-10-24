@@ -1,5 +1,5 @@
 /**
- * Dream before compaction: when @ultimate's context passes 80%, it writes a handoff while it still remembers everything,
+ * Dream before compaction: when @ultimate's context passes 70%, it writes a handoff while it still remembers everything,
  * then a dream starts by itself once nothing else works; once that dream settles, Ultimate falls asleep into a fresh
  * chapter only when it was worth it. The user's Dream button takes the same path: handoff first, then the dream.
  *
@@ -35,7 +35,7 @@ import { busyElsewhere } from './types.ts'
 /** The built-in automation's name, shown in the Automations panel. */
 export const AUTOMATION_NAME = 'Dream before compaction'
 /** Its trigger as dream first makes it; the user may change the threshold. */
-export const CONDITION = { metric: 'context' as const, of: '@ultimate', above: 80 }
+export const CONDITION = { metric: 'context' as const, of: '@ultimate', above: 70 }
 /** The automation before this feature: dream migrates it in place to the condition above. */
 const OLD_NAME = 'Dream after compaction'
 const OLD_EVENT = { name: 'conversations.compacted', where: { conversation: '@ultimate' } }
