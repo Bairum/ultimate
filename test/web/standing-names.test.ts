@@ -11,7 +11,8 @@ const conversations = [
   { id: 50, title: 'Build the feed', label: 'worker' },
   { id: 60, title: 'Fold cards in the chat' },
 ]
-vi.mock('@/sdk', () => ({
+vi.mock('@/sdk', async () => ({
+  Card: (await import('../../web/src/app/card.tsx')).Card,
   cn: (...names: unknown[]) => names.filter(Boolean).join(' '),
   api: { action: () => new Promise(() => {}) },
   definePoint: (name: string) => ({ name }),

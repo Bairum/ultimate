@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import {
   api,
+  Card,
   cn,
   ComposerRedirect,
   Conversation,
@@ -465,10 +466,7 @@ function SummaryCard({ entry }: { entry: EntryRecord }) {
   const openedAt = index?.sides.find((item) => item.id === data.side)?.openedAt
   const at = entry.model?.[0]?.timestamp
   return (
-    <section
-      className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
-      data-side-chat-summary={data.side}
-    >
+    <Card data-side-chat-summary={data.side}>
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <GitForkIcon className="size-3.5 text-brand" />
         <span className="text-foreground">Side chat</span>
@@ -491,7 +489,7 @@ function SummaryCard({ entry }: { entry: EntryRecord }) {
       <div className="min-w-0 px-3 py-3 font-sans text-[13px] leading-relaxed">
         <MessageResponse>{data.text}</MessageResponse>
       </div>
-    </section>
+    </Card>
   )
 }
 

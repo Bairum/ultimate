@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { api, cn, formatTime, useDocOf, useUltimate } from '@/sdk'
+import { api, Card as Frame, cn, formatTime, useDocOf, useUltimate } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { MoonRow, Passes, passLabels } from './moon.tsx'
@@ -28,15 +28,12 @@ function Card({
   children?: ReactNode
 }) {
   return (
-    <section
-      className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
-      data-dream-session={session}
-    >
+    <Frame data-dream-session={session}>
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         {header}
       </header>
       {children}
-    </section>
+    </Frame>
   )
 }
 

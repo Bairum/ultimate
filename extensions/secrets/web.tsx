@@ -8,6 +8,7 @@ import {
   defineWebExtension,
   errorMessage,
   events,
+  formatAgo,
   useAction,
   useEvent,
   useNow,
@@ -65,17 +66,6 @@ function useSecrets() {
 
 const missing = (secrets: readonly Secret[] | undefined) =>
   secrets?.filter((secret) => !secret.set && secret.declaredBy.length > 0) ?? []
-
-/** `just now`, `5m ago`, `3h ago`, `2d ago`, then a short date. */
-function ago(at: string, now: number) {
-  const time = Date.parse(at)
-  const minutes = Math.max(0, (now - time) / 60000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${Math.floor(minutes)}m ago`
-  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)}h ago`
-  if (minutes < 60 * 24 * 7) return `${Math.floor(minutes / 60 / 24)}d ago`
-  return new Date(time).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-}
 
 const dot = (tone: string) => <span className={cn('size-1.5 shrink-0 rounded-full', tone)} />
 const small = 'h-7 gap-1.5 px-2 font-mono text-[11.5px]'
@@ -276,7 +266,9 @@ function Row({
             title={secret.updatedAt && new Date(secret.updatedAt).toLocaleString()}
           >
             {dot('bg-success')}
-            {secret.updatedAt ? `set · ${ago(secret.updatedAt, now)}` : 'set'}
+            {secret.updatedAt
+              ? `set · ${formatAgo(Date.parse(secret.updatedAt), now, { ago: true })}`
+              : 'set'}
           </span>
         ) : (
           <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] text-warning">

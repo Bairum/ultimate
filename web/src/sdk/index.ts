@@ -55,6 +55,8 @@ export {
 export { ProjectChip, projectTitle, Wordmark } from '../app/titlebar.tsx'
 /** Isolates another extension's component you render, such as a document renderer: it throws into an error card. */
 export { ExtensionBoundary } from '../app/boundary.tsx'
+/** The transcript's card: a bordered section with the brand accent on its left edge. */
+export { Card } from '../app/card.tsx'
 /** A card that folds to one quiet line in compact mode, and whether one is open; the reader's choice survives reloads. */
 export { Fold, useFold } from '../app/fold.tsx'
 /** The entries a go-back set aside, which the model's context leaves out. */
@@ -118,6 +120,7 @@ export type { DocumentItem } from './registry.ts'
 export {
   elidePath,
   errorMessage,
+  formatAgo,
   formatBytes,
   formatDuration,
   formatTime,

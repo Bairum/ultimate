@@ -54,6 +54,7 @@
     "extensions/review/drafts.ts",
     "extensions/review/lines.ts",
     "extensions/review/sha256.ts",
+    "lib/ago.ts",
     "lib/compare.ts",
     "extensions/subagents/message-types.ts",
     "test/web"

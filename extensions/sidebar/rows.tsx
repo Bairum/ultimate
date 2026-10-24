@@ -18,7 +18,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { api, cn, errorMessage, Provided, useDocOf, useUltimate } from '@/sdk'
+import { api, cn, errorMessage, formatAgo, Provided, useDocOf, useUltimate } from '@/sdk'
 import { store } from '@/sdk/client'
 import { MessagesDoc, conversationState, emptyMessages } from '../messages/ui.tsx'
 import {
@@ -34,7 +34,6 @@ import { Review } from '../workspaces/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import type { OverviewRow } from '../conversations/types.ts'
 import type { ConversationState } from '../messages/ui.tsx'
-import { ago } from './lander.tsx'
 
 /** What a row's mark and state word say for each settled state; `working` and `idle` show no icon. */
 const settled = {
@@ -243,7 +242,7 @@ function PhasedRow({
                   className="shrink-0 text-muted-foreground/80"
                   title={new Date(latest).toLocaleString()}
                 >
-                  {ago(latest, now)}
+                  {formatAgo(latest, now)}
                 </span>
               )}
             </span>

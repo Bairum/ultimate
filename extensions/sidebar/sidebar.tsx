@@ -8,6 +8,7 @@ import {
   api,
   cn,
   errorMessage,
+  formatAgo,
   ParkedRuns,
   projectTitle,
   Provided,
@@ -45,7 +46,7 @@ import { Landed, useLandings } from './landed.tsx'
 import { useRoots } from '../lineage/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import type { KeptWork } from '../conversations/types.ts'
-import { ago, LanderState } from './lander.tsx'
+import { LanderState } from './lander.tsx'
 import { StandingPhase, WaitingOnUser } from './ultimate.tsx'
 import { useSidebarState } from './state.tsx'
 import { topLevelRows } from './listed.ts'
@@ -314,7 +315,7 @@ function Tree({
                 className="ml-auto shrink-0 text-muted-foreground/80"
                 title={new Date(latest).toLocaleString()}
               >
-                {ago(latest, now)}
+                {formatAgo(latest, now)}
               </span>
             )}
           </>

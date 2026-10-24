@@ -3,7 +3,7 @@ import { ArrowLeftIcon, BotIcon, SquareArrowOutUpRightIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
-import { events, Fold, Provided, useEvent, useConversation, useUltimate } from '@/sdk'
+import { Card, events, Fold, Provided, useEvent, useConversation, useUltimate } from '@/sdk'
 import { ConversationRef, ConversationTask } from '../conversations/ui.tsx'
 import { useWorkspaceConversations } from '../workspaces/ui.tsx'
 import type { AgentOrigin } from './message-types.ts'
@@ -74,10 +74,7 @@ export function AgentInput({ entry }: { entry: EntryRecord }) {
         </>
       }
     >
-      <section
-        data-agent-origin={origin.kind}
-        className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
-      >
+      <Card data-agent-origin={origin.kind}>
         <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
           <BotIcon className="size-3.5 text-brand" />
           <span className="min-w-0 text-foreground">
@@ -111,7 +108,7 @@ export function AgentInput({ entry }: { entry: EntryRecord }) {
         <div className="min-w-0 px-3 py-3 font-sans text-[13px] leading-relaxed">
           <MessageResponse>{body}</MessageResponse>
         </div>
-      </section>
+      </Card>
     </Fold>
   )
 }
@@ -137,9 +134,9 @@ export function AgentInbox({
   const sender = conversations.find((conversation) => conversation.id === origin.sender)
   const body = origin.body
   return (
-    <section
+    <Card
       data-agent-inbox={origin.kind}
-      className="flex min-w-0 items-center gap-2 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20 px-2 py-1 text-muted-foreground"
+      className="flex items-center gap-2 px-2 py-1 text-muted-foreground"
     >
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 text-[11px]">
@@ -179,6 +176,6 @@ export function AgentInbox({
         {sender ? 'source' : 'unavailable'}
       </button>
       {cancel}
-    </section>
+    </Card>
   )
 }

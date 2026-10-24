@@ -15,6 +15,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   api,
+  Card,
   cn,
   errorMessage,
   formatTime,
@@ -64,10 +65,7 @@ export function MorningCard({ entry }: { entry: EntryRecord }) {
   const data = entry.data as unknown as ChapterEntry
   const at = entry.model?.[0]?.timestamp
   return (
-    <section
-      className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
-      data-dream-morning={data.name}
-    >
+    <Card data-dream-morning={data.name}>
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <SunriseIcon className="size-3.5 text-brand" />
         <span className="text-foreground">{chapterLabel(data.number, data.name)}</span>
@@ -95,7 +93,7 @@ export function MorningCard({ entry }: { entry: EntryRecord }) {
         {data.carried && <Carried counts={data.carried} />}
       </div>
       <Awake data={data} />
-    </section>
+    </Card>
   )
 }
 

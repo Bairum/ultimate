@@ -706,6 +706,8 @@ Import them from `@/sdk`. Each is a thin wrapper over the shell's own parts; the
 | `<Slot name variant? />`                  | Any slot by name, each item in its own error boundary; `variant="inline"` for one-line places                                                                                                                                                                                                       |
 
 Everything else on a surface is your own components, styled like the rest of Ultimate (see [Styling](#styling)).
+A transcript card (a subagent report, a message, a catch-up) is a `<Card>`: a bordered section with the brand accent on
+its left edge; `className` adds layout, such as padding or `overflow-hidden`.
 Pass the header your own title or controls as children: `<Header><span className="text-[13px]">12 open</span></Header>`.
 
 ### Example: a Commits app
@@ -928,7 +930,8 @@ conversation.
 
 `api.cancelSubmission(submissionId, conversationId?)` withdraws one queued input without stopping the run.
 
-Helpers: `cn()` for class names, `formatTokens`, `formatBytes`, `formatDuration`, `shortenPath(path, { cwd, home })`
+Helpers: `cn()` for class names, `formatTokens`, `formatBytes`, `formatDuration`, `formatTime`, `formatAgo(at, now)`
+(`now`, `5m`, `3h`, `2d`, then a date; `{ ago: true }` reads `just now`, `5m ago`), `shortenPath(path, { cwd, home })`
 (`home` is `useSystem().machine.home`), `elidePath`, `formatKeys`, and `errorMessage(error)` for a caught value. Types
 for everything above are exported too (`EntryRecord`, `AssistantMessage`, `SystemInfo`, …).
 

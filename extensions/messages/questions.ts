@@ -6,6 +6,7 @@
 import { Type } from '@earendil-works/pi-ai'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
+import { formatAgo } from '../../lib/ago.ts'
 import { Messages } from './api.ts'
 import type { Message } from './api.ts'
 import type { Question } from './refs.ts'
@@ -137,16 +138,8 @@ export async function openQuestionsNote(tx: Tx, conversationId: ConversationId, 
     (m) => openQuestion(m) && m.from === conversationId,
   )
   if (!open.length) return undefined
-  const ago = (at: number) => {
-    const minutes = Math.max(0, Math.round((now - at) / 60_000))
-    return minutes < 1
-      ? 'just now'
-      : minutes < 60
-        ? `${minutes}m ago`
-        : `${Math.round(minutes / 60)}h ago`
-  }
   const text = `Open questions to the user, unanswered until they answer or dismiss them:\n${open
-    .map((m) => `- message ${m.id}: ${gist(m)} (asked ${ago(m.at)})`)
+    .map((m) => `- message ${m.id}: ${gist(m)} (asked ${formatAgo(m.at, now, { ago: true })})`)
     .join('\n')}`
   return {
     entries: [

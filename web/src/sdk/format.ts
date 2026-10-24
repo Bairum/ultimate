@@ -25,6 +25,9 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(seconds / 3600)}h ${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}m`
 }
 
+/** How long ago a time was; in lib/ so server code (model text, range lists) says it the same way. */
+export { formatAgo } from '../../../lib/ago.ts'
+
 /** Show `path` relative to `cwd` when inside it, else with `~` for `home` (`system.machine.home`). */
 export function shortenPath(path: string, options: { cwd?: string; home?: string } = {}): string {
   const { cwd, home } = options

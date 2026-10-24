@@ -1,7 +1,16 @@
 import { ScrollTextIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
-import { cn, formatTokens, Provided, useAction, useDocOf, useEvents, useUltimate } from '@/sdk'
+import {
+  cn,
+  formatAgo,
+  formatTokens,
+  Provided,
+  useAction,
+  useDocOf,
+  useEvents,
+  useUltimate,
+} from '@/sdk'
 import { MEMORY_PANEL, MemoryDoc, TallyDoc } from '../lineage/ui.tsx'
 import { Committed } from '../coding-tools/ui.tsx'
 import { MessagesDoc, conversationState, emptyMessages } from '../messages/ui.tsx'
@@ -9,7 +18,6 @@ import { StandingDoc } from '../subagents/ui.tsx'
 import { CommitCount, ProgressAction, Review, useWorkspaceIndex } from '../workspaces/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
 import { AgentMark, ConversationPhase, FeatureTag, useOverview } from '../conversations/ui.tsx'
-import { ago } from './lander.tsx'
 import type { Landing } from './landings.ts'
 import { RowMenu, saveTitle } from './rows.tsx'
 import { Section } from './section.tsx'
@@ -206,7 +214,7 @@ function PhasedFlightRow({
             <span className={cn('shrink-0', tones[state.tone])}>{state.label}</span>
             {latest > 0 && (
               <span className="ml-auto shrink-0 pl-1 text-muted-foreground/60">
-                {ago(latest, now)}
+                {formatAgo(latest, now)}
               </span>
             )}
           </span>

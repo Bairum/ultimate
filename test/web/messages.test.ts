@@ -12,7 +12,6 @@ import {
   stateWord,
   messageStatus,
   outgoingState,
-  relativeTime,
   scriptMessaged,
   sentBy,
   sentStatus,
@@ -125,12 +124,6 @@ describe('compact messages', () => {
       }),
     ).toBe(1)
     expect(waitingOnUser({ messages: [], next: 1 })).toBe(0)
-  })
-  it('shows elapsed minutes, hours and days without future negative times', () => {
-    expect(relativeTime(1000, 0)).toBe('now')
-    expect(relativeTime(0, 60000)).toBe('1m')
-    expect(relativeTime(0, 3600000)).toBe('1h')
-    expect(relativeTime(0, 86400000)).toBe('1d')
   })
 })
 

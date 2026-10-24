@@ -2,7 +2,7 @@ import { CloudIcon, LoaderCircleIcon } from 'lucide-react'
 import { useState, useSyncExternalStore } from 'react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { api, cn, defineWebExtension, errorMessage, formatBytes } from '@/sdk'
+import { api, cn, defineWebExtension, errorMessage, formatAgo, formatBytes } from '@/sdk'
 import { JoinDialog, joinDialog } from './join.tsx'
 import { BackupAction, StateAction } from './refs.ts'
 import type { CloudState } from './types.ts'
@@ -63,14 +63,7 @@ const backUp = async (force: boolean) => {
   await done.finally(local.refresh)
 }
 
-/** `just now`, `12m ago`, `3h ago`, `2d ago`. */
-function since(at: number, now = Date.now()) {
-  const minutes = Math.max(0, Math.floor((now - at) / 60000))
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)}h ago`
-  return `${Math.floor(minutes / 60 / 24)}d ago`
-}
+const since = (at: number) => formatAgo(at, Date.now(), { ago: true })
 const mb = (bytes: number) => {
   const value = bytes / 1024 / 1024
   return value < 10 ? value.toFixed(1) : String(Math.round(value))

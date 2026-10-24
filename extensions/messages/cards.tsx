@@ -20,9 +20,11 @@ import { MessageResponse } from '@/components/ai/message'
 import { ToolImage } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
+  Card,
   cn,
   events,
   Fold,
+  formatAgo,
   MessageActions,
   Provided,
   useCompact,
@@ -49,7 +51,6 @@ import {
   emptyMessages,
   messageStatus,
   outgoingState,
-  relativeTime,
   remoteLabel,
   sentBy,
   sentStatus,
@@ -214,7 +215,7 @@ export function Bubble({
               dateTime={new Date(at).toISOString()}
               title={new Date(at).toLocaleString()}
             >
-              {relativeTime(at, now)}
+              {formatAgo(at, now)}
             </time>
           )
         )}
@@ -258,7 +259,7 @@ function AttachedAnswer({ answer, question }: { answer: Message; question: Messa
           dateTime={new Date(answer.at).toISOString()}
           title={new Date(answer.at).toLocaleString()}
         >
-          {relativeTime(answer.at, now)}
+          {formatAgo(answer.at, now)}
         </time>
       </div>
       {!dismissed && (
@@ -390,10 +391,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
         </>
       }
     >
-      <section
-        data-message-outgoing={message?.id}
-        className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
-      >
+      <Card data-message-outgoing={message?.id}>
         <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
           {toUser ? (
             <InboxIcon className="size-3.5 text-brand" />
@@ -435,7 +433,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
         )}
         <Body text={text ?? ''} />
         {message && <Answers message={message} />}
-      </section>
+      </Card>
     </Fold>
   )
 }
@@ -485,10 +483,7 @@ export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode
         </>
       }
     >
-      <section
-        data-message-branch={id}
-        className="min-w-0 rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
-      >
+      <Card data-message-branch={id}>
         <header className="flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] whitespace-nowrap text-muted-foreground">
           <GitBranchIcon className="size-3.5 shrink-0 text-brand" />
           <span className="shrink-0">
@@ -533,7 +528,7 @@ export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode
           </p>
         )}
         <Body text={prompt ?? ''} />
-      </section>
+      </Card>
     </Fold>
   )
 }

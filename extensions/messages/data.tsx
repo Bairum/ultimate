@@ -258,14 +258,3 @@ export function outgoingState(message: Message | undefined, toUser: boolean, run
   if (!message.reply) return 'delivered'
   return toUser ? 'awaiting your reply' : 'awaiting reply'
 }
-
-export function relativeTime(at: number, now: number) {
-  const minutes = Math.max(0, Math.floor((now - at) / 60000))
-  return minutes < 1
-    ? 'now'
-    : minutes < 60
-      ? `${minutes}m`
-      : minutes < 1440
-        ? `${Math.floor(minutes / 60)}h`
-        : `${Math.floor(minutes / 1440)}d`
-}
