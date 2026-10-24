@@ -410,6 +410,24 @@ it('asks instead of sleeping once the granted automation is paused', async () =>
   expect(f.deps.grantedSleep).not.toHaveBeenCalled()
 })
 
+it('never adopts a same-name automation that watches other compactions', async () => {
+  const f = await fixture()
+  await f.action('delete', { id: (await f.own())! })
+  await f.harness.commit(async (tx) => {
+    const doc = await tx.doc(AfterCompactionDoc, ROOT_CONVERSATION_ID)
+    delete doc.id
+    delete doc.deleted
+  }, context)
+  const other = (await f.action('create', {
+    name: AUTOMATION_NAME,
+    event: { name: 'conversations.compacted' },
+  })) as { id: string }
+  await ensureAutomation(f.host)
+  const id = (await f.own())!
+  expect(id).not.toBe(other.id)
+  expect((await f.record(id)).event?.where).toEqual({ conversation: '@ultimate' })
+})
+
 it('keeps a chapter seed paused whichever check runs first', async () => {
   const f = await fixture()
   // A fresh chapter whose seed carried the automation paused, before any check made it.

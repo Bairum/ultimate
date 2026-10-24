@@ -17,6 +17,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, JsonObject, Tx } from '@earendil-works/pi-durable'
 import { join } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import { readJson } from '../../lib/json-file.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -108,7 +109,14 @@ export async function ensureAutomation(host: ExtensionHost) {
   if (ultimate === undefined) return
   // A create whose receipt was lost is found by name and trigger, not made twice.
   const created =
-    list.find((item) => item.name === AUTOMATION_NAME && item.event?.name === TRIGGER.name) ??
+    list.find(
+      (item) =>
+        item.name === AUTOMATION_NAME &&
+        item.event?.name === TRIGGER.name &&
+        isDeepStrictEqual(item.event.where, TRIGGER.where) &&
+        !item.prompt &&
+        isDeepStrictEqual(item.subscribers, [ultimate]),
+    ) ??
     ((await host.invoke(
       'automations',
       'create',
