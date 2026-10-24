@@ -1,4 +1,4 @@
-import { CalendarClockIcon, RadarIcon, TimerIcon } from 'lucide-react'
+import { CalendarClockIcon, RadarIcon, TimerIcon, ZapIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import {
@@ -104,7 +104,71 @@ const touched = (call: ToolCallView) =>
   words(call.args.id) || (/^(A\d+|[a-z][a-z0-9-]*) .+ — /.exec(call.output)?.[1] ?? '')
 
 /** One `automation` call: the action and automation, its ask or prompt, and a way to it. */
-function AutomationCall({ call }: { call: ToolCallView }) {
+export function AutomationCall({ call }: { call: ToolCallView }) {
+  if (call.args.action === 'act') return <ActCard call={call} />
+  return <AutomationTool call={call} />
+}
+
+/** A granted action is an outcome, not a folded generic tool call. */
+function ActCard({ call }: { call: ToolCallView }) {
+  const open = useOpenAutomation()
+  const id = touched(call)
+  let result: { by?: { name: string }; conversation?: number } | undefined
+  const json = call.output.indexOf('{')
+  if (json >= 0)
+    try {
+      result = JSON.parse(call.output.slice(json)) as typeof result
+    } catch {
+      // Partial output while the action runs is not a complete receipt yet.
+    }
+  const done = call.status === 'done'
+  const failed = call.status === 'error' || call.status === 'interrupted'
+  const action = words(call.args.do)
+  const title = failed
+    ? 'Automation could not act'
+    : !done
+      ? 'Requesting granted action…'
+      : action === 'dream'
+        ? 'Started a dream'
+        : action === 'compact'
+          ? `Compacting${result?.conversation ? ` #${result.conversation}` : ''}`
+          : 'Falling asleep…'
+  return (
+    <section
+      className={cn(
+        'min-w-0 rounded-md border border-l-2 border-border bg-muted/20',
+        failed ? 'border-l-error/70' : 'border-l-brand/60',
+      )}
+      data-automation-act={action}
+    >
+      <header className="flex items-start gap-2 px-3 py-2">
+        <ZapIcon className="mt-0.5 size-3.5 shrink-0 text-brand" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-medium">{title}</p>
+          <p className="mt-0.5 text-[11.5px] break-words text-muted-foreground">
+            {done ? `Under your grant on ${result?.by?.name ?? id}` : `Requested action on ${id}`} ·{' '}
+            {action === 'asleep' ? 'switch chapter after every gate passes' : action}
+          </p>
+        </div>
+        <button
+          className="shrink-0 text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+          onClick={() => open(id)}
+          type="button"
+        >
+          open {id}
+        </button>
+      </header>
+      {failed && (
+        <div className="border-t border-border/60 px-3 py-2">
+          <ToolOutput isError output={call.output} />
+        </div>
+      )}
+      <ToolDiagnostics diagnostics={call.diagnostics} />
+    </section>
+  )
+}
+
+function AutomationTool({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   const shell = useUltimate()
   const open = useOpenAutomation()
@@ -115,7 +179,14 @@ function AutomationCall({ call }: { call: ToolCallView }) {
   const ask = words(call.args.ask)
   const prompt = words(call.args.prompt)
   const reason = words(call.args.reason)
-  const Kind = ask ? RadarIcon : schedule ? CalendarClockIcon : TimerIcon
+  const Kind =
+    call.args.event || call.args.condition
+      ? ZapIcon
+      : ask
+        ? RadarIcon
+        : schedule
+          ? CalendarClockIcon
+          : TimerIcon
   const title: ReactNode = (
     <>
       {action === 'run' ? 'run now' : action}
