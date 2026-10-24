@@ -47,6 +47,20 @@ it('uses returned truncation coverage, never treating a truncated whole read as 
     ).old,
   ).toMatchObject({ reason: 'superseded', path: 'x' })
 })
+it('uses the rows a hashline read displayed, not its header row', () => {
+  const hashline = (id: string, startLine: number, text: string, full = false) =>
+    read(id, { path: 'x', offset: startLine }, `[x#ABCD]\n${text}`, {
+      hashline: { path: '/work/x', tag: 'ABCD', startLine, text, full },
+    })
+  // Rows 1-2 displayed; an older read of rows 2-3 is not covered, though the output has 3 lines.
+  expect(
+    candidates([...hashline('old', 2, 'b\nc'), ...hashline('new', 1, 'a\nb')], '/work', 1),
+  ).toEqual({})
+  expect(
+    candidates([...hashline('old', 2, 'b\nc'), ...hashline('new', 1, 'a\nb\nc', true)], '/work', 1)
+      .old,
+  ).toMatchObject({ reason: 'superseded' })
+})
 it.each<JsonObject>([
   { truncated: true, outputLines: 0, firstLineExceedsLimit: true },
   { truncated: true },

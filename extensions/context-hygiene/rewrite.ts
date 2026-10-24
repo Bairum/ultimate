@@ -81,6 +81,17 @@ function resultCounts(messages: readonly Message[]) {
 function range(call: ToolCall, result: Extract<Message, { role: 'toolResult' }>) {
   const start = typeof call.arguments.offset === 'number' ? Math.max(1, call.arguments.offset) : 1
   const details = result.details
+  // Hashline's read records exactly which rows it displayed; its text output adds a [path#TAG] header row.
+  const shown =
+    details && typeof details === 'object' && 'hashline' in details ? details.hashline : undefined
+  if (shown && typeof shown === 'object' && 'text' in shown && 'startLine' in shown) {
+    if (typeof shown.text !== 'string' || typeof shown.startLine !== 'number') return undefined
+    return {
+      start: shown.startLine,
+      end: shown.startLine + shown.text.split('\n').length,
+      whole: 'full' in shown && shown.full === true,
+    }
+  }
   const truncation =
     details && typeof details === 'object' && 'truncation' in details
       ? details.truncation

@@ -78,6 +78,8 @@ export async function offload(
     result.details && typeof result.details === 'object' && !Array.isArray(result.details)
       ? result.details
       : {}
+  // A tool that bounds its own output and records what the model was shown (hashline) opts out.
+  if (details.offloadExempt === true) return undefined
   const text = outputText(result)
   const spill = spillPath(call, result)
   if (!spill && Buffer.byteLength(text) <= options.thresholdBytes) return undefined

@@ -71,6 +71,19 @@ it('leaves small, read, nested and excluded tool results untouched, including er
       ).toBeUndefined()
 })
 
+it('leaves large results that opt out with details.offloadExempt untouched', async () => {
+  const home = await temp()
+  expect(
+    await offload(
+      home,
+      1,
+      { ...call, name: 'grep' },
+      { ...result, details: { offloadExempt: true } },
+      { thresholdBytes: 100, exclude: [] },
+    ),
+  ).toBeUndefined()
+})
+
 it('uses bytes for the configurable threshold and caps matching lines at 20', async () => {
   const home = await temp()
   const output = [{ type: 'text' as const, text: '警告 warn\n'.repeat(1500) }]
