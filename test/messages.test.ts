@@ -538,7 +538,7 @@ it('refuses @ultimate messaging the user it owes an answer', async () => {
   expect(reply.state).toBe('answered')
   expect(next).toMatchObject({ to: 'user', re: reply.id, reply: true, state: 'delivered' })
   // Its card reads the result as a sent message, so the answer card shows under it.
-  expect(f.observed.join('\n')).toContain(`Message ${next.id} sent.`)
+  expect((await toolResults(f)).at(-1)).toContain(`Message ${next.id} sent.`)
 })
 it.each([false, true])('replays a converted answer once (afterMemo: %s)', async (afterMemo) => {
   const sendGate = { gate: gate(), afterMemo, entered: false, conversation: () => 0 }
