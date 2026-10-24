@@ -49,7 +49,7 @@ import { ago, LanderState } from './lander.tsx'
 import { StandingPhase, WaitingOnUser } from './ultimate.tsx'
 import { useSidebarState } from './state.tsx'
 import { topLevelRows } from './listed.ts'
-import { UnderUltimate } from './ui.tsx'
+import { UnderUltimate, Unlisted } from './ui.tsx'
 
 /** What the conversations below start in: the project's path from home, or `<project> #<worktree>`; the full path on hover. */
 function ProjectPath() {
@@ -106,20 +106,35 @@ const pinned = (conversation: ConversationSummary) =>
 
 /** The project tree, with owned subagents under each row and earlier/concluded work at the bottom. */
 export function Conversations() {
+  const ultimateId = useDocOf(1, StandingDoc)?.ultimate
   return (
     <WaitingOnUser>
       {(waiting) => (
         <Provided input={null} point={ParkedRuns}>
-          {(parked) => <Tree parked={parked ?? noneParked} waiting={waiting} />}
+          {(parked) => (
+            <Provided input={ultimateId} point={Unlisted}>
+              {(unlisted) => (
+                <Tree parked={parked ?? none} unlisted={unlisted ?? none} waiting={waiting} />
+              )}
+            </Provided>
+          )}
         </Provided>
       )}
     </WaitingOnUser>
   )
 }
-const noneParked: ReadonlySet<number> = new Set()
+const none: ReadonlySet<number> = new Set()
 
 /** The tree, with how many messages and answers wait on the user for @ultimate's row. */
-function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number> }) {
+function Tree({
+  waiting,
+  parked,
+  unlisted,
+}: {
+  waiting: number
+  parked: ReadonlySet<number>
+  unlisted: ReadonlySet<number>
+}) {
   const overview = useOverview()
   const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const tasks = useTasks()
@@ -152,7 +167,7 @@ function Tree({ waiting, parked }: { waiting: number; parked: ReadonlySet<number
       : undefined
   const [expanded, setExpanded] = useSidebarState<number[]>('expanded', [])
   const working = workingByTop(conversations)
-  const topLevel = topLevelRows(conversations)
+  const topLevel = topLevelRows(conversations, unlisted)
   // @ultimate first, then the lander and other standing agents: pinned above the rest and never concluded.
   const standingIds = useDocOf(1, StandingDoc)
   const ultimateId = standingIds?.ultimate

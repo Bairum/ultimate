@@ -4,3 +4,8 @@ import { definePoint } from '@/sdk'
 
 /** Rows nested under @ultimate's row (`side-chat` lists its open side chats); input is @ultimate's conversation id. */
 export const UnderUltimate = definePoint<number | undefined, ReactNode>('sidebar.under-ultimate')
+/**
+ * Top-level conversations no section lists (`side-chat` names its side chats, open or ended, which nest under @ultimate
+ * instead); input is @ultimate's conversation id.
+ */
+export const Unlisted = definePoint<number | undefined, ReadonlySet<number>>('sidebar.unlisted')

@@ -18,6 +18,7 @@ import type { ConversationSummary } from '../../shared/protocol.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import { git } from '../../lib/git.ts'
 import { shortTitle } from '../../lib/title.ts'
+import { Standing } from '../subagents/api.ts'
 import type { BuildNote, Landing } from './refs.ts'
 
 export const order = -100
@@ -145,12 +146,9 @@ async function instructionChanges(
   conversationId: ConversationId,
   seen: { files?: Record<string, string> },
 ) {
-  const standing = host.doc('ultimate.standing-agents')
   const name = 'ultimate'
-  const index = standing
-    ? ((await tx.doc(standing, ROOT_CONVERSATION_ID)) as Record<string, number>)
-    : {}
-  if (index[name] !== conversationId) return { instructions: [], docs: [] }
+  if ((await tx.doc(Standing, ROOT_CONVERSATION_ID))[name] !== conversationId)
+    return { instructions: [], docs: [] }
   const { definitions } = await discoverAgents(
     host.ultimateRoot,
     host.projectRoot,

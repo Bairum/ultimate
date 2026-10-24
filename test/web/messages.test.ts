@@ -159,15 +159,20 @@ describe('sender accents', () => {
 })
 
 describe('@ultimate compact mode', () => {
-  const ultimate = { label: 'agent', title: '@ultimate' }
-  it("is @ultimate's own top-level standing conversation", () => {
-    expect(ultimateCompact(ultimate)).toBe(true)
+  const standing = { ultimate: 7, lander: 8 }
+  it("is @ultimate's conversation by the standing agents' index, whatever its title or label", () => {
+    expect(ultimateCompact({ id: 7 }, standing)).toBe(true)
+    // A rename or relabel changes nothing: the summary's title and label are not read.
+    expect(
+      ultimateCompact({ id: 7, title: 'Renamed', label: 'x' } as { id: number }, standing),
+    ).toBe(true)
   })
-  it('excludes other standing agents, subagents and coordinators', () => {
-    expect(ultimateCompact({ ...ultimate, title: '@lander' })).toBe(false)
-    expect(ultimateCompact({ ...ultimate, parentConversationId: 4 })).toBe(false)
-    expect(ultimateCompact({ ...ultimate, ownerTaskId: 9 })).toBe(false)
-    expect(ultimateCompact({ ...ultimate, label: 'coordinator' })).toBe(false)
+  it('excludes other standing agents and conversations titled @ultimate, and waits for the index', () => {
+    expect(ultimateCompact({ id: 8 }, standing)).toBe(false)
+    expect(
+      ultimateCompact({ id: 9, title: '@ultimate', label: 'agent' } as { id: number }, standing),
+    ).toBe(false)
+    expect(ultimateCompact({ id: 7 }, undefined)).toBe(false)
   })
 })
 

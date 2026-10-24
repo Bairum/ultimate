@@ -21,7 +21,7 @@ import { SubagentsApi } from '../subagents/api.ts'
 import { MessagesApi } from '../messages/api.ts'
 import { Done, Exited, Started } from './refs.ts'
 import type { Automations as Ledger } from './server.ts'
-import { doneText, fireText, isId, isSlug, trimLog } from './types.ts'
+import { doneText, fireText, isId, isSlug, trimLog, WatcherLabel } from './types.ts'
 import type { Manifest, Automation, AutomationListItem, Effect } from './types.ts'
 
 const owner = {
@@ -251,7 +251,7 @@ export function supervisor(
         parentAgent: prepared.parent!,
         modelRuntime: host.modelRuntime,
         metadata: host.metadata,
-        label: 'watcher',
+        label: WatcherLabel,
         title: `${id} · ${name}`,
         cwd,
       })

@@ -15,7 +15,8 @@ import {
   useRegionOpen,
 } from '../sdk/hooks.ts'
 import { panelItems, slotItems } from '../sdk/registry.ts'
-import { Slot } from './boundary.tsx'
+import { ConversationKind } from '../sdk/types.ts'
+import { Provided, Slot } from './boundary.tsx'
 import { Shortcut } from './palette.tsx'
 import { useRegion } from './surface.ts'
 
@@ -105,12 +106,15 @@ function Trail() {
         <span className="font-mono text-[12px] text-foreground/85">main</span>
       ) : (
         <>
-          {summary?.label && (
-            // A branch names its kind before the agent running it: `branch · coordinator`.
-            <span className="shrink-0 font-mono text-[12px] text-brand">
-              {summary.label === 'coordinator' ? 'branch · coordinator' : summary.label}
-            </span>
-          )}
+          <Provided input={summary} point={ConversationKind}>
+            {(kind) =>
+              (kind ?? summary?.label) && (
+                <span className="shrink-0 font-mono text-[12px] text-brand">
+                  {kind ?? summary?.label}
+                </span>
+              )
+            }
+          </Provided>
           <span className="truncate text-[13px] font-medium" title={title}>
             {title}
           </span>

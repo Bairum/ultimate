@@ -23,6 +23,7 @@ import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ConversationsService } from '../../extensions/conversations/api.ts'
 import { setAutomaticSummaries } from '../../extensions/conversations/summary.ts'
+import { setStanding } from '../../extensions/conversations/server.ts'
 import { apis, attach, temp, removeTemp, until } from '../helpers.ts'
 
 type Preview = { id: string; url: string; home: string; pid: number }
@@ -115,6 +116,7 @@ async function fixture({ foreign = false } = {}) {
     summaryModel: async () => undefined,
     requestSummary: async () => {},
     setAutomaticSummaries,
+    setStanding,
   } satisfies Partial<ConversationsService>)
   const extension = instance(host)
   const service = workspaces(host)

@@ -486,7 +486,7 @@ function Form({
               value={draft.isolate}
             />
           </Field>
-          {(draft.name === 'lander' || draft.onFailure) && (
+          {draft.onFailure && (
             <Field
               hint={
                 (draft.onFailure ?? 'diagnose') === 'fix'

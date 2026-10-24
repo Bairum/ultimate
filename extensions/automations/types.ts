@@ -1,6 +1,10 @@
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { TaskId, ConversationId } from '@earendil-works/pi-durable'
 
+/** The labels automations gives the conversations it creates: a prompt run's, and a script's watcher. */
+export const RunLabel = 'automation'
+export const WatcherLabel = 'watcher'
+
 export type Schedule =
   | { kind: 'cron'; expr: string; tz: string }
   | { kind: 'at'; time: string }

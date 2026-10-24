@@ -243,8 +243,9 @@ export function workspaces(host: Host) {
       }
       for (const id of landers) {
         await configure(tx, id, change)
-        // A lander keeps its `@lander` title: no automatic summaries.
+        // A lander keeps its `@lander` title (no automatic summaries) and is never concluded.
         await host.need(ConversationsApi).setAutomaticSummaries(tx, id, false)
+        await host.need(ConversationsApi).setStanding(tx, id, true)
       }
     }, context)
   }

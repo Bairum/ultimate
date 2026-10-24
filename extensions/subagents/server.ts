@@ -536,7 +536,8 @@ export default function subagents(
     ).definitions.filter((definition) => definition.resident === true)
   /** Drops standing agents whose definition is gone; their conversations become ordinary ones. Retirement waits
    * until every definition parses: an error names a file, not the agent it defines, so a typo retires nothing. The
-   * ones kept get their automatic summaries turned off, as `standing` does on every refresh. */
+   * ones kept, every one while a definition fails to parse, get their automatic summaries turned off and stay
+   * standing, as `standing` does on every refresh. */
   const pruneRetired = async (ctx: Context) => {
     const { definitions, errors } = await discoverAgents(
       host.ultimateRoot,
@@ -544,7 +545,6 @@ export default function subagents(
       host.userHome,
       host.modelRuntime,
     )
-    if (errors.length > 0) return
     const kept = new Set(
       definitions
         .filter((definition) => definition.resident === true)
@@ -555,12 +555,18 @@ export default function subagents(
       for (const name of Object.keys(index)) {
         const id = index[name]
         const exists = await tx.conversation(id)
-        if (kept.has(name)) {
-          if (exists) await conversations.setAutomaticSummaries(tx, id, false)
+        if (kept.has(name) || errors.length > 0) {
+          if (exists) {
+            await conversations.setAutomaticSummaries(tx, id, false)
+            await conversations.setStanding(tx, id, true)
+          }
           continue
         }
         delete index[name]
-        if (exists) delete (await tx.doc(host.metadata, id)).label
+        if (exists) {
+          delete (await tx.doc(host.metadata, id)).label
+          await conversations.setStanding(tx, id, false)
+        }
       }
     }, ctx)
   }
@@ -608,6 +614,7 @@ export default function subagents(
         Object.assign(await tx.doc(host.metadata, id), { label: 'agent', title: `@${name}` })
         // A standing agent keeps its `@name`: no automatic title, summary or reply activity.
         await conversations.setAutomaticSummaries(tx, id, false)
+        await conversations.setStanding(tx, id, true)
         ;(await tx.doc(Profile, id)).definition = name
         // Only a new conversation starts: a refresh reconfigures one that already runs.
         if (created) await started(host, tx, created, name, 'standing')

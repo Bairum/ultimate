@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto'
 // oxlint-disable-next-line no-restricted-imports -- tailscale ownership uses the shared process lock and liveness check
 import { acquireLock, alive } from '../../server/lock.ts'
-import { access, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { join } from 'node:path'
 import { defineExtension } from '@earendil-works/pi-durable'
 import { exec } from '../../lib/exec.ts'
-import { readJson } from '../../lib/json-file.ts'
+import { readJson, writeJson } from '../../lib/json-file.ts'
 import { userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ExtensionAction } from '../../server/actions.ts'
@@ -108,13 +108,7 @@ export default function tailscale(host: ExtensionHost) {
       )
         throw new Error('Invalid ~/.ultimate/tailscale.json port registry')
       const result = await use(value)
-      const temporary = `${registryPath}.${process.pid}.tmp`
-      try {
-        await writeFile(temporary, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 })
-        await rename(temporary, registryPath)
-      } finally {
-        await rm(temporary, { force: true })
-      }
+      await writeJson(registryPath, value, { mode: 0o600 })
       return result
     } finally {
       await lock.close()

@@ -894,10 +894,7 @@ async function forkBranch(
       : await inheritedTally(tx, from, at, root)
   let caller: string | undefined
   if (input.by !== undefined) {
-    const standing = host.doc('ultimate.standing-agents')
-    const index = standing
-      ? ((await tx.doc(standing, ROOT_CONVERSATION_ID)) as Record<string, number>)
-      : {}
+    const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
     const name = Object.keys(index).find((candidate) => index[candidate] === input.by)
     caller = `#${input.by}${name ? ` (@${name})` : ''}`
   }

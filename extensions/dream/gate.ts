@@ -8,6 +8,7 @@ import { chapterFiles, requestChapter } from '../../lib/chapters.ts'
 import { postAction } from '../../lib/remote.ts'
 import type { InstanceService } from '../instance/api.ts'
 import type { MemoryItem } from '../lineage/refs.ts'
+import { StandingDoc } from '../subagents/api.ts'
 import type { GateResult } from './refs.ts'
 import { writeSeed } from './seed.ts'
 import type { Seed } from './types.ts'
@@ -59,7 +60,7 @@ export async function gate(
     const todos = await doc<{ items: { done?: number }[] }>('todos')
     // The preview creates no automation that could fire against the real project; it checks each and records it.
     const automations = (await doc<{ automations: string[] }>('dream.seed')).automations
-    const standing = await doc<{ ultimate?: number }>('ultimate.standing-agents')
+    const standing = await doc<Record<string, number>>(StandingDoc.kind)
     const count = (name: string, actual: number, expected: number) =>
       check(name, actual === expected, `${actual} present; expected ${expected}`)
     count('memories', Object.keys(memory.memories).length, seed.counts.memories)
