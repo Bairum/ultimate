@@ -12,10 +12,11 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { SystemInfo } from '../../../shared/protocol.ts'
-import { actions } from '../sdk/actions.ts'
+import { actions, shellKeys } from '../sdk/actions.ts'
 import { shortenPath } from '../sdk/format.ts'
-import { useExtensions, useStore, useSystem } from '../sdk/hooks.ts'
-import { HOME, slotItems, surfaceItems } from '../sdk/registry.ts'
+import { useExtensions, useRegionOpen, useStore, useSystem, useUiState } from '../sdk/hooks.ts'
+import { HOME, panelItems, shownPanels, slotItems, surfaceItems } from '../sdk/registry.ts'
+import { useViewport } from '../sdk/viewport.ts'
 import { Slot } from './boundary.tsx'
 import { Shortcut } from './palette.tsx'
 import { sidebarWidthBeyondPhone } from './primitives.tsx'
@@ -252,8 +253,50 @@ function SurfaceItems() {
 }
 
 /**
+ * On a tablet (an unfolded foldable) the panels overlay the conversation and the header's toggle sits far from the
+ * hand, so the title bar's right end gets one icon per panel tab: it opens that panel, or closes it when shown.
+ */
+function PanelActions() {
+  const panels = panelItems(useExtensions())
+  const open = useRegionOpen('panels')
+  const [selected] = useUiState<string | null>(shellKeys.panel, null)
+  const { active, tabs } = shownPanels(panels, selected)
+  const tablet = useViewport() === 'tablet'
+  const agent = useStore((state) => state.ui.surface?.id === HOME)
+  if (!tablet || !agent) return null
+  return (
+    <nav className="flex items-center gap-0.5">
+      {tabs.map((panel) => {
+        const Icon = panel.icon
+        const shown = open && panel.id === active?.id
+        return (
+          <Tooltip key={`${panel.extension}:${panel.id}`}>
+            <TooltipTrigger asChild>
+              <button
+                aria-label={panel.title}
+                aria-pressed={shown}
+                className={cn(
+                  'flex size-7 items-center justify-center rounded-md transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
+                  shown && 'bg-accent text-foreground',
+                )}
+                onClick={() => (shown ? actions.closePanel() : actions.openPanel(panel.id))}
+                type="button"
+              >
+                {Icon ? <Icon className="size-4" /> : panel.title}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{panel.title}</TooltipContent>
+          </Tooltip>
+        )
+      })}
+    </nav>
+  )
+}
+
+/**
  * The bar above every surface, as the status line's background: the brand (the surface switcher on phones), the
- * project chip, `titlebar.left`, the surfaces; then `titlebar.right` and the command palette.
+ * project chip, `titlebar.left`, the surfaces; then `titlebar.right`, the panel actions on a tablet and the command
+ * palette.
  */
 export function TitleBar() {
   return (
@@ -276,9 +319,10 @@ export function TitleBar() {
       </div>
       <div className="flex shrink-0 items-center gap-3 whitespace-nowrap">
         <Slot name="titlebar.right" variant="inline" />
+        <PanelActions />
         <Button
           aria-label="Command palette"
-          className="-mr-1 h-6 gap-1.5 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground max-md:hidden"
+          className="-mr-1 h-6 gap-1.5 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground max-lg:hidden"
           onClick={actions.openPalette}
           size="sm"
           variant="ghost"
@@ -288,7 +332,7 @@ export function TitleBar() {
         </Button>
         <Button
           aria-label="Command palette"
-          className="-mr-1 size-6 text-muted-foreground hover:text-foreground md:hidden"
+          className="-mr-1 size-6 text-muted-foreground hover:text-foreground md:max-lg:size-7 lg:hidden"
           onClick={actions.openPalette}
           size="icon"
           variant="ghost"
