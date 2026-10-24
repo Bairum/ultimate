@@ -66,7 +66,7 @@ export async function start(tx: Tx, words: unknown, now: number) {
     decisions: [],
   }
   goals.goals.push(goal)
-  return { ...goal }
+  return goal
 }
 
 /** End the open goal; refuses when none is open. */
@@ -74,7 +74,8 @@ export async function end(tx: Tx, ending: Ending) {
   const goal = await openGoal(tx)
   if (!goal) throw new Error('No goal is open')
   goal.ended = ending
-  return structuredClone(goal)
+  // A plain copy: the document's overlay is a proxy that structuredClone refuses, and unusable after the commit.
+  return JSON.parse(JSON.stringify(goal)) as Goal
 }
 
 const status = (criterion: Criterion) =>

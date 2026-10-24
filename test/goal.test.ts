@@ -14,7 +14,16 @@ import type { ExtensionHost } from '../server/extensions.ts'
 const ULTIMATE = 5 as ConversationId
 const screenshot = { type: 'image', data: 'aGk=', mimeType: 'image/png' }
 
-/** A transaction over plain documents and a few entries of @ultimate's conversation; @ultimate is conversation 5. */
+/** Like the harness's document overlay, a proxy at every level: structuredClone refuses it. */
+const overlay = <T extends object>(value: T): T =>
+  new Proxy(value, {
+    get: (target, key) => {
+      const found = Reflect.get(target, key) as unknown
+      return found && typeof found === 'object' ? overlay(found) : found
+    },
+  })
+
+/** A transaction over overlaid documents and a few entries of @ultimate's conversation; @ultimate is conversation 5. */
 function fakeTx() {
   const docs = new Map<string, object>()
   const entries = [
@@ -37,7 +46,7 @@ function fakeTx() {
           key,
           def.kind === 'ultimate.standing-agents' ? { ultimate: ULTIMATE } : def.initial(),
         )
-      return docs.get(key)
+      return overlay(docs.get(key)!)
     },
     entry: async (id: number) => entries.find((entry) => entry.id === id),
     scanEntries: async ({ conversationId }: { conversationId: number }) => ({
