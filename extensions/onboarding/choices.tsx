@@ -15,6 +15,7 @@ export const recommended: readonly { name: string; line: string; needs?: string;
     { name: 'documents', line: 'Extension state in the right panel' },
     { name: 'tasks', line: 'What runs right now, live' },
     { name: 'info', line: 'Machine, code, and extensions at a glance' },
+    { name: 'update', line: 'Tells you when Ultimate has updates' },
     {
       name: 'parallel',
       line: 'Web search and fetch (parallel.ai)',
@@ -22,7 +23,6 @@ export const recommended: readonly { name: string; line: string; needs?: string;
     },
     { name: 'cloud', line: 'Encrypted project backups', hint: 'needs your own backup Worker' },
     { name: 'tailscale', line: 'Reach Ultimate from your devices', hint: 'needs Tailscale here' },
-    { name: 'update', line: 'Keeps this Ultimate current', hint: 'tracks origin hourly' },
     { name: 'health', line: 'Provider health for backups', hint: 'reports with cloud' },
     { name: 'classify', line: 'Typed judgments from Jev', hint: 'needs a Jev key' },
     { name: 'phase', line: 'Working-phase labels', needs: 'classify', hint: 'needs a Jev key' },

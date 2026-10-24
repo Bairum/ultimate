@@ -75,9 +75,13 @@ export async function cloneState(
   git: Git,
   root: string,
 ): Promise<
-  Pick<UpdateState, 'branch' | 'behind' | 'commits' | 'layers' | 'refused' | 'fetchedAt'> & {
+  Pick<
+    UpdateState,
+    'branch' | 'behind' | 'ahead' | 'commits' | 'layers' | 'refused' | 'fetchedAt'
+  > & {
     head: string
     remoteHead?: string
+    diverged?: true
   }
 > {
   const head = await git('rev-parse', 'HEAD')
@@ -87,8 +91,10 @@ export async function cloneState(
     head,
     branch: state.branch,
     behind: state.behind,
+    ahead: state.ahead,
     commits: [] as UpdateState['commits'],
     ...(state.refused ? { refused: state.refused } : {}),
+    ...(state.diverged ? { diverged: state.diverged } : {}),
     ...(at !== undefined ? { fetchedAt: at } : {}),
   }
   if (!state.behind) return result
