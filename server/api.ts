@@ -407,11 +407,14 @@ export async function createApi(
           return true
         }
         if (request.method !== 'POST') throw new HttpError(404, 'Unknown endpoint')
+        const action = actionPath.exec(url.pathname)
+        // Submissions carry images and actions can carry media (a voice recording); other commands stay small.
         const data = await body(
           request,
-          /^\/api\/conversations\/\d+\/submit$/.test(url.pathname) ? 12 * 1024 * 1024 : undefined,
+          action || /^\/api\/conversations\/\d+\/submit$/.test(url.pathname)
+            ? 12 * 1024 * 1024
+            : undefined,
         )
-        const action = actionPath.exec(url.pathname)
         if (action) {
           await runAction(request, response, extensions, action, data)
           return true
