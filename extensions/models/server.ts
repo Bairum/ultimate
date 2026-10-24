@@ -52,30 +52,6 @@ const kept = 10
 function liveFlows(host: ExtensionHost) {
   return host.resource('models.login', () => {
     const live = new Map<string, Flow>()
-    host.onOpen(async () => {
-      const harness = host.harness()
-      const ids: ConversationId[] = []
-      let cursor: Cursor | undefined
-      do {
-        const page = await harness.commit((tx) => tx.scanConversations({}, 256, cursor), context)
-        ids.push(...page.items.map((record) => record.id))
-        cursor = page.next
-      } while (cursor !== undefined)
-      for (const id of ids) {
-        const dead = (records: Readonly<Record<string, LoginFlow>>) =>
-          Object.keys(records).filter(
-            (flowId) => records[flowId].status === 'running' && !live.has(flowId),
-          )
-        if (!dead((await harness.snapshot(Logins, id, context))?.flows ?? {}).length) continue
-        await harness.commit(async (tx) => {
-          const { flows } = await tx.doc(Logins, id)
-          for (const flowId of dead(flows)) {
-            flows[flowId].status = 'cancel'
-            delete flows[flowId].prompt
-          }
-        }, context)
-      }
-    })
     host.onClose(async () => {
       for (const flow of live.values()) flow.controller.abort()
     })
@@ -226,7 +202,32 @@ export const actions = {
 }
 
 export default function models(host: ExtensionHost) {
-  // At load, so the next start marks flows of the previous process cancelled.
-  liveFlows(host)
+  const live = liveFlows(host)
+  // Each facet registers its own, so it reads Logins with this load's token: flows no live login drives (those of a
+  // previous process) are marked cancelled.
+  host.onOpen(async () => {
+    const harness = host.harness()
+    const ids: ConversationId[] = []
+    let cursor: Cursor | undefined
+    do {
+      const page = await harness.commit((tx) => tx.scanConversations({}, 256, cursor), context)
+      ids.push(...page.items.map((record) => record.id))
+      cursor = page.next
+    } while (cursor !== undefined)
+    for (const id of ids) {
+      const dead = (records: Readonly<Record<string, LoginFlow>>) =>
+        Object.keys(records).filter(
+          (flowId) => records[flowId].status === 'running' && !live.has(flowId),
+        )
+      if (!dead((await harness.snapshot(Logins, id, context))?.flows ?? {}).length) continue
+      await harness.commit(async (tx) => {
+        const { flows } = await tx.doc(Logins, id)
+        for (const flowId of dead(flows)) {
+          flows[flowId].status = 'cancel'
+          delete flows[flowId].prompt
+        }
+      }, context)
+    }
+  })
   return defineExtension({ name: 'models' })
 }
