@@ -10,7 +10,7 @@ import type { Todo } from '../todos/refs.ts'
 import { Roots } from '../lineage/api.ts'
 import { Messages } from '../messages/api.ts'
 import type { Automation } from '../automations/types.ts'
-import { AfterCompactionDoc, compactionSummary } from './after-compaction.ts'
+import { BuiltInDoc, compactionSummary } from './before-compaction.ts'
 import { deliver } from './delivery.ts'
 import type { Session } from './refs.ts'
 import type { Seed } from './types.ts'
@@ -75,12 +75,14 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
       .filter((item) => item.done === undefined)
       .map(({ text, owner }) => ({ text, owner }))
     // The built-in dream trigger is dream's own: the new chapter makes it again, as it was here.
-    const own = (await tx.doc(AfterCompactionDoc, ROOT_CONVERSATION_ID)).id
+    const own = (await tx.doc(BuiltInDoc, ROOT_CONVERSATION_ID)).id
     const builtIn = automations.find((item) => item.id === own)
-    // A compaction's dream continues what @ultimate was doing: its latest summary goes along.
+    // A dream that asked for a handoff continues what @ultimate was doing: its handoff, else (it timed out) its latest
+    // compaction summary.
     const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
+    const handoff = found.handoff?.text
     const summary =
-      found.afterCompaction && ultimate !== undefined
+      found.handoff && handoff === undefined && ultimate !== undefined
         ? await compactionSummary(tx, ultimate)
         : undefined
     const triggers = automations
@@ -152,9 +154,14 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
           automations: triggers.length,
           scripts: watchers.length,
         },
-        afterCompaction: builtIn ? { enabled: builtIn.enabled } : null,
-        ...(summary && ultimate !== undefined
-          ? { continues: { conversation: ultimate, summary } }
+        builtIn: builtIn ? { enabled: builtIn.enabled } : null,
+        ...(ultimate !== undefined && (handoff ?? summary)
+          ? {
+              continues: {
+                conversation: ultimate,
+                ...(handoff ? { handoff } : { summary: summary! }),
+              },
+            }
           : {}),
       }),
     ) as Seed
@@ -175,10 +182,12 @@ function chapterText(host: ExtensionHost, seed: Seed) {
     ...(seed.continues
       ? [
           '',
-          `A compaction of your context started the dream that led here. Before it, you were working on this (your compaction summary, #${seed.continues.conversation} in ${from.name}):`,
-          '<summary>',
-          seed.continues.summary,
-          '</summary>',
+          seed.continues.handoff
+            ? `Before the dream that led here, you wrote this handoff to yourself (#${seed.continues.conversation} in ${from.name}):`
+            : `Before the dream that led here, you were working on this (your latest compaction summary, #${seed.continues.conversation} in ${from.name}):`,
+          seed.continues.handoff ? '<handoff>' : '<summary>',
+          seed.continues.handoff ?? seed.continues.summary,
+          seed.continues.handoff ? '</handoff>' : '</summary>',
           '',
           'Greet the user in one or two lines, say you are ready, then continue that work: check what is still open (branches, questions, to-dos) and pick it up. The user may check you in a side chat: what this project is, what is open, what the rules are and who you work with.',
         ]
