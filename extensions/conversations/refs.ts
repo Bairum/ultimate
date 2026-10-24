@@ -14,6 +14,22 @@ export const Compacted = defineEvent<{ conversation: number; entry: number; reas
   'conversations.compacted',
 )
 
+/**
+ * How full conversation `id`'s context is: `tokens` its next request carries (the latest answer's prompt, or after a
+ * compaction or reset an `estimated` count until the next answer), `window` its model's context window and `percent`
+ * the two as 0–100. Fields are absent while unknown (no model window, an estimate that failed). `at` is when it was
+ * measured. One per conversation, kept by the server from Pi's answers, compactions, resets and model changes.
+ */
+export type ContextUsage = {
+  tokens?: number
+  window?: number
+  percent?: number
+  estimated?: boolean
+  at: number
+}
+/** The context fill of a conversation, on that conversation. */
+export const ContextDoc = docRef<ContextUsage>('conversations.context')
+
 /** The effective `summaryModel` setting and where it comes from. */
 export type SummaryModelSetting = {
   value: unknown
