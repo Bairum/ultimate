@@ -239,7 +239,12 @@ export default function browserExtension(host: ExtensionHost) {
       if (!state.launched) {
         const launched: Promise<Browser> = browserBinary()
           .then(async (executablePath) => {
-            const browser = await chromium.launch({ executablePath, headless: true })
+            const browser = await chromium.launch({
+              executablePath,
+              headless: true,
+              // Chromium's singleton socket needs a short system temp path. Playwright still puts the profile in our TMPDIR.
+              env: { ...process.env, TMPDIR: undefined },
+            })
             if (state.launched === launched) state.browser = browser
             browser.once('disconnected', () => {
               if (state.launched === launched) state.launched = undefined

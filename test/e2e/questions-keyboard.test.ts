@@ -85,7 +85,12 @@ it('answers a decisions card with letters, arrows and Enter', async () => {
   await until(async () => !!(await ask()))
   const asked = (await ask())!
 
-  const browser = await chromium.launch({ executablePath: await browserBinary(), headless: true })
+  const browser = await chromium.launch({
+    executablePath: await browserBinary(),
+    headless: true,
+    // Keep the profile in the test's TMPDIR, but let Chromium put its singleton socket in the short system temp path.
+    env: { ...process.env, TMPDIR: undefined },
+  })
   cleanup.push(() => browser.close())
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
   await page.goto(`${server.url}/?conversation=${ultimate}`)
