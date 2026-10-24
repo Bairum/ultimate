@@ -61,6 +61,9 @@ importers:
       cn:
         specifier: 0.4.0
         version: 0.4.0
+      diff:
+        specifier: 9.0.0
+        version: 9.0.0
       log-update:
         specifier: 8.0.0
         version: 8.0.0
