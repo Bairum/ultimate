@@ -1,4 +1,14 @@
-import { mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readFile,
+  readlink,
+  realpath,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest'
 import { Type } from '@earendil-works/pi-ai'
@@ -324,13 +334,13 @@ test('REM and MV use the environment; register CUT/paste survives text cache los
 test('failed MV retains source provenance and does not create destination history', async () => {
   const f = await fixture()
   await call(f.conversation, 'read', { path: 'a.txt', limit: 1 })
-  const write = vi.spyOn(NodeExecutionEnv.prototype, 'writeFile').mockResolvedValue({
+  const rename = vi.spyOn(NodeExecutionEnv.prototype, 'renameFile').mockResolvedValue({
     ok: false,
-    error: new FileError('permission_denied', 'destination write denied'),
+    error: new FileError('permission_denied', 'rename denied'),
   })
   const result = await call(f.conversation, 'edit', { input: patch(f.tag, 'MV moved.txt') })
   expect(result.isError).toBe(true)
-  expect(write).toHaveBeenCalledOnce()
+  expect(rename).toHaveBeenCalledOnce()
   expect(await f.read()).toBe('one\ntwo\nthree\n')
   const state = await opened.harness.snapshot(Provenance, f.conversation.id, context)
   expect(state?.paths[f.path][0].seen).toEqual([[0, 1]])
@@ -581,9 +591,24 @@ test('MV rejects an existing destination and requires an explicit tagged REM fir
     input: patch(f.tag, 'CUT 2 @saved\nMV moved.txt'),
   })
   expect(result.isError).toBe(true)
-  expect(result.text).toContain('REM it first with its current tagged header')
+  expect(result.text).toContain(
+    'REM it first in a separate edit call with its current tagged header',
+  )
   expect(await f.read()).toBe('one\ntwo\nthree\n')
   expect(await readFile(destination, 'utf8')).toBe('keep destination\n')
+  await call(f.conversation, 'read', { path: 'moved.txt' })
+  const remove = `[moved.txt#${computeFileHash('keep destination\n')}]\nREM`
+  const combined = await call(f.conversation, 'edit', {
+    input: `${remove}\n${patch(f.tag, 'MV moved.txt')}`,
+  })
+  expect(combined.isError).toBe(true)
+  expect(combined.text).toContain('separate edit call')
+  expect(await readFile(destination, 'utf8')).toBe('keep destination\n')
+  expect((await call(f.conversation, 'edit', { input: remove })).isError).toBe(false)
+  expect(
+    (await call(f.conversation, 'edit', { input: patch(f.tag, 'MV moved.txt') })).isError,
+  ).toBe(false)
+  expect(await readFile(destination, 'utf8')).toBe('one\ntwo\nthree\n')
 })
 
 test('failed destination write after CUT leaves every source byte and named register untouched', async () => {
@@ -727,6 +752,58 @@ test('a landed batch prefix never persists unrestricted engine-created coverage 
   })
   expect(hidden.isError).toBe(true)
   expect(await f.read()).toContain('line800\n')
+})
+
+for (const edited of [false, true])
+  test(`MV preserves 0755 permissions ${edited ? 'with edits' : 'without edits'}`, async () => {
+    const f = await fixture('#!/bin/sh\necho old\n')
+    await chmod(f.path, 0o755)
+    await call(f.conversation, 'read', { path: 'a.txt' })
+    const body = edited ? 'PUT 2.=2:\n+echo new\nMV moved.sh' : 'MV moved.sh'
+    const result = await call(f.conversation, 'edit', { input: patch(f.tag, body) })
+    expect(result.isError).toBe(false)
+    const destination = join(f.cwd, 'moved.sh')
+    expect((await stat(destination)).mode & 0o7777).toBe(0o755)
+    expect(await readFile(destination, 'utf8')).toBe(`#!/bin/sh\necho ${edited ? 'new' : 'old'}\n`)
+    await expect(lstat(f.path)).rejects.toThrow('ENOENT')
+  })
+
+test('plain MV renames a symlink without replacing it with a regular file', async () => {
+  const f = await fixture()
+  const alias = join(f.cwd, 'alias.txt'),
+    destination = join(f.cwd, 'moved-link.txt')
+  await symlink(f.path, alias)
+  await call(f.conversation, 'read', { path: 'alias.txt' })
+  const result = await call(f.conversation, 'edit', {
+    input: `[alias.txt#${f.tag}]\nMV moved-link.txt`,
+  })
+  expect(result.isError).toBe(false)
+  expect((await lstat(destination)).isSymbolicLink()).toBe(true)
+  expect(await readlink(destination)).toBe(f.path)
+  expect(await f.read()).toBe('one\ntwo\nthree\n')
+  await expect(lstat(alias)).rejects.toThrow('ENOENT')
+})
+
+test('collision mismatch explains the cause and directs write instead of repeated reads', async () => {
+  const f = await fixture('line one 263\nline two 4471\n')
+  await call(f.conversation, 'read', { path: 'a.txt' })
+  await writeFile(f.path, 'line one 410\nline two 6970\n')
+  const result = await call(f.conversation, 'edit', { input: patch(f.tag, 'PUT 1.=1:\n+new') })
+  expect(result.isError).toBe(true)
+  expect(result.text).toContain('16-bit hash collision')
+  expect(result.text).toContain('Use `write` to rewrite the file with the intended change')
+  expect(result.text).toContain('re-reading alone will not disambiguate')
+  const unknown = await call(f.conversation, 'edit', { input: patch('FFFF', 'PUT 1.=1:\n+new') })
+  expect(unknown.text).toContain(`tag #${f.tag} is ambiguous`)
+  await call(f.conversation, 'read', { path: 'a.txt' })
+  const again = await call(f.conversation, 'edit', { input: patch(f.tag, 'PUT 1.=1:\n+new') })
+  expect(again.text).toContain('16-bit hash collision')
+  await call(f.conversation, 'write', { path: 'a.txt', content: 'resolved collision\n' })
+  const edit = await call(f.conversation, 'edit', {
+    input: patch(computeFileHash('resolved collision\n'), 'PUT 1.=1:\n+resolved again'),
+  })
+  expect(edit.isError).toBe(false)
+  expect(await f.read()).toBe('resolved again\n')
 })
 
 test('provenance checkpoints on the 64th delta', () => {

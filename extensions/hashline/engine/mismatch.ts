@@ -49,6 +49,7 @@ export interface MismatchDetails {
    * to `true` for backward compatibility with direct callers.
    */
   hashRecognized?: boolean
+  ambiguousFileHash?: string
   tagOriginPaths?: readonly string[]
 }
 
@@ -65,6 +66,7 @@ export class MismatchError extends Error {
   readonly fileLines: string[]
   readonly anchorLines: readonly number[]
   readonly hashRecognized: boolean
+  readonly ambiguousFileHash: string | undefined
   readonly tagOriginPaths: readonly string[]
 
   constructor(details: MismatchDetails) {
@@ -76,6 +78,7 @@ export class MismatchError extends Error {
     this.fileLines = details.fileLines
     this.anchorLines = details.anchorLines ?? []
     this.hashRecognized = details.hashRecognized ?? true
+    this.ambiguousFileHash = details.ambiguousFileHash
     this.tagOriginPaths = details.tagOriginPaths ?? []
   }
 
@@ -87,6 +90,7 @@ export class MismatchError extends Error {
       fileLines: this.fileLines,
       anchorLines: this.anchorLines,
       hashRecognized: this.hashRecognized,
+      ambiguousFileHash: this.ambiguousFileHash,
       tagOriginPaths: this.tagOriginPaths,
     })
   }
@@ -94,6 +98,13 @@ export class MismatchError extends Error {
   static rejectionHeader(details: MismatchDetails): string[] {
     const pathText = details.path ? ` for ${details.path}` : ''
     const hashRecognized = details.hashRecognized ?? true
+    if (details.ambiguousFileHash) {
+      return [
+        `Edit rejected${pathText}: tag #${details.ambiguousFileHash} is ambiguous (16-bit hash collision between retained versions).`,
+        'Use `write` to rewrite the file with the intended change instead; re-reading alone will not disambiguate this tag.',
+        `The current file hashes to #${details.actualFileHash}.`,
+      ]
+    }
     if (!hashRecognized) {
       return [
         details.expectedFileHash === ''

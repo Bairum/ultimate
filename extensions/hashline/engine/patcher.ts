@@ -456,7 +456,7 @@ export class Patcher {
         throw new Error(`MV destination is the same as ${target.path}.`)
       if (await this.fs.exists(fileOp.dest))
         throw new Error(
-          `MV destination already exists: ${fileOp.dest}. REM it first with its current tagged header.`,
+          `MV destination already exists: ${fileOp.dest}. REM it first in a separate edit call with its current tagged header.`,
         )
     }
 
@@ -570,7 +570,7 @@ export class Patcher {
 
     if (moveDest !== undefined) {
       const destCanonical = this.fs.canonicalPath(moveDest)
-      await this.fs.move(section.path, moveDest, persisted)
+      await this.fs.move(section.path, moveDest, after === normalized ? undefined : persisted)
       this.snapshots.relocate(canonicalPath, destCanonical)
       this.snapshots.resetNoop(canonicalPath)
       this.snapshots.resetNoop(destCanonical)
@@ -761,6 +761,11 @@ export class Patcher {
       fileLines,
       anchorLines,
       hashRecognized,
+      ambiguousFileHash: [expected, actualFileHash].find(
+        (tag) =>
+          this.snapshots.findByHash(tag).filter((snapshot) => snapshot.path === canonicalPath)
+            .length > 1,
+      ),
       tagOriginPaths: [
         ...new Set(
           this.snapshots

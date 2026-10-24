@@ -78,10 +78,17 @@ concrete range/gap examples and without parser-backed block forms.
   unknown/aged-out tags and live short-tag/full-hash collisions are mismatches.
 - REM and every MV require a live full-hash match; neither stale recovery nor
   the head/tail shortcut authorizes destructive file operations.
-- MV refuses an existing destination with a tagged-REM instruction. Filesystem
-  adapters write edited content to the new destination before deleting the
-  source; failed destination writes leave the source unchanged. Node writes use
-  exclusive creation. Snapshot history relocates only after a successful move.
+- MV refuses an existing destination with an instruction to issue a tagged REM
+  in a separate edit call (preflight cannot combine the removal with the move).
+  Unchanged moves pass no replacement content and rename, preserving modes and
+  symlinks. Edited moves write a new destination, copy the source permission bits,
+  then delete the source; failed destination writes leave the source unchanged.
+  The host uses Node stat/chmod on its resolved local paths because ExecutionEnv
+  has no permission API. NodeFilesystem writes use exclusive creation. Snapshot
+  history relocates only after a successful move.
+- Mismatch replies detect when retained versions share the short tag after
+  recording the live snapshot, name the 16-bit collision, and direct the model
+  to apply its intended change with write instead of repeatedly reading.
 - Seen-line carry uses the authored snapshot's numbers, only when a retained
   live-matching version also exists. Missing provenance carries nothing;
   explicit unrestricted (`seen: null`, verified write) is the only unrestricted
