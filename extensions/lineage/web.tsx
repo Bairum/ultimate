@@ -15,6 +15,7 @@ import type { ReactNode } from 'react'
 import { MentionText, MessageResponse } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Kbd, KbdGroup } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   api,
@@ -418,9 +419,11 @@ function HistoryBanner({ id, dock }: { id: number; dock?: boolean }) {
         <Button className="ml-auto" onClick={() => void talkToUltimate(actions)}>
           <ArrowLeftIcon />
           Back to @ultimate
-          <span className="hidden font-mono text-[11px] opacity-60 sm:inline pointer-coarse:hidden">
-            {formatKeys('mod+0')[0].join('')}
-          </span>
+          <KbdGroup className="hidden sm:inline-flex pointer-coarse:hidden">
+            {formatKeys('mod+0')[0].map((key) => (
+              <Kbd key={key}>{key}</Kbd>
+            ))}
+          </KbdGroup>
         </Button>
       </div>
     </div>
