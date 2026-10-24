@@ -23,13 +23,15 @@ function Card({
   session,
   header,
   children,
+  className,
 }: {
   session: number
   header: ReactNode
   children?: ReactNode
+  className?: string
 }) {
   return (
-    <Frame data-dream-session={session}>
+    <Frame className={className} data-dream-session={session}>
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         {header}
       </header>
@@ -161,7 +163,11 @@ const FOLD = 600
 
 /** `dream.journal`: what the dream learned, the journal, and its proposals followed until they land. */
 export function JournalCard({ entry }: { entry: EntryRecord }) {
-  const { session: id } = entry.data as SessionEntry
+  return <SessionJournal id={(entry.data as SessionEntry).session} />
+}
+
+/** Session `id`'s journal card; the pinned dream line shows it in a dialog, framed by `className`. */
+export function SessionJournal({ id, className }: { id: number; className?: string }) {
   const session = useSession(id)
   const journal = session?.journal
   // Only the newest session falls asleep; an older one keeps the record of the sleep it took.
@@ -176,6 +182,7 @@ export function JournalCard({ entry }: { entry: EntryRecord }) {
           {journal && <span>{formatTime(journal.at)}</span>}
         </>
       }
+      className={className}
       session={id}
     >
       {!session ? (
