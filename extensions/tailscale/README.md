@@ -24,6 +24,14 @@ The status line's `tailnet` indicator opens a popover with the `status` action, 
 
 Other extensions read the status through `TailscaleApi` (`api.ts`), `host.want(TailscaleApi)?.status()`; `instance` takes the DNS name of its `url` for its previews' tailnet addresses.
 
+## On your phone's home screen
+
+The web UI installs as a standalone app (`web/public/manifest.webmanifest`, the meta tags in `web/index.html`; no
+service worker). On an iPhone in the same tailnet: scan the popover's QR code, open it in Safari, then Share → Add to
+Home Screen with Open as Web App on. It opens without Safari's bars, edge to edge under the status bar. Identity comes
+from Serve's headers, not cookies or redirects, so nothing sends the app back out to Safari. The icon keeps the URL
+with its port: should the registry hand this project another port, add it again.
+
 ## Stable ports, handoff, and recovery
 
 `~/.ultimate/tailscale.json` stores `{ "ports": { "<absolute project root>": { "port": 4747, "owner": "<pid>:<random token>" } } }`. A new project prefers its local supervisor port if free, otherwise the next free port from 4747. Port 443, existing Serve mappings, and other registry assignments are excluded. Registry entries remain after shutdown; prune unused entries by hand when their project is not running. A preview started by another Ultimate's `instance` tool (`ULTIMATE_INSTANCE_OWNER` set) claims its port under its own temporary home instead, marked `"temporary": true`, so it never takes the address of the server that previews the same folder; its entry goes when it closes, or at the next start once its owner is dead.

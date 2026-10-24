@@ -338,7 +338,9 @@ async function finalBackup(host: ExtensionHost): Promise<NonNullable<Sleep['back
         ? 'Cloud extension is not enabled'
         : status === 'off'
           ? 'Cloud backups are off'
-          : 'Project has no GitHub origin; cloud backup is local-only',
+          : status === 'satellite'
+            ? 'This machine is a satellite and never backs up'
+            : 'Project has no GitHub origin; cloud backup is local-only',
   }
 }
 

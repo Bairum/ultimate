@@ -5,7 +5,7 @@
  */
 import { hostname } from 'node:os'
 import type { JsonValue } from '@earendil-works/chord'
-import { cloudConfig, fetchRegister } from './cloud.ts'
+import { cloudConfig, fetchRegister, satelliteAddress } from './cloud.ts'
 import type { Register } from './cloud.ts'
 import { projectIdentity } from './project-identity.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
@@ -92,6 +92,10 @@ export async function locate(host: ExtensionHost, project: string, machine?: str
     })),
   )
   const here = machine === undefined ? undefined : machine === (await machineName(host))
+  // A satellite never backs up, so its address comes from the user's settings, not the register.
+  const satellite = here === false ? await satelliteAddress(host, machine!, project) : undefined
+  if (satellite)
+    return { ...satellite, label: `${satellite.name} on ${machine}`, machine: machine! }
   // A project this machine runs needs no cloud; anything else asks the register where it was last backed up.
   const cloud =
     here !== false && local.some((item) => naming(project)(item) && (item.current || item.running))

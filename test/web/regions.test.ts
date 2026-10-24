@@ -66,7 +66,8 @@ describe('sidebar and panel', () => {
 
   it('keep a docked sidebar beside the panel overlay on a tablet, and each viewport its own state', () => {
     width.current = 820
-    actions.toggleSidebar()
+    // Unfolded, the chats dock beside the conversation from the start.
+    expect([regionOpen('sidebar'), regionOpen('panels')]).toEqual([true, false])
     actions.openPanel()
     expect([regionOpen('sidebar'), regionOpen('panels')]).toEqual([true, true])
     actions.switchConversation(7)
@@ -76,5 +77,8 @@ describe('sidebar and panel', () => {
     expect(regionOpen('sidebar')).toBe(false)
     width.current = 820
     expect(regionOpen('sidebar')).toBe(true)
+    actions.toggleSidebar()
+    expect(regionOpen('sidebar')).toBe(false)
+    expect(shared.get('shell.sidebarOpen')).toBeUndefined()
   })
 })

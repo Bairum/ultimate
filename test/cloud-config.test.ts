@@ -32,8 +32,17 @@ it('enables sync with user settings and the secret', async () => {
     url: 'wss://user/sync',
     token: 'secret-token',
     machine: 'user-machine',
+    satellite: false,
   })
   expect(host.notice).not.toHaveBeenCalled()
+})
+
+it('marks a satellite only when cloud.satellite is true', async () => {
+  const { host, settings } = await fixture()
+  await settings({ url: 'wss://user/sync', satellite: true })
+  expect((await cloudConfig(host, {}))?.satellite).toBe(true)
+  await settings({ url: 'wss://user/sync', satellite: 'yes' })
+  expect((await cloudConfig(host, {}))?.satellite).toBe(false)
 })
 
 it('ignores project cloud settings, even without a user URL', async () => {
@@ -65,7 +74,12 @@ it('prefers environment overrides, including on previews', async () => {
       ULTIMATE_CLOUD_TOKEN: 'env-token',
       ULTIMATE_CLOUD_MACHINE: 'env-machine',
     }),
-  ).toEqual({ url: 'ws://override/sync', token: 'env-token', machine: 'env-machine' })
+  ).toEqual({
+    url: 'ws://override/sync',
+    token: 'env-token',
+    machine: 'env-machine',
+    satellite: false,
+  })
 })
 
 it('defaults the machine name to the OS hostname', async () => {

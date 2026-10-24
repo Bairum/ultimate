@@ -12,6 +12,7 @@ import {
 import type { CommandItem } from './registry.ts'
 import type { CommandContribution, UltimateActions, UltimateContext } from './types.ts'
 import { overlays, viewport } from './viewport.ts'
+import type { Viewport } from './viewport.ts'
 
 /** Shell state that survives reloads and follows across tabs (see ui-state.ts). */
 export const shellKeys = {
@@ -71,10 +72,16 @@ export const regionKeys = {
   panels: [shellKeys.panelOpen, false],
 } as const
 
-/** Whether `region` is open: shared on a desktop, this tab's own (closed by default) below it. */
+/**
+ * Whether `region` starts open in this tab below a desktop: only a tablet's sidebar, which docks (an unfolded
+ * foldable shows the chats beside the conversation).
+ */
+export const ownDefault = (region: Region, on: Viewport) => on === 'tablet' && region === 'sidebar'
+
+/** Whether `region` is open: shared on a desktop, this tab's own (`ownDefault`) below it. */
 export function regionOpen(region: Region) {
   const on = viewport()
-  if (on !== 'desktop') return store.getState().ui.open?.[on]?.[region] ?? false
+  if (on !== 'desktop') return store.getState().ui.open?.[on]?.[region] ?? ownDefault(region, on)
   const [key, fallback] = regionKeys[region]
   const value = uiState.get(key)
   return typeof value === 'boolean' ? value : fallback

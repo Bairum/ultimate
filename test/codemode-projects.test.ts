@@ -4,7 +4,10 @@ import { expect, it } from 'vitest'
 import type { Register } from '../lib/cloud.ts'
 import { actions } from '../extensions/codemode/server.ts'
 import { readProject } from '../extensions/codemode/projects.ts'
-import { resolveProject } from '../lib/remote.ts'
+import { join } from 'node:path'
+import { writeJson } from '../lib/json-file.ts'
+import { locate, resolveProject } from '../lib/remote.ts'
+import { temp } from './helpers.ts'
 import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 
@@ -180,6 +183,30 @@ it("answers another project's read of an exported document, and refuses an unkno
   await expect(actions.read({ op: 'doc', args: ['nope', 1] }, ctx)).rejects.toThrow(
     'Unknown conversation document: nope',
   )
+})
+
+it('reaches a satellite at the address the user set, since it never backs up to the register', async () => {
+  const userHome = await temp()
+  await writeJson(join(userHome, '.ultimate/settings.json'), {
+    cloud: {
+      machine: 'rog',
+      satellites: { mac: { Ultimate: 'https://mac.tail.ts.net:4747' } },
+    },
+  })
+  const host = {
+    userHome,
+    notice: () => {},
+    projects: async () => [{ name: 'ultimate', current: true }],
+  } as unknown as ExtensionHost
+  // The project runs here too; naming the satellite still reaches the satellite, with no cloud configured.
+  expect(await locate(host, 'ultimate', 'mac')).toEqual({
+    url: 'https://mac.tail.ts.net:4747',
+    label: 'Ultimate on mac',
+    name: 'Ultimate',
+    machine: 'mac',
+  })
+  expect(await locate(host, 'ultimate', 'rog')).toEqual({ current: true })
+  await expect(locate(host, 'blog', 'mac')).rejects.toThrow('Unknown project blog on mac')
 })
 
 it('names the machine when the project cannot be reached, and never offers a copy', () => {

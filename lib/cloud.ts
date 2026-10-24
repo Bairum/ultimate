@@ -23,7 +23,7 @@ async function userCloudSettings(host: Pick<ExtensionHost, 'userHome'>) {
 export async function cloudConfig(
   host: Pick<ExtensionHost, 'userHome' | 'notice'>,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<{ url: string; token: string; machine: string } | undefined> {
+): Promise<{ url: string; token: string; machine: string; satellite: boolean } | undefined> {
   if (!env.ULTIMATE_CLOUD_URL && env.ULTIMATE_INSTANCE_OWNER) return undefined
   const config = await userCloudSettings(host)
   const url = env.ULTIMATE_CLOUD_URL ?? (typeof config.url === 'string' ? config.url : undefined)
@@ -36,7 +36,27 @@ export async function cloudConfig(
   }
   const machine =
     env.ULTIMATE_CLOUD_MACHINE ?? (typeof config.machine === 'string' ? config.machine : hostname())
-  return { url, token, machine }
+  // A satellite runs the project beside the machine that backs it up; it must never replace that machine's backups.
+  return { url, token, machine, satellite: config.satellite === true }
+}
+
+/**
+ * The address the user set for `project` on `machine` in `cloud.satellites` (`{ <machine>: { <project>: url } }`):
+ * a satellite never backs up, so the register holds no tailnet address for it.
+ */
+export async function satelliteAddress(
+  host: Pick<ExtensionHost, 'userHome'>,
+  machine: string,
+  project: string,
+) {
+  const satellites = (await userCloudSettings(host)).satellites
+  if (!satellites || typeof satellites !== 'object' || Array.isArray(satellites)) return undefined
+  const projects = (satellites as Record<string, unknown>)[machine]
+  if (!projects || typeof projects !== 'object' || Array.isArray(projects)) return undefined
+  const found = Object.entries(projects).find(
+    ([name, url]) => name.toLowerCase() === project.toLowerCase() && typeof url === 'string',
+  )
+  return found && { name: found[0], url: found[1] as string }
 }
 
 /** The Worker's `GET /sync/register`: every project's latest backup and every machine that backed up. */

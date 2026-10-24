@@ -9,8 +9,11 @@ export interface LastBackup {
 
 /** `cloud.state`: whether backups run here, and this home's last backup, for the status line. */
 export interface CloudState {
-  /** `off`: not configured; `local`: configured, but the project has no GitHub origin. */
-  status: 'off' | 'local' | 'on'
+  /**
+   * `off`: not configured; `local`: configured, but the project has no GitHub origin; `satellite`: this machine never
+   * backs up (`cloud.satellite`).
+   */
+  status: 'off' | 'local' | 'satellite' | 'on'
   /** The project's name, the folder name the restore command takes. */
   name: string
   /** The active chapter, whose own backup chain this is. */
