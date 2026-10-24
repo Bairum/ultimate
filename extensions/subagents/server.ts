@@ -104,9 +104,7 @@ function createReporter() {
       sourceEntry?: EntryId
       answer?: EntryId
     },
-    | { phase: 'deliver' }
-    | { phase: 'retry'; retryRequest: string; until: number }
-    | { phase: 'report'; report?: string; answer?: EntryId },
+    { phase: 'deliver' } | { phase: 'report'; report?: string; answer?: EntryId },
     null
   >({
     name: 'ultimate.subagent-reporter',
@@ -116,16 +114,6 @@ function createReporter() {
         ? { phase: 'deliver' }
         : { phase: 'report', report: input.text, answer: input.answer },
     phases: {
-      // Persisted pre-watchdog retry checkpoints must finish silently, without retrying again.
-      retry: (task, runtime, context) =>
-        runtime.commit(async (tx) => {
-          const state = await tx.doc(Subagents, runtime.conversationId)
-          const action = Object.values(state.actions).find(
-            (candidate) => candidate.reporter === task.id,
-          )!
-          action.status = 'failed'
-          return { status: 'running', checkpoint: { phase: 'report' } }
-        }, context),
       deliver: async (task, runtime, context) => {
         try {
           const child = (await runtime.conversation(task.input.conversationId, context))!
@@ -1079,7 +1067,7 @@ export default function subagents(
                 request: `watchdog-retry:${(task.input as { failedTask: number }).failedTask}`,
               }))
             }, context)
-            const saved = await api.memo(
+            const target = await api.memo(
               'stopTarget',
               {
                 run: live?.run?.taskId ?? null,
@@ -1091,8 +1079,6 @@ export default function subagents(
               },
               context,
             )
-            // A stop interrupted before the watchdog saved no watchdogs; it captured none, so it cancels none.
-            const target = { ...saved, watchdogs: saved.watchdogs ?? [] }
             // Join delivery invocations before inspecting admissions that may have raced stop.
             // Capture watchdog identities too: Stop must not restart the child after its delay.
             for (const reporter of [
