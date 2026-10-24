@@ -45,6 +45,7 @@ export function StatusLine() {
             <Slot name="statusline.right" phone variant="inline" />
           </div>
           <StatusMore />
+          <BottomDebug />
         </>
       ) : (
         <>
@@ -57,6 +58,47 @@ export function StatusLine() {
         </>
       )}
     </footer>
+  )
+}
+
+// TEMPORARY preview readout: what decides the bottom offset on Daniel's iPhone. Removed before submit.
+function BottomDebug() {
+  const [text, setText] = useState('')
+  useLayoutEffect(() => {
+    const probe = document.createElement('div')
+    probe.style.cssText =
+      'position:fixed;visibility:hidden;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)'
+    document.body.append(probe)
+    const measure = () => {
+      const style = getComputedStyle(probe)
+      const shell = document.querySelector('.safe-area')
+      const footer = [...document.querySelectorAll('.safe-area footer')].at(-1)
+      const mode = ['standalone', 'fullscreen', 'minimal-ui', 'browser'].find(
+        (value) => matchMedia(`(display-mode: ${value})`).matches,
+      )
+      const rect = shell?.getBoundingClientRect()
+      const line = footer?.getBoundingClientRect()
+      setText(
+        [
+          `mode ${mode} ios-standalone ${String((navigator as { standalone?: boolean }).standalone)}`,
+          `inner ${innerHeight} vv ${Math.round(visualViewport?.height ?? 0)} screen ${screen.height} html ${document.documentElement.clientHeight}`,
+          `inset top ${style.paddingTop} bottom ${style.paddingBottom}`,
+          `shell ${Math.round(rect?.top ?? 0)}→${Math.round(rect?.bottom ?? 0)} pos ${shell ? getComputedStyle(shell).position : '?'} pb ${shell ? getComputedStyle(shell).paddingBottom : '?'}`,
+          `line bottom ${Math.round(line?.bottom ?? 0)} gap ${Math.round(innerHeight - (line?.bottom ?? 0))}`,
+        ].join('\n'),
+      )
+    }
+    measure()
+    const timer = setInterval(measure, 1000)
+    return () => {
+      clearInterval(timer)
+      probe.remove()
+    }
+  }, [])
+  return (
+    <pre className="pointer-events-none fixed top-1/3 left-2 z-[100] rounded bg-black/85 p-2 font-mono text-[10px] leading-snug text-lime-300">
+      {text}
+    </pre>
   )
 }
 
