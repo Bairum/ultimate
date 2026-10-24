@@ -25,6 +25,19 @@ import type { Draft } from './state.tsx'
 /** How long a sent card can still be taken back before the answer goes out. */
 const UNDO_MS = 3000
 
+/**
+ * Fills the undo bar over UNDO_MS from the moment it mounts, as `send` starts the timer. The Web Animations API
+ * runs on every mobile engine, where a `@starting-style` transition left the bar full. It stays under reduced
+ * motion: the bar tells how long Undo remains, it is not decoration. Module-level, so re-renders never restart it.
+ */
+const countdown = (bar: HTMLDivElement | null) => {
+  bar?.animate([{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }], {
+    duration: UNDO_MS,
+    easing: 'linear',
+    fill: 'both',
+  })
+}
+
 /** Whether `card` is the one on the shown conversation's page that takes the desktop 1–9 and Enter keys. */
 function useKeys(card: string) {
   const messages = useDocOf(1, MessagesDoc)?.messages ?? []
@@ -495,8 +508,9 @@ function Card({
         {phase === 'undo' && (
           <div className="mt-2.5 h-0.5 overflow-hidden rounded-full bg-border/60">
             <div
-              className="h-full w-full origin-left rounded-full bg-brand/70 transition-[scale] ease-linear starting:scale-x-0"
-              style={{ transitionDuration: `${UNDO_MS}ms` }}
+              ref={countdown}
+              data-countdown
+              className="h-full w-full origin-left rounded-full bg-brand/70"
             />
           </div>
         )}
