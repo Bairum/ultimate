@@ -11,7 +11,17 @@ import { git } from '../../lib/git.ts'
  * refuses while the module repositories exist, and deinit in a worktree unsets the submodules in the configuration it
  * shares with the main checkout.
  */
-export async function removeWorktree(source: string, path: string) {
+export async function removeWorktree(
+  source: string,
+  path: string,
+  options: { discardCreated?: boolean } = {},
+) {
+  // Only preparation rollback may discard a checkout it just created: a partial copy has no index and looks dirty,
+  // but holds no work of its own. The caller must verify that the registered path and branch are the ones it created.
+  if (options.discardCreated) {
+    await git(source, 'worktree', 'remove', '--force', path)
+    return
+  }
   try {
     // English messages: the refusal below is recognised by its text.
     await exec('git', ['worktree', 'remove', path], {

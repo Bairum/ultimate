@@ -390,7 +390,9 @@ export function workspaces(host: Host) {
               )
             if (created) {
               if (registered)
-                await removeWorktree(workspace.source, workspace.path).catch(
+                await removeWorktree(workspace.source, workspace.path, {
+                  discardCreated: true,
+                }).catch(
                   // Best-effort rollback: the preparation error is recorded below and must not be replaced.
                   () => undefined,
                 )
@@ -544,6 +546,11 @@ export function workspaces(host: Host) {
         )
         if (merged) await git(workspace.source, 'branch', '-D', workspace.branch)
       }
+      await host.harness().commit(async (tx) => {
+        const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)]
+        saved.state = 'removed'
+        delete saved.error
+      }, context)
       return undefined
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
