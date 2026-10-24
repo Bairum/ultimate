@@ -6,7 +6,7 @@ import { TurnRelay } from '@earendil-works/pi-claude-code/src/turn-relay.ts'
 
 // Pi upstream: @earendil-works/pi-claude-code@0.1.0 src/stream.ts — a tool_use the request did not offer (a bare
 // `bash` instead of `mcp__pi__bash`) ended the turn. The pnpm patch resolves it to Pi's name and leaves unknown
-// names to Pi's "not found" tool error. Drop with the matching patch when upstream does this.
+// names to Pi's "not available" tool error. Drop with the matching patch when upstream does this.
 const sse = (events: object[]) =>
   events.map((event) => `event: x\ndata: ${JSON.stringify(event)}\n\n`).join('')
 
@@ -36,7 +36,7 @@ const bareBash = sse([
 it('resolves prefixed and bare tool names to Pi names', () => {
   expect(piToolName('mcp__pi__bash')).toBe('bash')
   expect(piToolName('bash')).toBe('bash')
-  // A name Pi does not have passes through; Pi answers it with a "Tool Bash not found" tool error.
+  // A name Pi does not have passes through; Pi Durable answers it with "Tool Bash is not available".
   expect(piToolName('Bash')).toBe('Bash')
 })
 

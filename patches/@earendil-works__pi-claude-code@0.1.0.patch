@@ -1,7 +1,16 @@
 diff --git a/src/claude-cli.ts b/src/claude-cli.ts
-index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..93fd332a8e95f175df45fb32df87a01f2b5a23f7 100644
+index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..3bc9e94a1a027e6f1a3fb2bf0e7ac92f3a0c7367 100644
 --- a/src/claude-cli.ts
 +++ b/src/claude-cli.ts
+@@ -19,7 +19,7 @@ import type {
+   NativeResult,
+   NativeUsage,
+ } from "./native-types.ts";
+-import { TOOL_PREFIX, type NativeSystemInjection, type ToolManifestEntry } from "./transcript.ts";
++import type { NativeSystemInjection, ToolManifestEntry } from "./transcript.ts";
+ 
+ export const INSTALL_HINT =
+   "Claude Code is not installed. Install it with `npm install -g @anthropic-ai/claude-code` " +
 @@ -45,7 +45,6 @@ export interface RunClaudeInput {
    systemPrompt: string;
    manifest: ToolManifestEntry[];
@@ -115,7 +124,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..93fd332a8e95f175df45fb32df87a01f
        if (!usage || typeof usage.input_tokens !== "number" || typeof usage.output_tokens !== "number") {
          throw new Error("Claude Code response did not include complete token usage");
 diff --git a/src/stream.ts b/src/stream.ts
-index b516241c794b5dd7054822921d445a2169c6b70e..001e49c8e767861f3a066ab5853fadeedd27e650 100644
+index b516241c794b5dd7054822921d445a2169c6b70e..00ccb6aa5ddec60e64ccc4d339942be8124567fb 100644
 --- a/src/stream.ts
 +++ b/src/stream.ts
 @@ -6,6 +6,7 @@ import {
@@ -134,8 +143,8 @@ index b516241c794b5dd7054822921d445a2169c6b70e..001e49c8e767861f3a066ab5853fadee
 +/**
 + * Resolve a native tool name to Pi's. Claude Code runs without built-in tools and offers Pi's as
 + * `mcp__pi__<name>`, yet the model sometimes names one bare (`bash` for `mcp__pi__bash`). Both resolve to
-+ * Pi's name; a name Pi does not have stays a tool call, which Pi answers with a "not found" tool error the
-+ * model recovers from, instead of ending the turn.
++ * Pi's name; a name Pi does not have stays a tool call, which Pi answers with a "not available" tool error
++ * the model recovers from, instead of ending the turn.
 + */
 +export function piToolName(nativeName: string): string {
 +  return nativeName.startsWith(TOOL_PREFIX) ? nativeName.slice(TOOL_PREFIX.length) : nativeName;
