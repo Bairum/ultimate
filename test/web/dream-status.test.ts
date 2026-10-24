@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { pinnedOf, progress } from '../../extensions/dream/progress.ts'
+import { pinnedOf, progress } from '../../extensions/dream/types.ts'
 import type { Proposal, Session } from '../../extensions/dream/refs.ts'
 
 const waiting = { status: 'waiting' } as const

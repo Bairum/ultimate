@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { useDialog, useDocOf, useUltimate } from '@/sdk'
 import { SessionJournal } from './journal.tsx'
 import { MoonRow } from './moon.tsx'
-import { pinnedOf, progress } from './progress.ts'
+import { pinnedOf, progress } from './types.ts'
 import { DreamDoc } from './refs.ts'
 
 /** The dialog the pinned dream line opens: the session's journal card. */
