@@ -216,8 +216,9 @@ export default function messages(host: ExtensionHost) {
             .snapshot(Messages, ROOT_CONVERSATION_ID, ctx))!.messages.find(
             (message) => message.id === id,
           )
-          // It answered a message the recipient is waiting on: the answer is given, so the run ends here.
-          if (sent?.re !== undefined)
+          // It answered a message the recipient is waiting on: the answer is given, so the run ends here. A next
+          // question to the user answers theirs too, but shows as an open question below.
+          if (sent?.re !== undefined && sent.to !== 'user')
             return {
               output: [
                 {
