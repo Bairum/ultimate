@@ -9,8 +9,10 @@ export function report(results: Result[]) {
     '',
     'Exploratory measurements, not a statistical confidence interval. N/A means not enough paired data.',
     '',
-    '| Model | Arm | Runs | Pass | Edit errors | Wrong target | Output/pass | Cost/pass USD | Mean seconds |',
-    '|---|---|---:|---:|---:|---:|---:|---:|---:|',
+    'Wrong target counts runs that changed non-blank lines outside the mutated region; blank-line seams (only blank lines changed there) are counted separately.',
+    '',
+    '| Model | Arm | Runs | Pass | Edit errors | Wrong target | Blank seams | Output/pass | Cost/pass USD | Mean seconds |',
+    '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|',
   ]
   const models = [...new Set(results.map((r) => r.model))]
   const arms = [...new Set(results.toSorted((a, b) => a.armOrder - b.armOrder).map((r) => r.arm))]
@@ -24,6 +26,7 @@ export function report(results: Result[]) {
       rate: passed / rows.length,
       errors: calls ? sum('editErrors') / calls : null,
       wrong: rows.filter((r) => r.wrongTarget).length,
+      seams: rows.filter((r) => !r.wrongTarget && r.blankSeam).length,
       output: passed ? sum('output') / passed : null,
       cost:
         passed && rows.every((r) => r.cost !== null)
@@ -39,7 +42,7 @@ export function report(results: Result[]) {
       if (!rows.length) continue
       const s = stats(rows)
       output.push(
-        `| ${model} | ${arm} | ${rows.length} | ${number(s.rate * 100)}% | ${s.errors === null ? 'N/A' : number(s.errors * 100) + '%'} | ${s.wrong} | ${number(s.output)} | ${number(s.cost, 6)} | ${number(s.seconds)} |`,
+        `| ${model} | ${arm} | ${rows.length} | ${number(s.rate * 100)}% | ${s.errors === null ? 'N/A' : number(s.errors * 100) + '%'} | ${s.wrong} | ${s.seams} | ${number(s.output)} | ${number(s.cost, 6)} | ${number(s.seconds)} |`,
       )
     }
   output.push('', '## Pass bars', '')
@@ -91,7 +94,7 @@ export function report(results: Result[]) {
                 .toSorted((a, b) => a.run - b.run)
                 .map(
                   (r) =>
-                    `${r.run}:${r.error ? 'ERROR' : r.pass ? 'PASS' : 'FAIL'}${r.wrongTarget ? ' (wrong target)' : ''}`,
+                    `${r.run}:${r.error ? 'ERROR' : r.pass ? 'PASS' : 'FAIL'}${r.wrongTarget ? ' (wrong target)' : r.blankSeam ? ' (blank seam)' : ''}`,
                 )
                 .join(', ') || '—',
           )

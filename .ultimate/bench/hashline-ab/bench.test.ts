@@ -26,6 +26,7 @@ await test('all 106 expected trees pass; wrong content and extra files fail', as
       assert.deepEqual(await verify(fixture, join(fixture, 'expected')), {
         pass: true,
         wrongTarget: false,
+        blankSeam: false,
         diff: '',
       })
     }
@@ -40,7 +41,11 @@ await test('all 106 expected trees pass; wrong content and extra files fail', as
     const code = await readFile(path, 'utf8')
     await writeFile(path, '\n\n' + code)
     assert.equal((await verify(fixture, project)).pass, true) // Code blank-line count ignored.
-    assert.equal((await verify(fixture, project)).wrongTarget, true) // Raw off-target whitespace is conservative.
+    const seam = await verify(fixture, project)
+    assert.equal(seam.wrongTarget, false) // Only blank lines changed off target: a seam, not a wrong-line write.
+    assert.equal(seam.blankSeam, true)
+    await writeFile(path, '  ' + code)
+    assert.equal((await verify(fixture, project)).wrongTarget, true) // Off-target indentation is content.
     await writeFile(join(project, 'unexpected.txt'), 'extra')
     const extra = await verify(fixture, project)
     assert.equal(extra.pass, false)
@@ -52,10 +57,12 @@ await test('all 106 expected trees pass; wrong content and extra files fail', as
 
 await test('wrong-target checks use expected line coordinates and insertion boundary', () => {
   const expected = 'a\nb\nc\nd\n'
-  assert.equal(outsideRegion(expected, 'a\nx\nc\nd\n', 2, 1), false)
-  assert.equal(outsideRegion(expected, 'a\nb\nx\nc\nd\n', 2, 1), false)
-  assert.equal(outsideRegion(expected, 'x\nb\nc\nd\n', 2, 1), true)
-  assert.equal(outsideRegion(expected, 'a\nb\nc\nx\n', 2, 1), true)
+  const none = { content: false, blank: false }
+  assert.deepEqual(outsideRegion(expected, 'a\nx\nc\nd\n', 2, 1), none)
+  assert.deepEqual(outsideRegion(expected, 'a\nb\nx\nc\nd\n', 2, 1), none)
+  assert.deepEqual(outsideRegion(expected, 'x\nb\nc\nd\n', 2, 1), { content: true, blank: false })
+  assert.deepEqual(outsideRegion(expected, 'a\nb\nc\nx\n', 2, 1), { content: true, blank: false })
+  assert.deepEqual(outsideRegion(expected, 'a\nb\nc\n\nd\n', 2, 1), { content: false, blank: true })
 })
 
 await test('metrics count persisted usage and explicit edit errors, never assistant prose', () => {

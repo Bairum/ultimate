@@ -87,19 +87,23 @@ async function formatted(file: string, text: string) {
         .join('\n')
 }
 
+/**
+ * Off-target changes outside the mutated region: `content` when a non-blank line was added or removed there,
+ * `blank` when only blank lines were (a seam left by an otherwise correct edit).
+ */
 export function outsideRegion(expected: string, actual: string, start: number, length: number) {
+  const found = { content: false, blank: false }
   let line = 1
   for (const part of diffLines(normalize(expected), normalize(actual))) {
     const count = part.count ?? 0
-    if (part.added) {
-      // Insertions are anchored at the following expected line (end boundary allowed).
-      if (line < start || line > start + length) return true
-    } else {
-      if (part.removed && (line < start || line + count > start + length)) return true
-      line += count
-    }
+    // Insertions are anchored at the following expected line (end boundary allowed).
+    const outside = part.added
+      ? line < start || line > start + length
+      : part.removed && (line < start || line + count > start + length)
+    if (outside) found[part.value.trim() === '' ? 'blank' : 'content'] = true
+    if (!part.added) line += count
   }
-  return false
+  return found
 }
 
 export async function verify(fixture: string, project: string) {
@@ -116,6 +120,7 @@ export async function verify(fixture: string, project: string) {
   if (targets.length !== 1) throw new Error('Ambiguous metadata target')
   let pass = JSON.stringify(expectedFiles) === JSON.stringify(actualFiles)
   let wrongTarget = false,
+    blankSeam = false,
     diff = ''
   for (const file of new Set([...expectedFiles, ...actualFiles])) {
     const e = expectedFiles.includes(file)
@@ -126,11 +131,15 @@ export async function verify(fixture: string, project: string) {
       : ''
     if (e !== a) {
       diff += createTwoFilesPatch(`expected/${file}`, `actual/${file}`, e, a)
-      if (file !== targets[0] || outsideRegion(e, a, start, lines(snippet).length))
-        wrongTarget = true
+      if (file !== targets[0]) wrongTarget = true
+      else {
+        const outside = outsideRegion(e, a, start, lines(snippet).length)
+        wrongTarget ||= outside.content
+        blankSeam ||= outside.blank
+      }
     }
     if ((await formatted(file, e)) !== (await formatted(file, restoreWhitespace(e, a))))
       pass = false
   }
-  return { pass, wrongTarget, diff }
+  return { pass, wrongTarget, blankSeam, diff }
 }

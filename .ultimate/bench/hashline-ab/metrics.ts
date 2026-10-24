@@ -37,6 +37,8 @@ export type Result = ReturnType<typeof metrics> & {
   run: number
   pass: boolean
   wrongTarget: boolean
+  /** Only blank lines changed outside the mutated region. Older rows lack it. */
+  blankSeam?: boolean
   wallMs: number
   error?: string
   artifact: string

@@ -241,6 +241,7 @@ try {
         ...metrics(entries),
         pass: !error && verified.pass,
         wrongTarget: verified.wrongTarget,
+        blankSeam: verified.blankSeam,
         wallMs: Date.now() - began,
         ...(error ? { error } : {}),
         artifact,
