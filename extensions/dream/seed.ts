@@ -4,12 +4,13 @@ import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { readJson, writeJson } from '../../lib/json-file.ts'
-import { SubagentsApi } from '../subagents/api.ts'
+import { Standing, SubagentsApi } from '../subagents/api.ts'
 import type { MemoryItem } from '../lineage/refs.ts'
 import type { Todo } from '../todos/refs.ts'
 import { Roots } from '../lineage/api.ts'
 import { Messages } from '../messages/api.ts'
 import type { Automation } from '../automations/types.ts'
+import { AfterCompactionDoc, compactionSummary } from './after-compaction.ts'
 import { deliver } from './delivery.ts'
 import type { Session } from './refs.ts'
 import type { Seed } from './types.ts'
@@ -73,8 +74,20 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
     const todos = (await document<{ items: Todo[] }>(host, tx, 'todos')).items
       .filter((item) => item.done === undefined)
       .map(({ text, owner }) => ({ text, owner }))
+    // The built-in dream trigger is dream's own: the new chapter makes it again, as it was here.
+    const own = (await tx.doc(AfterCompactionDoc, ROOT_CONVERSATION_ID)).id
+    const builtIn = automations.find((item) => item.id === own)
+    // A compaction's dream continues what @ultimate was doing: its latest summary goes along.
+    const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
+    const summary =
+      found.afterCompaction && ultimate !== undefined
+        ? await compactionSummary(tx, ultimate)
+        : undefined
     const triggers = automations
-      .filter((item) => item.enabled && (item.schedule || item.event || item.condition))
+      .filter(
+        (item) =>
+          item.id !== own && item.enabled && (item.schedule || item.event || item.condition),
+      )
       .map((item) => {
         const { name, prompt, agent, model, thinking } = item
         return {
@@ -139,6 +152,10 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
           automations: triggers.length,
           scripts: watchers.length,
         },
+        ...(builtIn ? { afterCompaction: { enabled: builtIn.enabled } } : {}),
+        ...(summary && ultimate !== undefined
+          ? { continues: { conversation: ultimate, summary } }
+          : {}),
       }),
     ) as Seed
   }, context)
@@ -155,14 +172,29 @@ function chapterText(host: ExtensionHost, seed: Seed) {
     `Carried: ${Object.entries(seed.counts)
       .map(([kind, count]) => `${count} ${kind}`)
       .join(', ')}.`,
-    'Greet the user in one or two lines and say you are ready. They check you next in a side chat: what this project is, what is open, what the rules are and who you work with.',
+    ...(seed.continues
+      ? [
+          '',
+          `A compaction of your context started the dream that led here. Before it, you were working on this (your compaction summary, #${seed.continues.conversation} in ${from.name}):`,
+          '<summary>',
+          seed.continues.summary,
+          '</summary>',
+          '',
+          'Greet the user in one or two lines, say you are ready, then continue that work: check what is still open (branches, questions, to-dos) and pick it up. The user may check you in a side chat: what this project is, what is open, what the rules are and who you work with.',
+        ]
+      : [
+          'Greet the user in one or two lines and say you are ready. They check you next in a side chat: what this project is, what is open, what the rules are and who you work with.',
+        ]),
   ].join('\n')
 }
 
-/** Apply documents and schedule the chapter entry atomically; reconcile scheduler effects after that commit. */
+/**
+ * Apply documents and schedule the chapter entry atomically; reconcile scheduler effects after that commit. Returns the
+ * chapter's seed, if it has one.
+ */
 export async function applySeed(host: ExtensionHost) {
   const seed = await readJson<Seed | undefined>(join(host.chapter.dir, 'seed.json'), undefined)
-  if (!seed) return
+  if (!seed) return undefined
   const harness = host.harness()
   const state = await harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context)
   if (state?.applied === undefined) {
@@ -246,4 +278,5 @@ export async function applySeed(host: ExtensionHost) {
     }, context)
   }
   harness.resume()
+  return seed
 }

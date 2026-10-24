@@ -20,7 +20,7 @@ import {
   useChapters,
   useWakeUp,
 } from './chapters.tsx'
-import { JournalCard, StartedCard } from './journal.tsx'
+import { JournalCard, SettledCard, StartedCard } from './journal.tsx'
 import { MorningCard } from './morning.tsx'
 import { DreamDialog, dreamDialog } from './modal.tsx'
 import { DreamDoc } from './refs.ts'
@@ -128,6 +128,7 @@ export default defineWebExtension({
     'dream.started': StartedCard,
     'dream.journal': JournalCard,
     'dream.chapter': MorningCard,
+    'dream.settled': SettledCard,
   },
   slots: {
     'sidebar.top': [{ component: OlderChapterBanner, order: -30 }],

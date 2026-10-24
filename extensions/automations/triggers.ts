@@ -1,15 +1,19 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { defineEvent } from '../../shared/events.ts'
 import type { EventRecord } from '../../shared/events.ts'
 import { ContextUsageDoc } from '../conversations/api.ts'
 import type { ContextUsage } from '../conversations/api.ts'
-import { SubagentsApi } from '../subagents/api.ts'
+import { Standing, SubagentsApi } from '../subagents/api.ts'
 import { describeSchedule } from './schedule.ts'
 import type { Automations as Ledger } from './server.ts'
 import type { Automation, TriggerEvent } from './types.ts'
 import { RUN_TASK } from './types.ts'
+/** A standing agent's name in a context target or an event filter: `@ultimate`. */
+const STANDING = /^@[a-zA-Z0-9_-]+$/
+
 export const TRIGGER_EVENTS: TriggerEvent[] = [
   {
     name: 'workspaces.landed',
@@ -47,7 +51,10 @@ export const TRIGGER_EVENTS: TriggerEvent[] = [
   {
     name: 'conversations.compacted',
     description: 'A conversation compacted',
-    fields: { conversation: 'Conversation id', reason: 'Compaction reason' },
+    fields: {
+      conversation: 'Conversation id, or @name for a standing agent',
+      reason: 'Compaction reason',
+    },
   },
   {
     name: 'automations.escalated',
@@ -91,8 +98,7 @@ export function triggers(
   prepareFires: (tx: Tx) => Promise<unknown>,
 ) {
   async function resolve(of: string): Promise<ConversationId | undefined> {
-    if (/^@[a-zA-Z0-9_-]+$/.test(of))
-      return host.need(SubagentsApi).standing(of.slice(1), BACKGROUND_CONTEXT)
+    if (STANDING.test(of)) return host.need(SubagentsApi).standing(of.slice(1), BACKGROUND_CONTEXT)
     if (/^#[1-9]\d*$/.test(of)) return Number(of.slice(1)) as ConversationId
     return undefined
   }
@@ -175,12 +181,20 @@ export function triggers(
       async (tx, event) => {
         const state = await tx.doc(Automations)
         const matching: Automation[] = []
+        // `@name` matches the standing agent's conversation when the event comes: it changes with each chapter.
+        const standing = await tx.doc(Standing, ROOT_CONVERSATION_ID)
+        const expected = (value: string | number | boolean) =>
+          typeof value === 'string' && STANDING.test(value)
+            ? Object.hasOwn(standing, value.slice(1))
+              ? standing[value.slice(1)]
+              : null
+            : value
         // Every read before the first fire: a transaction may not scan tasks after it wrote.
         for (const a of Object.values(state.automations)) {
           if (!a.enabled || a.event?.name !== event.name || event.id <= a.event.sinceEvent) continue
           if (
             !Object.entries(a.event.where ?? {}).every(
-              ([key, value]) => (event.data as Record<string, unknown>)[key] === value,
+              ([key, value]) => (event.data as Record<string, unknown>)[key] === expected(value),
             )
           )
             continue

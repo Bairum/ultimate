@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { fauxProvider, fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai/providers/faux'
-import { configure } from '@earendil-works/pi-durable'
+import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Tx } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -12,6 +12,7 @@ import { callTrace } from '../server/trace.ts'
 import { Metadata } from '../server/metadata.ts'
 import { defineEvent } from '../shared/events.ts'
 import { ContextUsageDoc } from '../extensions/conversations/api.ts'
+import { Standing } from '../extensions/subagents/api.ts'
 import type { SubagentsService } from '../extensions/subagents/api.ts'
 import { createChild } from '../extensions/subagents/children.ts'
 import automations, { actions, Automations } from '../extensions/automations/server.ts'
@@ -162,6 +163,34 @@ it('matches only new events, strict filters and excludes its own run conversatio
   await f.settle()
   expect((await f.record(a.id)).fires).toBe(1)
   await f.action('run', { id: a.id })
+  expect((await f.record(a.id)).fires).toBe(2)
+})
+
+it("matches @ultimate's compaction by its conversation when the event comes, across a chapter change", async () => {
+  const f = await fixture()
+  const a = (await f.action('create', {
+    name: 'Dream after compaction',
+    event: { name: 'conversations.compacted', where: { conversation: '@ultimate' } },
+  })) as Automation
+  // No @ultimate yet: nothing matches, not even an event without a conversation.
+  await f.emit('conversations.compacted', { conversation: f.target, entry: 1 })
+  await f.settle()
+  expect((await f.record(a.id)).fires).toBe(0)
+  const standing = (id: number) =>
+    f.harness.commit(async (tx) => {
+      ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = id as never
+    }, context)
+  await standing(f.target)
+  // Another conversation (a root's tally compacted from its footer) is not @ultimate.
+  await f.emit('conversations.compacted', { conversation: 1, entry: 2 })
+  await f.emit('conversations.compacted', { conversation: f.target, entry: 3 })
+  await f.settle()
+  expect((await f.record(a.id)).fires).toBe(1)
+  // A new chapter gives @ultimate a new conversation: the old one no longer fires, the new one does.
+  await standing(f.target + 100)
+  await f.emit('conversations.compacted', { conversation: f.target, entry: 4 })
+  await f.emit('conversations.compacted', { conversation: f.target + 100, entry: 5 })
+  await f.settle()
   expect((await f.record(a.id)).fires).toBe(2)
 })
 

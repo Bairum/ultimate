@@ -21,6 +21,8 @@ the "Summary model…" command, and it applies to the next request. `fastModels`
 user) runs those models on the priority tier through the `fast` extension, at a higher usage rate. `instance.model`
 (`"provider/id"`, project over user, default `openai-codex/gpt-6.1-sol`; `null` turns it off) is the one model every
 agent in a preview (`instance start`) runs on, fast tier included; see `extensions/instance/README.md`.
+`dream.asleepAfter` (a positive integer, project over user, default 5) is how many landed or applied changes make a
+dream that @ultimate's compaction started worth falling asleep into a fresh chapter; see `extensions/dream/README.md`.
 Compaction thresholds come from Pi's settings (`~/.pi/agent/settings.json`, then `<project>/.pi/settings.json`,
 key `compaction`: `enabled`, `reserveTokens`, `keepRecentTokens`) over Pi Durable's defaults (reserve 16k, keep 20k,
 background compaction 32k below the blocking threshold), which suit a ~200k window. `server/harness.ts`

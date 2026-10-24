@@ -26,9 +26,9 @@ import {
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { CloudApi } from '../cloud/api.ts'
 import { InstanceApi } from '../instance/api.ts'
-import { Standing } from '../subagents/api.ts'
+import { Standing, Started as StandingStarted } from '../subagents/api.ts'
 import { SubmissionLanded } from '../workspaces/api.ts'
-import { DreamGrant } from '../automations/api.ts'
+import { DreamGrant, Fired } from '../automations/api.ts'
 import type { GrantedBy } from '../automations/api.ts'
 import {
   AsleepAction,
@@ -42,12 +42,13 @@ import {
   StartAction,
   StatsAction,
 } from './refs.ts'
-import type { PassState, Proposal, Session, Sleep, ToolStats } from './refs.ts'
+import type { AfterCompaction, PassState, Proposal, Session, Sleep, ToolStats } from './refs.ts'
 import { busyElsewhere, PASSES } from './types.ts'
 import { deliver, deliverTask } from './delivery.ts'
 import { applySeed, buildSeed, SeedState, writeSeed } from './seed.ts'
 import { gate } from './gate.ts'
-import type { PassName } from './types.ts'
+import { AfterCompactionDoc, compactionDream, ensureAutomation } from './after-compaction.ts'
+import type { PassName, Seed } from './types.ts'
 
 export const Sessions = defineDoc<{ next: number; sessions: Session[] }>({
   kind: DreamDoc.kind,
@@ -58,7 +59,7 @@ export const Sessions = defineDoc<{ next: number; sessions: Session[] }>({
   fork: 'initial',
   initial: () => ({ next: 1, sessions: [] }),
 })
-export const docs = [Sessions, SeedState]
+export const docs = [Sessions, SeedState, AfterCompactionDoc]
 export const userActions = ['start', 'end', 'asleep', 'switch']
 
 const LEARNED_LINES = 3
@@ -110,7 +111,12 @@ function settle(found: Session, now: number) {
 }
 
 /** Record a new session in `tx`; refuses while one is open. */
-export async function startSession(tx: Tx, now: number, by?: GrantedBy) {
+export async function startSession(
+  tx: Tx,
+  now: number,
+  by?: GrantedBy,
+  afterCompaction?: AfterCompaction,
+) {
   const doc = await tx.doc(Sessions, ROOT_CONVERSATION_ID)
   const active = doc.sessions.find((item) => item.endedAt === undefined)
   if (active)
@@ -127,6 +133,7 @@ export async function startSession(tx: Tx, now: number, by?: GrantedBy) {
     passes,
     proposals: [],
     ...(by ? { by } : {}),
+    ...(afterCompaction ? { afterCompaction } : {}),
   }
   doc.sessions.push(created)
   return created.id
@@ -204,12 +211,16 @@ export async function decide(tx: Tx, args: unknown, now: number) {
   proposal.status = input.status as Proposal['status']
   if (proposal.status === 'approved') proposal.branch = positive(input.branch, 'branch')
   else delete proposal.branch
+  const reason = optional(input.reason, 'reason', LINE_CHARS)
+  if (reason) proposal.reason = reason
+  else delete proposal.reason
   settle(found, now)
-  return { ...proposal }
+  return { found, proposal: { ...proposal } }
 }
 
-/** A landed branch lands the approved proposals it carries, in every open session. */
+/** A landed branch lands the approved proposals it carries, in every open session; returns the sessions it settled. */
 export async function landed(tx: Tx, branch: number, sha: string, now: number) {
+  const settled: Session[] = []
   for (const found of (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions) {
     if (found.endedAt !== undefined) continue
     for (const proposal of found.proposals)
@@ -218,7 +229,9 @@ export async function landed(tx: Tx, branch: number, sha: string, now: number) {
         proposal.sha = sha
       }
     settle(found, now)
+    if (found.endedAt !== undefined) settled.push(found)
   }
+  return settled
 }
 
 /** The model text of a filed journal: what @ultimate reads, with the proposal ids `decide` takes. */
@@ -437,6 +450,7 @@ export const actions = {
   journal: implementAction(JournalAction, async (args, { host }) => {
     const result = await host.harness().commit(async (tx) => {
       const { found, filed } = await fileJournal(tx, args, Date.now())
+      await settled(host, tx, found)
       if (filed) {
         const ultimate = await ultimateOf(tx)
         if (ultimate === undefined) throw new Error('@ultimate has no conversation yet')
@@ -453,9 +467,15 @@ export const actions = {
     host.harness().resume()
     return result
   }),
-  decide: implementAction(DecideAction, async (args, { host }) =>
-    host.harness().commit((tx) => decide(tx, args, Date.now()), context),
-  ),
+  decide: implementAction(DecideAction, async (args, { host }) => {
+    const decided = await host.harness().commit(async (tx) => {
+      const { found, proposal } = await decide(tx, args, Date.now())
+      await settled(host, tx, found)
+      return proposal
+    }, context)
+    host.harness().resume()
+    return decided
+  }),
   stats: implementAction(StatsAction, (_args, { host }) =>
     toolStats(
       host.chapter.trace,
@@ -477,8 +497,17 @@ export async function startDream(host: ExtensionHost) {
   return session
 }
 
-/** `startDream` inside `tx`, for the user (no `by`) or a granted automation `by` acting from conversation `acting`. */
-export async function startDreamIn(host: ExtensionHost, tx: Tx, by?: GrantedBy, acting?: number) {
+/**
+ * `startDream` inside `tx`: for the user (no `by`), a granted automation `by` acting from conversation `acting`, or
+ * @ultimate's compaction through the built-in automation (`after`).
+ */
+export async function startDreamIn(
+  host: ExtensionHost,
+  tx: Tx,
+  by?: GrantedBy,
+  acting?: number,
+  after?: AfterCompaction,
+) {
   const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
   if (ultimate === undefined) throw new Error('@ultimate has no conversation yet')
   const busy = busyElsewhere(host.conversations(), ultimate).filter((item) => item.id !== acting)
@@ -486,12 +515,17 @@ export async function startDreamIn(host: ExtensionHost, tx: Tx, by?: GrantedBy, 
     throw new Error(
       `Wait for these to finish before dreaming: ${busy.map((item) => `#${item.id} ${item.title}`).join(', ')}`,
     )
-  const session = await startSession(tx, Date.now(), by)
+  const session = await startSession(tx, Date.now(), by, after)
+  const who = by
+    ? `Automation ${by.automation} "${by.name}" started dream session ${session} under the user's grant`
+    : after
+      ? `Your context compaction started dream session ${session} (automation ${after.automation} "${after.name}"${after.handsOff ? `, which the user granted "dream": decide each proposal yourself and record your reason with decide {reason}` : ''})`
+      : `The user started dream session ${session}`
   await deliver(host, tx, ultimate, {
     type: 'input',
     session,
     kind: 'dream.started',
-    content: `${by ? `Automation ${by.automation} "${by.name}" started dream session ${session} under the user's grant` : `The user started dream session ${session}`}. Follow "For @ultimate" in the clone's extensions/dream/DREAM.md: start the dream branch now.`,
+    content: `${who}. Follow "For @ultimate" in the clone's extensions/dream/DREAM.md: start the dream branch now.`,
   })
   return { session }
 }
@@ -712,18 +746,57 @@ async function releaseSleep(tx: Tx, input: GrantedSleepInput, attempt: number, e
   found.sleep = { ...found.sleep, phase: 'failed', error, at: Date.now() }
 }
 
+/** Dream after compaction, bound to this extension's documents, lock and session start. */
+const compaction = (host: ExtensionHost) =>
+  compactionDream(host, {
+    Sessions,
+    switching: () => switching(host).busy,
+    start: (tx, after) => startDreamIn(host, tx, undefined, undefined, after),
+    grantedSleep: (tx, by, input) => grantedSleep(host, tx, by, input),
+  })
+
+/** Inside `tx`: a compaction's session that has just settled gets its "worth a fresh chapter?" check, once. */
+const settled = (host: ExtensionHost, tx: Tx, found: Session) => compaction(host).settled(tx, found)
+
 export default function dream(host: ExtensionHost) {
   host.implement(DreamGrant, {
     start: (tx, by, acting) => startDreamIn(host, tx, by, acting),
     asleep: (tx, by, input) => grantedSleep(host, tx, by, input),
   })
+  const { Wait, Settle, fired } = compaction(host)
+  // One at a time, across facet reloads: two concurrent checks would both make the automation.
+  const queue = host.resource('dream.after-compaction', () => ({ last: Promise.resolve() }))
+  /** Queue a check behind the last one; a failure becomes a notice. */
+  const ensure = (seed?: Seed) => {
+    const run = queue.last.then(() => ensureAutomation(host, seed))
+    // The queue only orders the checks: the failure is reported below, and the next check still runs.
+    queue.last = run.catch(() => undefined)
+    return run.catch((error: unknown) => host.notice(`Dream after compaction: ${String(error)}`))
+  }
   host.onOpen(async () => {
     await settleSleep(host)
-    await applySeed(host)
+    await ensure(await applySeed(host))
   })
-  // Approved proposals are followed to landing: their branch's landing settles them.
-  host.react('landed', [SubmissionLanded], (tx, { data }) =>
-    landed(tx, data.conversationId, data.sha, Date.now()),
+  // A fresh project has no @ultimate when it opens: the automation follows once it exists. Outside the transaction:
+  // making it commits.
+  host.react(
+    'ultimate-started',
+    [StandingStarted],
+    (_tx, { data }) => {
+      if (data.kind === 'standing' && data.agent === 'ultimate')
+        ensure().catch((error: unknown) => host.notice(String(error)))
+    },
+    { from: 'now' },
   )
-  return defineExtension({ name: 'dream', tasks: [deliverTask(host), grantedSleepTask(host)] })
+  // Approved proposals are followed to landing: their branch's landing settles them.
+  host.react('landed', [SubmissionLanded], async (tx, { data }) => {
+    for (const found of await landed(tx, data.conversationId, data.sha, Date.now()))
+      await settled(host, tx, found)
+  })
+  // Only the built-in automation's fires start a dream, and only by waiting for every other conversation.
+  host.react('after-compaction', [Fired], (tx, { data }) => fired(tx, data.id), { from: 'now' })
+  return defineExtension({
+    name: 'dream',
+    tasks: [deliverTask(host), grantedSleepTask(host), Wait, Settle],
+  })
 }

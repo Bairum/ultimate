@@ -25,6 +25,41 @@ for @ultimate and the dream branch, is in [DREAM.md](DREAM.md); this file is the
 The session flow does not edit code or memory. Once its journal is filed and every proposal is settled, the user can
 call `asleep { session, name? }` to start a new chapter. The name defaults to the journal's proposed `chapter`.
 
+## Dream after compaction
+
+When @ultimate's own context compacts, a dream starts by itself (`after-compaction.ts`). Dream ships the trigger as an
+ordinary event automation, **Dream after compaction** (`conversations.compacted where conversation=@ultimate`,
+subscriber @ultimate), made once per chapter when the harness opens or @ultimate first starts; its id is kept in
+`dream.after-compaction` on conversation 1. It shows in the Automations panel like any other: pausing it stops the
+dreams, deleting it is remembered (dream does not make it again), and a new chapter makes it again only as the seed
+carried it (paused stays paused). `@ultimate` in the filter resolves to @ultimate's conversation when the event
+comes, so it follows @ultimate across chapters; a tally compaction from a root's footer is another conversation and
+never matches.
+
+- **Start.** Reactor `dream/after-compaction` sees `automations.fired` of that automation only (its id in dream's own
+  document) and creates one durable `dream.after-compaction` wait, unless one already waits, a session is open, a
+  sleep is under way or a chapter change holds the lock. The wait looks every 15 seconds until no top-level
+  conversation other than @ultimate works, then starts the session through `startDreamIn` (every refusal of the Dream
+  button applies; a refusal looks again). After two hours it gives up and leaves @ultimate a quiet note through
+  lineage's `leaveNote`. The session records `afterCompaction {automation, name, at, handsOff?}`. No grant is needed:
+  the user decided this read-only analysis runs by default; the user-only `start` stays user-only.
+- **Deciding.** The `dream.started` input says whether the user granted `dream` on that automation (`handsOff`); only
+  then does @ultimate decide the proposals itself, recording each with `decide {…, reason}` (the journal shows it).
+  Otherwise the user decides, as for any dream. The rule lives in DREAM.md and `agents/ultimate.md`.
+- **Worth a fresh chapter?** When the session settles (the journal filed and every proposal rejected, applied or
+  landed; through `journal`, `decide` or a landing), a `dream.settled` task counts its changes: proposals `landed` or
+  `applied`. Below `dream.asleepAfter` (settings, project over user, default **5**) we stay in this chapter. At or above
+  it, an `asleep` grant on the enabled automation goes through the granted Fall asleep (`grantedSleep`, every gate);
+  otherwise, or when that grant is refused, @ultimate is asked to ask the user, and the `dream.settled` card carries
+  the Fall asleep section. The outcome is kept as `afterCompaction.outcome`; only `ask` wakes @ultimate, the others are
+  passive entries. A session the user ended early never settles this way. Nothing here switches chapters without the
+  `asleep` grant or the user's tap.
+- **Continuing.** The seed of a compaction's dream carries @ultimate's newest compaction summary as `continues`
+  (Pi's wrapper and the project memory lineage appends stripped; at most 12,000 characters, about 3k tokens, beside the
+  6,000-token memory brief). The new chapter's wake-up entry quotes it and tells @ultimate to continue that work.
+
+The user's Dream button and ⌘K "Dream…" are unchanged.
+
 ## Chapters
 
 A chapter is one database of a project home; one is active at a time and the others stay live, so any chapter can be
@@ -50,7 +85,8 @@ made active again (`lib/chapters.ts`).
 `seed.ts` builds a JSON manifest with `buildSeed(host, session)` and atomically writes it with
 `writeSeed(chapterDir, seed)` to `seed.json`. It carries the journal and proposal statuses, every root's memories
 (slug collisions keep the newest `updated`, including `about-*`), open to-dos and questions, and enabled automations
-and scripts, with counts for the later gate. Conversation docs are read through the host's exported tokens;
+and scripts, with counts for the later gate. The built-in Dream after compaction automation is not among them: the seed
+says only whether it was enabled (`afterCompaction`), and the new chapter makes its own. Conversation docs are read through the host's exported tokens;
 both trigger kinds are read through the single automations list action. Enabled schedule records keep name, optional prompt, schedule and run profile, but no subscribers: conversation ids do not survive a chapter. Schedules without a prompt become recreation to-dos.
 
 On open, dream applies a chapter's seed in one commit with `dream.seed.applied` on conversation 1: memories keep
@@ -93,7 +129,7 @@ A successful restart never returns: the new host opens the requested chapter.
 
 ## Actions
 
-`refs.ts` holds the documents and actions: `start`, `end`, `asleep`, `switch` (user-only), `chapters`, `pass`, `journal`, `decide`,
+`refs.ts` holds the documents and actions: `start`, `end`, `asleep`, `switch` (user-only), `chapters`, `pass`, `journal`, `decide` (with an optional one-line `reason`),
 and `stats`, which reads tool calls from `<home>/trace.sqlite` read-only: calls, failures and mean duration per tool,
 the 20 most frequent errors, and enabled tools never called in the trace's window (7 days or 200k rows).
 

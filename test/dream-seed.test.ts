@@ -306,6 +306,36 @@ it('carries the seed into a fresh chapter once, including user memory and its pa
   expect(await chapterEntries()).toEqual([entry])
 })
 
+it("wakes the next chapter's @ultimate with the compaction summary it was working from", async () => {
+  const f = await fixture()
+  await f.source()
+  const seed = await buildSeed(f.host, 1)
+  await writeSeed(join(f.home, 'chapters', 'fresh-roots'), {
+    ...seed,
+    continues: {
+      conversation: 42,
+      summary: 'I was wiring the dream trigger in after-compaction.ts.',
+    },
+  })
+  await f.close()
+  await requestChapter(f.home, 'fresh-roots')
+  await f.open()
+  const standing = await f.harness.snapshot(Standing, ROOT_CONVERSATION_ID, context)
+  const entries = () =>
+    f.harness.commit(
+      async (tx) =>
+        (await tx.scanEntries({ conversationId: standing!.ultimate }, 100)).items.filter(
+          (entry) => entry.kind === 'dream.chapter',
+        ),
+      context,
+    )
+  await until(async () => (await entries()).length === 1)
+  const text = JSON.stringify((await entries())[0].model)
+  expect(text).toContain('I was wiring the dream trigger in after-compaction.ts.')
+  expect(text).toContain('#42 in the-beginning')
+  expect(text).toContain('continue that work')
+})
+
 it('carries subscriber-only schedules as to-dos instead of recreating stale conversation ids', async () => {
   const f = await fixture()
   await f.source()

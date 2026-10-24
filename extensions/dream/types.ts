@@ -44,6 +44,13 @@ export type Seed = {
     automations: number
     scripts: number
   }
+  /** The built-in "Dream after compaction" automation, recreated in the new chapter; absent when it was deleted. */
+  afterCompaction?: { enabled: boolean }
+  /**
+   * What @ultimate was doing: its latest compaction summary in the chapter it left, carried when a compaction started
+   * the dream, so the new chapter continues the task.
+   */
+  continues?: { conversation: number; summary: string }
 }
 
 /** The five passes a dream runs, in the order the journal lists them. */
