@@ -3,47 +3,14 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { useDialog, useDocOf, useUltimate } from '@/sdk'
 import { SessionJournal } from './journal.tsx'
 import { MoonRow } from './moon.tsx'
+import { pinnedOf, progress } from './progress.ts'
 import { DreamDoc } from './refs.ts'
-import type { Session } from './refs.ts'
 
 /** The dialog the pinned dream line opens: the session's journal card. */
 export const journalDialog = 'dream.journal'
 
-/**
- * The session the status line keeps in view: the open one, or the newest once every proposal settled while its Fall
- * asleep is still to come (a granted sleep under way included). A session the user ended early, or one a compaction's
- * dream settled to stay, is done.
- */
-function usePinned(): Session | undefined {
-  const sessions = useDocOf(1, DreamDoc)?.sessions
-  const open = sessions?.find((item) => item.endedAt === undefined)
-  if (open) return open
-  const newest = sessions?.at(-1)
-  if (!newest?.journal || newest.sleep?.phase === 'asleep') return undefined
-  if (newest.proposals.some((item) => item.status === 'open' || item.status === 'approved'))
-    return undefined
-  if (newest.beforeCompaction?.outcome?.result === 'stay') return undefined
-  return newest
-}
-
-const settled = (session: Session) =>
-  session.proposals.filter((item) => item.status !== 'open' && item.status !== 'approved').length
-
-/** Where the session stands, in a few words: dreaming, deciding, waiting on branches, or ready to fall asleep. */
-function progress(session: Session) {
-  if (session.sleep && session.sleep.phase !== 'failed') return { long: 'falling asleep' }
-  if (!session.journal) return { long: 'dreaming', moons: true }
-  const total = session.proposals.length
-  const done = settled(session)
-  if (session.endedAt !== undefined || done === total) return { long: 'ready to fall asleep' }
-  const open = session.proposals.filter((item) => item.status === 'open').length
-  const approved = total - done - open
-  const rest = [open > 0 && `${open} to decide`, approved > 0 && `${approved} on branches`]
-  return {
-    long: [`${done} of ${total} settled`, ...rest].filter(Boolean).join(' · '),
-    short: `${done}/${total}`,
-  }
-}
+/** The session the status line keeps in view, live. */
+const usePinned = () => pinnedOf(useDocOf(1, DreamDoc)?.sessions)
 
 /**
  * A dream session in the status line, on every surface and on phones, from its start until it is settled and slept
