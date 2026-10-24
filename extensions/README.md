@@ -103,6 +103,8 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `notice(message)`: publish a warning notice and retain it in this facet's system diagnostics for later clients, until unload/reload.
 - `resource(key, create)`, `onOpen(callback)`, `onRelease(callback)`, `onClose(cleanup)`: shared reload-stable resources, async work each
   time the harness opens (at once if it is open; the server serves once it settles), async work each time before it closes while the process stays (a core swap; drop commit subscriptions there), and async cleanup. Facet-level callbacks are removed on unload/reload, with cleanup run before the replacement opens. Callbacks registered inside a shared resource's creation belong to that reload-stable resource and survive until server shutdown.
+  Keep only process state in a resource (running children, in-flight promises, flags); never capture document or task
+  tokens or facet functions in it, since they go stale on reload. Build those on each install around the shared state.
 
 ## Extension APIs
 
