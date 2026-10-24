@@ -89,6 +89,7 @@ export type Prepared = {
   parent?: Agent
   slug?: string
   target?: number
+  sinceEvent?: number
 }
 type Run = {
   child: GroupProcess
@@ -323,7 +324,7 @@ export function supervisor(
             await host
               .need(MessagesApi)
               .send(
-                sub.script!.conversationId,
+                sub.script?.conversationId ?? ROOT_CONVERSATION_ID,
                 { to: '@ultimate', text: content, reply: false },
                 `automations:${sub.id}:${event}:ultimate`,
                 ctx,
@@ -565,7 +566,10 @@ export function supervisor(
           saved.script!.lastOutputAt = saved.updatedAt = Date.now()
           if (fire === undefined || run.afterFire) return
           await fireAutomation(tx, saved, Date.now(), fire)
-          if (saved.script!.once) {
+          if (!saved.enabled) {
+            run.stopped = 'pause'
+            run.afterFire = true
+          } else if (saved.script!.once) {
             saved.script!.state = 'done'
             saved.enabled = false
             run.afterFire = true

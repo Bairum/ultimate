@@ -11,7 +11,7 @@ import { discoverAgents } from '../../lib/agents.ts'
 import { nextAt } from './schedule.ts'
 import type { Automation, Run } from './types.ts'
 import type { Automations as Ledger } from './server.ts'
-import { Fired } from './refs.ts'
+import { Escalated, Fired } from './refs.ts'
 const owner = {
   ownership: { kind: 'conversation' as const },
   conversationId: ROOT_CONVERSATION_ID,
@@ -35,7 +35,7 @@ export function scheduler(
     tx: Tx,
     a: Automation,
     event: number | string,
-    kind: 'fired',
+    kind: 'fired' | 'escalated',
     text: string,
   ) => Promise<void>,
 ) {
@@ -150,37 +150,53 @@ export function scheduler(
       }, context),
   })
   async function fire(tx: Tx, a: Automation, firedAt: number, text = '') {
+    a.recentFires = (a.recentFires ?? []).filter((at) => at > firedAt - 3600000)
+    if (a.recentFires.length >= 6) {
+      const reason = 'Fired more than 6 times in an hour; paused'
+      a.enabled = false
+      delete a.nextAt
+      if (a.script) {
+        a.script.state = 'stopped'
+        a.script.error = reason
+      }
+      const event = await host.emit(tx, Escalated, { id: a.id, reason })
+      await deliver(tx, a, event.id, 'escalated', reason)
+      return { id: a.id }
+    }
     // Scan for overlapping runs before any task/entry writes in this transaction.
     const result = a.prompt ? await fireRun(tx, a, firedAt, text) : { id: a.id }
+    a.recentFires.push(firedAt)
     a.fires++
     a.lastFireAt = firedAt
     const event = await host.emit(tx, Fired, { id: a.id, text, fire: a.fires })
     if (a.subscribers.length) await deliver(tx, a, event.id, 'fired', text)
     return result
   }
-  async function fireRun(tx: Tx, a: Automation, firedAt: number, text: string) {
-    let running = a.runs.some((r) => r.status === 'running')
+  const activeRuns = new WeakMap<Tx, Set<string>>()
+  // One event can fire several automations. Read their overlaps before the first fire writes any entries/tasks.
+  async function prepareFires(tx: Tx): Promise<Set<string>> {
+    const cached = activeRuns.get(tx)
+    if (cached) return cached
+    const ids = new Set<string>()
     // A long run can outlive the bounded run history.
-    if (!running) {
-      for (const status of ['pending', 'running', 'waiting', 'completing'] as const) {
-        let cursor: Cursor | undefined
-        do {
-          const page = await tx.scanTasks(
-            { conversationId: ROOT_CONVERSATION_ID, kind: 'ultimate.automation-run', status },
-            100,
-            cursor,
-          )
-          if (
-            page.items.some(
-              (task) => (task.input as { automation: Automation }).automation.id === a.id,
-            )
-          )
-            running = true
-          cursor = page.next
-        } while (cursor && !running)
-        if (running) break
-      }
+    for (const status of ['pending', 'running', 'waiting', 'completing'] as const) {
+      let cursor: Cursor | undefined
+      do {
+        const page = await tx.scanTasks(
+          { conversationId: ROOT_CONVERSATION_ID, kind: 'ultimate.automation-run', status },
+          100,
+          cursor,
+        )
+        for (const task of page.items)
+          ids.add((task.input as { automation: Automation }).automation.id)
+        cursor = page.next
+      } while (cursor)
     }
+    activeRuns.set(tx, ids)
+    return ids
+  }
+  async function fireRun(tx: Tx, a: Automation, firedAt: number, text: string) {
+    const running = a.runs.some((r) => r.status === 'running') || (await prepareFires(tx)).has(a.id)
     if (running) {
       a.runs.push({ id: `skipped:${firedAt}`, firedAt, finishedAt: firedAt, status: 'skipped' })
     } else {
@@ -193,6 +209,7 @@ export function scheduler(
         },
         owner,
       )
+      activeRuns.get(tx)!.add(a.id)
       a.runs.push({ id: String(id), firedAt, status: 'running' })
     }
     a.runs = a.runs.slice(-50)
@@ -233,7 +250,7 @@ export function scheduler(
           if (!a?.enabled || a.scheduler !== task.id) return terminal
           await fire(tx, a, runtime.now())
           delete a.nextAt
-          if (a.schedule!.kind === 'at') {
+          if (!a.enabled || a.schedule!.kind === 'at') {
             a.enabled = false
             delete a.scheduler
             return terminal
@@ -245,7 +262,7 @@ export function scheduler(
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), context),
   })
 
-  return { RunTask, Scheduler, fire }
+  return { RunTask, Scheduler, fire, prepareFires }
 }
 function finish(
   state: { automations: Record<string, Automation> },

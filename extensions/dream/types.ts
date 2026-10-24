@@ -2,10 +2,10 @@ import type { ConversationSummary } from '../../shared/protocol.ts'
 import type { MemoryItem } from '../lineage/refs.ts'
 import type { Todo } from '../todos/refs.ts'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
-import type { Schedule } from '../automations/refs.ts'
+import type { CreateArgs, Schedule } from '../automations/refs.ts'
 import type { GrantedBy, Journal, Proposal } from './refs.ts'
 
-/** Everything a dream carries to a fresh chapter; no runtime ids for schedules or subscribers. */
+/** Everything a dream carries to a fresh chapter; numeric trigger targets and subscribers need recreating. */
 export type Seed = {
   /** Written only by the gate: the preview checks automations' schedules instead of creating them. */
   gate?: true
@@ -20,7 +20,9 @@ export type Seed = {
   automations: {
     name: string
     prompt?: string
-    schedule: Schedule
+    schedule?: Schedule
+    event?: CreateArgs['event']
+    condition?: CreateArgs['condition']
     agent?: string
     model?: { provider: string; modelId: string }
     thinking?: ModelThinkingLevel

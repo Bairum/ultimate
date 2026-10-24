@@ -51,6 +51,28 @@ it('boots the switch-shaped scratch home, checks every invariant through HTTP, t
   expect(existsSync(f.home())).toBe(false)
 })
 
+it('counts event and standing-context receipts, and numeric-context recreation to-dos', async () => {
+  const f = instance()
+  f.seed.automations = [
+    { name: 'Landed', prompt: 'Review', event: { name: 'workspaces.landed' } },
+    {
+      name: 'Standing',
+      prompt: 'Review',
+      condition: { metric: 'context', of: '@ultimate', above: 80 },
+    },
+    { name: 'Numeric', prompt: 'Review', condition: { metric: 'context', of: '#42', above: 80 } },
+  ]
+  f.seed.counts.automations = 3
+  inspection(
+    () => f.seed,
+    () => ({
+      todos: { items: [{}, {}, {}, {}] },
+      'dream.seed': { automations: ['Landed', 'Standing'] },
+    }),
+  )
+  expect((await gate(f.seed, 'fresh-roots', f.api)).ok).toBe(true)
+})
+
 it.each([
   ['memories', { 'lineage.memory': { memories: {} } }],
   ['todos', { todos: { items: [{}, {}] } }],
