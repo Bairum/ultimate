@@ -381,9 +381,9 @@ it('starts without a handoff after 30 minutes and says so, and gives up after tw
   const second = await f.harness.commit((tx) => request(tx, 0, f.ultimate), context)
   f.busy([{ id: 50, busy: true, title: 'A branch at work' }])
   expect(await look(second.task, HANDOFF_WAIT_MS)).toBe('look')
-  // The note fails (a crash before it, in effect): the request stays, marked, and the next look leaves the note.
+  // The note fails: the wait looks again instead of ending, the request stays marked, and the next look leaves it.
   f.leaveNote.mockRejectedValueOnce(new Error('Crashed'))
-  await expect(look(second.task, DREAM_WAIT_MS)).rejects.toThrow('Crashed')
+  expect(await look(second.task, DREAM_WAIT_MS)).toBe('look')
   expect(await f.waiting()).toMatchObject({ task: second.task, gaveUp: true })
   f.busy([])
   expect(await look(second.task, DREAM_WAIT_MS + 1)).toBe('done')

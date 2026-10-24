@@ -288,13 +288,20 @@ export function compactionDream(
     const ultimate = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))
       ?.ultimate
     if (ultimate !== undefined)
-      await host
-        .need(LineageApi)
-        .leaveNote(
-          ultimate,
-          `The dream after your handoff did not start: other conversations kept working for ${DREAM_WAIT_MS / 3600_000} hours. Nothing to do; the next time your context passes the threshold it tries again, and the user can press Dream.`,
-          { requestId: `dream.handoff-wait:${task}` },
-        )
+      try {
+        await host
+          .need(LineageApi)
+          .leaveNote(
+            ultimate,
+            `The dream after your handoff did not start: other conversations kept working for ${DREAM_WAIT_MS / 3600_000} hours. Nothing to do; the next time your context passes the threshold it tries again, and the user can press Dream.`,
+            { requestId: `dream.handoff-wait:${task}` },
+          )
+      } catch (error) {
+        // The request stays marked: the wait looks again and retries the note under the same request id, so a
+        // failed note never ends the task with the request still blocking every later dream.
+        host.notice(`Dream: the give-up note failed, retrying: ${String(error)}`)
+        return 'look'
+      }
     // The note is left (its request id makes a repeat harmless): only now does the request go.
     await host.harness().commit(async (tx) => {
       const doc = await tx.doc(deps.Sessions, ROOT_CONVERSATION_ID)
