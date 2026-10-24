@@ -238,8 +238,8 @@ export function stateLine(automation: Automation, now: number): string {
     return condition.armed
       ? condition.value === undefined
         ? 'context not seen yet'
-        : `${condition.value}% now`
-      : `${automation.lastFireAt ? `fired ${clock(automation.lastFireAt, now)} · ` : ''}re-arms below ${condition.above - 10}%`
+        : `${Math.round(condition.value)}% now`
+      : `${automation.lastFireAt ? `fired ${clock(automation.lastFireAt, now)} · ` : ''}${condition.above > 10 ? `re-arms below ${condition.above - 10}%` : 're-arms after a compaction'}`
   }
   if (automation.event && !attention(look) && look !== 'working')
     return automation.fires
@@ -301,6 +301,8 @@ const grantActions: { action: GrantAction; label: string; hint: string }[] = [
 ]
 
 export function GrantBadge({ automation }: { automation: Automation }) {
+  // Only a woken subscriber can act on a grant; prompt runs never do.
+  if (!automation.subscribers.length && !automation.grant?.actions.length) return null
   return (
     <p
       className={cn(
@@ -323,16 +325,27 @@ export function GrantSwitches({
   actions,
   source,
   busy,
+  wakes = true,
   onChange,
 }: {
   actions: GrantAction[]
   source: string
   busy?: boolean
+  /** Whether the automation wakes a conversation: only a woken one can act on a grant. */
+  wakes?: boolean
   onChange: (actions: GrantAction[]) => void
 }) {
   return (
-    <fieldset className="flex flex-col gap-2 rounded-md border border-border/80 bg-card/40 p-2.5">
+    <fieldset
+      className="flex flex-col gap-2 rounded-md border border-border/80 bg-card/40 p-2.5"
+      disabled={!wakes && !actions.length}
+    >
       <legend className="px-1 text-[12.5px] font-medium">May act without asking</legend>
+      {!wakes && (
+        <p className="text-[11.5px] text-muted-foreground">
+          Only a conversation it wakes can act on a grant; prompt runs never do.
+        </p>
+      )}
       {grantActions.map(({ action, label, hint }) => (
         <label className="flex items-start gap-2 text-[12px]" key={action}>
           <Switch
@@ -378,6 +391,7 @@ export function GrantEditor({ automation }: { automation: Automation }) {
       <GrantSwitches
         actions={current.grant?.actions ?? []}
         busy={busy}
+        wakes={current.subscribers.length > 0}
         onChange={(actions) => {
           // oxlint-disable-next-line typescript/no-floating-promises -- change displays failures inline.
           void change(actions)

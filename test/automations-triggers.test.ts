@@ -187,6 +187,12 @@ it('skips events from its own prompt runs, by trace or by the conversation they 
   )
   await f.settle()
   expect((await f.record(own.id)).fires).toBe(1)
+  // Removing the prompt later does not make its old runs' events its own triggers.
+  await f.action('subscribe', { id: own.id })
+  await f.action('update', { id: own.id, prompt: '' })
+  await f.emit('conversations.compacted', { conversation: run, reason: 'threshold' })
+  await f.settle()
+  expect((await f.record(own.id)).fires).toBe(1)
   // Another conversation's compaction does fire it.
   await f.emit('conversations.compacted', { conversation: f.target })
   await f.settle()

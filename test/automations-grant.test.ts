@@ -179,9 +179,12 @@ it('allows only what the grant names: a dream grant never falls asleep or compac
   // Saving the grant again, or widening it, does not hand back the act this fire already used.
   await f.action('grant', { id, actions: ['dream', 'compact'] })
   await expect(act(f.host, id, 'dream', f.ultimate, 14)).rejects.toThrow('already used')
-  // The next fire may act again.
+  // The next fire may act again. A replay of the first call after it still returns the first call's result.
   await f.action('run', { id })
+  expect(await act(f.host, id, 'dream', f.ultimate, 11)).toMatchObject({ session: 7 })
+  expect(f.dream.start).toHaveBeenCalledOnce()
   await act(f.host, id, 'dream', f.ultimate, 13)
+  expect(f.dream.start).toHaveBeenCalledTimes(2)
   expect(await f.acted()).toHaveLength(2)
 })
 

@@ -507,7 +507,7 @@ export function AutomationForm({
               : {}),
           })
       if (!automation) created.current = saved
-      if (!automation && (grants.length || saved.grant)) {
+      if (!automation && saved.subscribers.length && (grants.length || saved.grant)) {
         saved = await api.action(GrantRef, {
           id: saved.id,
           actions: grants,
@@ -930,6 +930,8 @@ export function AutomationForm({
               <GrantSwitches
                 actions={grants}
                 busy={saving}
+                // Without a prompt the caller is woken; with one, only when "Wake this conversation" is on.
+                wakes={!prompt || (wakeable && draft.wake)}
                 onChange={setGrants}
                 source="Set in Automations form"
               />

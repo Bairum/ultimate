@@ -7,14 +7,13 @@ import type { JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
 import {
   AgentDoc,
-  CompactionTask,
   defineDoc,
   defineExtension,
   defineTool,
-  LiveDoc,
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
+import { admitCompaction } from '../../lib/compaction.ts'
 import type { TaskId, Tx, ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
@@ -649,9 +648,10 @@ function backend(host: ExtensionHost) {
     return host.harness().commit(async (tx) => {
       const a = (await tx.doc(Automations)).automations[validId(id)]
       if (!a) throw new Error(`Unknown automation: ${id}`)
+      // The tool call's own receipt, written with its effect: a replay returns it whatever fired since.
+      const receipt = task === undefined ? undefined : a.receipts?.[String(task)]
+      if (receipt) return { action: name, ...receipt, automation: a.id, name: a.name }
       const done = a.acted?.[name]
-      if (task !== undefined && done?.task === task && done.fire === a.fires)
-        return { action: name, ...done.result, automation: a.id, name: a.name }
       if (!a.grant?.actions.includes(name))
         throw new Error(
           `Automation ${a.id} has no grant for ${name}: ask the user instead. Only the user grants it, in the Automations panel.`,
@@ -670,7 +670,7 @@ function backend(host: ExtensionHost) {
       // Every task scan before the first write: Pi refuses scans after a write in one transaction.
       const result: Acted['result'] =
         name === 'compact'
-          ? { conversation: target, taskId: await compactIn(tx, target) }
+          ? { conversation: target, taskId: Number(await admitCompaction(tx, target)) }
           : name === 'dream'
             ? await dream!.start(tx, by, caller)
             : await dream!.asleep(tx, by, {})
@@ -678,36 +678,15 @@ function backend(host: ExtensionHost) {
         ...a.acted,
         [name]: { fire: a.fires, at: now, by: caller, ...(task ? { task } : {}), result },
       }
+      if (task !== undefined)
+        a.receipts = Object.fromEntries(
+          [...Object.entries(a.receipts ?? {}), [String(task), result] as const].slice(-20),
+        )
       await host.emit(tx, ActedEvent, { id: a.id, action: name, fire: a.fires, by: caller })
       return { action: name, ...result, automation: a.id, name: a.name }
     }, BACKGROUND_CONTEXT)
   }
   return { ...schedule, ...scripts, prepare, change, apply, operate, trigger, grant, act }
-}
-/**
- * Admit a manual compaction of conversation `id` inside `tx`, refusing one already running. A root's tally gets its
- * root focus from lineage's compaction hook, and @ultimate its wake-up once the summary is in.
- */
-async function compactIn(tx: Tx, id: ConversationId) {
-  for (const status of ['pending', 'running', 'waiting', 'completing'] as const)
-    if (
-      (await tx.scanTasks({ conversationId: id, kind: CompactionTask.definition.name, status }, 1))
-        .items.length
-    )
-      throw new Error(`#${id} is already compacting`)
-  // Pi upstream: @earendil-works/pi-durable@1.4.0 src/harness/compaction.ts — inline unexported createCompaction for atomic admission.
-  const created = await tx.createTask(
-    CompactionTask,
-    { reason: 'manual' },
-    { ownership: { kind: 'conversation' }, conversationId: id, background: false },
-  )
-  ;((await tx.doc(LiveDoc, id)).compactions ??= []).push({
-    taskId: created,
-    reason: 'manual',
-    blocking: false,
-    attempt: 1,
-  })
-  return Number(created)
 }
 function input(args: unknown, action: string): Args {
   return { ...(args as Omit<Args, 'action'>), action }

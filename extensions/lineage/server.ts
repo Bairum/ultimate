@@ -61,6 +61,7 @@ import { rewindActions, rewindTask } from './rewind.ts'
 import type { Tree } from './catchup.ts'
 import type { RootEvent } from './types.ts'
 import { compareUrl } from '../../lib/compare.ts'
+import { admitCompaction } from '../../lib/compaction.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
 
 export type BranchImage = { data: string; mimeType: string }
@@ -99,7 +100,7 @@ export const Tally = defineDoc<TallyState>({
 
 export const docs = [Roots, Branch, Tally, Seen, Memory]
 /** Going back sets a conversation's path aside, and forgetting drops a memory: only the user decides those. */
-export const userActions = ['rewind', 'forget']
+export const userActions = ['rewind', 'forget', 'compact']
 
 const ASK_TOKENS = 8192
 
@@ -1147,21 +1148,7 @@ async function compactTally(tx: Tx, root: number, instructions?: string) {
     throw new Error(`#${root} is not a listed root`)
   const id = root as ConversationId
   if ((await tx.doc(Tally, id)).since === undefined) throw new Error(`#${root} is not a tally`)
-  if (await liveTask(tx, id, CompactionTask.definition.name))
-    throw new Error(`#${root} is already compacting`)
-  // Pi upstream: @earendil-works/pi-durable@1.4.0 src/harness/compaction.ts — inline unexported createCompaction for atomic admission.
-  const created = await tx.createTask(
-    CompactionTask,
-    { reason: 'manual', instructions },
-    { ownership: { kind: 'conversation' }, conversationId: id, background: false },
-  )
-  ;((await tx.doc(LiveDoc, id)).compactions ??= []).push({
-    taskId: created,
-    reason: 'manual',
-    blocking: false,
-    attempt: 1,
-  })
-  return created
+  return admitCompaction(tx, id, instructions)
 }
 
 /** What `entry` of a root tells its sidebar row: a landing, note, branch, compaction or the context's start. */

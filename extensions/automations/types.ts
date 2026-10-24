@@ -39,6 +39,11 @@ export type Automation = {
    * so editing the grant never allows a second act on the same fire.
    */
   acted?: Partial<Record<GrantAction, Acted>>
+  /**
+   * What each of the last 20 `act` tool calls did, by tool task, written with its effect: a replay of that call returns
+   * it, whatever fired since, and never acts again.
+   */
+  receipts?: Record<string, Acted['result']>
   script?: {
     ask: string
     once: boolean

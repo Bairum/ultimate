@@ -34,7 +34,7 @@ import {
 import type { Sleep } from '../extensions/dream/refs.ts'
 import type { Seed } from '../extensions/dream/types.ts'
 import { inspection } from './dream-fixture.ts'
-import { temp } from './helpers.ts'
+import { temp, until } from './helpers.ts'
 
 const harnesses: Harness[] = []
 afterEach(async () => {
@@ -342,7 +342,10 @@ it('runs every gate for a granted Fall asleep once nothing works, and records wh
   // The user cannot start a second sleep over the reservation.
   await expect(actions.asleep({ session: 1 }, f.call)).rejects.toThrow('already falling asleep')
   busy = false
-  expect(await sleepWhenIdle(f.host, input, attempt, by.at)).toBe('done')
+  // The gates run outside the task step: a successful switch never returns, and a step waiting on it would hold the
+  // old process's shutdown.
+  expect(await sleepWhenIdle(f.host, input, attempt, by.at)).toBe('started')
+  await until(() => f.phases.at(-1)?.phase === 'failed')
   expect(f.phases.at(-1)?.error).toBe('Error: Restart refused')
   expect(f.phases.map((item) => item.phase)).toEqual([
     'waiting',
@@ -399,6 +402,21 @@ it('records a granted Fall asleep whose wait ran out, and switches nothing', asy
   })
   expect(f.instances.start).not.toHaveBeenCalled()
   expect(f.host.restart).not.toHaveBeenCalled()
+})
+
+it("credits the user's own retry after a failed granted sleep to the user", async () => {
+  const f = await fixture()
+  await f.journal()
+  f.host.conversations = () => [{ id: 20, busy: true, title: 'Still working' }] as never
+  const attempt = await admit(f)
+  const input = { session: 1, by, deadline: by.at + 60_000 }
+  await sleepWhenIdle(f.host, input, attempt, input.deadline)
+  expect(f.phases.at(-1)).toMatchObject({ phase: 'failed', by })
+  f.host.conversations = () => []
+  await actions.asleep({ session: 1 }, f.call)
+  const admitted = f.phases.find((item, index) => index > 1 && item.phase === 'seeding')
+  expect(admitted?.by).toBeUndefined()
+  expect(f.phases.slice(2).every((item) => item.by === undefined)).toBe(true)
 })
 
 it('leaves a sleep another attempt holds alone', async () => {

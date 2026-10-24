@@ -492,7 +492,9 @@ async function admitSleep(
     const name = chapterName(input.name ?? found.journal!.chapter)
     if (chapters.chapters.some((item) => item.name === name))
       throw new Error(`Chapter ${name} already exists; use switch instead`)
-    const by = found.sleep?.by
+    // Only the granted attempt that holds the session carries its automation on; the user's own retry is the user's.
+    const by =
+      attempt !== undefined && found.sleep?.attempt === attempt ? found.sleep.by : undefined
     found.sleep = { chapter: name, phase: 'seeding', at: Date.now(), ...(by ? { by } : {}) }
     return { session: found.id, name }
   }, context)
@@ -629,15 +631,17 @@ export async function grantedSleep(
 }
 
 /**
- * One look of granted attempt `attempt`: `look` again while a conversation works and time is left; otherwise run every
- * gate (`done` once they settle) or record why not. Only the attempt that still holds the session writes to it.
+ * One look of granted attempt `attempt`: `look` again while a conversation works and time is left; `done` when there
+ * is nothing left to do or the wait ran out; `started` once the gates run. The gates run outside the task, as the
+ * user's Fall asleep runs outside any task: a successful switch restarts the host and never returns, and a task step
+ * waiting on it would hold the old process's shutdown. Only the attempt that still holds the session writes to it.
  */
 export async function sleepWhenIdle(
   host: ExtensionHost,
   input: GrantedSleepInput,
   attempt: number,
   now: number,
-): Promise<'look' | 'done'> {
+): Promise<'look' | 'done' | 'started'> {
   const held = await host.harness().commit(async (tx) => {
     const sleep = (await find(tx, input.session)).sleep
     // A plain copy: the document's overlay is gone once the transaction ends.
@@ -661,15 +665,17 @@ export async function sleepWhenIdle(
       )
     return 'done'
   }
-  try {
-    await changing(host, async () =>
-      fallAsleep(host, await admitSleep(host, { session: input.session }, attempt)),
-    )
-  } catch (error) {
+  changing(host, async () =>
+    fallAsleep(host, await admitSleep(host, { session: input.session }, attempt)),
+  ).catch((error: unknown) =>
     // Refused before its gates began (busy again, a chapter change running): the reservation is still this attempt's.
-    await host.harness().commit((tx) => releaseSleep(tx, input, attempt, String(error)), context)
-  }
-  return 'done'
+    // Once admitted, fallAsleep records its own failures, and releaseSleep leaves an admitted sleep alone.
+    host
+      .harness()
+      .commit((tx) => releaseSleep(tx, input, attempt, String(error)), context)
+      .catch((failure: unknown) => host.notice(`Granted Fall asleep: ${String(failure)}`)),
+  )
+  return 'started'
 }
 
 /** Record why attempt `attempt` stopped, only while it still holds its session's sleep as `waiting`. */

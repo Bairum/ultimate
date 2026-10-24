@@ -116,7 +116,7 @@ export function triggers(
         tx,
         a,
         now,
-        `${condition.of} context ${usage.percent}%${usage.tokens !== undefined && usage.window !== undefined ? ` (${count(usage.tokens)}/${count(usage.window)})` : ''}`,
+        `${condition.of} context ${Math.round(usage.percent)}%${usage.tokens !== undefined && usage.window !== undefined ? ` (${count(usage.tokens)}/${count(usage.window)})` : ''}`,
       )
       condition.armed = false
     }
@@ -148,7 +148,7 @@ export function triggers(
    * the conversation's owner, not the bounded run history, so an old or long run still counts.
    */
   async function fromOwnRun(tx: Tx, a: Automation, event: EventRecord) {
-    if (!a.prompt) return false
+    // No shortcut on `a.prompt`: a run started before the prompt was removed can still emit.
     const data = event.data as Record<string, unknown>
     const ids = new Set(
       [event.context?.conversationId, data.conversation, data.conversationId].filter(
