@@ -18,6 +18,21 @@ One background root-owned scheduler per enabled schedule automation commits plan
 
 A script trigger uses `ask` instead of `schedule`. A `watcher` agent writes an executable `run`, briefly tests it, then calls `automation resume {id}`. Stdout `FIRE [text]` fires the automation; stderr and other stdout are progress. `once` defaults to true: its first FIRE atomically makes it done and disabled, then terminates the group. A recurring script may print `DONE [text]` and exit 0 to stop cleanly without a wake or failure. Resume keeps its persistent state. Any other unplanned exit, including a one-shot that never fired, wakes only the watcher to repair or escalate.
 
+## Grants
+
+A grant lets the agent an automation wakes do things for the user without asking. It holds a list of named actions:
+`dream` (start a dream session), `compact` (compact the watched conversation, else the woken one; a root's tally
+through lineage) and `asleep` (Fall asleep into a new chapter). Each is granted on its own: `dream` never implies
+`asleep`. Only the user sets one, through the user-only action `grant {id, actions, source?}`; empty `actions` withdraws
+it. The record keeps `grant: {actions, source, at, used}`, where `source` is the user's words or where it was set.
+
+The woken agent acts with the tool's `act {id, do}`. It is refused without a grant for `do`, on a paused automation,
+when the automation has not fired in the last six hours, from a conversation the automation does not wake (a subscriber,
+or a run of the latest fire), and a second time on one fire. The claim commits with `automations.acted {id, action,
+fire, by}` before the act; a replay of the same tool call keeps its claim. Dream and Fall asleep go through the
+`automations.dream` extension point, which dream provides with its own refusals and every gate of the user's Fall
+asleep (`extensions/dream/README.md`). Granted dreams and sleeps record the automation, and their cards say so.
+
 ## Actions
 
 Each automation has one or both actions: `prompt` starts a fresh run conversation; `subscribers` wakes existing conversations. Without a prompt or explicit subscribers, create adds the caller. A prompt-only automation has no subscribers. All trigger kinds share `fire`: increment lifetime `fires`, set `lastFireAt`, emit `automations.fired {id, text, fire}`, create a run when requested (overlap skips that run only), and create one durable delivery task for all subscribers. Each subscriber receives an `automations.fired` input with data `{id, name, text}`. A nonempty FIRE payload is appended to the run prompt as `\n\nFired: <text>`.

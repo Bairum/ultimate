@@ -96,3 +96,17 @@ A successful restart never returns: the new host opens the requested chapter.
 `refs.ts` holds the documents and actions: `start`, `end`, `asleep`, `switch` (user-only), `chapters`, `pass`, `journal`, `decide`,
 and `stats`, which reads tool calls from `<home>/trace.sqlite` read-only: calls, failures and mean duration per tool,
 the 20 most frequent errors, and enabled tools never called in the trace's window (7 days or 200k rows).
+
+## Granted by an automation
+
+The user can grant an automation `dream` and, separately, `asleep` (`extensions/automations/README.md` "Grants"). Dream
+provides the `automations.dream` point for them; the user-only actions stay user-only.
+
+- `start(by, acting)` is the Dream button's own path (`startDream`), with the same refusals; only the acting
+  conversation's own turn does not count as busy. The session records `by`, and its started card names the automation.
+- `asleep(by, {session?})` checks the session at once (a filed journal, every proposal settled, not already asleep),
+  answers, then waits up to 30 minutes for every conversation to finish, the acting agent's turn included. It then admits
+  and runs every gate of Fall asleep exactly as the user's action does: idle, seed, scratch preview with one repair,
+  final backup, idle again, journaled restart that rolls back on failure. A wait that runs out, or any refusal, records
+  a failed sleep with `by`; nothing switches. The sleep and the seed carry `by`, so the progress, the outcome and the
+  next chapter's morning card say which automation fell asleep, under the user's grant, and when.
