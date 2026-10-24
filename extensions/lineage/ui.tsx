@@ -1,11 +1,11 @@
 /**
  * Lineage for other extensions' browser code: the project's roots, a root's tally, landing links and compaction, the
- * branch and root events, the point where an empty root shows how to start (onboarding's Start here card), and the
- * Memory panel's header point.
+ * branch and root events, and the Memory panel's header point.
  */
 import type { ReactNode } from 'react'
 import { definePoint, getState, useDocOf, useUiState, useUltimate } from '@/sdk'
-import { RootsDoc } from './refs.ts'
+import { emptyRoot } from './empty-root.ts'
+import { MemoryDoc, RootsDoc, TallyDoc } from './refs.ts'
 
 export {
   Branched,
@@ -37,11 +37,6 @@ export function useOpenMemory() {
 export const column = (dock?: boolean) =>
   dock ? 'w-full px-4' : 'mx-auto w-full max-w-[46rem] px-3 sm:px-6'
 
-/** What an empty root shows in place of its composer (`onboarding` provides the Start here card); `dock` is narrow. */
-export const EmptyRoot = definePoint<{ id: number; dock?: boolean }, ReactNode>(
-  'lineage.empty-root',
-)
-
 /** What the Memory panel shows above the memories (`dream` provides its Dream button). */
 export const MemoryHeader = definePoint<null, ReactNode>('lineage.memory-header')
 
@@ -51,6 +46,15 @@ const keeper = 1
 /** The project's roots, live in every client; undefined until the stream delivers them. */
 export function useRoots() {
   return useDocOf(keeper, RootsDoc)?.roots
+}
+
+/** The project's root while it is new (no tally and no memories), so setup can offer to start; else undefined. */
+export function useNewRoot() {
+  const root = useRoots()?.[0]
+  const tally = useDocOf(root ?? keeper, TallyDoc)
+  const memories = useDocOf(root ?? keeper, MemoryDoc)
+  if (root === undefined || tally === undefined || memories === undefined) return undefined
+  return emptyRoot(tally, memories) ? root : undefined
 }
 
 /** The roots as last streamed, for synchronous readers such as a command's `when`; a mounted `useRoots` keeps them. */

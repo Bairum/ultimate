@@ -5,7 +5,7 @@ import {
   Card,
   defineWebExtension,
   errorMessage,
-  provide,
+  getState,
   useAction,
   useConversation,
   useDialog,
@@ -19,7 +19,7 @@ import type { EntryRecord, ToolCallView } from '@/sdk'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { FirstRun, GitCard, ProjectCard, Recommended } from './pages.tsx'
 import { IsolationAction } from '../workspaces/ui.tsx'
-import { EmptyRoot } from '../lineage/ui.tsx'
+import { StandingDoc } from '../subagents/ui.tsx'
 import { Familiarize } from './survey.tsx'
 import { ExtensionsPanel } from './panel.tsx'
 import { firstRunDialog, gitDialog, projectDialog } from './parts.tsx'
@@ -212,6 +212,12 @@ function ChoiceCard({ entry }: { entry: EntryRecord }) {
 
 export default defineWebExtension({
   tools: { setup: SetupCall },
+  // A new project starts in @ultimate's empty conversation: Start here, while the root has no history or memories.
+  intro: {
+    when: (conversation) => getState().docsOf[1]?.[StandingDoc.kind]?.ultimate === conversation.id,
+    title: 'Talk to @ultimate: it plans, starts and steers the work in this project.',
+    card: Familiarize,
+  },
   entries: {
     'onboarding.choice': ChoiceCard,
     'onboarding.start': ({ entry }) => {
@@ -238,7 +244,6 @@ export default defineWebExtension({
       { component: Undecided, phone: true },
     ],
   },
-  provides: [provide(EmptyRoot, ({ id, dock }) => <Familiarize dock={dock} id={id} />)],
   panels: [
     {
       id: 'extensions',

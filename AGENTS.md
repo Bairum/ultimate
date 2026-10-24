@@ -11,13 +11,15 @@ A project is a forest of conversation trees, like commit histories.
 - **Roots** run no turns. Each keeps a project memory (decisions, facts, lessons by slug); a branch starts from the
   root's memory index and recent landings. The root's read-only tally stays the browsable project context: branch
   intents, latest conversation abstracts and landings with divergence and `#conversation/entry` breadcrumbs. The UI
-  calls a tally **context**; code, tools and model text call it "tally". The footer shows the memory's estimated tokens (what a branch starts from) and **Talk to @ultimate**; the sidebar
-  shows each root heading its tree with its last three events (landings, notes, branches, compactions).
-  Start a project with @ultimate: Continue on Get ready or **Set up with @ultimate** on Start here. It handles setup
+  calls a tally **context** and shows it as the read-only **History** page, whose only control is **Back to
+  @ultimate**; the sidebar's Memory row shows the memory's estimated tokens (what a branch starts from) and opens the
+  Memory panel, and each root heads its tree with its last three events (landings, notes, branches, compactions).
+  Start a project with @ultimate: Continue on Get ready, or **Set up with @ultimate** on the Start here card in
+  @ultimate's empty conversation. It handles setup
   cards, reads the project and writes its first memories with `remember`; optional focus becomes instructions,
   kept verbatim as a memory. The tally then builds up from branches and landings. @ultimate maintains memory with
-  `remember` and the memory review (`extensions/lineage/README.md`); the user can compact a tally from its footer
-  or ⌘K. A project has one root: independent work goes into branches.
+  `remember` and the memory review (`extensions/lineage/README.md`); the user can compact a tally with ⌘K
+  Compact while it is shown. A project has one root: independent work goes into branches.
   Roots and standing agents are never concluded or cleared, only compacted.
 - **A branch** is a feature, a fix, an experiment. @ultimate picks a root by reading its tally, then starts a
   coordinator branch that starts from its memory brief (or, without memories, its tally) before its prompt. A branch is never a subagent.

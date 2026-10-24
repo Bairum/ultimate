@@ -26,7 +26,7 @@ An optional `composer` renderer receives `{ core, dock? }` for the shown convers
 narrow side region). Render `core` to preserve the existing composer, optionally wrapping it. Facets compose in
 discovery order: each receives the previous rendering as `core`, behind its own extension boundary with that rendering
 as fallback. These renderers can use `useTranscript()` for the shown conversation's current entries.
-Lineage uses this to show a root's read-only context footer, or an empty root's Start here card, instead of a composer.
+Lineage uses this to show a root's read-only History banner, with the way back to @ultimate, instead of a composer.
 To send what the composer submits elsewhere, wrap `core` in `<ComposerRedirect to={{ placeholder, send }}>` (from `@/sdk`):
 while `to` is set, Enter and the send button call `send(text)` instead of submitting, with the same draft, error and
 sending states (side-chat forks @ultimate this way). Only the shown conversation's composer takes typing shortcuts

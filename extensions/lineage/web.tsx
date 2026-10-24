@@ -1,4 +1,5 @@
 import {
+  ArrowLeftIcon,
   BrainIcon,
   ChevronRightIcon,
   CircleCheckIcon,
@@ -12,6 +13,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MentionText, MessageResponse } from '@/components/ai/message'
+import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -25,11 +27,10 @@ import {
   provide,
   Provided,
   formatAgo,
+  formatKeys,
   formatTime,
-  formatTokens,
   useConversation,
   useDocOf,
-  useExtensionUiState,
   useNow,
   useTranscript,
   useUiState,
@@ -40,11 +41,10 @@ import { store } from '@/sdk/client'
 import { ConversationRef, Unsummarized } from '../conversations/ui.tsx'
 import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open } from '../workspaces/ui.tsx'
-import { CompactAction, ForgetAction, MemoryDoc, TallyDoc } from './refs.ts'
+import { ForgetAction, MemoryDoc } from './refs.ts'
 import type { MemoryItem } from './refs.ts'
-import { column, EmptyRoot, MEMORY_FOCUS, MEMORY_PANEL, MemoryHeader, useRoots } from './ui.tsx'
+import { column, MEMORY_FOCUS, MEMORY_PANEL, MemoryHeader, useRoots } from './ui.tsx'
 import { GoBackAction, Rewound, RewoundDependent } from './rewind.tsx'
-import { emptyRoot } from './empty-root.ts'
 
 function userText(entry: EntryRecord) {
   const message = entry.model?.[0]
@@ -389,99 +389,42 @@ function Reset({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   return core
 }
 
-/** A root takes no input: an empty one starts by getting familiar with the project, any other shows its tally footer. */
+/** A root is the project's history: read-only, with the way back to @ultimate in place of its composer. */
 function RootComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
   const id = useConversation((conversation) => conversation.id)
   const roots = useRoots()
   if (id === undefined || !roots?.includes(id)) return core
-  return <TallyComposer dock={dock} id={id} key={id} />
+  return <HistoryBanner dock={dock} id={id} />
 }
 
-/** Only a root subscribes to its `lineage.tally` document; a root from before tallies has none and shows the footer. */
-function TallyComposer({ id, dock }: { id: number; dock?: boolean }) {
-  const tally = useDocOf(id, TallyDoc)
-  const memories = useDocOf(id, MemoryDoc)
-  const history = useConversation((conversation) =>
-    conversation.loading ? undefined : conversation.entries.length > 0,
-  )
-  if (tally === undefined || memories === undefined || history === undefined) return null
-  if (emptyRoot(tally, history, memories))
-    return (
-      <Provided input={{ id, dock }} point={EmptyRoot}>
-        {(start) => start}
-      </Provided>
-    )
-  return <TallyFooter brief={tally?.briefTokens} dock={dock} id={id} tokens={tally?.tokens} />
-}
-
-/**
- * In place of a tally's composer: what a new branch starts from and its size (the memory brief, or the whole context
- * while there are no memories), and the way to @ultimate, who keeps it.
- */
-function TallyFooter({
-  id,
-  tokens,
-  brief,
-  dock,
-}: {
-  id: number
-  tokens?: number
-  brief?: number
-  dock?: boolean
-}) {
+function HistoryBanner({ id, dock }: { id: number; dock?: boolean }) {
   const actions = useUltimate()
   return (
     <div className={cn(column(dock), 'pb-3')}>
       <div
-        className="rounded-lg border border-border bg-muted/20 px-3.5 py-2.5"
-        data-lineage-tally-footer={id}
+        className="flex flex-wrap items-center gap-x-3 gap-y-2.5 rounded-lg border border-border/70 border-l-2 border-l-brand/50 bg-muted/30 px-3.5 py-3"
+        data-lineage-history={id}
       >
-        <div className="flex min-w-0 items-center gap-2 font-mono text-[11px] text-muted-foreground">
-          <ScrollTextIcon className="size-3.5 shrink-0 text-brand" />
-          <span className="shrink-0 text-foreground">
-            {brief === undefined ? 'Context' : 'Memory'}
-          </span>
-          {(brief ?? tokens) !== undefined && (
-            <span className="shrink-0" data-lineage-tokens={brief ?? tokens}>
-              · {formatTokens((brief ?? tokens)!)} tokens
-            </span>
-          )}
-          {tokens !== undefined && (
-            <button
-              className="ml-auto shrink-0 cursor-pointer hover:text-foreground hover:underline"
-              onClick={() => void api.action(CompactAction, { id })}
-              title="Have @ultimate reshape this history into a shorter one; nothing is deleted"
-              type="button"
-            >
-              Compact
-            </button>
-          )}
-          <button
-            className={cn(
-              'shrink-0 cursor-pointer text-brand hover:underline',
-              tokens === undefined && 'ml-auto',
-            )}
-            onClick={() => void talkToUltimate(actions)}
-            type="button"
-          >
-            Talk to @ultimate
-          </button>
+        <ScrollTextIcon className="size-4 shrink-0 text-brand" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[13.5px] font-medium text-foreground">
+            You're reading the project's history
+          </p>
+          <p className="text-[12.5px] leading-snug text-muted-foreground">
+            Every branch, abstract and landing so far, read-only. To change anything, talk to
+            @ultimate.
+          </p>
         </div>
-        <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
-          {brief === undefined
-            ? 'What every new branch starts from until there are memories. @ultimate maintains it.'
-            : 'What every new branch starts from. The context above is the browsable history; @ultimate maintains both.'}
-        </p>
-        <Memory id={id} />
+        <Button className="ml-auto" onClick={() => void talkToUltimate(actions)}>
+          <ArrowLeftIcon />
+          Back to @ultimate
+          <span className="hidden font-mono text-[11px] opacity-60 sm:inline pointer-coarse:hidden">
+            {formatKeys('mod+0')[0].join('')}
+          </span>
+        </Button>
       </div>
     </div>
   )
-}
-
-const kindTones: Record<MemoryItem['kind'], string> = {
-  decision: 'bg-brand/10 text-brand',
-  fact: 'bg-muted text-muted-foreground',
-  lesson: 'bg-note/15 text-amber-700 dark:text-note',
 }
 
 /** Where a memory was learned, `#conversation/entry`, as that conversation's chip; a click opens it at the entry. */
@@ -509,57 +452,17 @@ function MemorySource({ source }: { source: string }) {
   )
 }
 
-/** A root's project memory, folded to `Memory · N`, newest first; nothing while it has none. */
-function Memory({ id }: { id: number }) {
-  const memories = useDocOf(id, MemoryDoc)?.memories
-  const [unfolded, setUnfolded] = useExtensionUiState<number[]>('memoryOpen', [])
-  const now = useNow(60_000)
-  const open = unfolded.includes(id)
-  const slugs = Object.keys(memories ?? {}).toSorted(
-    (a, b) => memories![b].updated - memories![a].updated || a.localeCompare(b),
-  )
-  if (!memories || !slugs.length) return null
-  return (
-    <section className="mt-2 border-t border-border/60 pt-1.5" data-lineage-memory={id}>
-      <button
-        aria-expanded={open}
-        className="flex cursor-pointer items-center gap-1 font-mono text-[9.5px] tracking-wider text-muted-foreground/70 uppercase outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-        onClick={() =>
-          setUnfolded((previous) => [
-            ...previous.filter((root) => root !== id),
-            ...(open ? [] : [id]),
-          ])
-        }
-        type="button"
-      >
-        {slugs.length} {slugs.length === 1 ? 'memory' : 'memories'}
-        <ChevronRightIcon className={cn('size-2.5 transition-transform', open && 'rotate-90')} />
-      </button>
-      {open && (
-        <ul className="-mx-1.5 mt-1 flex max-h-[45vh] flex-col overflow-y-auto">
-          {slugs.map((slug) => (
-            <MemoryRow item={memories[slug]} key={slug} now={now} root={id} slug={slug} />
-          ))}
-        </ul>
-      )}
-    </section>
-  )
-}
-
-/** One memory: its kind, slug, line and age; a click shows its body and source. The trash icon forgets it. */
+/** One memory under its kind's heading: slug, line and age; a click shows its body and source. The trash icon forgets it. */
 function MemoryRow({
   root,
   slug,
   item,
   now,
-  plain,
 }: {
   root: number
   slug: string
   item: MemoryItem
   now: number
-  /** Under a heading that already names its kind: no kind chip. */
-  plain?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [forgetting, setForgetting] = useState(false)
@@ -583,11 +486,6 @@ function MemoryRow({
           type="button"
         >
           <span className="flex w-full min-w-0 items-center gap-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
-            {!plain && (
-              <span className={cn('shrink-0 rounded-sm px-1', kindTones[item.kind])}>
-                {item.kind}
-              </span>
-            )}
             <span className="min-w-0 truncate text-foreground/80">{slug}</span>
             <span
               className="ml-auto shrink-0 pl-1 text-muted-foreground/60"
@@ -692,14 +590,7 @@ function RootMemory({ root, label }: { root: number; label: boolean }) {
               </h3>
               <ul className="-mx-1.5 flex flex-col">
                 {shown.map((slug) => (
-                  <MemoryRow
-                    item={memories[slug]}
-                    key={slug}
-                    now={now}
-                    plain
-                    root={root}
-                    slug={slug}
-                  />
+                  <MemoryRow item={memories[slug]} key={slug} now={now} root={root} slug={slug} />
                 ))}
               </ul>
             </div>

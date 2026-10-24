@@ -19,7 +19,7 @@ it('starts @ultimate when a fresh home has none yet', () => {
 
 it("treats a new chapter's root with carried memories as set up, not as an empty root", () => {
   const carried = { memories: { 'about-daniel': {} } }
-  expect(emptyRoot({}, false, carried)).toBe(false)
-  expect(emptyRoot(null, false, { memories: {} })).toBe(true)
-  expect(emptyRoot({ since: 5 }, false, null)).toBe(false)
+  expect(emptyRoot({}, carried)).toBe(false)
+  expect(emptyRoot(null, { memories: {} })).toBe(true)
+  expect(emptyRoot({ since: 5 }, null)).toBe(false)
 })

@@ -11,14 +11,17 @@ focus to the composer. An automated browser (`navigator.webdriver`) does not get
 
 ## Onboarding with @ultimate
 
-Continue on Get ready, or **Set up with @ultimate** on an empty root's Start here card, calls the user-only action
+Continue on Get ready, or **Set up with @ultimate** on the Start here card, calls the user-only action
 `start { root?, instructions? }` and opens @ultimate's standing conversation. An omitted root resolves to the shown
 conversation's tree, or conversation 1. The optional focus is passed verbatim as instructions. The action submits a
 quiet `onboarding.start` input with `{ root, instructions?, facts }`: project name/path, first-run state, undecided
 project setup, Git isolation reason (if any), root id and emptiness. Model text names the event, lists those facts
 and preserves the instructions. Request id `onboarding:<root>` ensures one input per root; repeated calls return
-`{ id }` without sending again. The root conversation's `onboarding.starts` document maps roots to that standing id
-so Start here can show **@ultimate is setting up this project · open** across reloads.
+`{ id }` without sending again: the root conversation's `onboarding.starts` document maps roots to that standing id.
+
+Start here is the `intro` card of @ultimate's empty conversation (`survey.tsx`), shown while the project's root has
+no tally and no memories: an optional focus and **Set up with @ultimate**. Once onboarding starts, the conversation
+is no longer empty and the card goes with the empty state. The History page (the root) takes no input.
 
 @ultimate greets and first walks the user through how Ultimate works with the `how-ultimate-works` skill
 (`skills/how-ultimate-works/SKILL.md`): five short beats, each a message with one question card and a Skip the rest
@@ -73,8 +76,7 @@ as **Chosen: …**, never the current settings or a local success flag. A quiet 
 The status line keeps **project setup** while the project decision is open and **set up git** while isolation is
 unavailable. Clicking calls `help { card: 'project' | 'git' }`, which submits "Help me decide whether to use this
 project's setup." or "Help me set up git for this folder." directly in @ultimate's standing conversation and returns
-its id. The browser opens that conversation on the Agent surface. First-run Continue and Start here's start/open links also select the Agent surface. While onboarding is
-in progress, Start here shows only the open link, without the focus textarea or keyboard hint.
+its id. The browser opens that conversation on the Agent surface. First-run Continue also selects the Agent surface.
 The Extensions panel's About this setup routes there too rather than opening a setup dialog.
 The Git status is read again whenever the shown conversation finishes a run, including an agent's first Git commit.
 

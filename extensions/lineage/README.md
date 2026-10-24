@@ -39,14 +39,14 @@ document, tools and model-facing text, where agents and stored entries already u
   landings recorded `base` uses the landing before it, which is where the lander's serial queue left the target.
   Catch-up notes and abstracts are left out. The sidebar's Landed section, under the lander, shows the landings.
   Workspaces' `github` action gives the root page's landing cards the same range.
-  `compact` `{ id, instructions? }` → `{ taskId }` compacts a root's tally (see Compaction), for the history footer's
-  Compact and the palette's Compact command on a root.
+  `compact` `{ id, instructions? }` → `{ taskId }` compacts a root's tally (see Compaction), for the palette's Compact
+  command on a root.
 - **Tally**: conversation-scoped doc `lineage.tally` (latest history) holds
   `{ abstracts: Record<string, { anchor, at, text, title?, feature? }>, tokens: number, briefTokens?: number, since?: number }`:
   each conversation's open abstract, estimated model-visible context tokens, estimated tokens of the memory brief
   (absent without memories), and the entry where the root became a tally. Forks start with an empty doc,
   not the source's bookkeeping. Both counts are recounted after commits that append root entries (including resets and
-  compaction) or change its memory. The root footer and sidebar row show what a new branch starts from: "Memory · …
+  compaction) or change its memory. The sidebar's Memory row shows what a new branch starts from: "Memory · …
   tokens", the brief, or "Context · … tokens", the whole tally, while the root has no memories.
   `lineage.abstract` entries hold `{ conversation, at, text, title?, feature?, anchor? }`, with `at` pointing to the
   answer summarized. An abstract is liquid until its conversation lands, like an uncommitted working tree: the first
@@ -94,11 +94,10 @@ document, tools and model-facing text, where agents and stored entries already u
   with `tool_search`. Tool `memory {read?, root?}`, offered to every agent, returns the index, one
   `slug [kind] — line (updated YYYY-MM-DD)` per memory, or with `read` one memory's body and source. User-only
   `forget {root, slug}` (`ForgetAction`) deletes one through the same path, as does `LineageApi.remember` for other
-  extensions. The root's context footer folds them to `Memory · N` (open state in UI state `ext.lineage.memoryOpen`),
-  newest first: kind, slug, line and age per row; a row expands to its Markdown body and source chip, and a trash icon
-  (always visible on touch) calls `forget`. The **Memory** panel (`MEMORY_PANEL` in `ui.tsx`, which the sidebar's
-  Memory row opens) shows every root's memory with the same rows, grouped into Decisions, Facts and Lessons (the brief's
-  size is on the sidebar row); `ui.tsx` also re-exports `MemoryDoc` for the sidebar's counts.
+  extensions. The **Memory** panel (`MEMORY_PANEL` in `ui.tsx`, which the sidebar's Memory row opens) shows every
+  root's memory grouped into Decisions, Facts and Lessons, newest first: slug, line and age per row; a row expands to
+  its Markdown body and source chip, and a trash icon (always visible on touch) calls `forget` (the brief's size is on
+  the sidebar row); `ui.tsx` also re-exports `MemoryDoc` for the sidebar's counts.
   **Brief**: a branch forked from a root that has memories does not start from the tally. Its fork gets a
   `pi.reset` (`head: 'self'`, `data.lineage.brief: {tally}`, the root tip it covers) right after the fork point,
   before its prompt, whose model text is `<project_memory root="#R">` with the index, the root's last 10 landings (`<sha7> <feature: title> (#conv)`) and
@@ -204,18 +203,13 @@ The user talks to @ultimate in its own conversation, opened by the first sidebar
 A branch is the conversation; the coordinator is the agent that runs it, so the header and System lanes label it `branch · coordinator`.
 There is no manual creation page or message-hover branch action. Coordinator branches keep their composers for steering.
 
-An empty root shows what the `EmptyRoot` point (`ui.tsx`) provides: onboarding's **Start here** card
-(`onboarding/survey.tsx`), an optional focus and **Set up with @ultimate**.
-This calls user action `onboarding.start` with that root and the focus verbatim as instructions, then opens @ultimate.
-Once started, it shows only a quiet **@ultimate is setting up this project · open** link from `onboarding.starts`.
-@ultimate reads the project and writes its first memories with `remember` before starting work.
-
-Listed roots with a tally or existing history replace their composer through the SDK's `composer` renderer with a
-read-only footer: **Memory** with the brief's estimated tokens, "What every new branch starts from. The context
-above is the browsable history; @ultimate maintains both.", the memory fold, and **Talk to @ultimate**. A root
-without memories shows **Context** with the tally's tokens instead, since its branches start from the tally. There is no text input. @ultimate maintains standing decisions in memory with
-`remember` and the memory review; on a root the palette's Compact runs lineage `compact` and its composer-focus
-command is hidden. A root's transcript shows no summary or assessment lines.
+A root is the project's read-only History page. Through the SDK's `composer` renderer, every listed root replaces
+its composer with one banner, "You're reading the project's history", and **Back to @ultimate** (`talkToUltimate`,
+like mod+0). There is no text input, memory list or compact button on the page: memory lives in the sidebar's Memory
+row and the Memory panel, and the palette's Compact on a root runs lineage `compact` while its composer-focus command
+is hidden. A new project starts in @ultimate's empty conversation instead, from onboarding's Start here card.
+@ultimate maintains standing decisions in memory with `remember` and the memory review. A root's transcript shows no
+summary or assessment lines.
 
 Old stored notes and survey inputs still render quietly, without creation controls. Old brief resets still render;
 a genesis reset shows a collapsible **Context starts here** card.
