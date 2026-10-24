@@ -266,10 +266,17 @@ function Form({
   // A new definition: blank, duplicated, or replacing a file that fails to parse with nothing else applying.
   const [creating, setCreating] = useState(!shown?.definition)
   const source = creating ? undefined : shown?.source
-  const [scope, setScope] = useState<Scope>(
-    source === 'user' || (source !== 'project' && discovery.projectSetup !== 'trusted')
+  const overlays = creating ? [] : (shown?.definition?.overlays ?? [])
+  const overlayScope = overlays.at(-1)?.startsWith(`${discovery.scopes.project}/`)
+    ? 'project'
+    : overlays.length
       ? 'user'
-      : 'project',
+      : undefined
+  const [scope, setScope] = useState<Scope>(
+    overlayScope ??
+      (source === 'user' || (source !== 'project' && discovery.projectSetup !== 'trusted')
+        ? 'user'
+        : 'project'),
   )
   const [pending, setPending] = useState<'save' | 'delete'>()
   const [confirming, setConfirming] = useState(false)
@@ -297,7 +304,8 @@ function Form({
   const display = (path: string) =>
     shortenPath(path, { cwd: system?.project.root, home: system?.machine.home })
   const files = creating ? [] : (shown?.files ?? [])
-  const overrides = files.includes('builtin') && scope !== 'user' ? 'the built-in' : undefined
+  const overrides =
+    files.includes('builtin') && scope !== 'user' && !overlays.length ? 'the built-in' : undefined
   const shadowed = scope === 'user' && files.includes('project')
   // Saving to a scope without the file, or over one that fails to parse, changes something too.
   const dirty =
@@ -554,6 +562,12 @@ function Form({
         >
           {display(target)}
           {overrides && <span className="text-muted-foreground/70"> · overrides {overrides}</span>}
+          {overlays.length > 0 && (
+            <span className="text-muted-foreground/70">
+              {' '}
+              · an overlay: only the changes, over {display(shown?.path ?? '')}
+            </span>
+          )}
           {shadowed && (
             <span className="text-warning"> · the project definition of this name applies</span>
           )}
