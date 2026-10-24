@@ -224,7 +224,13 @@ export default defineWebExtension({
       )
     },
   },
-  slots: { overlay: [Onboarding], 'statusline.right': [NoGit, Undecided] },
+  slots: {
+    overlay: [Onboarding],
+    'statusline.right': [
+      { component: NoGit, phone: true },
+      { component: Undecided, phone: true },
+    ],
+  },
   provides: [provide(EmptyRoot, ({ id, dock }) => <Familiarize dock={dock} id={id} />)],
   panels: [
     {

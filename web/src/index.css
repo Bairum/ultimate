@@ -187,14 +187,9 @@
   /* Edge to edge (viewport-fit=cover): the app shell keeps out of the notch, rounded corners and home indicator. The
      open keyboard covers the home indicator, so typing drops the bottom inset instead of leaving a gap above it. */
   .safe-area {
+    height: 100dvh;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
       env(safe-area-inset-left);
-  }
-  /* Installed, the bottom line sits on the screen's rounded corners: lift it until the curve clears its ends. */
-  @media (display-mode: standalone) {
-    .safe-area {
-      padding-bottom: calc(max(env(safe-area-inset-bottom), 34px) + 12px);
-    }
   }
   .safe-area:has(textarea:focus, input:focus, [contenteditable]:focus) {
     padding-bottom: 0;

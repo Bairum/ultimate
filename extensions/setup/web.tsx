@@ -127,7 +127,8 @@ function Setup() {
 }
 
 export default defineWebExtension({
-  slots: { 'statusline.right': [Setup] },
+  // Shown only while something needs setting up, so it stays on a phone's line too.
+  slots: { 'statusline.right': [{ component: Setup, phone: true }] },
   // The agent's note about setup changes; the user sees setup in the status line.
   entries: { 'setup.note': () => null },
 })

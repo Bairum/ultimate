@@ -358,7 +358,10 @@ export default defineWebExtension({
   tools: { restart: RestartCall },
   slots: {
     // Discovery order puts `self` before `status-line`: the item sits just left of `live · gen N`.
-    'statusline.right': [CoreStale, { component: Build, order: 1 }],
+    'statusline.right': [
+      { component: CoreStale, phone: true },
+      { component: Build, order: 1 },
+    ],
     overlay: HotReloaded,
   },
 })

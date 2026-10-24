@@ -7,12 +7,13 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="color-scheme" content="dark light" />
-    <!-- Home screen: standalone, drawn edge to edge under the status bar (web/src/app/App.tsx pads the safe area). -->
+    <!-- Home screen: standalone; App.tsx pads the safe area. No black-translucent status bar: under it iOS sizes the
+         viewport a status bar short at launch and full later, so the bottom line floated or the page scrolled. -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icons/icon-180.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Ultimate" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="theme-color" content="#111112" />
     <title>Ultimate</title>
     <style>

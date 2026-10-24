@@ -157,12 +157,17 @@ export function Slot({
   name,
   variant = 'block',
   separator,
+  phone,
 }: {
   name: SlotName
   variant?: 'inline' | 'block'
   separator?: ReactNode
+  /** Only the items marked `phone` (true) or only the others (false); all by default. */
+  phone?: boolean
 }) {
-  const items = slotItems(useExtensions(), name)
+  const items = slotItems(useExtensions(), name).filter(
+    (item) => phone === undefined || item.phone === phone,
+  )
   return items.map(({ key, extension, version, component: Item }, index) => (
     <Fragment key={key}>
       {index > 0 && separator}
