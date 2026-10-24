@@ -26,7 +26,7 @@ import { AutomationsApi } from '../automations/api.ts'
 import type { GrantedBy } from '../automations/api.ts'
 import type { Automation } from '../automations/refs.ts'
 import { LineageApi } from '../lineage/api.ts'
-import { Standing, SubagentsApi } from '../subagents/api.ts'
+import { Standing } from '../subagents/api.ts'
 import { deliver } from './delivery.ts'
 import type { BeforeCompaction, Handoff, Session, Waiting } from './refs.ts'
 import type { Seed } from './types.ts'
@@ -141,9 +141,9 @@ export async function ensureAutomation(host: ExtensionHost) {
     if (!own) return remember({ deleted: true })
     return migrate(own)
   }
-  // @ultimate as the subagents service has it, made now on a fresh project: its start may come before any reactor
-  // would see it.
-  const ultimate = await host.need(SubagentsApi).standing('ultimate', context)
+  // Never made here: on a fresh project the automation follows @ultimate's start.
+  const ultimate = (await harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
+  if (ultimate === undefined) return
   // A create (or migration) whose receipt was lost is found by name and trigger target, not made twice. Not by
   // threshold or subscribers: the user may change them, and that must not make a second one.
   const found = list.find(
