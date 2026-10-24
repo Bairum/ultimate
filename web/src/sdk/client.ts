@@ -1,6 +1,14 @@
 import { ActionError, actionMessage, createApi } from './api.ts'
 import { createRegistry } from './registry.ts'
 import { createStore } from './store.ts'
+import { createTestHook } from './test-hook.ts'
+import type { TestHook } from './test-hook.ts'
+
+declare global {
+  interface Window {
+    ultimate?: TestHook
+  }
+}
 import { createUiState } from './ui-state.ts'
 
 const initialUrl = new URL(location.href)
@@ -46,6 +54,8 @@ export const uiState = createUiState(detached ? undefined : api.updateUi, {
       message: `UI state not saved: ${String(error)}`,
     }),
 })
+// A page the browser tool drives, here or on a preview, waits on state through `window.ultimate` (test-hook.ts).
+if (sessionStorage.getItem('ultimate.driven') === '1') window.ultimate = createTestHook(store, api)
 /** Installed web facets of `extensions/*`. */
 export const registry = createRegistry()
 
