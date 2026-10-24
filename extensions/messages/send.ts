@@ -115,6 +115,7 @@ export async function send(
     if (from === 'user' && input.re !== undefined)
       for (const m of (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages)
         if (openQuestion(m) && m.id === input.re) m.state = input.dismiss ? 'dismissed' : 'answered'
+    let re = input.re
     if (from !== 'user' && input.reply !== false) {
       const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
       const pending = log.messages.find(
@@ -124,14 +125,20 @@ export async function send(
           m.reply &&
           (m.state === 'sent' || m.state === 'delivered'),
       )
-      // Still queued, it is unread: answering it would answer what the agent has not seen.
-      if (pending && (to === 'user' || pending.state === 'sent'))
+      // Still queued, it is unread: answering it would answer what the agent has not seen. A plain final answer
+      // reaches the user anyway; only a next question needs a message.
+      if (pending && (pending.state === 'sent' || (to === 'user' && !questions)))
         throw new Error(
           `Your answer to ${toLabel}'s message ${pending.id} is sent back automatically. Answer instead of messaging.`,
         )
+      // Asking the user the next question answers their reply: the new question is that answer, and stays open.
+      if (pending && to === 'user') {
+        pending.state = 'answered'
+        re = pending.id
+      }
       // An agent messaging a sender whose message it has read and owes an answer is answering: this becomes the reply,
       // and that message's delivery, seeing it answered, keeps the final answer local.
-      if (pending) {
+      else if (pending) {
         pending.state = 'answered'
         const response = await append(tx, {
           from,
@@ -170,7 +177,7 @@ export async function send(
       text: input.text,
       reply: input.reply ?? true,
       state: to === 'user' ? 'delivered' : 'sent',
-      ...(input.re === undefined ? {} : { re: input.re }),
+      ...(re === undefined ? {} : { re }),
       ...(callId === undefined ? {} : { call: callId }),
       ...(images ? { images } : {}),
       ...(questions ? { questions } : {}),

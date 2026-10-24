@@ -532,6 +532,11 @@ it('refuses @ultimate messaging the user it owes an answer', async () => {
     "Your answer to user's message 1 is sent back automatically. Answer instead of messaging.",
   )
   expect((await f.log())!.messages).toHaveLength(1)
+  // The next question, though, is the answer: it closes the user's reply and stays open itself.
+  await f.send('user', 'Next', { questions: [{ text: 'Ready?', kind: 'confirm' }] })
+  const [reply, next] = (await f.log())!.messages
+  expect(reply.state).toBe('answered')
+  expect(next).toMatchObject({ to: 'user', re: reply.id, reply: true, state: 'delivered' })
 })
 it.each([false, true])('replays a converted answer once (afterMemo: %s)', async (afterMemo) => {
   const sendGate = { gate: gate(), afterMemo, entered: false, conversation: () => 0 }

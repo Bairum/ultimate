@@ -31,7 +31,9 @@ in its reply phase; its `steer` and `reply` flags are ignored. The original's de
 the final answer local, and the tool returns `Sent as your answer to message N.` with `terminate`, so the run ends
 without restating it. A replayed call finds the reply through the `board.sent` receipt and memo, so it is sent once.
 `reply: false` updates and other recipients are unaffected. @ultimate's message to `user` while the user's message is
-open is still refused: its answer goes back automatically, and a reply cannot carry `questions`.
+open is still refused, since its answer goes back automatically, unless it carries `questions`: then the next
+question answers the user's message (marked `answered`, the new one names it in `re`) and stays open itself, so a
+conversation such as the onboarding walkthrough can ask one card after another.
 A subagent (a conversation its parent lists in `ultimate.subagents`) may message only that parent, so its work reaches
 the user through its coordinator and @ultimate; its prompt says so. Automation runs and top-level conversations may
 message any agent; only @ultimate may message the user.
