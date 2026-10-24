@@ -207,6 +207,7 @@ async function restoreReads(
 }
 
 export const editDescription = `Edit existing files using hashline patches. Copy [path#TAG] from the latest read, grep, write or edit result.
+Every edit needs that tag: line numbers seen only in bash output (cat, rg, sed) carry none, so read the file or use the grep tool first.
 Each section begins [path#TAG]. All numbers address the ORIGINAL tagged file; keep edits tight and touch only displayed lines.
 PUT N.=M: replaces a range. PUT <N: / PUT >N: insert before/after a line. PUT >$: appends.
 Every body needs a header line ending in ':' (PUT N.=M: / PUT <N: / PUT >N:).
