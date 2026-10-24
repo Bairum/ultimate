@@ -3,7 +3,7 @@ import type { MemoryItem } from '../lineage/refs.ts'
 import type { Todo } from '../todos/refs.ts'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { Schedule } from '../automations/refs.ts'
-import type { Journal, Proposal } from './refs.ts'
+import type { GrantedBy, Journal, Proposal } from './refs.ts'
 
 /** Everything a dream carries to a fresh chapter; no runtime ids for schedules or subscribers. */
 export type Seed = {
@@ -11,6 +11,8 @@ export type Seed = {
   gate?: true
   from: { name: string; number: number }
   session: number
+  /** The granted automation that fell asleep for the user; absent when the user did. */
+  by?: GrantedBy
   journal: Journal & { proposals: Proposal[] }
   memories: Record<string, MemoryItem>
   todos: Pick<Todo, 'text' | 'owner'>[]

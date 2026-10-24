@@ -87,3 +87,6 @@ export function trimLog(text: string): string {
   const bytes = Buffer.from(lines)
   return bytes.length > 256 * 1024 ? bytes.subarray(-256 * 1024).toString('utf8') : lines
 }
+
+/** Who acted for the user: automation `automation`, named `name`, under the user's grant, at `at`. */
+export type GrantedBy = { automation: string; name: string; at: number }

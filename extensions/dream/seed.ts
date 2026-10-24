@@ -195,6 +195,7 @@ export async function applySeed(host: ExtensionHost) {
           session: seed.session,
           learned: seed.journal.learned,
           carried: seed.counts,
+          ...(seed.by ? { by: seed.by } : {}),
         },
         content: chapterText(host, seed),
       })

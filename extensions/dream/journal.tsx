@@ -9,6 +9,7 @@ import type { EntryRecord } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { MoonRow, Passes, passLabels } from './moon.tsx'
 import { FallAsleep } from './sleep.tsx'
+import { Granted } from './morning.tsx'
 import { DreamDoc, EndAction } from './refs.ts'
 import type { Proposal, Session, SessionEntry } from './refs.ts'
 
@@ -68,6 +69,11 @@ export function StartedCard({ entry }: { entry: EntryRecord }) {
       }
       session={id}
     >
+      {session?.by && (
+        <div className="border-b border-border/60 px-3 py-1.5">
+          <Granted by={session.by} what="started this dream" />
+        </div>
+      )}
       {session && !filed && (
         <>
           <div className="px-3 py-2.5">

@@ -17,6 +17,7 @@ import {
   useChapters,
 } from './chapters.tsx'
 import { Moon } from './moon.tsx'
+import { Granted } from './morning.tsx'
 import type { Session, Sleep } from './refs.ts'
 
 type Step = Exclude<Sleep['phase'], 'asleep' | 'failed'>
@@ -209,6 +210,11 @@ function Failed({ sleep }: { sleep: Sleep }) {
           {sleep.error.replace(/^Error: /, '')}
         </p>
       )}
+      {sleep.by && (
+        <div className="mt-2">
+          <Granted by={sleep.by} what="tried to fall asleep" />
+        </div>
+      )}
       <p className="mt-2 text-[12px] text-muted-foreground">
         Nothing moved: we're still in{' '}
         <span className="text-foreground">
@@ -243,6 +249,7 @@ function Progress({ session, sleep }: { session: Session; sleep: Sleep }) {
         <span className="text-muted-foreground">
           Fell asleep into <span className="text-foreground">{label}</span> · {formatTime(sleep.at)}
         </span>
+        {sleep.by && <Granted by={sleep.by} what="fell asleep" />}
         {chapters && chapters.active !== sleep.chapter && (
           <button
             className="ml-auto cursor-pointer font-mono text-[11px] text-foreground/85 hover:text-foreground"
@@ -265,6 +272,7 @@ function Progress({ session, sleep }: { session: Session; sleep: Sleep }) {
         Falling asleep
         <span className="font-mono text-[11.5px] text-muted-foreground">into {label}</span>
       </p>
+      {sleep.by && <Granted by={sleep.by} what="started this" />}
       <ol className="mt-2 space-y-1.5">
         {STEPS.map((step, index) => {
           const status =

@@ -1,6 +1,7 @@
 /** Automations: resume, pause, run and inspect scheduled or supervised script triggers. */
 import { defineApi } from '../../shared/extension-api.ts'
-import type { AutomationListItem } from './types.ts'
+import type { AutomationListItem, GrantedBy } from './types.ts'
+export type { GrantedBy } from './types.ts'
 export type AutomationsService = {
   /** Resume a trigger from its current settings/executable. Commits; call outside transactions. */
   resume(id: string): Promise<AutomationListItem>
@@ -13,4 +14,16 @@ export type AutomationsService = {
 }
 /** Optional automation service. */
 export const AutomationsApi = defineApi<AutomationsService>()('automations')
+export type DreamGrantService = {
+  /** Start a dream session exactly as the user's Dream button does, every refusal included, on a granted fire. */
+  start(by: GrantedBy): Promise<{ session: number }>
+  /**
+   * Fall asleep for `session` (default: the newest one with a filed journal) on a granted fire: it checks the session
+   * now, waits until no conversation works, then runs every gate of the user's Fall asleep (seed, scratch preview, one
+   * repair, backup, rollback on a failed restart). The switch records `by`, and the morning card names it.
+   */
+  asleep(by: GrantedBy, input: { session?: number }): Promise<{ session: number }>
+}
+/** The extension point through which a granted automation starts a dream or falls asleep; dream provides it. */
+export const DreamGrant = defineApi<DreamGrantService>()('automations.dream')
 export { Fired, Started, Exited, Done, Escalated } from './refs.ts'

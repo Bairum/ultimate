@@ -77,6 +77,7 @@ async function fixture() {
       opener = callback
     },
     react: () => {},
+    implement: () => {},
     need: () => ({
       standing: async () =>
         opened.harness.commit(async (tx) => {

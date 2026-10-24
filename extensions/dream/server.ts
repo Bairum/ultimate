@@ -23,6 +23,8 @@ import { CloudApi } from '../cloud/api.ts'
 import { InstanceApi } from '../instance/api.ts'
 import { Standing, SubagentsApi } from '../subagents/api.ts'
 import { SubmissionLanded } from '../workspaces/api.ts'
+import { DreamGrant } from '../automations/api.ts'
+import type { GrantedBy } from '../automations/api.ts'
 import {
   AsleepAction,
   ChaptersAction,
@@ -103,7 +105,7 @@ function settle(found: Session, now: number) {
 }
 
 /** Record a new session in `tx`; refuses while one is open. */
-export async function startSession(tx: Tx, now: number) {
+export async function startSession(tx: Tx, now: number, by?: GrantedBy) {
   const doc = await tx.doc(Sessions, ROOT_CONVERSATION_ID)
   const active = doc.sessions.find((item) => item.endedAt === undefined)
   if (active)
@@ -114,7 +116,13 @@ export async function startSession(tx: Tx, now: number) {
     PassName,
     PassState
   >
-  const created: Session = { id: doc.next++, startedAt: now, passes, proposals: [] }
+  const created: Session = {
+    id: doc.next++,
+    startedAt: now,
+    passes,
+    proposals: [],
+    ...(by ? { by } : {}),
+  }
   doc.sessions.push(created)
   return created.id
 }
@@ -383,82 +391,11 @@ export const actions = {
       return restartChapter(host, name, () => finalBackup(host))
     }),
   ),
-  asleep: implementAction(AsleepAction, async (args, { host }) =>
-    changing(host, async () => {
-      const input = fields(args)
-      const chapters = await readChapters(host.home)
-      const initial = await host.harness().commit(async (tx) => {
-        const found = await find(tx, input.session)
-        if (!found.journal) throw new Error(`Dream session ${found.id} has no journal`)
-        if (found.proposals.some((item) => item.status === 'open' || item.status === 'approved'))
-          throw new Error('Settle every dream proposal before falling asleep')
-        await idle(host, tx)
-        const name = chapterName(input.name ?? found.journal.chapter)
-        if (chapters.chapters.some((item) => item.name === name))
-          throw new Error(`Chapter ${name} already exists; use switch instead`)
-        found.sleep = { chapter: name, phase: 'seeding', at: Date.now() }
-        return { session: found.id, name }
-      }, context)
-      const { session, name } = initial
-      const progress = (change: Partial<Sleep>) =>
-        host.harness().commit(async (tx) => {
-          const found = await find(tx, session)
-          found.sleep = { ...found.sleep!, ...change, at: Date.now() }
-          return JSON.parse(JSON.stringify(found.sleep)) as Sleep
-        }, context)
-      try {
-        const instances = host.want(InstanceApi)
-        if (!instances) throw new Error('Fall asleep needs the instance extension for its gate')
-        let seed = await buildSeed(host, session)
-        await progress({ phase: 'checking' })
-        let result = await gate(seed, name, instances)
-        if (!result.ok) {
-          await progress({ phase: 'seeding', checks: result.checks })
-          seed = await buildSeed(host, session)
-          await progress({ phase: 'checking' })
-          result = await gate(seed, name, instances)
-        }
-        if (!result.ok)
-          return {
-            session,
-            sleep: await progress({
-              phase: 'failed',
-              checks: result.checks,
-              error: 'Chapter gate failed after one repair',
-            }),
-          }
-        await progress({ phase: 'backing up', checks: result.checks })
-        await progress({ backup: await finalBackup(host) })
-        // The gate and backup can take time; work started since admission must also finish before we switch.
-        await host.harness().commit((tx) => idle(host, tx), context)
-        await progress({ phase: 'switching' })
-        await writeSeed(chapterFiles(host.home, name).dir, seed)
-        return await restartChapter(host, name)
-      } catch (error) {
-        return { session, sleep: await progress({ phase: 'failed', error: String(error) }) }
-      }
-    }),
-  ),
-  start: implementAction(StartAction, async (_args, { host }) => {
-    const ultimate = await host.need(SubagentsApi).standing('ultimate', context)
-    const busy = busyElsewhere(host.conversations(), ultimate)
-    if (busy.length)
-      throw new Error(
-        `Wait for these to finish before dreaming: ${busy.map((item) => `#${item.id} ${item.title}`).join(', ')}`,
-      )
-    const session = await host.harness().commit(async (tx) => {
-      const id = await startSession(tx, Date.now())
-      await deliver(host, tx, ultimate, {
-        type: 'input',
-        session: id,
-        kind: 'dream.started',
-        content: `The user started dream session ${id}. Follow "For @ultimate" in the clone's extensions/dream/DREAM.md: start the dream branch now.`,
-      })
-      return id
-    }, context)
-    host.harness().resume()
-    return { session }
+  asleep: implementAction(AsleepAction, async (args, { host }) => {
+    const input = fields(args)
+    return changing(host, async () => fallAsleep(host, await admitSleep(host, input)))
   }),
+  start: implementAction(StartAction, async (_args, { host }) => startDream(host)),
   end: implementAction(EndAction, async (args, { host }) =>
     host.harness().commit(async (tx) => {
       const found = await open(tx, fields(args).session)
@@ -505,7 +442,188 @@ export const actions = {
   ),
 }
 
+/**
+ * Start a dream session: the user's Dream button, or a granted automation `by` acting for the user. Both refuse while
+ * other top-level conversations work (besides @ultimate and the conversation acting) or a session is open.
+ */
+export async function startDream(host: ExtensionHost, by?: GrantedBy, acting?: number) {
+  const ultimate = await host.need(SubagentsApi).standing('ultimate', context)
+  const busy = busyElsewhere(host.conversations(), ultimate).filter((item) => item.id !== acting)
+  if (busy.length)
+    throw new Error(
+      `Wait for these to finish before dreaming: ${busy.map((item) => `#${item.id} ${item.title}`).join(', ')}`,
+    )
+  const session = await host.harness().commit(async (tx) => {
+    const id = await startSession(tx, Date.now(), by)
+    await deliver(host, tx, ultimate, {
+      type: 'input',
+      session: id,
+      kind: 'dream.started',
+      content: `${by ? `Automation ${by.automation} "${by.name}" started dream session ${id} under the user's grant` : `The user started dream session ${id}`}. Follow "For @ultimate" in the clone's extensions/dream/DREAM.md: start the dream branch now.`,
+    })
+    return id
+  }, context)
+  host.harness().resume()
+  return { session }
+}
+
+/**
+ * Check that session `input.session` may fall asleep now and claim its sleep: a filed journal, every proposal settled,
+ * a new chapter name, and no conversation at work. `by` names the granted automation that asked.
+ */
+async function admitSleep(
+  host: ExtensionHost,
+  input: { session?: unknown; name?: unknown },
+  by?: GrantedBy,
+) {
+  const chapters = await readChapters(host.home)
+  return host.harness().commit(async (tx) => {
+    const found = await sleepable(tx, input.session)
+    await idle(host, tx)
+    const name = chapterName(input.name ?? found.journal!.chapter)
+    if (chapters.chapters.some((item) => item.name === name))
+      throw new Error(`Chapter ${name} already exists; use switch instead`)
+    found.sleep = { chapter: name, phase: 'seeding', at: Date.now(), ...(by ? { by } : {}) }
+    return { session: found.id, name }
+  }, context)
+}
+
+/** Session `id` (default: the newest with a journal) when it may fall asleep: journal filed, proposals settled. */
+async function sleepable(tx: Tx, id: unknown) {
+  const found =
+    id === undefined
+      ? (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions.findLast((item) => item.journal)
+      : await find(tx, id)
+  if (!found) throw new Error('No dream session has a journal yet')
+  if (!found.journal) throw new Error(`Dream session ${found.id} has no journal`)
+  if (found.proposals.some((item) => item.status === 'open' || item.status === 'approved'))
+    throw new Error('Settle every dream proposal before falling asleep')
+  if (found.sleep && found.sleep.phase !== 'failed')
+    throw new Error(`Dream session ${found.id} is already falling asleep (${found.sleep.phase})`)
+  return found
+}
+
+/**
+ * Every gate of Fall asleep after admission, the same for the user and a grant: seed, scratch preview with one repair,
+ * final backup, nothing at work, then the journaled restart that rolls back when it fails.
+ */
+async function fallAsleep(
+  host: ExtensionHost,
+  { session, name }: { session: number; name: string },
+) {
+  const progress = (change: Partial<Sleep>) =>
+    host.harness().commit(async (tx) => {
+      const found = await find(tx, session)
+      found.sleep = { ...found.sleep!, ...change, at: Date.now() }
+      return JSON.parse(JSON.stringify(found.sleep)) as Sleep
+    }, context)
+  try {
+    const instances = host.want(InstanceApi)
+    if (!instances) throw new Error('Fall asleep needs the instance extension for its gate')
+    const by = await host
+      .harness()
+      .commit(async (tx) => {
+        const found = (await find(tx, session)).sleep?.by
+        return found && (JSON.parse(JSON.stringify(found)) as GrantedBy)
+      }, context)
+    const build = async () => ({ ...(await buildSeed(host, session)), ...(by ? { by } : {}) })
+    let seed = await build()
+    await progress({ phase: 'checking' })
+    let result = await gate(seed, name, instances)
+    if (!result.ok) {
+      await progress({ phase: 'seeding', checks: result.checks })
+      seed = await build()
+      await progress({ phase: 'checking' })
+      result = await gate(seed, name, instances)
+    }
+    if (!result.ok)
+      return {
+        session,
+        sleep: await progress({
+          phase: 'failed',
+          checks: result.checks,
+          error: 'Chapter gate failed after one repair',
+        }),
+      }
+    await progress({ phase: 'backing up', checks: result.checks })
+    await progress({ backup: await finalBackup(host) })
+    // The gate and backup can take time; work started since admission must also finish before we switch.
+    await host.harness().commit((tx) => idle(host, tx), context)
+    await progress({ phase: 'switching' })
+    await writeSeed(chapterFiles(host.home, name).dir, seed)
+    return await restartChapter(host, name)
+  } catch (error) {
+    return { session, sleep: await progress({ phase: 'failed', error: String(error) }) }
+  }
+}
+
+/** How long a granted Fall asleep waits for every conversation to finish before it gives up. */
+export const GRANTED_SLEEP_WAIT_MS = 30 * 60_000
+
+/**
+ * Fall asleep for a granted automation `by`. The automation's woken agent asks while its own turn runs, so this checks
+ * the session now, returns, and in the background waits until no conversation works (the agent's turn included), then
+ * admits and runs every gate exactly as the user's Fall asleep does. A refusal after the wait is recorded on the session
+ * as a failed sleep; a restart while waiting drops the wait, and nothing switches.
+ */
+export async function grantedSleep(
+  host: ExtensionHost,
+  by: GrantedBy,
+  input: { session?: number },
+  wait: (ready: () => boolean) => Promise<boolean> = (ready) => idleWithin(host, ready),
+) {
+  const session = await host
+    .harness()
+    .commit(async (tx) => (await sleepable(tx, input.session)).id, context)
+  const run = async () => {
+    const ready = () => !busyElsewhere(host.conversations()).length
+    if (!(await wait(ready)))
+      throw new Error(
+        `Conversations kept working for ${GRANTED_SLEEP_WAIT_MS / 60_000} minutes; nothing switched`,
+      )
+    return changing(host, async () => fallAsleep(host, await admitSleep(host, { session }, by)))
+  }
+  run().catch((error: unknown) =>
+    host
+      .harness()
+      .commit(async (tx) => {
+        const found = await find(tx, session)
+        const chapter = found.sleep?.chapter ?? found.journal?.chapter ?? ''
+        found.sleep = { chapter, phase: 'failed', error: String(error), at: Date.now(), by }
+      }, context)
+      .catch((failure: unknown) => host.notice(`Granted Fall asleep: ${String(failure)}`)),
+  )
+  return { session }
+}
+
+/** Resolve true once `ready()` holds, checked on every commit, or false after `GRANTED_SLEEP_WAIT_MS`. */
+function idleWithin(host: ExtensionHost, ready: () => boolean) {
+  return new Promise<boolean>((resolve) => {
+    if (ready()) return resolve(true)
+    let look: ReturnType<typeof setTimeout> | undefined
+    // Not a reactor: whether conversations work is the harness's live state, not a domain event.
+    const stop = host.harness().subscribeCommits(() => {
+      // The summary list follows the commit; look once commits have settled for a second.
+      clearTimeout(look)
+      look = setTimeout(() => {
+        if (ready()) finish(true)
+      }, 1000)
+    })
+    const timer = setTimeout(() => finish(false), GRANTED_SLEEP_WAIT_MS)
+    function finish(value: boolean) {
+      stop()
+      clearTimeout(timer)
+      clearTimeout(look)
+      resolve(value)
+    }
+  })
+}
+
 export default function dream(host: ExtensionHost) {
+  host.implement(DreamGrant, {
+    start: (by) => startDream(host, by),
+    asleep: (by, input) => grantedSleep(host, by, input),
+  })
   host.onOpen(async () => {
     await settleSleep(host)
     await applySeed(host)

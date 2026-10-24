@@ -25,6 +25,7 @@ import { Todos } from '../extensions/todos/server.ts'
 import {
   actions,
   fileJournal,
+  grantedSleep,
   Sessions,
   startSession,
   userActions,
@@ -32,7 +33,7 @@ import {
 import type { Sleep } from '../extensions/dream/refs.ts'
 import type { Seed } from '../extensions/dream/types.ts'
 import { inspection } from './dream-fixture.ts'
-import { temp } from './helpers.ts'
+import { temp, until } from './helpers.ts'
 
 const harnesses: Harness[] = []
 afterEach(async () => {
@@ -314,6 +315,78 @@ it('stays when the backup fails or the instance service is missing', async () =>
   expect(await actions.asleep({ session: 1 }, f.call)).toMatchObject({
     sleep: { phase: 'failed', error: expect.stringContaining('instance extension') },
   })
+})
+
+const by = { automation: 'A4', name: 'Dream at 80%', at: 5 }
+
+it('runs every gate for a granted Fall asleep once nothing works, and records who did it', async () => {
+  const f = await fixture()
+  await f.journal()
+  let busy = true
+  f.host.conversations = () =>
+    (busy ? [{ id: 20, busy: true, title: 'Woken by the automation' }] : []) as never
+  let release!: (value: boolean) => void
+  const waited = new Promise<boolean>((resolve) => (release = resolve))
+  // The woken agent's own turn is still running when it asks: the check passes, the gates wait.
+  expect(await grantedSleep(f.host, by, {}, () => waited)).toEqual({ session: 1 })
+  expect(f.phases).toEqual([])
+  busy = false
+  release(true)
+  await until(() => f.phases.at(-1)?.phase === 'failed')
+  expect(f.phases.at(-1)?.error).toBe('Error: Restart refused')
+  expect(f.phases.map((item) => item.phase)).toEqual([
+    'seeding',
+    'checking',
+    'backing up',
+    'backing up',
+    'switching',
+    'failed',
+  ])
+  expect(f.phases.every((item) => item.by?.automation === 'A4')).toBe(true)
+  expect(f.instances.start).toHaveBeenCalledOnce()
+  expect(f.cloud.backup).toHaveBeenCalledOnce()
+  expect(f.host.restart).toHaveBeenCalledOnce()
+  // The seed the next chapter opens with names the automation, so its morning card can say so.
+  expect(f.current().by).toEqual(by)
+  expect(existsSync(join(f.home, 'pending-chapter.json'))).toBe(false)
+})
+
+it.each(['no journal', 'open'])(
+  'refuses a granted Fall asleep with %s at once, before any wait',
+  async (reason) => {
+    const f = await fixture()
+    if (reason === 'open') {
+      await f.journal()
+      await f.harness.commit(async (tx) => {
+        ;(await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions[0].proposals.push({
+          id: 'p',
+          pass: 'tools',
+          title: 'Fix',
+          status: 'open',
+        })
+      }, context)
+    }
+    const wait = vi.fn(async () => true)
+    await expect(grantedSleep(f.host, by, {}, wait)).rejects.toThrow(
+      reason === 'open' ? 'Settle every' : 'No dream session has a journal yet',
+    )
+    expect(wait).not.toHaveBeenCalled()
+    expect(f.instances.start).not.toHaveBeenCalled()
+  },
+)
+
+it('records a granted Fall asleep whose wait ran out, and switches nothing', async () => {
+  const f = await fixture()
+  await f.journal()
+  await grantedSleep(f.host, by, {}, async () => false)
+  await until(() => f.phases.at(-1)?.phase === 'failed')
+  expect(f.phases.at(-1)).toMatchObject({
+    phase: 'failed',
+    by,
+    error: expect.stringContaining('kept working'),
+  })
+  expect(f.instances.start).not.toHaveBeenCalled()
+  expect(f.host.restart).not.toHaveBeenCalled()
 })
 
 it('stays when another conversation starts during the gate or backup', async () => {
