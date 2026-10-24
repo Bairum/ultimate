@@ -25,6 +25,7 @@ import { UserInputEvent } from '../shared/events.ts'
 import { admit, deviceOf } from './request-security.ts'
 import type { Access } from './request-security.ts'
 import { conversationIndex } from './project.ts'
+import { maxUploadBytes, pruneUploads, saveUpload, UploadTooLarge } from './uploads.ts'
 import { windowOps, windowView } from './view-window.ts'
 
 class HttpError extends Error {
@@ -159,6 +160,7 @@ export async function createApi(
   let closed = false
   let summaries: ConversationSummary[] = []
   const projectIndex = conversationIndex(host.home)
+  void pruneUploads(host.home).catch((failure) => console.error('Pruning uploads failed', failure))
   const indexListener: Parameters<typeof events.listeners.add>[0] = (name, data) => {
     if (name === 'conversations') projectIndex.update(data as ConversationSummary[])
   }
@@ -407,6 +409,22 @@ export async function createApi(
           return true
         }
         if (request.method !== 'POST') throw new HttpError(404, 'Unknown endpoint')
+        const upload = /^\/api\/conversations\/(\d+)\/upload$/.exec(url.pathname)
+        if (upload) {
+          const name = url.searchParams.get('name')
+          if (!name) throw new HttpError(400, 'Expected name')
+          if (Number(request.headers['content-length'] ?? 0) > maxUploadBytes)
+            throw new HttpError(413, 'File exceeds 50 MiB')
+          const path = await saveUpload(host.home, Number(upload[1]), name, request).catch(
+            (failure: unknown) => {
+              throw failure instanceof UploadTooLarge
+                ? new HttpError(413, failure.message)
+                : failure
+            },
+          )
+          json(200, { path })
+          return true
+        }
         const data = await body(
           request,
           /^\/api\/conversations\/\d+\/submit$/.test(url.pathname) ? 12 * 1024 * 1024 : undefined,

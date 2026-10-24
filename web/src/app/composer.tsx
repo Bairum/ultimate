@@ -3,6 +3,7 @@ import { cn } from 'cn'
 import { CornerDownRightIcon, ListPlusIcon, LoaderCircleIcon, XIcon } from 'lucide-react'
 import { createContext, useContext, useEffect, useState, useSyncExternalStore } from 'react'
 import { ImagePreviews, useImagePaste } from '@/components/image-paste'
+import { useFileDrop } from '@/components/file-drop'
 import type { KeyboardEvent, ReactNode } from 'react'
 import {
   PromptInput,
@@ -257,6 +258,15 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     if (value) localStorage.setItem(key, value)
     else localStorage.removeItem(key)
   }
+  const inputId = scoped === undefined ? 'composer-input' : `composer-input-${scoped}`
+  const drop = useFileDrop({
+    conversation: id,
+    textarea: () => document.getElementById(inputId) as HTMLTextAreaElement | null,
+    text: () => draft.get().text,
+    update,
+    setError,
+    disabled: () => loading || draft.get().sending,
+  })
   const blocked = loading ? undefined : blockedBy(agent, models)
   const empty = !text.trim() && images.length === 0
 
@@ -337,12 +347,19 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     >
       <Inbox items={inbox} />
       <PromptInput
+        {...drop.handlers}
+        className="relative"
         onSubmit={(event) => {
           event.preventDefault()
           // oxlint-disable-next-line typescript/no-floating-promises -- send catches submission failures and displays them in the draft's error state.
           void send()
         }}
       >
+        {(drop.over || drop.uploading) && (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl border border-dashed border-ring bg-card/90 text-sm text-muted-foreground">
+            {drop.over ? 'Drop to insert file paths' : 'Saving files…'}
+          </div>
+        )}
         <ImagePreviews
           images={images}
           disabled={loading || sending || reading}
@@ -352,7 +369,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
           autoFocus={!touchKeyboard()}
           readOnly={loading || sending}
           onPaste={(event) => void paste(event)}
-          id={scoped === undefined ? 'composer-input' : `composer-input-${scoped}`}
+          id={inputId}
           onChange={(event) => update(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder={

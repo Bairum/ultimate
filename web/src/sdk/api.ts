@@ -88,6 +88,20 @@ export function createApi(store: Store, options: { fetch?: typeof fetch } = {}) 
     `/api/conversations/${id ?? shown()}/${action}`
 
   return {
+    /** Saves a dropped file under the project home and returns its path. */
+    upload: async (id: number | undefined, file: File): Promise<string> => {
+      const response = await request(
+        `${conversation(id, 'upload')}?${new URLSearchParams({ name: file.name })}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file },
+      )
+      const data = (await response.json().catch(() => ({}))) as { path?: string; error?: string }
+      if (!response.ok || !data.path)
+        throw new HttpError(
+          response.status,
+          data.error ?? `${response.status} ${response.statusText}`,
+        )
+      return data.path
+    },
     submit: (
       text: string,
       whenBusy?: SubmitRequest['whenBusy'],
