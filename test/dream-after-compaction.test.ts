@@ -19,7 +19,6 @@ import automations, {
   actions as automationActions,
   Automations,
 } from '../extensions/automations/server.ts'
-import type { Automation } from '../extensions/automations/types.ts'
 import dream, { actions, fileJournal, Sessions, startSession } from '../extensions/dream/server.ts'
 import {
   AfterCompactionDoc,
@@ -186,7 +185,10 @@ async function fixture() {
     },
     settle: () => until(events.settled),
     action: (name: keyof typeof automationActions, args: JsonValue = {}) =>
-      automationActions[name](args, { host, conversationId: ultimate } as ActionContext),
+      automationActions[name](args, {
+        host,
+        conversationId: ultimate,
+      } as unknown as ActionContext),
   }
 }
 
@@ -228,7 +230,7 @@ it("starts one wait on @ultimate's compaction, none for another conversation's o
   await f.settle()
   expect((await f.record((await f.own())!)).fires).toBe(2)
   // Two compactions while the first still waits: one wait.
-  expect((await f.waits()).filter((task) => task.status !== 'completed')).toHaveLength(1)
+  expect(await f.waits()).toHaveLength(1)
 })
 
 it('waits for idle, then starts the session through the Dream path, and times out with a quiet note', async () => {
@@ -266,9 +268,10 @@ it('does nothing while a chapter change runs or a sleep is under way', async () 
   const f = await fixture()
   const { look } = compactionDream(f.host, f.deps)
   const input = { automation: (await f.own())!, name: AUTOMATION_NAME, deadline: 1000 }
-  ;(f.host.resource('dream.switching', () => ({ busy: false })) as { busy: boolean }).busy = true
+  const lock = f.host.resource('dream.switching', () => ({ busy: false }))
+  lock.busy = true
   expect(await look(input, 1, 10)).toBe('done')
-  ;(f.host.resource('dream.switching', () => ({ busy: false })) as { busy: boolean }).busy = false
+  lock.busy = false
   await f.harness.commit(async (tx) => {
     await startSession(tx, 1)
     const doc = await tx.doc(Sessions, ROOT_CONVERSATION_ID)
@@ -350,13 +353,13 @@ it.each([
       threshold: ASLEEP_AFTER,
       result,
     })
-    if (result === 'asleep')
-      expect(f.deps.grantedSleep).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ automation: id, name: AUTOMATION_NAME }),
-        { session: 1 },
-      )
-    else expect(f.deps.grantedSleep).not.toHaveBeenCalled()
+    // Only the grant falls asleep, and as the automation, for this session.
+    const asleep = [
+      [expect.objectContaining({ automation: id, name: AUTOMATION_NAME }), { session: 1 }],
+    ]
+    expect(f.deps.grantedSleep.mock.calls.map(([, by, input]) => [by, input])).toEqual(
+      result === 'asleep' ? asleep : [],
+    )
     // Settling twice decides once.
     await settle(1)
     expect(f.deps.grantedSleep.mock.calls.length).toBe(result === 'asleep' ? 1 : 0)
@@ -384,7 +387,8 @@ it('asks the user when the asleep grant is refused', async () => {
 
 it('reads dream.asleepAfter from project over user settings, and rejects nonsense', async () => {
   const home = await temp('ultimate-asleep-after-')
-  const host = (project: object) => ({ userHome: home, projectSettings: async () => project })
+  const host = (project: object) =>
+    ({ userHome: home, projectSettings: async () => project }) as unknown as ExtensionHost
   expect(await asleepAfter(host({}))).toBe(ASLEEP_AFTER)
   await writeJson(`${home}/.ultimate/settings.json`, { dream: { asleepAfter: 3 } })
   expect(await asleepAfter(host({}))).toBe(3)
