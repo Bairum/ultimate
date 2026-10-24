@@ -226,17 +226,24 @@ export default function browserExtension(host: ExtensionHost) {
                   else {
                     const ms = step.timeoutMs ?? untilTimeoutMs
                     // The hook times out first and says what was still busy; the guard only backs it up.
-                    value = await guard(
+                    const outcome = await guard(
                       page.evaluate(
                         ([condition, conversation, timeoutMs]) =>
-                          window.ultimate!.until(condition, {
-                            conversation: conversation ?? undefined,
-                            timeoutMs,
-                          }),
+                          window
+                            .ultimate!.until(condition, {
+                              conversation: conversation ?? undefined,
+                              timeoutMs,
+                            })
+                            .then(
+                              (result) => ({ result }),
+                              (error: unknown) => ({ error: String(error) }),
+                            ),
                         [step.until, step.conversation ?? null, ms] as const,
                       ),
                       ms,
                     )
+                    if ('error' in outcome) throw new Error(outcome.error.replace(/^Error: /, ''))
+                    value = outcome.result
                   }
                 } else value = await guard(page.evaluate(step.eval))
                 outcomes.push(
