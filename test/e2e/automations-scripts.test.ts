@@ -360,13 +360,15 @@ async function committed(root: string, slug: string, script: string) {
   await writeFile(join(dir, 'run'), `#!/bin/sh\n${script}\n`)
   await chmod(join(dir, 'run'), 0o700)
 }
+/** Project records only: dream can independently register its built-in event automation. */
 async function list(app: NonNullable<typeof server>) {
-  return (await app.extensions.invoke(
+  const automations = (await app.extensions.invoke(
     'automations',
     'list',
     null,
     new AbortController().signal,
   )) as Automation[]
+  return automations.filter((a) => a.scope === 'project')
 }
 
 it('discovers a committed project automation by slug only in a chosen project, and starts, stops and DONEs it there', async () => {
@@ -473,12 +475,7 @@ it('creates a project automation in the checkout with a committed manifest', asy
     ),
   ).toEqual({ name: 'Ship PRs', ask: 'Poll ship PRs', once: false, secrets: ['GH_TOKEN'] })
   // Discovery keeps the created record and its agent.
-  const listed = (await app.extensions.invoke(
-    'automations',
-    'list',
-    null,
-    new AbortController().signal,
-  )) as Automation[]
+  const listed = await list(app)
   expect(listed).toMatchObject([
     { id: 'ship-prs', script: { conversationId: sub.script!.conversationId, state: 'writing' } },
   ])
