@@ -233,6 +233,20 @@ it("starts one wait on @ultimate's compaction, none for another conversation's o
   expect(await f.waits()).toHaveLength(1)
 })
 
+it('finds a wait that sleeps between looks, so another compaction starts no second one', async () => {
+  const f = await fixture()
+  f.busy([{ id: 50, busy: true, title: 'A branch at work' }])
+  f.host.harness().resume()
+  await f.compact(f.ultimate)
+  await f.settle()
+  // The scheduler runs the first look: busy, so the wait sleeps until the next one.
+  await until(async () => (await f.waits())[0]?.state.status === 'sleeping')
+  await f.compact(f.ultimate)
+  await f.settle()
+  expect((await f.record((await f.own())!)).fires).toBe(2)
+  expect(await f.waits()).toHaveLength(1)
+})
+
 it('waits for idle, then starts the session through the Dream path, and times out with a quiet note', async () => {
   const f = await fixture()
   const { look } = compactionDream(f.host, f.deps)
@@ -245,7 +259,8 @@ it('waits for idle, then starts the session through the Dream path, and times ou
   // @ultimate's own turn is not work in progress: only another conversation's is.
   expect(await look(input, 9, 10)).toBe('look')
   expect(await f.sessions()).toEqual([])
-  // Past the deadline: gives up, leaves @ultimate a note, starts nothing.
+  // Past the deadline: gives up, leaves @ultimate a note, starts nothing, even with nothing else at work.
+  f.busy([])
   expect(await look(input, 9, 1000)).toBe('done')
   expect(f.notes).toEqual([{ to: f.ultimate, text: expect.stringContaining('did not start') }])
   expect(await f.sessions()).toEqual([])
@@ -278,6 +293,18 @@ it('does nothing while a chapter change runs or a sleep is under way', async () 
     doc.sessions[0].endedAt = 2
     doc.sessions[0].sleep = { chapter: 'next', phase: 'checking', at: 2 }
   }, context)
+  expect(await look(input, 2, 20)).toBe('done')
+  expect(f.deps.start).not.toHaveBeenCalled()
+})
+
+it('starts nothing once its automation is paused or deleted', async () => {
+  const f = await fixture()
+  const { look } = compactionDream(f.host, f.deps)
+  const id = (await f.own())!
+  const input = { automation: id, name: AUTOMATION_NAME, deadline: 1000 }
+  await f.action('pause', { id })
+  expect(await look(input, 1, 10)).toBe('done')
+  await f.action('delete', { id })
   expect(await look(input, 2, 20)).toBe('done')
   expect(f.deps.start).not.toHaveBeenCalled()
 })
@@ -370,6 +397,43 @@ it.each([
     expect((await submitted())?.type).toBe(result === 'ask' ? 'input' : 'write')
   },
 )
+
+it('asks instead of sleeping once the granted automation is paused', async () => {
+  const f = await fixture()
+  const id = (await f.own())!
+  await automationActions.grant({ id, actions: ['asleep'] }, f.call)
+  await f.action('pause', { id })
+  const { settle } = compactionDream(f.host, f.deps)
+  await settledSession(f, ASLEEP_AFTER)
+  await settle(1)
+  expect((await f.sessions())[0].afterCompaction?.outcome?.result).toBe('ask')
+  expect(f.deps.grantedSleep).not.toHaveBeenCalled()
+})
+
+it('keeps a chapter seed paused whichever check runs first', async () => {
+  const f = await fixture()
+  // A fresh chapter whose seed carried the automation paused, before any check made it.
+  await f.action('delete', { id: (await f.own())! })
+  await f.harness.commit(async (tx) => {
+    const doc = await tx.doc(AfterCompactionDoc, ROOT_CONVERSATION_ID)
+    delete doc.id
+    delete doc.deleted
+  }, context)
+  await writeJson(`${f.host.chapter.dir}/seed.json`, { afterCompaction: { enabled: false } })
+  // The standing reactor's check runs without the seed in hand: it reads the seed itself.
+  await ensureAutomation(f.host)
+  const id = (await f.own())!
+  expect((await f.record(id)).enabled).toBe(false)
+  // A seed whose chapter had deleted it makes none.
+  await f.action('delete', { id })
+  await f.harness.commit(async (tx) => {
+    const doc = await tx.doc(AfterCompactionDoc, ROOT_CONVERSATION_ID)
+    delete doc.id
+  }, context)
+  await writeJson(`${f.host.chapter.dir}/seed.json`, {})
+  await ensureAutomation(f.host)
+  expect((await f.harness.snapshot(Automations, context))!.automations).toEqual({})
+})
 
 it('asks the user when the asleep grant is refused', async () => {
   const f = await fixture()

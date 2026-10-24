@@ -1,7 +1,7 @@
 /** Automations: resume, pause, run and inspect scheduled, event, context or supervised script triggers. */
 import type { Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
-import type { AutomationListItem, GrantedBy } from './types.ts'
+import type { Automation, AutomationListItem, GrantedBy } from './types.ts'
 export type { GrantedBy } from './types.ts'
 export type AutomationsService = {
   /** Resume a trigger from its current settings/executable. Commits; call outside transactions. */
@@ -12,6 +12,11 @@ export type AutomationsService = {
   run(id: string): Promise<AutomationListItem>
   /** The record, including whether its script process is alive. */
   status(id: string): Promise<AutomationListItem>
+  /**
+   * The record of `id` as `tx` sees it, a plain copy, or undefined once deleted: for a check (enabled, granted) that must
+   * hold in the same transaction as the effect it allows.
+   */
+  read(tx: Tx, id: string): Promise<Automation | undefined>
 }
 /** Optional automation service. */
 export const AutomationsApi = defineApi<AutomationsService>()('automations')

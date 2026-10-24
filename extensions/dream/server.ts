@@ -48,7 +48,7 @@ import { deliver, deliverTask } from './delivery.ts'
 import { applySeed, buildSeed, SeedState, writeSeed } from './seed.ts'
 import { gate } from './gate.ts'
 import { AfterCompactionDoc, compactionDream, ensureAutomation } from './after-compaction.ts'
-import type { PassName, Seed } from './types.ts'
+import type { PassName } from './types.ts'
 
 export const Sessions = defineDoc<{ next: number; sessions: Session[] }>({
   kind: DreamDoc.kind,
@@ -767,15 +767,16 @@ export default function dream(host: ExtensionHost) {
   // One at a time, across facet reloads: two concurrent checks would both make the automation.
   const queue = host.resource('dream.after-compaction', () => ({ last: Promise.resolve() }))
   /** Queue a check behind the last one; a failure becomes a notice. */
-  const ensure = (seed?: Seed) => {
-    const run = queue.last.then(() => ensureAutomation(host, seed))
+  const ensure = () => {
+    const run = queue.last.then(() => ensureAutomation(host))
     // The queue only orders the checks: the failure is reported below, and the next check still runs.
     queue.last = run.catch(() => undefined)
     return run.catch((error: unknown) => host.notice(`Dream after compaction: ${String(error)}`))
   }
   host.onOpen(async () => {
     await settleSleep(host)
-    await ensure(await applySeed(host))
+    await applySeed(host)
+    await ensure()
   })
   // A fresh project has no @ultimate when it opens: the automation follows once it exists. Outside the transaction:
   // making it commits.

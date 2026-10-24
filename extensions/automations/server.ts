@@ -799,6 +799,10 @@ export default function automations(host: ExtensionHost) {
     pause: async (id) => (await api.operate({ action: 'pause', id }), api.status(id)),
     run: async (id) => (await api.operate({ action: 'run', id }), api.status(id)),
     status: api.status,
+    read: async (tx, id) => {
+      const a = (await tx.doc(Automations)).automations[id]
+      return a && json(a)
+    },
   })
   api.trigger.install()
   host.onOpen(async () => {

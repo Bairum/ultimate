@@ -16,6 +16,8 @@ import {
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, JsonObject, Tx } from '@earendil-works/pi-durable'
+import { join } from 'node:path'
+import { readJson } from '../../lib/json-file.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { AutomationsApi } from '../automations/api.ts'
@@ -82,7 +84,9 @@ export const changes = (found: Session) =>
  * Make sure this chapter has the built-in automation, unless the user deleted it. A new chapter makes it as its `seed`
  * carried it: paused stays paused, and one deleted before the switch is not made again.
  */
-export async function ensureAutomation(host: ExtensionHost, seed?: Seed) {
+export async function ensureAutomation(host: ExtensionHost) {
+  // Every caller reads the chapter's own seed, so whichever runs first keeps its paused or deleted automation so.
+  const seed = await readJson<Seed | undefined>(join(host.chapter.dir, 'seed.json'), undefined)
   // A gate's preview checks the seed against the real project; it makes nothing that could fire.
   if (seed?.gate) return
   if (!host.extensions().some((item) => item.name === 'automations' && item.enabled)) return
@@ -95,6 +99,7 @@ export async function ensureAutomation(host: ExtensionHost, seed?: Seed) {
     }, context)
   if (!state?.id && seed && !seed.afterCompaction) return remember({ deleted: true })
   const signal = new AbortController().signal
+  // Session-scoped ledger: its list action reads it, as the seed does.
   const list = (await host.invoke('automations', 'list', null, signal)) as Automation[]
   // Gone from the list: the user deleted it, and that choice holds.
   if (state?.id)
@@ -111,7 +116,7 @@ export async function ensureAutomation(host: ExtensionHost, seed?: Seed) {
       signal,
     )) as Automation)
   if (seed?.afterCompaction?.enabled === false && created.enabled)
-    await host.invoke('automations', 'pause', { id: created.id }, signal)
+    await host.need(AutomationsApi).pause(created.id)
   await remember({ id: created.id })
 }
 
@@ -170,55 +175,42 @@ export function compactionDream(
     status: 'terminal' as const,
     outcome: { status: 'completed' as const, result: null },
   }
-  /** Automation `id` with its grant; undefined when automations is off or the user deleted it: no grant then. */
-  const grantOf = async (id: string) =>
-    host
-      .want(AutomationsApi)
-      ?.status(id)
-      .catch((error: unknown) => {
-        // A deleted automation grants nothing; status refuses it as unknown.
-        if (String(error).includes('Unknown automation')) return undefined
-        throw error
-      })
+  /**
+   * The automation `id` as `tx` sees it, only while it is enabled: a paused or deleted one does nothing and grants
+   * nothing. Read in the transaction of the effect it allows, as automations' own `act` does.
+   */
+  const enabled = async (tx: Tx, id: string) => {
+    const automation = await host.want(AutomationsApi)?.read(tx, id)
+    return automation?.enabled ? automation : undefined
+  }
 
   /**
    * One look of wait `task`: `look` again while another top-level conversation works and time is left; `started` once
-   * the session started; `done` when no dream may start (a session open, a sleep or a chapter change) or the wait ran
-   * out, which leaves @ultimate a quiet note.
+   * the session started; `done` when no dream may start (its automation paused or deleted, a session open, a sleep or
+   * a chapter change) or the wait ran out, which leaves @ultimate a quiet note. Every check and the start commit
+   * together.
    */
   async function look(input: WaitInput, task: number, now: number) {
-    const automation = await grantOf(input.automation)
-    const handsOff = !!automation?.grant?.actions.includes('dream')
     const next = await host.harness().commit(async (tx) => {
+      // Expired first: a host that wakes long after the deadline gives up instead of starting a stale dream.
+      if (now >= input.deadline) return 'gave up'
+      const automation = await enabled(tx, input.automation)
       const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
       const { sessions } = await tx.doc(deps.Sessions, ROOT_CONVERSATION_ID)
-      if (ultimate === undefined || blocked(sessions, deps.switching())) return 'done'
-      if (busyElsewhere(host.conversations(), ultimate).length)
-        return now < input.deadline ? 'look' : 'gave up'
-      return 'start'
-    }, context)
-    if (next === 'look' || next === 'done') return next
-    if (next === 'start') {
-      const after = {
+      if (!automation || ultimate === undefined || blocked(sessions, deps.switching()))
+        return 'done'
+      if (busyElsewhere(host.conversations(), ultimate).length) return 'look'
+      const handsOff = !!automation.grant?.actions.includes('dream')
+      await deps.start(tx, {
         automation: input.automation,
         name: input.name,
         at: now,
         ...(handsOff ? { handsOff } : {}),
-      }
-      // startDreamIn refuses with its own checks; work that began since is waited for on the next look.
-      const refused = await host
-        .harness()
-        .commit((tx) => deps.start(tx, after), context)
-        .then(
-          () => undefined,
-          (error: unknown) => String(error),
-        )
-      if (refused === undefined) {
-        host.harness().resume()
-        return 'started'
-      }
-      if (now < input.deadline) return 'look'
-    }
+      })
+      return 'started'
+    }, context)
+    if (next === 'started') host.harness().resume()
+    if (next !== 'gave up') return next
     const ultimate = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))
       ?.ultimate
     if (ultimate !== undefined)
@@ -260,10 +252,6 @@ export function compactionDream(
       host.notice(`Dream: ${String(error)}; using ${ASLEEP_AFTER}`)
       return ASLEEP_AFTER
     })
-    const before = await host.harness().snapshot(deps.Sessions, ROOT_CONVERSATION_ID, context)
-    const id = before?.sessions.find((item) => item.id === session)?.afterCompaction?.automation
-    const automation = id === undefined ? undefined : await grantOf(id)
-    const granted = !!automation?.enabled && !!automation.grant?.actions.includes('asleep')
     await host.harness().commit(async (tx) => {
       const found = (await tx.doc(deps.Sessions, ROOT_CONVERSATION_ID)).sessions.find(
         (item) => item.id === session,
@@ -271,6 +259,9 @@ export function compactionDream(
       const after = found?.afterCompaction
       const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
       if (!found || !after || after.outcome || ultimate === undefined) return
+      // The grant is read here, with the sleep it allows: a revoke, pause or delete committed before counts.
+      const automation = await enabled(tx, after.automation)
+      const granted = !!automation?.grant?.actions.includes('asleep')
       const count = changes(found)
       let result: 'stay' | 'ask' | 'asleep' =
         count < threshold ? 'stay' : granted ? 'asleep' : 'ask'
@@ -327,7 +318,7 @@ export function compactionDream(
   async function fired(tx: Tx, id: string) {
     if ((await tx.doc(AfterCompactionDoc, ROOT_CONVERSATION_ID)).id !== id) return
     // Every task scan before the first write.
-    for (const status of ['pending', 'running', 'waiting'] as const)
+    for (const status of ['pending', 'running', 'waiting', 'sleeping'] as const)
       if (
         (
           await tx.scanTasks(
