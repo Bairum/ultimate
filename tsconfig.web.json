@@ -36,6 +36,7 @@
     "extensions/status-line/context.ts",
     "extensions/status-line/turns.ts",
     "extensions/sounds/cues.ts",
+    "extensions/keep-warm/due.ts",
     "extensions/sounds/tones.ts",
     "extensions/instance/links.ts",
     "extensions/update/item.ts",
