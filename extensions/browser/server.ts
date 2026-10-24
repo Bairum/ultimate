@@ -45,6 +45,8 @@ export function screenshotFile(home: string, cwd: string, path?: string) {
 
 /** Each page operation's limit unless a call passes timeoutMs; a call as a whole gets four of them plus its explicit waits. */
 const stepTimeoutMs = 30_000
+/** How long an `until` step waits on Ultimate's state unless it passes timeoutMs. */
+const untilTimeoutMs = 300_000
 /** How long closing a context, or the browser after it, may take before it counts as wedged. */
 const closeTimeoutMs = 5_000
 
@@ -141,7 +143,7 @@ export default function browserExtension(host: ExtensionHost) {
       defineTool({
         name: 'browser',
         description:
-          'Drive a fresh browser page with clicks, fills, keys, waits and JavaScript; report outcomes and optionally an image. Each step times out after 30 s.',
+          "Drive a fresh browser page with clicks, fills, keys, waits and JavaScript; report outcomes and optionally an image. Each step times out after 30 s. On an Ultimate page (this UI or a preview), `send` submits a prompt without the composer and `until` waits on Ultimate's state, never a guessed time: 'idle' (that conversation's turn is done), 'quiet' (nothing is busy, branches and subagents included), {entry: kind} or {event: name, where}; until defaults to 5 min (timeoutMs) and on timeout says what was still busy. Click and fill only to test the interaction itself.",
         parameters: Type.Object({
           ...base,
           steps: Type.Array(
@@ -157,13 +159,36 @@ export default function browserExtension(host: ExtensionHost) {
               Type.Object({ press: Type.String() }),
               Type.Object({ wait: Type.Union([Type.Number({ minimum: 0 }), Type.String()]) }),
               Type.Object({ eval: Type.String() }),
+              Type.Object({
+                send: Type.String(),
+                conversation: Type.Optional(Type.Integer({ minimum: 1 })),
+              }),
+              Type.Object({
+                until: Type.Union([
+                  Type.Literal('idle'),
+                  Type.Literal('quiet'),
+                  Type.Object({ entry: Type.String() }),
+                  Type.Object({
+                    event: Type.String(),
+                    where: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+                  }),
+                ]),
+                conversation: Type.Optional(Type.Integer({ minimum: 1 })),
+                timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+              }),
             ]),
           ),
           screenshot: Type.Optional(Type.Boolean()),
         }),
         async execute(args, api, context) {
           const waits = args.steps.reduce(
-            (sum, step) => sum + ('wait' in step && typeof step.wait === 'number' ? step.wait : 0),
+            (sum, step) =>
+              sum +
+              ('wait' in step && typeof step.wait === 'number'
+                ? step.wait
+                : 'until' in step
+                  ? (step.timeoutMs ?? untilTimeoutMs)
+                  : 0),
             0,
           )
           return run(args, waits, api, context, async (page, outcomes, png, guard) => {
@@ -179,6 +204,47 @@ export default function browserExtension(host: ExtensionHost) {
                   if (typeof step.wait === 'number')
                     await guard(page.waitForTimeout(step.wait), step.wait)
                   else await guard(page.locator(step.wait).waitFor())
+                } else if ('send' in step || 'until' in step) {
+                  // `window.ultimate` (web/src/sdk/test-hook.ts) appears once the page's SDK has loaded.
+                  await guard(
+                    page
+                      .waitForFunction(() => 'ultimate' in window)
+                      .catch(() => {
+                        throw new Error(
+                          'This page has no window.ultimate: not an Ultimate UI, or one older than send/until steps',
+                        )
+                      }),
+                  )
+                  if ('send' in step)
+                    value = await guard(
+                      page.evaluate(
+                        ([text, conversation]) =>
+                          window.ultimate!.send(text, { conversation: conversation ?? undefined }),
+                        [step.send, step.conversation ?? null] as const,
+                      ),
+                    )
+                  else {
+                    const ms = step.timeoutMs ?? untilTimeoutMs
+                    // The hook times out first and says what was still busy; the guard only backs it up.
+                    const outcome = await guard(
+                      page.evaluate(
+                        ([condition, conversation, timeoutMs]) =>
+                          window
+                            .ultimate!.until(condition, {
+                              conversation: conversation ?? undefined,
+                              timeoutMs,
+                            })
+                            .then(
+                              (result) => ({ result }),
+                              (error: unknown) => ({ error: String(error) }),
+                            ),
+                        [step.until, step.conversation ?? null, ms] as const,
+                      ),
+                      ms,
+                    )
+                    if ('error' in outcome) throw new Error(outcome.error.replace(/^Error: /, ''))
+                    value = outcome.result
+                  }
                 } else value = await guard(page.evaluate(step.eval))
                 outcomes.push(
                   `Step ${index + 1}: OK${value === undefined ? '' : ` ${JSON.stringify(value)}`}`,
@@ -275,6 +341,8 @@ export default function browserExtension(host: ExtensionHost) {
       })
       page.on('pageerror', (error) => outcomes.push(`Page error: ${error.message}`))
       const url = new URL(args.url ?? '', host.system().process.url).href
+      // Any Ultimate page, this UI or a preview, gets `window.ultimate` for send/until steps.
+      await guard(page.addInitScript(() => sessionStorage.setItem('ultimate.driven', '1')))
       if (new URL(url).origin === new URL(host.system().process.url).origin) {
         // Own UI: this page is detached from the shared UI state (web/src/sdk/client.ts), so its `?conversation=`
         // and clicks never move the user's tabs; the theme is this browser's preference.

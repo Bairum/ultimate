@@ -125,13 +125,17 @@ function Screenshot({ call }: { call: ToolCallView }) {
 
 type Step = Record<string, unknown>
 function describe(step: Step) {
-  const [action, value] = Object.entries(step)[0] ?? ['?', '']
+  const [action, value] = Object.entries(step).find(
+    ([key]) => key !== 'conversation' && key !== 'timeoutMs',
+  ) ?? ['?', '']
   const shown = Array.isArray(value)
     ? value.map((item) => JSON.stringify(item)).join(' ← ')
     : typeof value === 'string'
       ? value
       : JSON.stringify(value)
-  return { action, shown }
+  // `send` and `until` name the conversation they act on when it is not the page's own.
+  const conversation = typeof step.conversation === 'number' ? ` · #${step.conversation}` : ''
+  return { action, shown: shown + conversation }
 }
 
 function Browser({ call }: { call: ToolCallView }) {
