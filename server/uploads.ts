@@ -42,15 +42,11 @@ export async function saveUpload(
       done(size > limit ? new UploadTooLarge() : undefined, chunk)
     },
   })
-  const destination = createWriteStream(path, { flags: 'wx' })
-  let created = false
-  destination.once('open', () => {
-    created = true
-  })
   try {
-    await pipeline(source, cap, destination)
+    await pipeline(source, cap, createWriteStream(path, { flags: 'wx' }))
   } catch (failure) {
-    if (created) await rm(path, { force: true })
+    // A file that already existed belongs to another upload; anything else is this upload's partial file.
+    if ((failure as NodeJS.ErrnoException).code !== 'EEXIST') await rm(path, { force: true })
     throw failure
   }
   return path
@@ -80,8 +76,9 @@ export async function pruneUploads(home: string, now = Date.now()) {
       }
     }
     if (left === 0)
-      await rmdir(dir).catch(() => {
+      await rmdir(dir).catch((error: NodeJS.ErrnoException) => {
         // A fresh upload may have arrived, or another prune already removed the folder.
+        if (error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT') throw error
       })
   }
 }
