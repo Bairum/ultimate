@@ -1,0 +1,16 @@
+{
+  "arms": [
+    {
+      "name": "hashline-prompt",
+      "extensions": ["hashline"],
+      "armOrder": 0
+    }
+  ],
+  "models": ["anthropic/claude-sonnet-5-5"],
+  "runs": 3,
+  "tasks": "all",
+  "timeout": 600000,
+  "ultimateRoot": "/tmp/hab-main",
+  "revision": "b5f92205dbec5d7e5030fd8c24524afc783e9c19",
+  "codemode": false
+}

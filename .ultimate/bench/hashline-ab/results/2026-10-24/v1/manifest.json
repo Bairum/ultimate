@@ -1,0 +1,21 @@
+{
+  "arms": [
+    {
+      "name": "baseline",
+      "extensions": [],
+      "armOrder": 0
+    },
+    {
+      "name": "hashline",
+      "extensions": ["hashline"],
+      "armOrder": 1
+    }
+  ],
+  "models": ["anthropic/claude-sonnet-5-5", "openai-codex/gpt-6.1-sol"],
+  "runs": 3,
+  "tasks": "all",
+  "timeout": 600000,
+  "ultimateRoot": "/tmp/hab-checkout",
+  "revision": "19b287f0ac9408c18bcb482938fae3f46fe658a6",
+  "codemode": false
+}
