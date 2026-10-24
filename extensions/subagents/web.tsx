@@ -5,6 +5,7 @@ import {
   SquareArrowOutUpRightIcon,
   Trash2Icon,
 } from 'lucide-react'
+import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { MentionText, Message, MessageResponse } from '@/components/ai/message'
 import { Shimmer } from '@/components/ai/shimmer'
@@ -22,7 +23,10 @@ import {
   defineWebExtension,
   Provided,
   useConversation,
+  useDocOf,
+  useStore,
   useToolDuration,
+  useUiState,
   useUltimate,
 } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
@@ -33,6 +37,8 @@ import { DefinitionDialog, Definitions } from './definitions.tsx'
 import { Tag } from './parts.tsx'
 import { AgentInbox, AgentInput, AgentMessages } from './messages.tsx'
 import { openAgentSource } from './ui.tsx'
+import { StandingDoc } from './refs.ts'
+import { landing } from './landing.ts'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 
@@ -299,12 +305,25 @@ function ChildList({ output }: { output: string }) {
   )
 }
 
+/** With no conversation chosen, show @ultimate's (see `landing`). */
+function LandOnUltimate() {
+  const loaded = useStore((state) => state.shared !== undefined)
+  const [chosen] = useUiState<number | null>('shell.conversation', null)
+  const ultimate = useDocOf(1, StandingDoc)?.ultimate
+  const { switchConversation } = useUltimate()
+  const target = landing(loaded, chosen ?? undefined, ultimate)
+  useEffect(() => {
+    if (target !== undefined) switchConversation(target, { replace: true })
+  }, [target, switchConversation])
+  return null
+}
+
 export default defineWebExtension({
   tools: { subagent: SubagentCall },
   panels: [{ id: 'agents', title: 'Agents', icon: NetworkIcon, component: Definitions, order: 3 }],
   entries: { 'subagents.instruction': AgentInput, 'subagents.report': AgentInput },
   inbox: AgentInbox,
-  slots: { overlay: [DefinitionDialog], 'header.right': [AgentMessages] },
+  slots: { overlay: [DefinitionDialog, LandOnUltimate], 'header.right': [AgentMessages] },
   commands: [
     {
       id: 'subagents.open',
