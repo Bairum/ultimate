@@ -1,0 +1,1611 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ultimate · Architecture</title>
+    <style>
+      :root {
+        --bg: #18181b;
+        --panel: #202025;
+        --panel2: #26262c;
+        --border: #36363e;
+        --text: #ececf1;
+        --muted: #9b9ba6;
+        --dim: #6f6f7a;
+        --ult: #b794f6;
+        --ult-fill: rgba(183, 148, 246, 0.1);
+        --pi: #5cc8b4;
+        --pi-fill: rgba(92, 200, 180, 0.09);
+        --sans: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+        --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.6 var(--sans);
+      }
+      main {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 48px 24px 80px;
+      }
+      h1 {
+        font-size: 28px;
+        font-weight: 650;
+        margin: 0 0 6px;
+        letter-spacing: -0.01em;
+      }
+      .lede {
+        color: var(--muted);
+        margin: 0 0 18px;
+        max-width: 760px;
+      }
+      .legend {
+        display: flex;
+        gap: 22px;
+        color: var(--muted);
+        font-size: 13px;
+        margin-bottom: 36px;
+      }
+      .legend span::before {
+        content: "";
+        display: inline-block;
+        width: 11px;
+        height: 11px;
+        border-radius: 3px;
+        margin-right: 7px;
+        vertical-align: -1px;
+        border: 1.5px solid;
+      }
+      .legend .l-pi::before {
+        border-color: var(--pi);
+        background: var(--pi-fill);
+      }
+      .legend .l-ult::before {
+        border-color: var(--ult);
+        background: var(--ult-fill);
+      }
+      .legend .l-ext::before {
+        border-color: #4a4a54;
+        background: var(--panel);
+      }
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 40px;
+      }
+      nav a {
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 13px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 4px 12px;
+      }
+      nav a:hover {
+        color: var(--text);
+        border-color: var(--ult);
+      }
+      section {
+        margin-bottom: 64px;
+      }
+      section h2 {
+        font-size: 19px;
+        font-weight: 620;
+        margin: 0 0 4px;
+      }
+      section h2 small {
+        color: var(--ult);
+        font: 500 13px var(--mono);
+        margin-right: 10px;
+      }
+      section p {
+        color: var(--muted);
+        margin: 0 0 16px;
+        max-width: 860px;
+      }
+      figure {
+        margin: 0;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 8px;
+      }
+      svg {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      code {
+        font: 0.88em var(--mono);
+        background: var(--panel2);
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+
+      /* SVG vocabulary */
+      svg text {
+        fill: var(--text);
+        font-family: var(--sans);
+        font-size: 14px;
+      }
+      svg .h {
+        font-size: 16px;
+        font-weight: 620;
+      }
+      svg .b {
+        font-weight: 600;
+      }
+      svg .s {
+        fill: var(--muted);
+        font-size: 12.5px;
+      }
+      svg .m {
+        font-family: var(--mono);
+        font-size: 12px;
+        fill: var(--muted);
+      }
+      svg .mt {
+        font-family: var(--mono);
+        font-size: 12.5px;
+      }
+      svg .ult-t {
+        fill: var(--ult);
+      }
+      svg .pi-t {
+        fill: var(--pi);
+      }
+      svg .dim {
+        fill: var(--dim);
+      }
+      svg .box {
+        fill: var(--panel2);
+        stroke: var(--border);
+        stroke-width: 1.2;
+      }
+      svg .ext {
+        fill: #1c1c21;
+        stroke: #4a4a54;
+        stroke-width: 1.2;
+      }
+      svg .ult {
+        fill: var(--ult-fill);
+        stroke: var(--ult);
+        stroke-width: 1.4;
+      }
+      svg .pi {
+        fill: var(--pi-fill);
+        stroke: var(--pi);
+        stroke-width: 1.4;
+      }
+      svg .chip-u {
+        fill: rgba(183, 148, 246, 0.14);
+        stroke: rgba(183, 148, 246, 0.45);
+      }
+      svg .chip-p {
+        fill: rgba(92, 200, 180, 0.13);
+        stroke: rgba(92, 200, 180, 0.45);
+      }
+      svg .dash {
+        stroke-dasharray: 6 5;
+        fill: none;
+      }
+      svg .ln {
+        stroke: #8c8c98;
+        stroke-width: 1.5;
+        fill: none;
+      }
+      svg .ln-u {
+        stroke: var(--ult);
+        stroke-width: 1.6;
+        fill: none;
+      }
+      svg .ln-p {
+        stroke: var(--pi);
+        stroke-width: 1.6;
+        fill: none;
+      }
+      svg .note {
+        stroke-dasharray: 5 5;
+      }
+      svg .notify {
+        stroke-dasharray: 1.5 4.5;
+        stroke-linecap: round;
+      }
+    </style>
+  </head>
+  <body>
+    <svg width="0" height="0" style="position: absolute">
+      <defs>
+        <marker
+          id="a"
+          viewBox="0 0 10 10"
+          refX="9"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0 L10 5 L0 10 z" fill="#8c8c98" />
+        </marker>
+        <marker
+          id="au"
+          viewBox="0 0 10 10"
+          refX="9"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0 L10 5 L0 10 z" fill="#b794f6" />
+        </marker>
+        <marker
+          id="ap"
+          viewBox="0 0 10 10"
+          refX="9"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0 L10 5 L0 10 z" fill="#5cc8b4" />
+        </marker>
+      </defs>
+    </svg>
+    <main>
+      <h1>How Ultimate fits together</h1>
+      <p class="lede">
+        Five pictures, one question each. Ultimate is a web UI and a server that
+        runs coding agents on
+        <b>Pi Durable</b>; almost everything Ultimate adds lives in extensions
+        that reload while it runs.
+      </p>
+      <div class="legend">
+        <span class="l-pi">Pi Durable (the engine we build on)</span>
+        <span class="l-ult">What Ultimate adds</span>
+        <span class="l-ext">Outside: browser, providers, files</span>
+      </div>
+      <nav>
+        <a href="#big-picture">1 · The big picture</a>
+        <a href="#pi-durable">2 · Where Pi Durable sits</a>
+        <a href="#extensions">3 · Extensions and their interfaces</a>
+        <a href="#events">4 · The event bus</a>
+        <a href="#forest">5 · The agent forest</a>
+      </nav>
+
+      <!-- 1 ─────────────────────────────────────────────────────────── -->
+      <section id="big-picture">
+        <h2><small>1</small>The big picture</h2>
+        <p>
+          What runs where. The browser talks to one server process; a tiny
+          supervisor keeps that process alive and swaps it on restart. Each
+          layer reloads differently, so the conversation you are in keeps
+          running.
+        </p>
+        <figure>
+          <svg viewBox="0 0 1120 700" role="img" aria-label="Big picture">
+            <!-- Browser -->
+            <rect class="ext" x="30" y="70" width="270" height="400" rx="14" />
+            <text class="h" x="52" y="102">Browser</text>
+            <text class="m" x="52" y="122">web/ · extensions/*/web.tsx</text>
+            <rect class="ult" x="48" y="142" width="234" height="66" rx="9" />
+            <text class="b" x="64" y="169">web/ core</text>
+            <text class="s" x="64" y="190">
+              transcript · composer · ⌘K · surfaces
+            </text>
+            <rect class="ult" x="48" y="220" width="234" height="66" rx="9" />
+            <text class="b" x="64" y="247">
+              SDK
+              <tspan class="mt ult-t">@/sdk</tspan>
+            </text>
+            <text class="s" x="64" y="268">useDoc · useAction · useEvents</text>
+            <rect class="ult" x="48" y="298" width="234" height="66" rx="9" />
+            <text class="b" x="64" y="325">Extension facets</text>
+            <text class="s" x="64" y="346">
+              panels · slots · renderers · apps
+            </text>
+            <text class="s" x="52" y="400">
+              One page; facets hot-swap in place.
+            </text>
+            <text class="s" x="52" y="420">
+              A broken facet shows an error card,
+            </text>
+            <text class="s" x="52" y="440">the rest keeps running.</text>
+
+            <!-- Browser ⇄ server -->
+            <path class="ln" d="M302 196 H398" marker-end="url(#a)" />
+            <text class="s" x="350" y="186" text-anchor="middle">HTTP</text>
+            <path class="ln" d="M398 268 H302" marker-end="url(#a)" />
+            <text class="s" x="350" y="258" text-anchor="middle">SSE</text>
+            <text class="m" x="350" y="294" text-anchor="middle">
+              /api/events
+            </text>
+
+            <!-- Supervisor -->
+            <rect
+              class="ult dash"
+              x="400"
+              y="34"
+              width="430"
+              height="470"
+              rx="16"
+            />
+            <text class="h" x="422" y="64">Supervisor</text>
+            <text class="m" x="514" y="64">bin/ultimate.ts</text>
+            <text class="s" x="422" y="84">
+              owns port 4747 and the lock · swaps the child on restart
+            </text>
+
+            <rect
+              class="box"
+              x="420"
+              y="100"
+              width="390"
+              height="384"
+              rx="12"
+            />
+            <text class="h" x="440" y="128">Server process</text>
+            <text class="m" x="572" y="128">server/main.ts</text>
+
+            <rect class="ult" x="438" y="144" width="172" height="62" rx="9" />
+            <text class="b" x="454" y="170">Vite</text>
+            <text class="s" x="454" y="191">serves web/, hot reload</text>
+            <rect class="ult" x="620" y="144" width="172" height="62" rx="9" />
+            <text class="b" x="636" y="170">API</text>
+            <text class="s" x="636" y="191">/api/* and the stream</text>
+
+            <rect class="ult" x="438" y="218" width="354" height="74" rx="9" />
+            <text class="b" x="454" y="244">
+              Extension host
+              <tspan class="m">server/extensions.ts</tspan>
+            </text>
+            <text class="s" x="454" y="265">
+              loads extensions/*/server.ts: services, events,
+            </text>
+            <text class="s" x="454" y="282">actions, documents, tracing</text>
+
+            <rect class="pi" x="438" y="304" width="354" height="162" rx="9" />
+            <text class="b pi-t" x="454" y="330">Pi Durable Harness</text>
+            <text class="m" x="602" y="330">server/harness.ts</text>
+            <text class="s" x="454" y="352">
+              conversations · entries · tasks · documents
+            </text>
+            <text class="s" x="454" y="372">
+              runs each agent: model turns and tool calls
+            </text>
+            <rect
+              class="chip-p"
+              x="454"
+              y="388"
+              width="160"
+              height="28"
+              rx="6"
+            />
+            <text class="s" x="534" y="407" text-anchor="middle">
+              registry of extensions
+            </text>
+            <rect
+              class="chip-p"
+              x="622"
+              y="388"
+              width="154"
+              height="28"
+              rx="6"
+            />
+            <text class="s" x="699" y="407" text-anchor="middle">
+              pi-ai model runtime
+            </text>
+            <text class="s" x="454" y="447">commit first, then show</text>
+
+            <!-- Providers -->
+            <rect
+              class="ext"
+              x="890"
+              y="300"
+              width="200"
+              height="166"
+              rx="14"
+            />
+            <text class="h" x="910" y="330">Model providers</text>
+            <text class="s" x="910" y="356">openai-codex (Sol)</text>
+            <text class="s" x="910" y="378">Claude Code, unmodified</text>
+            <text class="s" x="910" y="400">others through pi-ai</text>
+            <text class="m" x="910" y="440">~/.pi/agent logins</text>
+            <path
+              class="ln-p"
+              d="M792 400 H888"
+              marker-end="url(#ap)"
+              marker-start="url(#ap)"
+            />
+            <text class="s" x="840" y="390" text-anchor="middle">stream</text>
+
+            <!-- Git -->
+            <rect
+              class="ext"
+              x="890"
+              y="100"
+              width="200"
+              height="150"
+              rx="14"
+            />
+            <text class="h" x="910" y="130">Git</text>
+            <text class="s" x="910" y="156">your checkout (main)</text>
+            <text class="s" x="910" y="178">one worktree per branch</text>
+            <text class="s" x="910" y="200">the lander's checkout</text>
+            <text class="m" x="910" y="230">bash, edit, workspaces</text>
+            <path class="ln" d="M810 175 H888" marker-end="url(#a)" />
+
+            <!-- Storage -->
+            <rect class="pi" x="438" y="540" width="200" height="66" rx="10" />
+            <text class="b" x="454" y="566">state.sqlite</text>
+            <text class="s" x="454" y="587">every commit, durable</text>
+            <rect class="ult" x="652" y="540" width="200" height="66" rx="10" />
+            <text class="b" x="668" y="566">trace.sqlite</text>
+            <text class="s" x="668" y="587">every call, 7 days</text>
+            <path class="ln-p" d="M538 466 V538" marker-end="url(#ap)" />
+            <path class="ln-u" d="M752 466 V538" marker-end="url(#au)" />
+            <text class="m" x="438" y="626">
+              ~/.ultimate/projects/&lt;name&gt;-&lt;hash&gt;/
+            </text>
+
+            <!-- Reload layers -->
+            <text class="b" x="30" y="560">How a change goes live</text>
+            <text class="s" x="30" y="586">
+              <tspan class="mt ult-t">web/ · web.tsx</tspan>
+              hot reload, instant
+            </text>
+            <text class="s" x="30" y="608">
+              <tspan class="mt ult-t">server.ts</tspan>
+              reinstalled on save
+            </text>
+            <text class="s" x="30" y="630">
+              <tspan class="mt ult-t">server/ · shared/</tspan>
+              restart tool:
+            </text>
+            <text class="s" x="30" y="648">
+              new child type-checks beside the old
+            </text>
+            <text class="s" x="30" y="672">
+              <tspan class="mt ult-t">bin/</tspan>
+              only a human restart
+            </text>
+          </svg>
+        </figure>
+      </section>
+
+      <!-- 2 ─────────────────────────────────────────────────────────── -->
+      <section id="pi-durable">
+        <h2><small>2</small>Where Pi Durable sits</h2>
+        <p>
+          Pi Durable is the engine: it stores every conversation as entries,
+          runs every model turn and tool call as a checkpointed task, and
+          resumes them after a crash. Ultimate is the layers on top: an
+          extension host, and the features that make conversations into a
+          project.
+        </p>
+        <figure>
+          <svg viewBox="0 0 1120 680" role="img" aria-label="Pi Durable layers">
+            <!-- Top: features -->
+            <rect class="ult" x="30" y="30" width="1060" height="150" rx="14" />
+            <text class="h ult-t" x="52" y="60">Ultimate's features</text>
+            <text class="s" x="230" y="60">
+              extensions/ · about 50 folders, each reloads on its own
+            </text>
+            <g>
+              <rect
+                class="chip-u"
+                x="52"
+                y="80"
+                width="190"
+                height="78"
+                rx="9"
+              />
+              <text class="b" x="68" y="106">conversations</text>
+              <text class="s" x="68" y="127">titles · summaries</text>
+              <text class="s" x="68" y="145">concluding</text>
+              <rect
+                class="chip-u"
+                x="254"
+                y="80"
+                width="190"
+                height="78"
+                rx="9"
+              />
+              <text class="b" x="270" y="106">lineage</text>
+              <text class="s" x="270" y="127">roots · branches</text>
+              <text class="s" x="270" y="145">tally · memory</text>
+              <rect
+                class="chip-u"
+                x="456"
+                y="80"
+                width="190"
+                height="78"
+                rx="9"
+              />
+              <text class="b" x="472" y="106">subagents · messages</text>
+              <text class="s" x="472" y="127">children · @ultimate</text>
+              <text class="s" x="472" y="145">message · note · notify</text>
+              <rect
+                class="chip-u"
+                x="658"
+                y="80"
+                width="190"
+                height="78"
+                rx="9"
+              />
+              <text class="b" x="674" y="106">workspaces</text>
+              <text class="s" x="674" y="127">worktrees · the lander</text>
+              <text class="s" x="674" y="145">checks · push</text>
+              <rect
+                class="chip-u"
+                x="860"
+                y="80"
+                width="208"
+                height="78"
+                rx="9"
+              />
+              <text class="b" x="876" y="106">dream · automations</text>
+              <text class="s" x="876" y="127">chapters · memory review</text>
+              <text class="s" x="876" y="145">schedules · triggers</text>
+            </g>
+
+            <!-- Middle: extension host -->
+            <rect
+              class="ult"
+              x="30"
+              y="200"
+              width="1060"
+              height="110"
+              rx="14"
+            />
+            <text class="h ult-t" x="52" y="230">
+              Ultimate's extension host
+            </text>
+            <text class="m" x="268" y="230">server/</text>
+            <g>
+              <rect
+                class="chip-u"
+                x="52"
+                y="248"
+                width="196"
+                height="40"
+                rx="8"
+              />
+              <text class="s" x="150" y="273" text-anchor="middle">
+                typed services · need / want
+              </text>
+              <rect
+                class="chip-u"
+                x="258"
+                y="248"
+                width="196"
+                height="40"
+                rx="8"
+              />
+              <text class="s" x="356" y="273" text-anchor="middle">
+                durable events · reactors
+              </text>
+              <rect
+                class="chip-u"
+                x="464"
+                y="248"
+                width="196"
+                height="40"
+                rx="8"
+              />
+              <text class="s" x="562" y="273" text-anchor="middle">
+                actions for UI and agents
+              </text>
+              <rect
+                class="chip-u"
+                x="670"
+                y="248"
+                width="196"
+                height="40"
+                rx="8"
+              />
+              <text class="s" x="768" y="273" text-anchor="middle">
+                documents → browser
+              </text>
+              <rect
+                class="chip-u"
+                x="876"
+                y="248"
+                width="192"
+                height="40"
+                rx="8"
+              />
+              <text class="s" x="972" y="273" text-anchor="middle">
+                call trace · reload
+              </text>
+            </g>
+
+            <!-- Bottom: Pi Durable -->
+            <rect class="pi" x="30" y="330" width="1060" height="300" rx="14" />
+            <text class="h pi-t" x="52" y="360">Pi Durable</text>
+            <text class="m" x="148" y="360">
+              @earendil-works/pi-durable · one Harness per project
+            </text>
+
+            <!-- One run -->
+            <text class="s" x="52" y="392">
+              One answered input, as entries and tasks:
+            </text>
+            <g class="mt">
+              <rect
+                class="chip-p"
+                x="52"
+                y="404"
+                width="112"
+                height="34"
+                rx="7"
+              />
+              <text x="108" y="426" text-anchor="middle">pi.user</text>
+              <path class="ln-p" d="M166 421 H190" marker-end="url(#ap)" />
+              <rect
+                class="chip-p"
+                x="192"
+                y="404"
+                width="142"
+                height="34"
+                rx="7"
+              />
+              <text x="263" y="426" text-anchor="middle">pi.generation</text>
+              <path class="ln-p" d="M336 421 H360" marker-end="url(#ap)" />
+              <rect
+                class="chip-p"
+                x="362"
+                y="404"
+                width="136"
+                height="34"
+                rx="7"
+              />
+              <text x="430" y="426" text-anchor="middle">pi.assistant</text>
+              <path class="ln-p" d="M500 421 H524" marker-end="url(#ap)" />
+              <rect
+                class="chip-p"
+                x="526"
+                y="404"
+                width="118"
+                height="34"
+                rx="7"
+              />
+              <text x="585" y="426" text-anchor="middle">pi.tool × n</text>
+              <path class="ln-p" d="M646 421 H670" marker-end="url(#ap)" />
+              <rect
+                class="chip-p"
+                x="672"
+                y="404"
+                width="156"
+                height="34"
+                rx="7"
+              />
+              <text x="750" y="426" text-anchor="middle">pi.tool-result</text>
+              <path class="ln-p" d="M830 421 H854" marker-end="url(#ap)" />
+              <rect
+                class="chip-p"
+                x="856"
+                y="404"
+                width="212"
+                height="34"
+                rx="7"
+              />
+              <text x="962" y="426" text-anchor="middle">
+                next generation → answer
+              </text>
+            </g>
+
+            <g>
+              <text class="b" x="52" y="478">Commit</text>
+              <text class="s" x="52" y="498">atomic; stored before</text>
+              <text class="s" x="52" y="515">anything is shown</text>
+              <text class="b" x="232" y="478">Entries</text>
+              <text class="s" x="232" y="498">immutable transcript;</text>
+              <text class="s" x="232" y="515">forks, resets, compaction</text>
+              <text class="b" x="422" y="478">Documents</text>
+              <text class="s" x="422" y="498">typed JSON per conversation</text>
+              <text class="s" x="422" y="515">
+                pi.agent · pi.live · pi.inbox
+              </text>
+              <text class="b" x="622" y="478">Tasks</text>
+              <text class="s" x="622" y="498">checkpoint every step;</text>
+              <text class="s" x="622" y="515">can sleep until a time</text>
+              <text class="b" x="812" y="478">Registry</text>
+              <text class="s" x="812" y="498">tools · prompt sections</text>
+              <text class="s" x="812" y="515">hooks · tasks, swappable</text>
+            </g>
+            <line
+              x1="52"
+              y1="540"
+              x2="1068"
+              y2="540"
+              stroke="rgba(92,200,180,.3)"
+            />
+            <text class="s" x="52" y="568">
+              <tspan class="b pi-t">After a crash or restart</tspan>
+              open storage → resume(): every run continues from its last
+              checkpoint.
+            </text>
+            <text class="s" x="52" y="588">
+              Tools marked replay: 'safe' run again; any other interrupted tool
+              tells the model "interrupted".
+            </text>
+
+            <!-- Patches -->
+            <rect
+              x="760"
+              y="554"
+              width="308"
+              height="60"
+              rx="10"
+              fill="#201c28"
+              stroke="#b794f6"
+              stroke-dasharray="6 5"
+            />
+            <text class="b ult-t" x="778" y="578">
+              Ultimate's patches to Pi Durable
+            </text>
+            <text class="s" x="778" y="598">
+              beforeInput placement hook · Harness.hold()
+            </text>
+
+            <text class="m" x="30" y="660">
+              storage: state.sqlite (SQLite) · models: pi-ai · coding tools from
+              Pi
+            </text>
+          </svg>
+        </figure>
+      </section>
+
+      <!-- 3 ─────────────────────────────────────────────────────────── -->
+      <section id="extensions">
+        <h2><small>3</small>Extensions and their interfaces</h2>
+        <p>
+          An extension is a folder. Its <code>api.ts</code> is what other server
+          code may use, its <code>refs.ts</code> what the browser may use. Four
+          channels connect extensions; pick one by what crosses it. Dependencies
+          always point down.
+        </p>
+        <figure>
+          <svg
+            viewBox="0 0 1120 720"
+            role="img"
+            aria-label="Extensions and interfaces"
+          >
+            <!-- Folder -->
+            <rect class="ult" x="30" y="30" width="330" height="390" rx="14" />
+            <text class="h" x="52" y="62">extensions/workspaces/</text>
+            <text class="s" x="52" y="82">one extension, two sides</text>
+
+            <text
+              class="b dim"
+              x="52"
+              y="116"
+              style="font-size: 11px; letter-spacing: 0.08em"
+            >
+              SERVER
+            </text>
+            <rect
+              class="chip-u"
+              x="52"
+              y="126"
+              width="286"
+              height="50"
+              rx="8"
+            />
+            <text class="mt" x="66" y="148">server.ts</text>
+            <text class="s" x="66" y="166">
+              a Pi Durable extension + actions, docs
+            </text>
+            <rect
+              class="chip-u"
+              x="52"
+              y="184"
+              width="286"
+              height="50"
+              rx="8"
+              stroke-width="2"
+            />
+            <text class="mt ult-t" x="66" y="206">api.ts</text>
+            <text class="s" x="66" y="224">
+              contract: services, points, events, tier
+            </text>
+
+            <text
+              class="b dim"
+              x="52"
+              y="268"
+              style="font-size: 11px; letter-spacing: 0.08em"
+            >
+              BROWSER
+            </text>
+            <rect
+              class="chip-u"
+              x="52"
+              y="278"
+              width="286"
+              height="50"
+              rx="8"
+              stroke-width="2"
+            />
+            <text class="mt ult-t" x="66" y="300">refs.ts</text>
+            <text class="s" x="66" y="318">
+              docRef · actionRef · defineEvent
+            </text>
+            <rect
+              class="chip-u"
+              x="52"
+              y="336"
+              width="138"
+              height="50"
+              rx="8"
+            />
+            <text class="mt" x="66" y="358">web.tsx</text>
+            <text class="s" x="66" y="376">its UI</text>
+            <rect
+              class="chip-u"
+              x="200"
+              y="336"
+              width="138"
+              height="50"
+              rx="8"
+            />
+            <text class="mt" x="214" y="358">ui.tsx</text>
+            <text class="s" x="214" y="376">for other facets</text>
+            <text class="s" x="52" y="408">
+              Agents read api.ts and refs.ts to learn it.
+            </text>
+
+            <!-- Channels -->
+            <text class="h" x="400" y="54">Four channels</text>
+            <text class="s" x="520" y="54">pick by what crosses</text>
+
+            <!-- 1 service -->
+            <rect class="box" x="400" y="70" width="690" height="80" rx="10" />
+            <text class="b" x="418" y="98">Service</text>
+            <text class="s" x="418" y="118">a call between</text>
+            <text class="s" x="418" y="134">extensions</text>
+            <rect
+              class="chip-u"
+              x="540"
+              y="90"
+              width="110"
+              height="40"
+              rx="8"
+            />
+            <text x="595" y="115" text-anchor="middle">lineage</text>
+            <path class="ln-u" d="M652 110 H860" marker-end="url(#au)" />
+            <text class="m" x="756" y="102" text-anchor="middle">
+              host.need(WorkspacesApi)
+            </text>
+            <rect
+              class="chip-u"
+              x="862"
+              y="90"
+              width="210"
+              height="40"
+              rx="8"
+            />
+            <text x="967" y="108" text-anchor="middle">workspaces</text>
+            <text class="m" x="967" y="124" text-anchor="middle">
+              host.implement(…)
+            </text>
+
+            <!-- 2 event -->
+            <rect class="box" x="400" y="160" width="690" height="80" rx="10" />
+            <text class="b" x="418" y="188">Durable event</text>
+            <text class="s" x="418" y="208">"this happened"</text>
+            <rect
+              class="chip-u"
+              x="540"
+              y="180"
+              width="110"
+              height="40"
+              rx="8"
+            />
+            <text x="595" y="205" text-anchor="middle">lander</text>
+            <path class="ln-u" d="M652 200 H860" marker-end="url(#au)" />
+            <text class="m" x="756" y="192" text-anchor="middle">
+              host.emit(tx, Landed)
+            </text>
+            <rect
+              class="chip-u"
+              x="862"
+              y="180"
+              width="210"
+              height="40"
+              rx="8"
+            />
+            <text x="967" y="198" text-anchor="middle">
+              lineage · dream · update
+            </text>
+            <text class="m" x="967" y="214" text-anchor="middle">
+              host.react(…)
+            </text>
+
+            <!-- 3 document -->
+            <rect class="box" x="400" y="250" width="690" height="80" rx="10" />
+            <text class="b" x="418" y="278">Document</text>
+            <text class="s" x="418" y="298">durable state</text>
+            <rect
+              class="chip-u"
+              x="540"
+              y="270"
+              width="110"
+              height="40"
+              rx="8"
+            />
+            <text x="595" y="288" text-anchor="middle">server</text>
+            <text class="m" x="595" y="304" text-anchor="middle">
+              tx.doc(…)
+            </text>
+            <path class="ln-u" d="M652 290 H860" marker-end="url(#au)" />
+            <text class="m" x="756" y="282" text-anchor="middle">
+              streamed snapshots + ops
+            </text>
+            <rect class="ext" x="862" y="270" width="210" height="40" rx="8" />
+            <text x="967" y="288" text-anchor="middle">browser</text>
+            <text class="m" x="967" y="304" text-anchor="middle">
+              useDoc(ref)
+            </text>
+
+            <!-- 4 action -->
+            <rect class="box" x="400" y="340" width="690" height="80" rx="10" />
+            <text class="b" x="418" y="368">Action</text>
+            <text class="s" x="418" y="388">the UI and agent</text>
+            <text class="s" x="418" y="404">boundary</text>
+            <rect class="ext" x="540" y="360" width="110" height="40" rx="8" />
+            <text x="595" y="378" text-anchor="middle">UI · agent</text>
+            <text class="m" x="595" y="394" text-anchor="middle">
+              useAction
+            </text>
+            <path class="ln-u" d="M652 380 H860" marker-end="url(#au)" />
+            <text class="m" x="756" y="372" text-anchor="middle">
+              POST …/actions/:action
+            </text>
+            <rect
+              class="chip-u"
+              x="862"
+              y="360"
+              width="210"
+              height="40"
+              rx="8"
+            />
+            <text x="967" y="378" text-anchor="middle">extension</text>
+            <text class="m" x="967" y="394" text-anchor="middle">
+              implementAction(Ref, …)
+            </text>
+
+            <!-- Core tier -->
+            <text class="h" x="30" y="476">The core tier, lowest first</text>
+            <text class="s" x="252" y="476">
+              always on · each layer depends only on layers below it
+            </text>
+            <g>
+              <rect
+                class="chip-u"
+                x="30"
+                y="494"
+                width="164"
+                height="76"
+                rx="9"
+              />
+              <text class="m ult-t" x="44" y="514">1</text>
+              <text class="s" x="44" y="534">prompt · coding-tools</text>
+              <text class="s" x="44" y="552">documents · secrets …</text>
+              <rect
+                class="chip-u"
+                x="204"
+                y="494"
+                width="98"
+                height="76"
+                rx="9"
+              />
+              <text class="m ult-t" x="218" y="514">2</text>
+              <text x="218" y="540">models</text>
+              <rect
+                class="chip-u"
+                x="312"
+                y="494"
+                width="128"
+                height="76"
+                rx="9"
+              />
+              <text class="m ult-t" x="326" y="514">3</text>
+              <text x="326" y="540">conversations</text>
+              <rect
+                class="chip-u"
+                x="450"
+                y="494"
+                width="114"
+                height="76"
+                rx="9"
+              />
+              <text class="m ult-t" x="464" y="514">4</text>
+              <text x="464" y="540">workspaces</text>
+              <rect
+                class="chip-u"
+                x="574"
+                y="494"
+                width="108"
+                height="76"
+                rx="9"
+              />
+              <text class="m ult-t" x="588" y="514">5</text>
+              <text x="588" y="540">subagents</text>
+              <rect
+                class="chip-u"
+                x="692"
+                y="494"
+                width="92"
+                height="76"
+                rx="9"
+              />
+              <text class="m ult-t" x="706" y="514">6</text>
+              <text x="706" y="540">lineage</text>
+              <rect
+                class="chip-u"
+                x="794"
+                y="494"
+                width="104"
+                height="76"
+                rx="9"
+              />
+              <text class="m ult-t" x="808" y="514">7</text>
+              <text x="808" y="540">messages</text>
+              <rect
+                class="chip-u"
+                x="908"
+                y="494"
+                width="96"
+                height="76"
+                rx="9"
+              />
+              <text class="m ult-t" x="922" y="514">8</text>
+              <text x="922" y="540">onboarding</text>
+              <text class="s" x="922" y="558">agent</text>
+              <rect
+                class="chip-u"
+                x="1014"
+                y="494"
+                width="76"
+                height="76"
+                rx="9"
+              />
+              <text class="m ult-t" x="1028" y="514">9</text>
+              <text x="1028" y="540">sidebar</text>
+            </g>
+            <path class="ln" d="M1060 588 H60" marker-end="url(#a)" />
+            <text class="s" x="560" y="606" text-anchor="middle">
+              dependencies point down
+            </text>
+
+            <!-- Extension point -->
+            <rect class="box" x="30" y="626" width="1060" height="80" rx="10" />
+            <text class="b" x="50" y="656">Calling up: an extension point</text>
+            <text class="s" x="50" y="678">
+              The lower layer owns the contract and wants it;
+            </text>
+            <text class="s" x="50" y="694">the higher one implements it.</text>
+            <rect
+              class="chip-u"
+              x="420"
+              y="646"
+              width="150"
+              height="40"
+              rx="8"
+            />
+            <text x="495" y="664" text-anchor="middle">workspaces (4)</text>
+            <text class="m" x="495" y="680" text-anchor="middle">
+              want(Handoff)
+            </text>
+            <path class="ln-u" d="M572 666 H720" marker-end="url(#au)" />
+            <text class="m" x="646" y="658" text-anchor="middle">
+              workspaces.handoff
+            </text>
+            <rect
+              class="chip-u"
+              x="722"
+              y="646"
+              width="140"
+              height="40"
+              rx="8"
+            />
+            <text x="792" y="664" text-anchor="middle">messages (7)</text>
+            <text class="m" x="792" y="680" text-anchor="middle">
+              implement(Handoff)
+            </text>
+            <text class="s" x="884" y="662">Optional extensions plug in</text>
+            <text class="s" x="884" y="680">the same way; core never</text>
+            <text class="s" x="884" y="698">imports them.</text>
+          </svg>
+        </figure>
+      </section>
+
+      <!-- 4 ─────────────────────────────────────────────────────────── -->
+      <section id="events">
+        <h2><small>4</small>The event bus, followed through one landing</h2>
+        <p>
+          An event is written in the same commit as the change it describes, so
+          it exists exactly when that change does. Each reactor keeps its own
+          cursor and advances it inside its handler's commit. Here is what
+          happens when a branch's work lands.
+        </p>
+        <figure>
+          <svg viewBox="0 0 1120 690" role="img" aria-label="Event bus">
+            <!-- Row 1 -->
+            <rect class="ult" x="30" y="40" width="210" height="96" rx="12" />
+            <text class="m ult-t" x="48" y="64">1</text>
+            <text class="b" x="48" y="88">Branch coordinator</text>
+            <text class="mt" x="48" y="112">workspace submit</text>
+
+            <path class="ln-u" d="M242 88 H282" marker-end="url(#au)" />
+
+            <rect class="ult" x="284" y="40" width="250" height="96" rx="12" />
+            <text class="m ult-t" x="302" y="64">2</text>
+            <text class="b" x="302" y="88">@lander</text>
+            <text class="s" x="302" y="110">merge · run checks ·</text>
+            <text class="s" x="302" y="127">fast-forward main · push</text>
+
+            <path class="ln-u" d="M536 88 H576" marker-end="url(#au)" />
+
+            <rect class="pi" x="578" y="40" width="250" height="96" rx="12" />
+            <text class="m ult-t" x="596" y="64">3</text>
+            <text class="b" x="596" y="88">One commit</text>
+            <text class="s" x="596" y="110">lander state</text>
+            <text class="s" x="596" y="127">
+              +
+              <tspan class="mt ult-t">emit(workspaces.landed)</tspan>
+            </text>
+
+            <path class="ln-p" d="M830 88 H870" marker-end="url(#ap)" />
+
+            <rect class="pi" x="872" y="40" width="218" height="96" rx="12" />
+            <text class="m ult-t" x="890" y="64">4</text>
+            <text class="b" x="890" y="88">Events log</text>
+            <text class="s" x="890" y="110">an ownerless conversation</text>
+            <text class="s" x="890" y="127">that never runs</text>
+
+            <!-- Fan out -->
+            <path
+              class="ln-u"
+              d="M980 138 V170 H160 V196"
+              marker-end="url(#au)"
+            />
+            <path class="ln-u" d="M420 170 V196" marker-end="url(#au)" />
+            <path class="ln-u" d="M680 170 V196" marker-end="url(#au)" />
+            <path class="ln-u" d="M940 170 V196" marker-end="url(#au)" />
+            <text class="s" x="40" y="164">
+              5 each reactor, in order, with its own cursor
+            </text>
+
+            <!-- Reactors row 1 -->
+            <g>
+              <rect
+                class="chip-u"
+                x="30"
+                y="198"
+                width="250"
+                height="78"
+                rx="10"
+              />
+              <text class="mt" x="46" y="222">lineage/conclude-landed</text>
+              <text class="s" x="46" y="244">concludes the branch once</text>
+              <text class="s" x="46" y="262">its report run is idle</text>
+              <rect
+                class="chip-u"
+                x="290"
+                y="198"
+                width="260"
+                height="78"
+                rx="10"
+              />
+              <text class="mt" x="306" y="222">lineage/landing-notes</text>
+              <text class="s" x="306" y="244">puts the landing into the</text>
+              <text class="s" x="306" y="262">root's tally (its context)</text>
+              <rect
+                class="chip-u"
+                x="560"
+                y="198"
+                width="250"
+                height="78"
+                rx="10"
+              />
+              <text class="mt" x="576" y="222">lineage/memorize</text>
+              <text class="s" x="576" y="244">distils the root's memory</text>
+              <text class="s" x="576" y="262">in a background task</text>
+              <rect
+                class="chip-u"
+                x="820"
+                y="198"
+                width="270"
+                height="78"
+                rx="10"
+              />
+              <text class="mt" x="836" y="222">update/install-landed</text>
+              <text class="s" x="836" y="244">pnpm install when packages</text>
+              <text class="s" x="836" y="262">
+                changed in the host checkout
+              </text>
+            </g>
+            <g>
+              <rect
+                class="chip-u"
+                x="30"
+                y="286"
+                width="250"
+                height="60"
+                rx="10"
+              />
+              <text class="mt" x="46" y="310">dream/landed</text>
+              <text class="s" x="46" y="330">settles approved proposals</text>
+              <rect
+                class="chip-u"
+                x="290"
+                y="286"
+                width="260"
+                height="60"
+                rx="10"
+              />
+              <text class="mt" x="306" y="310">automations/events</text>
+              <text class="s" x="306" y="330">
+                fires event-triggered automations
+              </text>
+              <rect
+                class="ext"
+                x="560"
+                y="286"
+                width="530"
+                height="60"
+                rx="10"
+              />
+              <text class="b" x="576" y="310">Browser feed</text>
+              <text class="s" x="576" y="330">
+                <tspan class="mt">useEvents([SubmissionLanded])</tspan>
+                → toast "Landed &lt;branch&gt;"
+              </text>
+            </g>
+
+            <!-- Guarantees -->
+            <rect class="box" x="30" y="374" width="520" height="168" rx="12" />
+            <text class="h" x="50" y="404">What the cursor buys</text>
+            <text class="s" x="50" y="432">
+              Writes through
+              <tspan class="mt">tx</tspan>
+              happen
+              <tspan class="b" style="fill: var(--text)">exactly once</tspan>
+              , across
+            </text>
+            <text class="s" x="50" y="451">crashes, reloads and failures.</text>
+            <text class="s" x="50" y="476">
+              Files, processes, network:
+              <tspan class="b" style="fill: var(--text)">at least once</tspan>
+              .
+            </text>
+            <text class="s" x="50" y="501">
+              A throw rolls back handler and cursor; it retries.
+            </text>
+            <text class="s" x="50" y="526">
+              <tspan class="mt">{ from: 'now' }</tspan>
+              : a new reactor skips the past.
+            </text>
+
+            <rect
+              class="box"
+              x="570"
+              y="374"
+              width="520"
+              height="168"
+              rx="12"
+            />
+            <text class="h" x="590" y="404">Seeing it</text>
+            <text class="s" x="590" y="432">
+              <tspan class="mt">emit</tspan>
+              stamps the trace context on the event, so
+            </text>
+            <text class="s" x="590" y="451">
+              each reactor run continues the lander's trace.
+            </text>
+            <text class="s" x="590" y="476">
+              <tspan class="mt">eventLog.reactors()</tspan>
+              : cursor, lag, last failure.
+            </text>
+            <text class="s" x="590" y="501">
+              <tspan class="mt">ultimate.traceTree(id)</tspan>
+              : the whole chain,
+            </text>
+            <text class="s" x="590" y="520">nested, with durations.</text>
+
+            <!-- Git path -->
+            <rect
+              class="ext"
+              x="30"
+              y="566"
+              width="1060"
+              height="100"
+              rx="12"
+            />
+            <text class="b" x="50" y="594">
+              Meanwhile, through git rather than the bus
+            </text>
+            <g class="s">
+              <rect
+                class="chip-u"
+                x="50"
+                y="610"
+                width="170"
+                height="38"
+                rx="8"
+              />
+              <text x="135" y="634" text-anchor="middle">main moves</text>
+              <path class="ln" d="M222 629 H252" marker-end="url(#a)" />
+              <rect
+                class="chip-u"
+                x="254"
+                y="610"
+                width="230"
+                height="38"
+                rx="8"
+              />
+              <text x="369" y="634" text-anchor="middle">
+                host hot-reloads the files
+              </text>
+              <path class="ln" d="M486 629 H516" marker-end="url(#a)" />
+              <rect
+                class="chip-u"
+                x="518"
+                y="610"
+                width="270"
+                height="38"
+                rx="8"
+              />
+              <text x="653" y="634" text-anchor="middle">
+                next input gets "Build changed"
+              </text>
+              <path class="ln" d="M790 629 H820" marker-end="url(#a)" />
+              <rect
+                class="chip-u"
+                x="822"
+                y="610"
+                width="250"
+                height="38"
+                rx="8"
+              />
+              <text x="947" y="634" text-anchor="middle">
+                ↻ Reloaded · &lt;branch&gt; #N
+              </text>
+            </g>
+          </svg>
+        </figure>
+      </section>
+
+      <!-- 5 ─────────────────────────────────────────────────────────── -->
+      <section id="forest">
+        <h2><small>5</small>The agent forest</h2>
+        <p>
+          Every box is a Pi Durable conversation; the roles are Ultimate's. You
+          talk to @ultimate; it starts a branch per piece of work; branches
+          delegate to subagents and land through the lander; landings flow back
+          into the root's memory, which the next branch starts from.
+        </p>
+        <figure>
+          <svg viewBox="0 0 1120 640" role="img" aria-label="Agent forest">
+            <!-- User -->
+            <rect class="ext" x="470" y="24" width="180" height="56" rx="28" />
+            <text class="b" x="560" y="57" text-anchor="middle">Daniel</text>
+
+            <path
+              class="ln-u"
+              d="M560 82 V128"
+              marker-end="url(#au)"
+              marker-start="url(#au)"
+            />
+            <text class="s" x="574" y="110">only @ultimate talks to you</text>
+
+            <!-- @ultimate -->
+            <rect class="ult" x="430" y="130" width="260" height="76" rx="12" />
+            <text class="b ult-t" x="450" y="160">@ultimate</text>
+            <text class="s" x="450" y="182">
+              standing agent: starts, steers,
+            </text>
+            <text class="s" x="450" y="198">relays decisions</text>
+
+            <!-- Root -->
+            <rect class="ult" x="30" y="130" width="290" height="152" rx="12" />
+            <text class="b ult-t" x="50" y="160">Root #1</text>
+            <text class="s" x="132" y="160">runs no turns</text>
+            <rect
+              class="chip-u"
+              x="50"
+              y="176"
+              width="250"
+              height="42"
+              rx="8"
+            />
+            <text class="b" x="64" y="194" style="font-size: 13px">memory</text>
+            <text class="s" x="64" y="210">decisions · facts · lessons</text>
+            <rect
+              class="chip-u"
+              x="50"
+              y="226"
+              width="250"
+              height="42"
+              rx="8"
+            />
+            <text class="b" x="64" y="244" style="font-size: 13px">
+              tally (context)
+            </text>
+            <text class="s" x="64" y="260">intents · abstracts · landings</text>
+
+            <!-- branch tool -->
+            <path class="ln-u" d="M560 208 V270" marker-end="url(#au)" />
+            <text class="mt ult-t" x="574" y="246">branch</text>
+            <path class="ln-u" d="M175 284 V330 H428" marker-end="url(#au)" />
+            <text class="s" x="190" y="322">starts from the memory brief</text>
+
+            <!-- Branches -->
+            <rect
+              class="ult"
+              x="430"
+              y="272"
+              width="260"
+              height="120"
+              rx="12"
+            />
+            <text class="b" x="450" y="302">Branch · coordinator</text>
+            <text class="s" x="450" y="324">one feature or fix; plans,</text>
+            <text class="s" x="450" y="341">decides, verifies</text>
+            <text class="m" x="450" y="372">own worktree · own branch</text>
+            <text class="s" x="450" y="412">
+              one per piece of work, in parallel
+            </text>
+
+            <!-- reply arrow -->
+            <path
+              class="ln-u"
+              d="M708 300 C760 300 760 190 692 190"
+              marker-end="url(#au)"
+            />
+            <text class="mt ult-t" x="756" y="236">message</text>
+            <text class="s" x="756" y="254">decisions · reports</text>
+
+            <!-- Subagents -->
+            <rect
+              class="box"
+              x="430"
+              y="500"
+              width="260"
+              height="110"
+              rx="12"
+            />
+            <text class="b" x="450" y="528">Subagents</text>
+            <text class="s" x="450" y="550">bounded jobs, answer once</text>
+            <g class="mt">
+              <rect
+                class="chip-u"
+                x="450"
+                y="562"
+                width="56"
+                height="28"
+                rx="6"
+              />
+              <text
+                x="478"
+                y="581"
+                text-anchor="middle"
+                style="font-size: 11.5px"
+              >
+                scout
+              </text>
+              <rect
+                class="chip-u"
+                x="512"
+                y="562"
+                width="62"
+                height="28"
+                rx="6"
+              />
+              <text
+                x="543"
+                y="581"
+                text-anchor="middle"
+                style="font-size: 11.5px"
+              >
+                worker
+              </text>
+              <rect
+                class="chip-u"
+                x="580"
+                y="562"
+                width="94"
+                height="28"
+                rx="6"
+              />
+              <text
+                x="627"
+                y="581"
+                text-anchor="middle"
+                style="font-size: 11.5px"
+              >
+                reviewer …
+              </text>
+            </g>
+            <path class="ln-u" d="M560 424 V498" marker-end="url(#au)" />
+            <text class="mt ult-t" x="574" y="466">subagent start</text>
+
+            <!-- Lander -->
+            <rect
+              class="ult"
+              x="830"
+              y="300"
+              width="260"
+              height="110"
+              rx="12"
+            />
+            <text class="b ult-t" x="850" y="330">@lander</text>
+            <text class="s" x="850" y="352">
+              standing agent: one submission
+            </text>
+            <text class="s" x="850" y="369">at a time; checks, then main</text>
+            <text class="m" x="850" y="394">its own checkout</text>
+            <path class="ln-u" d="M692 360 H828" marker-end="url(#au)" />
+            <text class="mt ult-t" x="704" y="380">workspace submit</text>
+
+            <rect class="ext" x="830" y="460" width="260" height="60" rx="12" />
+            <text class="b" x="850" y="486">main</text>
+            <text class="s" x="850" y="506">
+              checks pass → fast-forward, push
+            </text>
+            <path class="ln" d="M960 412 V458" marker-end="url(#a)" />
+
+            <!-- landing back to root -->
+            <path
+              class="ln-u"
+              d="M1090 355 H1104 V20 H20 V206 H28"
+              marker-end="url(#au)"
+            />
+            <text class="s" x="1100" y="44" text-anchor="end">
+              workspaces.landed → landing note + memorize
+            </text>
+
+            <!-- Legend for lines -->
+            <g>
+              <path class="ln-u" d="M30 520 H80" />
+              <text class="s" x="92" y="524">
+                message / start: wakes the recipient
+              </text>
+              <path class="ln-u note" d="M30 550 H80" />
+              <text class="s" x="92" y="554">
+                <tspan class="mt ult-t">note</tspan>
+                : read at its next input, wakes nothing
+              </text>
+              <path class="ln-u notify" d="M30 580 H80" />
+              <text class="s" x="92" y="584">
+                <tspan class="mt ult-t">notify</tspan>
+                : tells you when it finishes
+              </text>
+            </g>
+            <path
+              class="ln-u note"
+              d="M430 376 C330 376 290 340 260 286"
+              marker-end="url(#au)"
+            />
+            <text class="mt ult-t" x="300" y="396">note</text>
+            <path
+              class="ln-u notify"
+              d="M430 560 C380 560 380 430 400 410 C410 400 420 396 428 394"
+              marker-end="url(#au)"
+            />
+            <text class="mt ult-t" x="352" y="486">notify</text>
+          </svg>
+        </figure>
+      </section>
+    </main>
+  </body>
+</html>
