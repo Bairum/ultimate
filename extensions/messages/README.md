@@ -152,7 +152,8 @@ never the user's.
 
 - **Sender:** codemode `ultimate.tell({ project, text, reply? })` (@ultimate only) logs a message `to: 'remote'` with
   `remote: { project, machine, key }`, a fresh random key, then posts the target's `messages.remote` action, located as
-  codemode's `{ project }` reads are (`lib/remote.ts`: loopback, else the tailnet address from the cloud register; the
+  codemode's `{ project }` reads are (`lib/remote.ts`: loopback, a satellite's address from `cloud.satellites`, else
+  the tailnet address from the cloud register; the
   target's own `Origin`, admitted by `tailscale.allow` on the tailnet). A failed post marks the message failed and the
   call throws a sentence naming the project and machine. Telling an Ultimate whose reply-expected message to you is
   still open is refused: answer it instead.
