@@ -73,10 +73,10 @@ function reply(response: ServerResponse, status: number, data: unknown) {
   response.writeHead(status, { 'Content-Type': 'application/json' })
   response.end(JSON.stringify(data))
 }
-function failed(response: ServerResponse, error: unknown) {
+function failed(request: IncomingMessage, response: ServerResponse, error: unknown) {
   if (!response.headersSent) {
-    if (error instanceof HttpError && error.status === 413)
-      response.setHeader('Connection', 'close')
+    // An unread body (a refused upload) would otherwise be read to its end to keep the connection alive.
+    if (!request.complete) response.setHeader('Connection', 'close')
     reply(response, error instanceof HttpError ? error.status : 500, {
       error: error instanceof HttpError ? error.message : 'Request failed',
     })
@@ -677,7 +677,7 @@ export async function createApi(
         }
         throw new HttpError(404, 'Unknown endpoint')
       } catch (error) {
-        failed(response, error)
+        failed(request, response, error)
       }
       return true
     },

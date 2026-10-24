@@ -143,7 +143,8 @@ it.concurrent('validates uploads, closes oversized requests and saves accepted f
   for (const precheck of [true, false]) {
     const oversized = await refuse(precheck)
     expect(oversized.status).toBe(413)
-    expect(oversized.connection).toBe('close')
+    // Only an unread body closes the connection; the streamed one was read to its last byte before the refusal.
+    expect(oversized.connection).toBe(precheck ? 'close' : 'keep-alive')
     expect(JSON.parse(oversized.body)).toEqual({ error: 'File exceeds 50 MiB' })
   }
 
