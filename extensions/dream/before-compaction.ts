@@ -243,12 +243,16 @@ export function compactionDream(
       const doc = await tx.doc(deps.Sessions, ROOT_CONVERSATION_ID)
       const waiting = doc.waiting
       if (waiting?.task !== task) return 'done'
-      const stop = (result: 'done' | 'gave up') => {
+      const stop = (result: 'done') => {
         delete doc.waiting
         return result
       }
-      // Expired first: a host that wakes long after the deadline gives up instead of starting a stale dream.
-      if (now >= waiting.at + DREAM_WAIT_MS) return stop('gave up')
+      // Expired first: a host that wakes long after the deadline gives up instead of starting a stale dream. The
+      // request stays, marked, until its note is left: a crash in between leaves the note on the next look.
+      if (waiting.gaveUp || now >= waiting.at + DREAM_WAIT_MS) {
+        waiting.gaveUp = true
+        return 'gave up'
+      }
       const automation = waiting.automation && (await enabled(tx, waiting.automation.id))
       const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
       if ((waiting.automation && !automation) || ultimate === undefined) return stop('done')
@@ -290,8 +294,26 @@ export function compactionDream(
           `The dream after your handoff did not start: other conversations kept working for ${DREAM_WAIT_MS / 3600_000} hours. Nothing to do; the next time your context passes the threshold it tries again, and the user can press Dream.`,
           { requestId: `dream.handoff-wait:${task}` },
         )
+    // The note is left (its request id makes a repeat harmless): only now does the request go.
+    await host.harness().commit(async (tx) => {
+      const doc = await tx.doc(deps.Sessions, ROOT_CONVERSATION_ID)
+      if (doc.waiting?.task === task) delete doc.waiting
+    }, context)
     return 'done'
   }
+
+  /**
+   * The wait of the event trigger before this feature, retired: one saved before the upgrade ends at once instead of
+   * being blocked forever for a missing definition. A later fire asks for a handoff.
+   */
+  const Retired = defineTask<unknown, { phase: 'look' }, null>({
+    name: 'dream.after-compaction',
+    version: 1,
+    initial: () => ({ phase: 'look' }),
+    phases: { look: (_task, runtime, ctx) => runtime.commit(() => done, ctx) },
+    abort: (_task, runtime, ctx) =>
+      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+  })
 
   /** One request's wait: a look every 15 seconds, for the handoff and then for idle, up to two hours in all. */
   const Wait = defineTask<{ at: number }, { phase: 'look' }, null>({
@@ -311,11 +333,11 @@ export function compactionDream(
   })
 
   /**
-   * Inside `tx`: record a request for @ultimate's handoff, start its wait and ask conversation `ultimate` for it with
-   * an input. `automation` names the built-in automation whose fire asked, absent when the user pressed Dream. A fire
-   * also wakes @ultimate with its own input; whichever comes second joins the same run as a follow-up, so it is one
-   * turn. A passive write would not do: an idle @ultimate that answered the fire first would never read it. Refuses
-   * while a request waits or no dream may start.
+   * Inside `tx`: record a request for @ultimate's handoff, start its wait and ask conversation `ultimate` for it.
+   * `automation` names the built-in automation whose fire asked: that fire's own input already wakes @ultimate, whose
+   * prompt says to hand off on it, so the ask here is a passive write that costs no turn (it joins the fire's run when
+   * it comes first). A second input would start a second run. Absent when the user pressed Dream: then the ask is the
+   * input that wakes it. Refuses while a request waits or no dream may start.
    */
   async function request(
     tx: Tx,
@@ -341,7 +363,7 @@ export function compactionDream(
     const waiting: Waiting = { at: now, task, ...(automation ? { automation } : {}) }
     doc.waiting = waiting
     await deliver(host, tx, ultimate, {
-      type: 'input',
+      type: automation ? 'write' : 'input',
       session: task,
       kind: 'dream.handoff',
       data: { task, ...(automation ? { automation } : {}) },
@@ -451,5 +473,5 @@ export function compactionDream(
     )
   }
 
-  return { Wait, Settle, fired, request, settled, look, settle }
+  return { Wait, Retired, Settle, fired, request, settled, look, settle }
 }

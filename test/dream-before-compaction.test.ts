@@ -61,6 +61,9 @@ async function fixture() {
   const events = eventHost(() => opened.harness, 'test')
   let busy: { id: number; busy: boolean; title: string }[] = []
   const notes: { to: number; text: string }[] = []
+  const leaveNote = vi.fn<
+    (to: number, text: string, options?: { requestId: string }) => Promise<void>
+  >(async (to, text) => void notes.push({ to, text }))
   const notices: string[] = []
   const services = apis(
     new Map<string, unknown>([
@@ -69,7 +72,7 @@ async function fixture() {
         'lineage',
         {
           rootOf: async () => undefined,
-          leaveNote: async (to: number, text: string) => void notes.push({ to, text }),
+          leaveNote,
         },
       ],
       [
@@ -201,6 +204,7 @@ async function fixture() {
     submitted,
     waits,
     notes,
+    leaveNote,
     notices,
     invoke,
     deps,
@@ -305,9 +309,9 @@ it('fires once at 80% and re-arms below 70%, asking for one handoff per fire', a
   await until(async () => (await f.waiting()) !== undefined)
   const first = (await f.waiting())!
   expect(first.automation).toEqual({ id, name: AUTOMATION_NAME })
-  // The fire's own input and the handoff ask both reach @ultimate.
+  // The fire's own input wakes @ultimate; the handoff ask is a passive write in that run, so it costs one turn.
   await until(async () => (await f.submitted(`dream.handoff:${first.task}`)) !== undefined)
-  expect((await f.submitted(`dream.handoff:${first.task}`))?.type).toBe('input')
+  expect((await f.submitted(`dream.handoff:${first.task}`))?.type).toBe('write')
   // Still above: no second fire, no second request.
   await f.usage(85)
   await until(async () => (await f.record(id)).condition?.value === 85)
@@ -377,8 +381,18 @@ it('starts without a handoff after 30 minutes and says so, and gives up after tw
   const second = await f.harness.commit((tx) => request(tx, 0, f.ultimate), context)
   f.busy([{ id: 50, busy: true, title: 'A branch at work' }])
   expect(await look(second.task, HANDOFF_WAIT_MS)).toBe('look')
-  expect(await look(second.task, DREAM_WAIT_MS)).toBe('done')
-  expect(f.notes).toEqual([{ to: f.ultimate, text: expect.stringContaining('did not start') }])
+  // The note fails (a crash before it, in effect): the request stays, marked, and the next look leaves the note.
+  f.leaveNote.mockRejectedValueOnce(new Error('Crashed'))
+  await expect(look(second.task, DREAM_WAIT_MS)).rejects.toThrow('Crashed')
+  expect(await f.waiting()).toMatchObject({ task: second.task, gaveUp: true })
+  f.busy([])
+  expect(await look(second.task, DREAM_WAIT_MS + 1)).toBe('done')
+  // Left again on the retry (and by the wait task itself, which the first start resumed), always under the same
+  // request id, so lineage records the note once.
+  const keys = f.leaveNote.mock.calls.map(([, , options]) => options?.requestId)
+  expect(keys.length).toBeGreaterThanOrEqual(2)
+  expect(new Set(keys)).toEqual(new Set([`dream.handoff-wait:${second.task}`]))
+  expect(f.notes.at(-1)).toEqual({ to: f.ultimate, text: expect.stringContaining('did not start') })
   expect(await f.sessions()).toHaveLength(1)
   expect(await f.waiting()).toBeUndefined()
 })
@@ -665,4 +679,70 @@ it("carries @ultimate's handoff, else its compaction summary without its memory,
     conversation: f.ultimate,
     handoff: 'Open: the preview round.',
   })
+})
+
+it("renames a stored session's afterCompaction to beforeCompaction, keeping its outcome", () => {
+  const migrate = (
+    Sessions as unknown as { definition: { migrate: (v: object, from: number) => object } }
+  ).definition.migrate
+  const outcome = { changes: 5, threshold: 5, result: 'ask', at: 3 }
+  expect(
+    migrate(
+      {
+        next: 3,
+        sessions: [
+          {
+            id: 1,
+            afterCompaction: {
+              automation: 'A4',
+              name: 'Dream after compaction',
+              at: 1,
+              settling: 9,
+              outcome,
+            },
+          },
+          { id: 2 },
+        ],
+      },
+      1,
+    ),
+  ).toEqual({
+    next: 3,
+    sessions: [
+      {
+        id: 1,
+        beforeCompaction: {
+          automation: 'A4',
+          name: 'Dream after compaction',
+          at: 1,
+          settling: 9,
+          outcome,
+        },
+      },
+      { id: 2 },
+    ],
+  })
+})
+
+it('ends a wait saved by the old event trigger instead of leaving it blocked', async () => {
+  const f = await fixture()
+  const task = await f.harness.commit(
+    (tx) =>
+      tx.createTask(
+        compactionDream(f.host, f.deps).Retired,
+        { automation: 'A4', name: 'Dream after compaction', deadline: 1 },
+        {
+          conversationId: ROOT_CONVERSATION_ID,
+          ownership: { kind: 'conversation' },
+          background: true,
+        },
+      ),
+    context,
+  )
+  f.host.harness().resume()
+  await until(
+    async () =>
+      (await f.harness.commit((tx) => tx.task(task), context))?.state.status === 'terminal',
+  )
+  expect(await f.waiting()).toBeUndefined()
 })

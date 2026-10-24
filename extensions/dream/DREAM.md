@@ -14,9 +14,10 @@ errors are found in conversation entries.
 
 ## For @ultimate
 
-A dream starts with your **handoff**. A `dream.handoff` input asks for it: the user pressed Dream, or your context
-passed the threshold of the built-in "Dream before compaction" automation (80% by default; its fire wakes you too: do
-nothing on the fire itself, the handoff input is the one to act on). Write it in that same turn, while your context
+A dream starts with your **handoff**. The user pressed Dream (a `dream.handoff` input asks for it), or the built-in
+"Dream before compaction" automation fired because your context passed its threshold (80% by default; a `dream.handoff`
+entry beside the fire carries the same ask, and the fire's turn is the one to write it in; never `act` on the fire).
+Write it in that same turn, while your context
 still holds everything: what you worked on, what is still open (branches, questions, to-dos) and how far each got,
 the decisions and why, the user's corrections, the lessons, and what you would do next. Plain Markdown, at most
 12,000 characters; record it with one call, `ultimate.action('dream', 'handoff', {text})`, then end your turn with one

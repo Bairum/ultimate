@@ -50,17 +50,21 @@ event), never by threshold or subscribers, so it is never made twice.
 - **Handoff.** Reactor `dream/after-compaction` sees `automations.fired` of that automation only (its id in dream's own
   document) and, unless a request already waits, a session is open, a sleep is under way or a chapter change holds the
   lock, records `waiting {at, task, automation}` in `dream.sessions` and a durable `dream.handoff-wait` task in one
-  commit with a `dream.handoff` input to @ultimate (request id `dream.handoff:<task>`). The fire's own
-  `automations.fired` input reaches @ultimate as well; whichever comes second is a follow-up in the same run, so the
-  handoff costs one turn. The user's Dream button takes the same path without `automation`. @ultimate records the
+  commit with a `dream.handoff` entry for @ultimate (request id `dream.handoff:<task>`). The fire's own
+  `automations.fired` input wakes @ultimate, so this entry is a passive write read in that run: the handoff costs one
+  turn (a second input would start a second run). The user's Dream button takes the same path without `automation`,
+  and there the `dream.handoff` entry is the input that wakes @ultimate. A wait saved by the old event trigger
+  (`dream.after-compaction` task) ends at once; stored sessions migrate `afterCompaction` to `beforeCompaction`
+  (`dream.sessions` version 2). @ultimate records the
   handoff with `handoff {text}` (nonempty, at most 12,000 characters; a later call replaces it while the request
   waits).
 - **Start.** The wait looks every 15 seconds. It starts the session through `startDreamIn` once the handoff is
   recorded, or 30 minutes after the request without one, and no top-level conversation other than @ultimate works
   (every refusal of the Dream button applies). The session records `handoff {task, text, at}` or `{task, missing}`
   and, for the automation, `beforeCompaction {automation, name, at, handsOff?}`; the `dream.started` input and card
-  say whether the handoff came. Two hours after the request the wait gives up and leaves @ultimate a quiet note
-  through lineage's `leaveNote`; a paused or deleted automation ends it. No grant is needed: the user decided this
+  say whether the handoff came. Two hours after the request the wait gives up (`waiting.gaveUp`, kept until the note
+  is left, so a crash in between leaves it on the next look) and leaves @ultimate a quiet note through lineage's
+  `leaveNote`; a paused or deleted automation ends it. No grant is needed: the user decided this
   read-only analysis runs by default; the user-only `start` stays user-only.
 - **Deciding.** The `dream.started` input says whether the user granted `dream` on that automation (`handsOff`); only
   then does @ultimate decide the proposals itself, recording each with `decide {…, reason}` (the journal shows it).

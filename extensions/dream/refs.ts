@@ -74,11 +74,12 @@ export type Handoff = { task: number; text?: string; at?: number; missing?: stri
 /**
  * A dream waiting for @ultimate's handoff and then for every other conversation to finish: asked at `at` by the
  * built-in `automation`'s fire, or by the user's Dream button (no `automation`); `task` is the wait. `handoff` once
- * @ultimate recorded it.
+ * @ultimate recorded it; `gaveUp` once two hours passed, until the note saying so is left.
  */
 export type Waiting = {
   at: number
   task: number
+  gaveUp?: true
   automation?: { id: string; name: string }
   handoff?: { text: string; at: number }
 }

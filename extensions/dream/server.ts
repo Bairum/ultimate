@@ -60,7 +60,19 @@ import type { PassName } from './types.ts'
 export const Sessions = defineDoc<{ next: number; sessions: Session[]; waiting?: Waiting }>({
   kind: DreamDoc.kind,
   checkpointWhen: () => false,
-  version: 1,
+  // Version 1 named a built-in automation's session `afterCompaction`; the record itself is the same.
+  version: 2,
+  migrate: (value) => {
+    const doc = value as { next: number; sessions: (Session & { afterCompaction?: unknown })[] }
+    return {
+      ...doc,
+      sessions: doc.sessions.map(({ afterCompaction, ...session }) =>
+        afterCompaction
+          ? { ...session, beforeCompaction: afterCompaction as Session['beforeCompaction'] }
+          : session,
+      ),
+    }
+  },
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
@@ -795,7 +807,7 @@ export default function dream(host: ExtensionHost) {
     start: (tx, by, acting) => startDreamIn(host, tx, by, acting),
     asleep: (tx, by, input) => grantedSleep(host, tx, by, input),
   })
-  const { Wait, Settle, fired } = compaction(host)
+  const { Wait, Retired, Settle, fired } = compaction(host)
   // One at a time, across facet reloads: two concurrent checks would both make the automation.
   const queue = host.resource('dream.after-compaction', () => ({ last: Promise.resolve() }))
   /** Queue a check behind the last one; a failure becomes a notice. */
@@ -832,6 +844,6 @@ export default function dream(host: ExtensionHost) {
   })
   return defineExtension({
     name: 'dream',
-    tasks: [deliverTask(host), grantedSleepTask(host), Wait, Settle],
+    tasks: [deliverTask(host), grantedSleepTask(host), Wait, Retired, Settle],
   })
 }
