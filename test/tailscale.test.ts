@@ -480,6 +480,20 @@ it('keeps the live mapping through a scratch server of the same project, and Che
   expect(await proxy()).toBe('http://127.0.0.1:4747')
   expect((await registry())['/project/a'].owner).toMatch(new RegExp(`^${process.pid}:`))
   expect(live.access.origins()).toEqual(['https://rog.example.ts.net:4747'])
+
+  // A check that fails once shows the failure; the next one finds the mapping standing and shows it ready again.
+  const retry = async () =>
+    (await actions.retry(null, { host: live.host } as Parameters<
+      typeof actions.retry
+    >[1])) as Status
+  const healthy = await readFile(f.config, 'utf8')
+  await writeFile(
+    f.config,
+    JSON.stringify({ ...JSON.parse(healthy), error: 'boom', errorOn: 'serve status --json' }),
+  )
+  expect((await retry()).state).toBe('error')
+  await writeFile(f.config, healthy)
+  expect(await retry()).toEqual(checked)
 })
 it('publishes a preview and frees its port when it ends', async () => {
   const f = await fixture()

@@ -118,19 +118,25 @@ export default function tailscale(host: ExtensionHost) {
       await lock.close()
     }
   }
-  /** Whether this server's mapping still stands, or a live successor took it over. */
+  let ready: Status | undefined
+  /** Whether this server's mapping still stands (`own`), a live successor took it over, or it is gone. */
   const intact = () =>
     withRegistry(async (registry) => {
       const owner = registry.ports[key]?.owner
-      if (owner !== ownerToken && owner && alive(Number(owner.split(':')[0]))) return true
+      if (owner !== ownerToken && owner && alive(Number(owner.split(':')[0]))) return 'successor'
       const serve = JSON.parse((await command(['serve', 'status', '--json'])).stdout) as Serve
       return owner === ownerToken && target(serve, dnsName!, ownedPort!) === localTarget
+        ? 'own'
+        : undefined
     })
   async function start() {
     if (closed) return
     try {
       if (ownedPort !== undefined) {
-        if (await intact()) return
+        const mapping = await intact()
+        // A probe that failed earlier left an error status over a mapping that stands: show it ready again.
+        if (mapping === 'own') set(ready!)
+        if (mapping) return
         // Removed behind this server's back (`tailscale serve … off`, or another server's cleanup): claim it again.
         remove?.()
         ownedPort = undefined
@@ -280,7 +286,8 @@ export default function tailscale(host: ExtensionHost) {
             return typeof login === 'string' && allow.includes(login) ? { login } : undefined
           },
         })
-        set({ state: 'ready', url, allow })
+        ready = { state: 'ready', url, allow }
+        set(ready)
       })
     } catch (error) {
       const stderr = (error as { stderr?: string }).stderr ?? ''
