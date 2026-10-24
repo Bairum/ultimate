@@ -383,10 +383,11 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
           value={text}
         />
         <PromptInputFooter className="@container">
-          <PromptInputTools>
+          {/* The toolbar gives way first, so Send and the composer actions always stay in reach. */}
+          <PromptInputTools className="overflow-hidden">
             <Slot name="composer.toolbar" variant="inline" />
           </PromptInputTools>
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex max-w-full min-w-0 shrink-0 items-center gap-2">
             <span
               className={cn(
                 'truncate font-mono text-[11px]',

@@ -178,6 +178,8 @@ function VoiceButton() {
       // oxlint-disable-next-line typescript/no-floating-promises -- transcribe shows its own failures beside the button.
       void transcribe(new Blob(active.chunks, { type: recorder.mimeType || type || 'audio/webm' }))
     })
+    // Created after awaiting the permission prompt, it may start suspended (Safari): the meter would read silence.
+    audio?.resume().catch(() => undefined)
     recorder.start(1000)
     setRecording(active)
   }
