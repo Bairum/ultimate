@@ -1,47 +1,62 @@
 import { BrainIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { cn, defineWebExtension, useDoc } from '@/sdk'
+import { cn, defineWebExtension, useDoc, useTranscript } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { useOpenMemory } from '../lineage/ui.tsx'
 import { RecallDoc } from './refs.ts'
 import { RECALL_ENTRY } from './types.ts'
 import type { Recalled } from './types.ts'
 
-/** While recall checks this message, a band of light runs around the bubble's border, then fades. */
-function Shimmer({ entry }: { entry: EntryRecord }) {
+/**
+ * On the user's bubble: while recall checks the message, a band of light runs around its border and fades; recalled
+ * memories then fly in as chips hanging on its bottom edge, each opening the Memory panel. Nothing when none applies.
+ */
+function RecallBubble({ entry }: { entry: EntryRecord }) {
   const pending = useDoc(RecallDoc)?.pending === entry.id
-  // Mounted once the check starts, so the fade-out plays; never on history.
-  const [seen, setSeen] = useState(false)
+  const recalled = useTranscript().find(
+    (other) => other.kind === RECALL_ENTRY && (other.data as Recalled).input === entry.id,
+  )?.data as Recalled | undefined
+  // Mounted once this view saw the check start, so the fade-out and the fly-in play; history shows chips still.
+  const [watched, setWatched] = useState(false)
+  // A check takes about 0.2 s: the light runs at least one lap so it reads as a check, not a flicker.
+  const [lap, setLap] = useState(false)
   useEffect(() => {
-    if (pending) setSeen(true)
+    if (!pending) return
+    setWatched(true)
+    setLap(true)
+    const timer = setTimeout(() => setLap(false), 1200)
+    return () => clearTimeout(timer)
   }, [pending])
-  if (!seen) return null
+  const checking = pending || lap
   return (
-    <span
-      aria-hidden
-      className={cn(
-        'pointer-events-none absolute inset-0 rounded-lg p-px transition-opacity duration-700',
-        pending ? 'animate-sweep opacity-100' : 'opacity-0',
+    <>
+      {watched && (
+        <span
+          aria-hidden
+          className={cn(
+            'pointer-events-none absolute inset-0 rounded-lg p-px transition-opacity duration-700',
+            checking ? 'opacity-100' : 'opacity-0',
+          )}
+          data-recall-checking={checking || undefined}
+          style={{
+            // One lap of the band across the border per minimum check time.
+            animation: checking ? 'sweep 1.2s linear infinite' : undefined,
+            background:
+              'linear-gradient(90deg, transparent 30%, var(--color-brand) 50%, transparent 70%) 0 0 / 300% 100%',
+            mask: 'linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0)',
+          }}
+        />
       )}
-      data-recall-checking={pending || undefined}
-      style={{
-        background:
-          'linear-gradient(90deg, transparent 30%, var(--color-brand) 50%, transparent 70%) 0 0 / 300% 100%',
-        mask: 'linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0)',
-      }}
-    />
+      {recalled && !checking && <Chips animate={watched} recalled={recalled} />}
+    </>
   )
 }
 
-/** The memories recalled for the message above, as chips under it that open the Memory panel. */
-function Recall({ entry }: { entry: EntryRecord }) {
-  const recalled = entry.data as Recalled
+function Chips({ recalled, animate }: { recalled: Recalled; animate: boolean }) {
   const openMemory = useOpenMemory()
   const row = useRef<HTMLDivElement>(null)
-  // Fly in only when it arrives live, not when history loads.
-  const [live] = useState(() => Date.now() - (entry.model?.[0]?.timestamp ?? 0) < 10_000)
   useEffect(() => {
-    if (!live) return
+    if (!animate) return
     row.current?.querySelectorAll('button').forEach((chip, index) =>
       chip.animate(
         [
@@ -56,16 +71,16 @@ function Recall({ entry }: { entry: EntryRecord }) {
         },
       ),
     )
-  }, [live])
+  }, [animate])
   return (
     <div
-      className="-mt-1 mb-1 flex flex-wrap justify-end gap-1"
+      className="absolute -bottom-2.5 left-3 flex max-w-[calc(100%-1.5rem)] flex-wrap gap-1"
       data-recall={recalled.input}
       ref={row}
     >
       {recalled.memories.map(({ slug, line }) => (
         <button
-          className="inline-flex h-6 max-w-full cursor-pointer items-center gap-1 rounded-full border border-border/70 bg-background px-2 font-mono text-[10.5px] text-muted-foreground outline-none hover:border-brand/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          className="inline-flex h-5 max-w-full cursor-pointer items-center gap-1 rounded-full border border-border/70 bg-background px-1.5 font-mono text-[10px] text-muted-foreground outline-none hover:border-brand/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
           data-recall-memory={slug}
           key={slug}
           onClick={() => openMemory(slug)}
@@ -81,6 +96,7 @@ function Recall({ entry }: { entry: EntryRecord }) {
 }
 
 export default defineWebExtension({
-  userBubble: [Shimmer],
-  entries: { [RECALL_ENTRY]: Recall },
+  userBubble: [RecallBubble],
+  // The bubble shows what was recalled; the entry carries the memories for the model.
+  entries: { [RECALL_ENTRY]: () => null },
 })
