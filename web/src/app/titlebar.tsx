@@ -1,5 +1,5 @@
 import { cn } from 'cn'
-import { ChevronDownIcon, CommandIcon } from 'lucide-react'
+import { ChevronDownIcon, CommandIcon, EllipsisIcon } from 'lucide-react'
 import { forwardRef } from 'react'
 import type { ComponentProps, ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
@@ -12,10 +12,11 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { SystemInfo } from '../../../shared/protocol.ts'
-import { actions } from '../sdk/actions.ts'
+import { actions, shellKeys } from '../sdk/actions.ts'
 import { shortenPath } from '../sdk/format.ts'
-import { useExtensions, useStore, useSystem } from '../sdk/hooks.ts'
-import { HOME, slotItems, surfaceItems } from '../sdk/registry.ts'
+import { useExtensions, useRegionOpen, useStore, useSystem, useUiState } from '../sdk/hooks.ts'
+import { HOME, panelItems, shownPanels, slotItems, surfaceItems } from '../sdk/registry.ts'
+import { useViewport } from '../sdk/viewport.ts'
 import { Slot } from './boundary.tsx'
 import { Shortcut } from './palette.tsx'
 import { sidebarWidthBeyondPhone } from './primitives.tsx'
@@ -251,9 +252,89 @@ function SurfaceItems() {
   )
 }
 
+/** The panels an unfolded foldable's title bar shows as icons; the others sit behind its `⋯`. */
+const quickPanels = ['todos', 'tasks', 'activity', 'info']
+
+const action =
+  'flex size-7 items-center justify-center rounded-md transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring'
+
+/**
+ * On a tablet (an unfolded foldable) the panels overlay the conversation and the header's toggle sits far from the
+ * hand, so the title bar's right end gets the `quickPanels` as icons, each opening its panel or closing it when
+ * shown, and a `⋯` menu with the rest.
+ */
+function PanelActions() {
+  const panels = panelItems(useExtensions())
+  const open = useRegionOpen('panels')
+  const [selected] = useUiState<string | null>(shellKeys.panel, null)
+  const { active, tabs } = shownPanels(panels, selected)
+  const tablet = useViewport() === 'tablet'
+  const agent = useStore((state) => state.ui.surface?.id === HOME)
+  if (!tablet || !agent) return null
+  const quick = tabs.filter((panel) => quickPanels.includes(panel.id))
+  const more = tabs.filter((panel) => !quickPanels.includes(panel.id))
+  return (
+    <nav className="flex items-center gap-0.5">
+      {quick.map((panel) => {
+        const Icon = panel.icon
+        const shown = open && panel.id === active?.id
+        return (
+          <Tooltip key={`${panel.extension}:${panel.id}`}>
+            <TooltipTrigger asChild>
+              <button
+                aria-label={panel.title}
+                aria-pressed={shown}
+                className={cn(action, shown && 'bg-accent text-foreground')}
+                onClick={() => (shown ? actions.closePanel() : actions.openPanel(panel.id))}
+                type="button"
+              >
+                {Icon ? <Icon className="size-4" /> : panel.title}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{panel.title}</TooltipContent>
+          </Tooltip>
+        )
+      })}
+      {more.length > 0 && (
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <button
+              aria-label="More panels"
+              className={cn(
+                action,
+                'data-[state=open]:bg-accent data-[state=open]:text-foreground',
+                open && active && more.includes(active) && 'bg-accent text-foreground',
+              )}
+              type="button"
+            >
+              <EllipsisIcon className="size-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-44">
+            {more.map((panel) => {
+              const Icon = panel.icon
+              return (
+                <DropdownMenuItem
+                  className="gap-2 py-1.5 font-mono text-[12px]"
+                  key={`${panel.extension}:${panel.id}`}
+                  onSelect={() => actions.openPanel(panel.id)}
+                >
+                  {Icon && <Icon className="size-3.5" />}
+                  {panel.title}
+                </DropdownMenuItem>
+              )
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </nav>
+  )
+}
+
 /**
  * The bar above every surface, as the status line's background: the brand (the surface switcher on phones), the
- * project chip, `titlebar.left`, the surfaces; then `titlebar.right` and the command palette.
+ * project chip, `titlebar.left`, the surfaces; then `titlebar.right`, the panel actions on a tablet and the command
+ * palette.
  */
 export function TitleBar() {
   return (
@@ -276,9 +357,10 @@ export function TitleBar() {
       </div>
       <div className="flex shrink-0 items-center gap-3 whitespace-nowrap">
         <Slot name="titlebar.right" variant="inline" />
+        <PanelActions />
         <Button
           aria-label="Command palette"
-          className="-mr-1 h-6 gap-1.5 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground max-md:hidden"
+          className="-mr-1 h-6 gap-1.5 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground max-lg:hidden"
           onClick={actions.openPalette}
           size="sm"
           variant="ghost"
@@ -288,7 +370,7 @@ export function TitleBar() {
         </Button>
         <Button
           aria-label="Command palette"
-          className="-mr-1 size-6 text-muted-foreground hover:text-foreground md:hidden"
+          className="-mr-1 size-6 text-muted-foreground hover:text-foreground md:max-lg:size-7 lg:hidden"
           onClick={actions.openPalette}
           size="icon"
           variant="ghost"

@@ -27,10 +27,14 @@ import { IconButton } from './header.tsx'
 import { useSurfaceId } from './surface.ts'
 import { Transcript } from './transcript.tsx'
 
-/** The bottom line with the `statusline.left` and `statusline.right` slots. */
+/**
+ * The bottom line with the `statusline.left` and `statusline.right` slots. On a touch screen of tablet width (an
+ * unfolded foldable, a tablet) the page reaches the display's rounded corners, so the line's ends move in and up to
+ * clear them.
+ */
 export function StatusLine() {
   return (
-    <footer className="flex h-7 shrink-0 items-center gap-4 overflow-hidden border-t border-border/70 bg-sidebar px-3 font-mono text-[11.5px] text-muted-foreground">
+    <footer className="flex h-7 shrink-0 items-center gap-4 overflow-hidden border-t border-border/70 bg-sidebar px-3 font-mono text-[11.5px] text-muted-foreground md:pointer-coarse:box-content md:pointer-coarse:px-7 md:pointer-coarse:pb-3">
       <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden whitespace-nowrap">
         <Slot name="statusline.left" variant="inline" />
       </div>

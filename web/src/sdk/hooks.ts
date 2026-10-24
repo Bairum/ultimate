@@ -18,7 +18,7 @@ import type {
   LiveState,
   UsageState,
 } from '@earendil-works/pi-durable'
-import { actions, allCommands, regionKeys, shellKeys, shownSurface } from './actions.ts'
+import { actions, allCommands, ownDefault, regionKeys, shellKeys, shownSurface } from './actions.ts'
 import type { Region } from './actions.ts'
 import { actionMessage, ROOT } from './api.ts'
 import { EVENT_FEED } from '../../../shared/events.ts'
@@ -246,7 +246,7 @@ export function useRegionOpen(region: Region) {
   const [shared] = useUiState<boolean>(key, fallback)
   const on = useViewport()
   const own = useStore((state) =>
-    on === 'desktop' ? false : (state.ui.open?.[on]?.[region] ?? false),
+    on === 'desktop' ? false : (state.ui.open?.[on]?.[region] ?? ownDefault(region, on)),
   )
   return on === 'desktop' ? shared : own
 }
