@@ -413,6 +413,8 @@ export async function createApi(
         if (upload) {
           const name = url.searchParams.get('name')
           if (!name) throw new HttpError(400, 'Expected name')
+          if (!(await harness.conversation(Number(upload[1]) as ConversationId, context)))
+            throw new HttpError(404, 'Unknown conversation')
           if (Number(request.headers['content-length'] ?? 0) > maxUploadBytes)
             throw new HttpError(413, 'File exceeds 50 MiB')
           const path = await saveUpload(host.home, Number(upload[1]), name, request).catch(

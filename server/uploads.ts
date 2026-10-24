@@ -62,7 +62,9 @@ export async function pruneUploads(home: string, now = Date.now()) {
     let left = files.length
     for (const file of files) {
       const path = join(dir, file)
-      if (now - (await stat(path)).mtimeMs > keepMs) {
+      // A file removed between the listing and the stat has nothing left to prune.
+      const info = await stat(path).catch(() => undefined)
+      if (info && now - info.mtimeMs > keepMs) {
         await rm(path, { force: true })
         left--
       }
