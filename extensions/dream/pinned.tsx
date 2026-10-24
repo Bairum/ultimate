@@ -38,7 +38,7 @@ export function DreamStatus() {
   )
 }
 
-/** The pinned session's journal, proposals and End or Fall asleep, as the card in @ultimate's conversation shows them. */
+/** The pinned session's current step: Fall asleep or its progress once proposals are settled, else the proposals. */
 export function JournalDialog() {
   const [open, setOpen] = useDialog(journalDialog)
   const session = usePinned()
@@ -52,7 +52,7 @@ export function JournalDialog() {
         <DialogDescription className="sr-only">
           The dream's journal and where its proposals stand
         </DialogDescription>
-        {session && <SessionJournal className="rounded-none border-0" id={session.id} />}
+        {session && <SessionJournal className="rounded-none border-0" current id={session.id} />}
       </DialogContent>
     </Dialog>
   )

@@ -50,7 +50,8 @@ When the built-in automation's dream settles, a `dream.settled` entry says wheth
 applied changes against the `dream.asleepAfter` setting, default 5). Below it, carry on in this chapter. At or above
 it, either the automation's `asleep` grant falls asleep by itself (every gate still runs; nothing to do), or the input
 asks you to ask the user: send one message with a `choice` question (Fall asleep now / Later) and point at the card's
-Fall asleep button, which only they press. Never call `asleep` or `automation act {do: 'asleep'}` for it yourself.
+Fall asleep button, which only they press. When the same turn owes the user an answer, put that question into the
+answer instead: a turn that owes an answer cannot also message the user. Never call `asleep` or `automation act {do: 'asleep'}` for it yourself.
 
 ## For the dream branch
 

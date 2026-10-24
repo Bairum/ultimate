@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { pinnedOf, progress } from '../../extensions/dream/types.ts'
+import { pinnedOf, progress, sleepLeads } from '../../extensions/dream/types.ts'
 import type { Proposal, Session } from '../../extensions/dream/refs.ts'
 
 const waiting = { status: 'waiting' } as const
@@ -56,6 +56,30 @@ it('drops a session ended early, one that stays in its chapter, and one that nev
     outcome: { changes: 1, threshold: 5, result: 'stay' as const, at: 3 },
   }
   expect(pinnedOf([session(1, { journal, endedAt: 2, beforeCompaction: stay })])).toBeUndefined()
+})
+
+it('leads the pinned dialog with Fall asleep once settled, also for a compaction dream worth a chapter', () => {
+  // Session 1 of chapter 2: its Fall asleep lived only on the settled card, so the dialog showed none.
+  const ask = {
+    automation: 'A4',
+    name: 'Dream before compaction',
+    at: 0,
+    outcome: { changes: 11, threshold: 5, result: 'ask' as const, at: 3 },
+  }
+  const settled = session(1, {
+    journal,
+    endedAt: 2,
+    beforeCompaction: ask,
+    proposals: proposals('landed', 'rejected'),
+  })
+  expect(sleepLeads(settled, true)).toBe(true)
+  expect(sleepLeads({ ...settled, sleep: { chapter: 'a', phase: 'checking', at: 3 } }, true)).toBe(
+    true,
+  )
+  expect(sleepLeads(session(1, { journal, proposals: proposals('landed', 'open') }), true)).toBe(
+    false,
+  )
+  expect(sleepLeads(settled, false)).toBe(false)
 })
 
 it('says where the session stands', () => {

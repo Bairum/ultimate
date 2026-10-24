@@ -9,6 +9,7 @@ import type { EntryRecord } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { MoonRow, Passes, passLabels } from './moon.tsx'
 import { FallAsleep } from './sleep.tsx'
+import { sleepLeads } from './types.ts'
 import { Granted } from './morning.tsx'
 import { DreamDoc, EndAction } from './refs.ts'
 import type { Handoff, HandoffEntry, Proposal, Session, SessionEntry } from './refs.ts'
@@ -166,12 +167,29 @@ export function JournalCard({ entry }: { entry: EntryRecord }) {
   return <SessionJournal id={(entry.data as SessionEntry).session} />
 }
 
-/** Session `id`'s journal card; the pinned dream line shows it in a dialog, framed by `className`. */
-export function SessionJournal({ id, className }: { id: number; className?: string }) {
+/**
+ * Session `id`'s journal card. The pinned dream line shows it in a dialog with `current`: there Fall asleep always
+ * shows (the settled card it would otherwise live on is not in the dialog), and once every proposal is settled it
+ * leads, with the journal folded below it.
+ */
+export function SessionJournal({
+  id,
+  className,
+  current,
+}: {
+  id: number
+  className?: string
+  current?: boolean
+}) {
   const session = useSession(id)
   const journal = session?.journal
   // Only the newest session falls asleep; an older one keeps the record of the sleep it took.
   const newest = useDocOf(1, DreamDoc)?.sessions.at(-1)?.id === id
+  const sleeps = !!session && (newest || !!session.sleep)
+  // A compaction's dream that was worth a chapter offers Fall asleep on its settled card, below.
+  const onSettledCard =
+    !!session?.beforeCompaction?.outcome && session.beforeCompaction.outcome.result !== 'stay'
+  const ready = current && !!session && sleepLeads(session, newest)
   return (
     <Card
       header={
@@ -191,18 +209,32 @@ export function SessionJournal({ id, className }: { id: number; className?: stri
         <div className="px-3 py-2.5">
           <Passes session={session} />
         </div>
+      ) : ready ? (
+        <>
+          <div className="[&>section]:border-t-0" data-dream-current>
+            <FallAsleep session={session} />
+          </div>
+          <Collapsible className="group/folded border-t border-border/60">
+            <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-1 px-4 py-2 font-mono text-[11px] text-muted-foreground hover:text-foreground">
+              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/folded:rotate-90 motion-reduce:transition-none" />
+              The journal and its {session.proposals.length} proposal
+              {session.proposals.length === 1 ? '' : 's'}
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <Learned lines={journal.learned} />
+              <Text text={journal.text} />
+              {session.proposals.length > 0 && <Proposals session={session} />}
+            </CollapsibleContent>
+          </Collapsible>
+          <Footer session={session} />
+        </>
       ) : (
         <>
           <Learned lines={journal.learned} />
           <Text text={journal.text} />
           {session.proposals.length > 0 && <Proposals session={session} />}
           <Footer session={session} />
-          {/* A compaction's dream that was worth a chapter offers Fall asleep on its settled card, below. */}
-          {(newest || session.sleep) &&
-            !(
-              session.beforeCompaction?.outcome &&
-              session.beforeCompaction.outcome.result !== 'stay'
-            ) && <FallAsleep session={session} />}
+          {sleeps && (current || !onSettledCard) && <FallAsleep session={session} />}
         </>
       )}
     </Card>

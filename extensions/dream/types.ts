@@ -83,6 +83,18 @@ export function pinnedOf(sessions: readonly Session[] = []): Session | undefined
   return newest
 }
 
+/**
+ * Whether the pinned dialog leads with Fall asleep (or its progress, or its failure): the newest session, or one that
+ * slept, once no proposal is open or on a branch, whichever card in the conversation carries Fall asleep.
+ */
+export function sleepLeads(session: Session, newest: boolean) {
+  if (!session.journal || !(newest || session.sleep)) return false
+  return (
+    !!session.sleep ||
+    !session.proposals.some((item) => item.status === 'open' || item.status === 'approved')
+  )
+}
+
 const settled = (session: Session) =>
   session.proposals.filter((item) => item.status !== 'open' && item.status !== 'approved').length
 
