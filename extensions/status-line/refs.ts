@@ -11,12 +11,3 @@ export type RateSample = { rates: Tokens; elapsed: number; totals: Tokens & { co
 
 /** No arguments → the latest rate sample, or null until two samples within 5 seconds of each other exist. */
 export const RatesAction = actionRef<null, RateSample | null>('status-line', 'rates')
-
-/**
- * `marker`, the conversation's newest compaction or reset → the estimated tokens of its next request (system prompt,
- * tools, summary and kept entries), or null when `marker` no longer heads its context.
- */
-export const EstimateAction = actionRef<{ marker: number }, number | null>(
-  'status-line',
-  'estimate',
-)
