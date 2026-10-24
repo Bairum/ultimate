@@ -152,7 +152,7 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
           automations: triggers.length,
           scripts: watchers.length,
         },
-        ...(builtIn ? { afterCompaction: { enabled: builtIn.enabled } } : {}),
+        afterCompaction: builtIn ? { enabled: builtIn.enabled } : null,
         ...(summary && ultimate !== undefined
           ? { continues: { conversation: ultimate, summary } }
           : {}),
