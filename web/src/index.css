@@ -184,6 +184,15 @@
   html.dark {
     color-scheme: dark;
   }
+  /* Edge to edge (viewport-fit=cover): the app shell keeps out of the notch, rounded corners and home indicator. The
+     open keyboard covers the home indicator, so typing drops the bottom inset instead of leaving a gap above it. */
+  .safe-area {
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+      env(safe-area-inset-left);
+  }
+  .safe-area:has(textarea:focus, input:focus, [contenteditable]:focus) {
+    padding-bottom: 0;
+  }
   body {
     @apply bg-background text-foreground antialiased;
     font-size: 14px;
