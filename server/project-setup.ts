@@ -63,6 +63,22 @@ export function projectDecision(projectRoot: string, userHome = homedir()) {
   }
 }
 
+/**
+ * Whether this project's decision, or the error reading it, changed since the last call. trust.json holds every
+ * project's decision, so most of its writes concern other projects and must not reload this one.
+ */
+export function decisionChanges(projectRoot: string, userHome = homedir()) {
+  const path = join(userHome, '.ultimate/trust.json')
+  const read = () => `${projectDecision(projectRoot, userHome)} ${errors.get(path) ?? ''}`
+  let last = read()
+  return () => {
+    const next = read()
+    if (next === last) return false
+    last = next
+    return true
+  }
+}
+
 export function useProjectSetup(projectRoot: string, userHome?: string) {
   return projectDecision(projectRoot, userHome) === true
 }

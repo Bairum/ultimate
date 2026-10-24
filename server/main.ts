@@ -22,6 +22,7 @@ import { admit, createAccess } from './request-security.ts'
 import { writeProject } from './project.ts'
 import { reportCore } from './supervisor-protocol.ts'
 import { viteLogger } from './vite-logger.ts'
+import { watchOnce } from './watch-once.ts'
 import type { Notice } from '../shared/protocol.ts'
 
 const send = (message: ChildMessage) => process.send?.(message)
@@ -118,13 +119,15 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     cacheDir: resolvePath(host.home, 'vite'),
     resolve: { alias: { '@': resolvePath(ultimateRoot, 'web/src') } },
     plugins: [
-      extensionModules(ultimateRoot, projectRoot, host.userHome),
       {
         name: 'ultimate:watchers',
+        enforce: 'pre',
         configureServer: (server) => {
+          watchOnce(server.watcher)
           for (const move of restarted) move(server.watcher)
         },
       },
+      extensionModules(ultimateRoot, projectRoot, host.userHome),
     ],
   })
   const watch: Watch = (attach) => {

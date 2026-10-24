@@ -5,7 +5,7 @@ import { discoverExtensions } from './discovery.ts'
 import { discoveryRoots } from './project.ts'
 import { watchRoots } from './watch-roots.ts'
 import { extensionSettingsFiles } from './extension-settings.ts'
-import { useProjectSetup } from './project-setup.ts'
+import { decisionChanges, useProjectSetup } from './project-setup.ts'
 
 const virtual = 'virtual:ultimate/web-facets'
 const resolved = '\0' + virtual
@@ -100,12 +100,14 @@ export function extensionModules(
     },
     configureServer(server) {
       server.watcher.add([...roots, ...settingsFiles])
+      const trustChanged = decisionChanges(projectRoot, userHome)
       const structure = (file: string) => {
         if (
           !settingsFiles.includes(file) &&
           !roots.some((root) => file === root || file.startsWith(root + '/'))
         )
           return
+        if (file === trustFile && !trustChanged()) return
         for (const id of [
           resolved,
           ...(file === trustFile ? [join(ultimateRoot, 'web/src/index.css')] : []),

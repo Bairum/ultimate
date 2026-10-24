@@ -1,6 +1,16 @@
 import { execFile } from 'node:child_process'
 import { promisify, parseArgs } from 'node:util'
-import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import {
+  appendFile,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
@@ -74,6 +84,33 @@ try {
   if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
 }
 const fixtures = await mkdtemp(join(tmpdir(), 'hashline-fixtures-'))
+// Every run project is a linked worktree of one checkout trusted once: a worktree shares its checkout's decision
+// (server/project-setup.ts decisionRoot), so runs never write trust.json, which every running Ultimate watches.
+const runsRoot = await mkdtemp(join(tmpdir(), 'hashline-runs-'))
+const base = join(runsRoot, 'base')
+const identity = [
+  '-c',
+  'user.name=Benchmark',
+  '-c',
+  'user.email=benchmark@localhost',
+  '-c',
+  'core.hooksPath=/dev/null',
+]
+await mkdir(base)
+await exec('git', ['init', '-q'], { cwd: base })
+await exec('git', [...identity, 'commit', '-q', '--allow-empty', '-m', 'Base'], { cwd: base })
+const trusted = await realpath(base)
+trust.set(trusted, true)
+// Concurrent workers must not race on the checkout's worktree list.
+let worktrees = Promise.resolve()
+const inBase = (args: string[]) => {
+  const next = worktrees.then(() => exec('git', args, { cwd: base }))
+  worktrees = next.then(
+    () => undefined,
+    () => undefined,
+  )
+  return next
+}
 try {
   await exec('tar', [
     '-xzf',
@@ -110,7 +147,7 @@ try {
       const artifact = join('runs', model.replaceAll('/', '__'), arm.name, task, String(run))
       const directory = join(out, artifact)
       await mkdir(directory, { recursive: true })
-      const temp = await mkdtemp(join(tmpdir(), 'hashline-run-'))
+      const temp = await mkdtemp(join(runsRoot, 'run-'))
       const project = join(temp, 'project'),
         home = join(temp, 'home')
       const fixture = join(fixtures, 'fixtures', task)
@@ -121,6 +158,7 @@ try {
         id: number | undefined
       console.log('RUN', model, arm.name, task, run)
       try {
+        await inBase(['worktree', 'add', '-q', '--detach', project])
         await cp(join(fixture, 'input'), project, { recursive: true })
         await mkdir(join(project, '.ultimate'), { recursive: true })
         await writeFile(
@@ -140,24 +178,8 @@ try {
             },
           }),
         )
-        await exec('git', ['init', '-q'], { cwd: project })
         await exec('git', ['add', '.'], { cwd: project })
-        await exec(
-          'git',
-          [
-            '-c',
-            'user.name=Benchmark',
-            '-c',
-            'user.email=benchmark@localhost',
-            '-c',
-            'core.hooksPath=/dev/null',
-            'commit',
-            '-qm',
-            'Fixture input',
-          ],
-          { cwd: project },
-        )
-        trust.set(project, true)
+        await exec('git', [...identity, 'commit', '-qm', 'Fixture input'], { cwd: project })
         server = await start(project, home, model, join(directory, 'server.log'), ultimateRoot)
         const available = await server.api('/api/models')
         if (!available.models.some((m: any) => `${m.provider}/${m.id}` === model && m.available))
@@ -191,11 +213,7 @@ try {
       } catch (cause) {
         error = String(cause)
       } finally {
-        try {
-          if (server) await server.stop()
-        } finally {
-          trust.set(project, null)
-        }
+        if (server) await server.stop()
       }
       const database = new DatabaseSync(join(home, 'state.sqlite'), { readOnly: true })
       try {
@@ -229,6 +247,8 @@ try {
         if (a !== b) diff += createTwoFilesPatch(`input/${file}`, `output/${file}`, a, b)
       }
       await writeFile(join(directory, 'final.diff'), diff)
+      // Each server's Vite dependency cache is hundreds of MB; the artifacts need only its storage.
+      await rm(join(home, 'vite'), { recursive: true, force: true })
       await cp(home, join(directory, 'storage'), { recursive: true })
       const result: Result = {
         key,
@@ -254,6 +274,7 @@ try {
       })
       await publish
       await rm(temp, { recursive: true, force: true })
+      await inBase(['worktree', 'prune'])
       console.log(result.pass ? 'PASS' : 'FAIL', key, result.output, 'output tokens', error ?? '')
     }
   }
@@ -261,5 +282,7 @@ try {
   await writeFile(join(out, 'report.md'), report(results))
   if (results.some((r) => r.error)) process.exitCode = 1
 } finally {
+  trust.set(trusted, null)
+  await rm(runsRoot, { recursive: true, force: true })
   await rm(fixtures, { recursive: true, force: true })
 }

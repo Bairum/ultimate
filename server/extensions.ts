@@ -1,7 +1,13 @@
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { compareExtensions, discoverExtensions } from './discovery.ts'
-import { decisionRoot, projectSetup, projectSettings, projectDiagnostics } from './project-setup.ts'
+import {
+  decisionChanges,
+  decisionRoot,
+  projectSetup,
+  projectSettings,
+  projectDiagnostics,
+} from './project-setup.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { discoveryRoots, projects } from './project.ts'
 import type { ProjectInfo } from './project.ts'
@@ -433,10 +439,9 @@ export async function loadExtensions(
     )
   let chain = Promise.resolve()
   let closed = false
-  const settingsFiles = [
-    ...extensionSettingsFiles(host.projectRoot, host.userHome),
-    join(host.userHome, '.ultimate/trust.json'),
-  ]
+  const trustFile = join(host.userHome, '.ultimate/trust.json')
+  const trustChanged = decisionChanges(host.projectRoot, host.userHome)
+  const settingsFiles = [...extensionSettingsFiles(host.projectRoot, host.userHome), trustFile]
   let previousSettings: string | undefined
   let diagnostics: string[] = []
   async function discover() {
@@ -640,6 +645,7 @@ export async function loadExtensions(
     )
       return
     if (settingsFiles.includes(resolve(file))) {
+      if (resolve(file) === trustFile && !trustChanged()) return
       chain = chain.then(() => reloadSettings()).catch(() => changed())
       return
     }

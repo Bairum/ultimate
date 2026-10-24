@@ -1,11 +1,30 @@
 import { createBashTool } from '@earendil-works/pi-durable/tools'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
 import { afterEach, expect, it, vi } from 'vitest'
-import codingTools from '../extensions/coding-tools/server.ts'
+import codingTools, { prepareBash } from '../extensions/coding-tools/server.ts'
 import { context } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 
 afterEach(() => vi.unstubAllEnvs())
+
+it("runs commands without this server's own variables, so a nested `ultimate` opens its own home", () => {
+  vi.stubEnv('ULTIMATE_HOME', '/state/of/this/server')
+  vi.stubEnv('ULTIMATE_PROJECT', '/this/project')
+  vi.stubEnv('ULTIMATE_SUPERVISED', '1')
+  vi.stubEnv('ULTIMATE_BASH_TIMEOUT', '42')
+  const execution = { command: 'ultimate', cwd: '/', env: { EXTRA: 'kept' }, inheritEnv: true }
+  prepareBash(execution, { conversationId: 7 } as ToolExecutionApi, '/tmp/commits.log')
+  expect(execution.inheritEnv).toBe(false)
+  expect(execution.env).not.toHaveProperty('ULTIMATE_HOME')
+  expect(execution.env).not.toHaveProperty('ULTIMATE_PROJECT')
+  expect(execution.env).not.toHaveProperty('ULTIMATE_SUPERVISED')
+  expect(execution.env).toMatchObject({
+    PATH: process.env.PATH,
+    ULTIMATE_BASH_TIMEOUT: '42',
+    EXTRA: 'kept',
+    ULTIMATE_COMMIT_LOG: '/tmp/commits.log',
+  })
+})
 
 it('uses a 600-second default tripwire and leaves explicit timeouts unchanged', async () => {
   vi.stubEnv('ULTIMATE_BASH_TIMEOUT', undefined)

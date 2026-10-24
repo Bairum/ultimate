@@ -67,12 +67,37 @@ const hooks = (conversation: number) => ({
   'post-rewrite': `while read -r old new rest; do printf 'rewrite\\t%s\\t\\t\\t%s\\t%s\\n' "$new" "$(git rev-parse --path-format=absolute --git-common-dir)" "$old"; done 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
 })
 
-/** Install the hooks for bash call `api` in `execution`; they log its commits to `log` when given. */
+/** What the supervisor tells this server about itself (`bin/ultimate.ts`), as `extensions/instance` also drops them. */
+const serverEnv = [
+  'ULTIMATE_HOME',
+  'ULTIMATE_PROJECT',
+  'ULTIMATE_PORT',
+  'ULTIMATE_SUPERVISED',
+  'ULTIMATE_GENERATION',
+  'ULTIMATE_PUBLIC_URL',
+  'ULTIMATE_PREVIOUS_BUILD',
+]
+
+/**
+ * Install the hooks for bash call `api` in `execution`; they log its commits to `log` when given. The command does not
+ * inherit this server's own variables: with them, `ultimate`, `pnpm start` or `pnpm reset` would act on this server's
+ * home instead of the project they are given.
+ */
 export function prepareBash(
   execution: BashExecution,
   api: Pick<ToolExecutionApi, 'conversationId'>,
   log?: string,
 ) {
+  execution.inheritEnv = false
+  execution.env = {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(
+        (entry): entry is [string, string] =>
+          entry[1] !== undefined && !serverEnv.includes(entry[0]),
+      ),
+    ),
+    ...execution.env,
+  }
   let count = Number(process.env.GIT_CONFIG_COUNT ?? 0)
   for (const [event, command] of Object.entries(hooks(api.conversationId))) {
     execution.env[`GIT_CONFIG_KEY_${count}`] = `hook.ultimate-${event}.event`
