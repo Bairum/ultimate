@@ -39,7 +39,9 @@ import {
   deleteDefinition,
   discoverAgents,
   saveDefinition,
+  saveOverlay,
 } from '../../lib/agents.ts'
+import type { DefinitionFields } from '../../lib/agents.ts'
 import { createChild, started } from './children.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { exec } from '../../lib/exec.ts'
@@ -472,30 +474,31 @@ export const actions = {
     )
     const existing = definitions.find((definition) => definition.name === name)
     if (create === true && existing) throw new Error(`A definition named ${name} exists already`)
-    // The form shows the merged definition; saving it would write the overlays' additions into a whole copy.
-    if (existing?.overlays?.length)
-      throw new Error(
-        `${name} is extended by ${existing.overlays.join(', ')}: edit that file to change its additions`,
+    const fields: DefinitionFields = {
+      description,
+      ...(model ? { model } : {}),
+      ...(thinking ? { thinking } : {}),
+      ...(tools ? { tools } : {}),
+      ...(denyTools?.length ? { denyTools } : {}),
+      ...(isolate ? { isolate } : {}),
+      ...(resident !== undefined ? { resident } : {}),
+      ...(onFailure ? { onFailure } : {}),
+      ...(fast ? { fast } : {}),
+      ...(!summaries ? { summaries } : {}),
+    }
+    // The form shows the merged definition; a whole copy would freeze the overlays' additions and the base's
+    // instructions, so the save becomes an overlay holding only what differs from the base.
+    if (existing?.overlays?.length) {
+      await saveOverlay(host, host.modelRuntime, scope, name, fields, instructions)
+      const { definitions: saved } = await discoverAgents(
+        host.ultimateRoot,
+        host.projectRoot,
+        host.userHome,
+        host.modelRuntime,
       )
-    return saveDefinition(
-      host,
-      host.modelRuntime,
-      scope,
-      name,
-      {
-        description,
-        ...(model ? { model } : {}),
-        ...(thinking ? { thinking } : {}),
-        ...(tools ? { tools } : {}),
-        ...(denyTools?.length ? { denyTools } : {}),
-        ...(isolate ? { isolate } : {}),
-        ...(resident !== undefined ? { resident } : {}),
-        ...(onFailure ? { onFailure } : {}),
-        ...(fast ? { fast } : {}),
-        ...(!summaries ? { summaries } : {}),
-      },
-      instructions,
-    )
+      return saved.find((definition) => definition.name === name)!
+    }
+    return saveDefinition(host, host.modelRuntime, scope, name, fields, instructions)
   }),
   /** `{name, scope}`: remove a user or project definition; a built-in or user one of that name applies again. */
   deleteDefinition: implementAction(DeleteDefinitionAction, async (args, { host }) => {
