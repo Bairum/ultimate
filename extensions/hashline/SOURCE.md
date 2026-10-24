@@ -1,5 +1,10 @@
 # Hashline engine provenance
 
+E1.2 adds host tools/cards documented in README.md. One additional engine fix:
+`patcher.ts` relocates snapshot history only after the filesystem move succeeds,
+so a failed MV cannot discard the source's provenance. Failed-MV coverage lives
+in `test/hashline-tools.test.ts`.
+
 Vendored from `@oh-my-pi/hashline@18.1.5`, `src/*.ts` (MIT), published by
 [oh-my-pi](https://github.com/can1357/oh-my-pi). The engine directory preserves
 upstream's module structure. `LICENSE-omp` carries the upstream MIT license and

@@ -574,8 +574,8 @@ export class Patcher {
 
     if (moveDest !== undefined) {
       const destCanonical = this.fs.canonicalPath(moveDest)
-      this.snapshots.relocate(canonicalPath, destCanonical)
       await this.fs.move(section.path, moveDest, persisted)
+      this.snapshots.relocate(canonicalPath, destCanonical)
       this.snapshots.resetNoop(canonicalPath)
       this.snapshots.resetNoop(destCanonical)
       const fileHash = this.#recordFullSnapshot(destCanonical, after)
