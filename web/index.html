@@ -4,9 +4,16 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1, interactive-widget=resizes-content"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <meta name="color-scheme" content="dark light" />
+    <!-- Home screen: standalone, drawn edge to edge under the status bar (web/src/app/App.tsx pads the safe area). -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Ultimate" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#111112" />
     <title>Ultimate</title>
     <style>
       html {
@@ -18,8 +25,10 @@
     </style>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <script>
-      if (localStorage.getItem('ultimate.theme') === 'light')
+      if (localStorage.getItem('ultimate.theme') === 'light') {
         document.documentElement.classList.remove('dark')
+        document.querySelector('meta[name=theme-color]').content = '#f9fafb'
+      }
     </script>
   </head>
   <body>

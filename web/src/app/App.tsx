@@ -177,7 +177,7 @@ export function App() {
   )
   return (
     <TooltipProvider delayDuration={400}>
-      <div className="flex h-dvh flex-col">
+      <div className="safe-area flex h-dvh flex-col">
         {loaded && !embedded && <TitleBar />}
         {loaded && !pending && <Surfaces surfaces={line} />}
       </div>
