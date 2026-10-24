@@ -84,7 +84,7 @@ function BottomDebug() {
           `inner ${innerHeight} vv ${Math.round(visualViewport?.height ?? 0)} screen ${screen.height} html ${document.documentElement.clientHeight}`,
           `inset top ${style.paddingTop} bottom ${style.paddingBottom}`,
           `shell ${Math.round(rect?.top ?? 0)}→${Math.round(rect?.bottom ?? 0)} pos ${shell ? getComputedStyle(shell).position : '?'} pb ${shell ? getComputedStyle(shell).paddingBottom : '?'}`,
-          `line bottom ${Math.round(line?.bottom ?? 0)} gap ${Math.round(innerHeight - (line?.bottom ?? 0))}`,
+          `line bottom ${Math.round(line?.bottom ?? 0)} gap ${Math.round(innerHeight - (line?.bottom ?? 0))} to screen ${Math.round(screen.height - (line?.bottom ?? 0))} scrollY ${scrollY}`,
         ].join('\n'),
       )
     }
