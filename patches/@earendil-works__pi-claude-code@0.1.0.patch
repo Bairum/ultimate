@@ -92,24 +92,19 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..c5e47effcec94e266ae31abe0842c2e9
  
        const nativeFailureHandled = this.relay.denied > 0 || message.stop_reason === "refusal";
        if (nativeError && !nativeFailureHandled) throw new Error(`Claude Code API error: ${nativeError}`);
-diff --git a/src/turn-relay.ts b/src/turn-relay.ts
-index 08ec86e5df1baac866a1cd97cea4dc94a523fbd7..b3aa4007e5154b2d9cd21e8d2ad8fbc622f919c8 100644
---- a/src/turn-relay.ts
-+++ b/src/turn-relay.ts
-@@ -323,7 +323,7 @@ export class TurnRelay {
-       if (this.status === 200) this.capture.finish();
-       response.end();
-     } catch (error) {
--      this.failure = error instanceof Error ? error.name : "UnknownError";
-+      this.failure = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-       if (!response.headersSent) response.writeHead(this.cancelled ? 499 : 502).end();
-       else response.destroy();
-     } finally {
 diff --git a/src/stream.ts b/src/stream.ts
-index b516241c794b5dd7054822921d445a2169c6b70e..ba5330c54b36584a6f7b35a53afee4c411770e07 100644
+index b516241c794b5dd7054822921d445a2169c6b70e..8754a4b6eecd02b07689bb6111dd32f364d6148c 100644
 --- a/src/stream.ts
 +++ b/src/stream.ts
-@@ -122,6 +122,19 @@ function comparableContent(content: AssistantMessage["content"]): unknown[] {
+@@ -6,6 +6,7 @@ import {
+   getCurrentTools,
+   getInitialSystemMessage,
+   getSystemMessageText,
++  parseStreamingJson,
+   type AssistantMessage,
+   type AssistantMessageEventStream,
+   type Model,
+@@ -122,6 +123,19 @@ function comparableContent(content: AssistantMessage["content"]): unknown[] {
    });
  }
  
@@ -129,7 +124,7 @@ index b516241c794b5dd7054822921d445a2169c6b70e..ba5330c54b36584a6f7b35a53afee4c4
  function nativeContent(content: NativeContentBlock[], toolNames: Set<string>): AssistantMessage["content"] {
    const converted: AssistantMessage["content"] = [];
    for (const block of content) {
-@@ -141,9 +154,7 @@ function nativeContent(content: NativeContentBlock[], toolNames: Set<string>): A
+@@ -141,9 +155,7 @@ function nativeContent(content: NativeContentBlock[], toolNames: Set<string>): A
          redacted: true,
        });
      } else if (block.type === "tool_use") {
@@ -140,7 +135,7 @@ index b516241c794b5dd7054822921d445a2169c6b70e..ba5330c54b36584a6f7b35a53afee4c4
        converted.push({ type: "toolCall", id: block.id, name, arguments: block.input as never });
      }
    }
-@@ -239,9 +250,7 @@ class EventTranslator {
+@@ -239,9 +251,7 @@ class EventTranslator {
        } as IndexedThinking);
        this.stream.push({ type: "thinking_start", contentIndex, partial: this.output });
      } else if (native.type === "tool_use") {
@@ -151,3 +146,26 @@ index b516241c794b5dd7054822921d445a2169c6b70e..ba5330c54b36584a6f7b35a53afee4c4
        this.output.content.push({
          type: "toolCall",
          id: native.id,
+@@ -270,7 +280,8 @@ class EventTranslator {
+       block.thinkingSignature = (block.thinkingSignature ?? "") + delta.signature;
+     } else if (delta.type === "input_json_delta" && block.type === "toolCall") {
+       block.partialJson += delta.partial_json;
+-      block.arguments = parseArguments(block.partialJson, block.arguments);
++      // Partial arguments while the call streams in, as pi-ai's own providers do, so renderers can show it arriving.
++      block.arguments = parseStreamingJson(block.partialJson);
+       this.stream.push({ type: "toolcall_delta", contentIndex, delta: delta.partial_json, partial: this.output });
+     }
+   }
+diff --git a/src/turn-relay.ts b/src/turn-relay.ts
+index 08ec86e5df1baac866a1cd97cea4dc94a523fbd7..b3aa4007e5154b2d9cd21e8d2ad8fbc622f919c8 100644
+--- a/src/turn-relay.ts
++++ b/src/turn-relay.ts
+@@ -323,7 +323,7 @@ export class TurnRelay {
+       if (this.status === 200) this.capture.finish();
+       response.end();
+     } catch (error) {
+-      this.failure = error instanceof Error ? error.name : "UnknownError";
++      this.failure = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+       if (!response.headersSent) response.writeHead(this.cancelled ? 499 : 502).end();
+       else response.destroy();
+     } finally {

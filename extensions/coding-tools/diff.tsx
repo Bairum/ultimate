@@ -1,4 +1,5 @@
 // Pi upstream: @earendil-works/pi-durable@1.4.0 src/tools/edit.ts and src/tools/edit-diff.ts — internal untyped details.patch/details.diff formats drive the diff renderer. Drop when Pi exports structured diff rows for rendering.
+import type { Ref } from 'react'
 import { cn } from '@/sdk'
 
 export interface DiffRow {
@@ -42,13 +43,14 @@ export function parseDisplayDiff(diff: string): DiffRow[] {
   })
 }
 
-/** Rows from the call's `edits`, before there is a result. */
+/** Rows from the call's `edits` before there is a result: only text that has arrived, never an empty placeholder row. */
 export function editRows(edits: readonly { oldText?: string; newText?: string }[]): DiffRow[] {
-  return edits.flatMap((edit, index) => [
-    ...(index > 0 ? [{ type: 'gap' as const, text: '' }] : []),
-    ...(edit.oldText ?? '').split('\n').map((text) => ({ type: 'del' as const, text })),
-    ...(edit.newText ?? '').split('\n').map((text) => ({ type: 'add' as const, text })),
-  ])
+  const lines = (text: string | undefined, type: 'add' | 'del') =>
+    text ? text.split('\n').map((line) => ({ type, text: line })) : []
+  return edits.flatMap((edit, index) => {
+    const rows = [...lines(edit.oldText, 'del'), ...lines(edit.newText, 'add')]
+    return index > 0 && rows.length > 0 ? [{ type: 'gap' as const, text: '' }, ...rows] : rows
+  })
 }
 
 export function countChanges(rows: readonly DiffRow[]) {
@@ -67,7 +69,23 @@ const tone = {
 } as const
 const sign = { add: '+', del: '−', context: ' ', hunk: '', gap: '' } as const
 
-export function Diff({ rows, className }: { rows: readonly DiffRow[]; className?: string }) {
+/** The soft block cursor at the end of text that is still arriving. */
+export const Caret = () => (
+  <span className="ml-px inline-block h-3.5 w-1.5 animate-pulse-dot bg-brand align-middle" />
+)
+
+export function Diff({
+  rows,
+  className,
+  caret,
+  ref,
+}: {
+  rows: readonly DiffRow[]
+  className?: string
+  /** Text is still arriving: a cursor ends the last row. */
+  caret?: boolean
+  ref?: Ref<HTMLDivElement>
+}) {
   const numbered = rows.some((row) => row.old !== undefined || row.new !== undefined)
   return (
     <div
@@ -75,7 +93,13 @@ export function Diff({ rows, className }: { rows: readonly DiffRow[]; className?
         'overflow-auto bg-terminal py-1 font-mono text-[12px] leading-[1.6]',
         className,
       )}
+      ref={ref}
     >
+      {caret && rows.length === 0 && (
+        <div className="px-3">
+          <Caret />
+        </div>
+      )}
       <div className="grid min-w-max grid-cols-[auto_auto_auto_1fr]">
         {rows.map((row, index) =>
           row.type === 'hunk' || row.type === 'gap' ? (
@@ -106,7 +130,8 @@ export function Diff({ rows, className }: { rows: readonly DiffRow[]; className?
                   row.type === 'del' && 'text-diff-del',
                 )}
               >
-                {row.text || ' '}
+                {row.text || (caret && index === rows.length - 1 ? '' : ' ')}
+                {caret && index === rows.length - 1 && <Caret />}
               </span>
             </div>
           ),
