@@ -1,5 +1,6 @@
 import { Type } from '@earendil-works/pi-ai'
 import type { ConversationId, EntryId, EntryRecord, Tx } from '@earendil-works/pi-durable'
+import { imagesOf } from '../../lib/entries.ts'
 import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 
 /**
@@ -8,24 +9,6 @@ import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.
  */
 export type ImagesRef = 'latest' | number
 export const SCAN_PAGE = 200
-export function imagesOf(entry: EntryRecord | undefined) {
-  return (entry?.model ?? []).flatMap((message) =>
-    (message.role === 'user' || message.role === 'toolResult') &&
-    typeof message.content !== 'string'
-      ? message.content.flatMap((block) =>
-          block.type === 'image'
-            ? [
-                {
-                  type: 'image' as const,
-                  data: block.data,
-                  mimeType: block.mimeType,
-                },
-              ]
-            : [],
-        )
-      : [],
-  )
-}
 /** Resolve `ref` against conversation `from`'s visible history to the entry holding the images, checking the limits. */
 export async function resolveImages(tx: Tx, from: ConversationId, ref: ImagesRef) {
   let entry: EntryRecord | undefined
