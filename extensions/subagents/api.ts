@@ -28,6 +28,11 @@ export const Subagents = defineDoc<{
       conversationId: ConversationId
       reporter: TaskId
       answer?: EntryId
+      /**
+       * Unset while delivering; then `done`, `unanswered` (stopped by the parent), `interrupted` (stopped in the
+       * child), `failed` (a provider error the watchdog holds, or a delivery error) or `given-up` (the watchdog
+       * reported that provider error instead of retrying it: final).
+       */
       status?: string
     }
   >

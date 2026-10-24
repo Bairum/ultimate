@@ -180,7 +180,11 @@ export function Bubble({
   const answer = message && log ? answerTo(log.messages, message) : undefined
   // In compact mode, how a message was sent is no news: only what asks something of you, or went wrong, says so.
   const shown =
-    status === 'yours' || status === 'sending' || status === 'failed' || status === 'dismissed'
+    status === 'yours' ||
+    status === 'sending' ||
+    status === 'failed' ||
+    status === 'stopped' ||
+    status === 'dismissed'
   return (
     <section
       data-message-outgoing={message?.id}
@@ -455,9 +459,11 @@ export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode
       ? 'starting'
       : message?.state === 'failed'
         ? 'failed'
-        : message?.state === 'answered'
-          ? 'reported back'
-          : 'working'
+        : message?.state === 'stopped'
+          ? 'stopped by the user'
+          : message?.state === 'answered'
+            ? 'reported back'
+            : 'working'
   return (
     <Fold
       card={call.id}
@@ -583,6 +589,7 @@ export function MessageInput({ entry }: { entry: EntryRecord }) {
     reply: boolean
     delivery?: 'steer' | 'followUp' | 'note'
     failed?: boolean
+    stopped?: boolean
     remote?: Remote
   }
   const receiver = useConversation((conversation) => conversation.id)
@@ -602,7 +609,11 @@ export function MessageInput({ entry }: { entry: EntryRecord }) {
           <span className="shrink-0">
             {reply ? 'reply' : origin.reply ? 'message · expects reply' : 'message · one-way'}
           </span>
-          {origin.failed && <span className="shrink-0 text-destructive">· failed</span>}
+          {origin.stopped ? (
+            <span className="shrink-0">· stopped by the user</span>
+          ) : (
+            origin.failed && <span className="shrink-0 text-destructive">· failed</span>
+          )}
           <TriageStatus id={origin.id} />
         </>
       }
@@ -628,7 +639,11 @@ export function MessageInput({ entry }: { entry: EntryRecord }) {
                 ` · ${{ steer: 'steered', followUp: 'follow-up', note: 'note' }[origin.delivery]}`}
             </span>
           )}
-          {origin.failed && <span className="text-destructive">failed</span>}
+          {origin.stopped ? (
+            <span>stopped by the user</span>
+          ) : (
+            origin.failed && <span className="text-destructive">failed</span>
+          )}
           <TriageStatus id={origin.id} />
           <TriageReason id={origin.id} />
           {typeof origin.from === 'number' && (

@@ -232,6 +232,7 @@ export const isOpen = (message: Message) =>
 /** Who waits on whom for one message; `yours` is an open question to the user. */
 export function messageStatus(message: Message) {
   if (message.state === 'failed') return 'failed'
+  if (message.state === 'stopped') return 'stopped'
   if (message.state === 'answered') return 'answered'
   if (message.state === 'dismissed') return 'dismissed'
   if (isOpen(message)) return message.to === 'user' ? 'yours' : 'waiting'
@@ -250,6 +251,7 @@ export const sentStatus = (message: Message | undefined, running: boolean) =>
 export function outgoingState(message: Message | undefined, toUser: boolean, running: boolean) {
   if (!message) return running ? 'sending' : undefined
   if (message.state === 'failed') return 'failed'
+  if (message.state === 'stopped') return 'stopped by the user'
   if (message.state === 'answered') return 'answered'
   if (message.state === 'dismissed') return 'dismissed'
   if (message.state === 'sent') return 'sending'

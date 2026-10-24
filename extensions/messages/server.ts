@@ -363,9 +363,11 @@ function delivery(host: ExtensionHost) {
       fromLabel: string
       toLabel: string
       /** Another project's Ultimate answered `message`: deliver only this reply. */
-      reply?: { message: Message; failed: boolean }
+      reply?: { message: Message; failed: boolean; stopped?: boolean }
     },
-    { phase: 'deliver' } | { phase: 'reply'; message: Message; failed: boolean },
+    | { phase: 'deliver' }
+    /** `stopped`: the recipient's run was stopped before it answered; `failed` is set too, as for any non-answer. */
+    | { phase: 'reply'; message: Message; failed: boolean; stopped?: boolean },
     null
   >({
     name: 'board.delivery',
@@ -479,7 +481,13 @@ function delivery(host: ExtensionHost) {
             )
             // A recipient that answered with a message before this commit has moved it past delivered already.
             if (stored?.state === 'sent') {
-              stored.state = placement.status === 'unanswered' ? 'failed' : 'delivered'
+              // A queued input withdrawn by a Stop or a cancel was stopped, not failed.
+              stored.state =
+                placement.status !== 'unanswered'
+                  ? 'delivered'
+                  : placement.reason === 'aborted'
+                    ? 'stopped'
+                    : 'failed'
               if ('entry' in placement && placement.entry !== undefined)
                 stored.entry = placement.entry
             }
@@ -548,11 +556,19 @@ function delivery(host: ExtensionHost) {
             model?.role !== 'assistant' ||
             model.stopReason === 'error' ||
             model.stopReason === 'aborted'
-          const error = failed
-            ? `ended its turn without an answer (${settled.status === 'unanswered' ? settled.reason : settled.status})`
-            : undefined
+          // A Stop (the run or its queued input aborted) is not a crash: the sender is told it was stopped.
+          const stopped =
+            failed &&
+            ((settled.status === 'unanswered' && settled.reason === 'aborted') ||
+              (model?.role === 'assistant' && model.stopReason === 'aborted'))
+          const error = stopped
+            ? 'was stopped by the user before it answered'
+            : failed
+              ? `ended its turn without an answer (${settled.status === 'unanswered' ? settled.reason : settled.status})`
+              : undefined
+          const state = stopped ? 'stopped' : failed ? 'failed' : undefined
           if (original) {
-            original.state = failed ? 'failed' : 'answered'
+            original.state = state ?? 'answered'
             if (answer !== undefined) original.answer = answer
             if (error !== undefined) original.error = error
             if ('entry' in settled && settled.entry !== undefined) original.entry = settled.entry
@@ -563,16 +579,24 @@ function delivery(host: ExtensionHost) {
             text: error ?? text,
             reply: false,
             re: m.id,
-            state: failed ? 'failed' : 'sent',
+            state: state ?? 'sent',
             ...(answer ? { answer } : {}),
             ...(error ? { error } : {}),
             ...(m.remote ? { remote: m.remote } : {}),
           })
-          return { status: 'running', checkpoint: { phase: 'reply', message: response, failed } }
+          return {
+            status: 'running',
+            checkpoint: {
+              phase: 'reply',
+              message: response,
+              failed,
+              ...(stopped ? { stopped } : {}),
+            },
+          }
         }, ctx)
       },
       reply: async (task, runtime, ctx) => {
-        const { message: m, failed } = task.state.checkpoint
+        const { message: m, failed, stopped } = task.state.checkpoint
         if (m.to === 'remote') {
           // The answer travels back to the Ultimate that asked; it delivers it once, as a reply that expects none.
           let error: string | undefined
@@ -583,7 +607,7 @@ function delivery(host: ExtensionHost) {
               target,
               'messages',
               'remoteReply',
-              { key: m.remote!.key, text: m.text, failed },
+              { key: m.remote!.key, text: m.text, failed, ...(stopped ? { stopped } : {}) },
               runtime.signal,
             )
           } catch (cause) {
@@ -595,7 +619,13 @@ function delivery(host: ExtensionHost) {
               (item) => item.id === m.id,
             )
             if (stored) {
-              stored.state = error || failed ? 'failed' : 'delivered'
+              stored.state = error
+                ? 'failed'
+                : stopped
+                  ? 'stopped'
+                  : failed
+                    ? 'failed'
+                    : 'delivered'
               if (error) stored.error = error
             }
             return terminal
@@ -642,11 +672,12 @@ function delivery(host: ExtensionHost) {
               from: m.from,
               text: m.text,
               failed,
+              ...(stopped ? { stopped } : {}),
               ...(images.length ? { images: images.length } : {}),
               ...(m.remote ? { remote: m.remote } : {}),
             },
           }
-          const body = `Reply from ${task.input.toLabel} to your message ${m.re}${failed ? ' (failed)' : ''}:\n${m.text}`
+          const body = `Reply from ${task.input.toLabel} to your message ${m.re}${stopped ? ' (stopped)' : failed ? ' (failed)' : ''}:\n${m.text}`
           const content = images.length ? [{ type: 'text' as const, text: body }, ...images] : body
           const requestId = `board-reply:${m.id}`
           if (sender && triager) {
@@ -1188,7 +1219,7 @@ export const actions = {
     }, BACKGROUND_CONTEXT)
   },
   /**
-   * `{ key, text, failed }`: the Ultimate this instance told answers its reply-enabled message `key`. The answer reaches
+   * `{ key, text, failed, stopped? }`: the Ultimate this instance told answers its reply-enabled message `key`. The answer reaches
    * the teller as a reply that expects none; a second answer returns the first one's id, and a message that expects no
    * reply refuses it, so two Ultimates cannot keep answering each other.
    */
@@ -1197,6 +1228,7 @@ export const actions = {
     const key = field(input.key, 'key', 100)
     const body = field(input.text, 'text', 100_000)
     const failed = input.failed === true
+    const stopped = failed && input.stopped === true
     const seen = (
       await host.harness().snapshot(RemoteDoc, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
     )?.told
@@ -1211,7 +1243,7 @@ export const actions = {
       const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
         (m) => m.id === original.id,
       )
-      if (stored) stored.state = failed ? 'failed' : 'answered'
+      if (stored) stored.state = stopped ? 'stopped' : failed ? 'failed' : 'answered'
       const response = await append(tx, {
         from: 'remote',
         to: original.from,
@@ -1230,7 +1262,7 @@ export const actions = {
           note: false,
           fromLabel,
           toLabel: remoteLabel(original.remote!),
-          reply: { message: response, failed },
+          reply: { message: response, failed, ...(stopped ? { stopped } : {}) },
         },
         {
           conversationId: ROOT_CONVERSATION_ID,

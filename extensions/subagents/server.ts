@@ -174,8 +174,9 @@ function createReporter() {
                 },
               }
             }
-            // Provider failures belong to the watchdog. Keep the failed action so recover()
-            // delivers the answer of a later watchdog-retry (or manual continuation).
+            // Provider failures belong to the watchdog, which marks the action `given-up` once it reports
+            // instead of retrying. Either way recover() delivers the answer of a later watchdog retry (or
+            // manual continuation).
             if (
               settled.status === 'unanswered' &&
               (settled.reason === 'model_error' || settled.reason === 'no_model')
@@ -664,7 +665,11 @@ export default function subagents(
       if (!messaged && !submission.requestId?.startsWith('watchdog-retry:')) {
         const action = childActions.at(-1)
         const interrupted = action?.status === 'interrupted'
-        if (action?.status !== 'unanswered' && action?.status !== 'failed' && !interrupted) return
+        if (
+          !action ||
+          (!['unanswered', 'failed', 'given-up'].includes(action.status ?? '') && !interrupted)
+        )
+          return
         const failed = await tx.submissionByRequest(
           submission.conversationId,
           `subagent:${action.reporter}`,

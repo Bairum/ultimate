@@ -22,7 +22,7 @@ import type {
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { rateLimited } from '../../lib/rate-limit.ts'
 import { Messages } from '../messages/api.ts'
-import { Standing } from '../subagents/api.ts'
+import { Standing, Subagents } from '../subagents/api.ts'
 import { idleNote } from './idle.ts'
 import type { Failure } from './refs.ts'
 
@@ -222,7 +222,19 @@ export default function watchdog(host: ExtensionHost) {
             ctx,
           )
         }
-        await runtime.commit(() => terminal, ctx)
+        await runtime.commit(async (tx) => {
+          // Reporting ends the watchdog's hold on a subagent's provider failure: its action has given up.
+          const actions = Object.values((await tx.doc(Subagents, recipient)).actions)
+          const action = actions.findLast((candidate) => candidate.conversationId === conversation)
+          if (action?.status === 'failed') {
+            const input = await tx.submissionByRequest(
+              conversation as ConversationId,
+              `subagent:${action.reporter}`,
+            )
+            if (input && failedInput(input)) action.status = 'given-up'
+          }
+          return terminal
+        }, ctx)
       },
     },
     abort: (_task, runtime, ctx) =>
