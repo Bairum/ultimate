@@ -2,7 +2,15 @@
  * The extension SDK: everything a `web.tsx` needs besides components (`@/components/ui/*`, `@/components/ai/*`).
  * The guide is extensions/README.md.
  */
-export { defineWebExtension, definePoint, ParkedRuns, provide, RunStart } from './types.ts'
+export {
+  ConversationKind,
+  defineWebExtension,
+  definePoint,
+  MessageReference,
+  ParkedRuns,
+  provide,
+  RunStart,
+} from './types.ts'
 export { events, useEvent } from './events.ts'
 export { resumed } from './resume.ts'
 export type {

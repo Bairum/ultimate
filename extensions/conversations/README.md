@@ -53,7 +53,8 @@ Actions are callable from the browser with `api.action` or by agents with
 list. No state-key migration runs automatically.
 
 - `conclude {ids:number[]}`: validates top-level conversations (unknown ids, subagents, listed roots and standing agents
-  throw, refusing the whole call), deduplicates and
+  throw, refusing the whole call; a standing agent is one marked by the service's `setStanding`, which subagents calls
+  for residents and workspaces for landers, never by its label or title), deduplicates and
   adds them to `ext.conversations.concluded` in one transaction, then frees their resources through the `conversations.release`
   extension point, which workspaces provides (its worktrees). Returns
   `{ concluded: number[], kept: {id, uncommitted, unlanded, busy?}[] }`; `kept` explains which checkouts remain.

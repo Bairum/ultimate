@@ -8,7 +8,11 @@ import { attach, fauxServer, post, prepareFauxServer, temp, until } from './help
 import type { ConversationSummary } from '../shared/protocol.ts'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
-import { actions as conversationActions, concludedIn } from '../extensions/conversations/server.ts'
+import {
+  actions as conversationActions,
+  concludedIn,
+  setStanding,
+} from '../extensions/conversations/server.ts'
 import { UiState } from '../server/ui-state.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { actionExec } from '../server/actions.ts'
@@ -637,9 +641,15 @@ it.concurrent('refuses to conclude a root or a standing agent', async () => {
   const ultimate = (
     await post(server, '/api/extensions/subagents/actions/standing', { args: { name: 'ultimate' } })
   ).data.result as number
+  // The lander is marked standing by workspaces; its label is not read, so relabelling it changes nothing.
   const lander = await create()
   await server.harness.commit(async (tx) => {
-    ;(await tx.doc(Metadata, lander)).label = 'lander'
+    await setStanding(tx, lander, true)
+    ;(await tx.doc(Metadata, lander)).label = 'renamed'
+  }, context)
+  const labelled = await create()
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Metadata, labelled)).label = 'lander'
   }, context)
   const branch = await create()
   for (const [id, kind] of [
@@ -655,6 +665,8 @@ it.concurrent('refuses to conclude a root or a standing agent', async () => {
   // The refusal is the whole call's: the ordinary conversation named with it was not concluded either.
   expect((await server.host.uiState(context))['ext.conversations.concluded']).toBeUndefined()
   expect(await action('conclude', { ids: [branch] })).toMatchObject({ status: 200 })
+  // A conversation merely labelled `lander` is an ordinary one.
+  expect(await action('conclude', { ids: [labelled] })).toMatchObject({ status: 200 })
 })
 
 it.concurrent('concludes a retired standing agent once its definition is gone', async () => {

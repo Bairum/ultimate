@@ -69,12 +69,16 @@ it('offers Discard only while the side chat changed nothing', () => {
 })
 
 it('lists side chats as no branch, root or earlier row in the sidebar', () => {
-  const rows = topLevelRows([
-    { id: 44, label: 'agent' },
-    { id: 82, label: 'side-chat', branchOf: { conversationId: 44 } },
-    { id: 90, label: 'branch', branchOf: { conversationId: 1 } },
-    { id: 91, parentConversationId: 90 },
-  ])
+  // The side-chat extension names its side chats; a label is not read.
+  const rows = topLevelRows(
+    [
+      { id: 44, label: 'agent' },
+      { id: 82, label: 'renamed', branchOf: { conversationId: 44 } },
+      { id: 90, label: 'side-chat', branchOf: { conversationId: 1 } },
+      { id: 91, parentConversationId: 90 },
+    ],
+    new Set([82]),
+  )
   expect(rows.map((row) => row.id)).toEqual([44, 90])
 })
 

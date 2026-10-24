@@ -14,6 +14,7 @@ import {
   defineExtension,
   defineTask,
   defineTool,
+  LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Task, TaskId } from '@earendil-works/pi-durable'
@@ -643,6 +644,23 @@ it('resolves a standing address and returns unanswered inputs as failure replies
   expect(await actions.addresses({}, f.action())).toMatchObject({
     agents: [{ name: 'scout', description: 'Search', id: f.recipient.id }],
   })
+})
+it('tells the sender a Stop as stopped, not failed', async () => {
+  const f = await fixture()
+  await f.send(`#${f.recipient.id}`, 'HOLD')
+  await until(f.holding)
+  // The person presses Stop in the recipient: its run is aborted before it answers.
+  const run = (await f.opened.harness.snapshot(LiveDoc, f.recipient.id, context))!.run!.taskId
+  await f.opened.harness.abortTask(run, context)
+  await until(async () => (await replies(f)).length === 1)
+  expect((await f.log())!.messages).toMatchObject([
+    { to: f.recipient.id, state: 'stopped', error: 'was stopped by the user before it answered' },
+    { from: f.recipient.id, to: 1, re: 1, state: 'stopped' },
+  ])
+  expect((await replies(f))[0].data).toMatchObject({ failed: true, stopped: true })
+  expect(f.observed).toContainEqual(
+    expect.stringContaining(`to your message 1 (stopped):\nwas stopped by the user`),
+  )
 })
 it('delivers to a retired standing agent by id without refreshing it', async () => {
   const f = await fixture()

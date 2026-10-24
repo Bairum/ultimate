@@ -90,7 +90,7 @@ sender. Its admission atomically checks that the original message is still open,
 
 In the sender's transcript a `message` call renders as an outgoing card: recipient, one-way or expects reply, and
 the message's live state from the messages log (sending, delivered, awaiting reply, awaiting your reply, answered,
-failed), with an Open link to the recipient's entry. A `branch` call renders as a branch-start card: the branch's
+failed, stopped by the user), with an Open link to the recipient's entry. A `branch` call renders as a branch-start card: the branch's
 feature and title, its root, isolated or shared, working or reported back, an Open link to its first input, and
 the prompt. Failed calls of either tool keep the generic tool card with their error.
 
@@ -103,7 +103,10 @@ placed input awaiting an answer and a recorded answer awaiting delivery survive 
 One-way input deliveries also wait for the answer; recording it and completing the task commit together.
 Note deliveries complete after placement, without waiting for an answer.
 When the recipient's input hooks refuse placement, the message becomes `failed` with `error` naming the cause, and
-the task completes instead of faulting with the message stuck in `sent`. A message to a concluded conversation is
+the task completes instead of faulting with the message stuck in `sent`. A reply-enabled message whose recipient ends
+its run without an answer gets a reply in its place: `stopped` when the run or its queued input was aborted (a person
+pressed Stop; the reply reads `was stopped by the user before it answered` and the sender's input says `(stopped)`),
+`failed` for anything else (a crash, a provider error, an empty answer). A message to a concluded conversation is
 delivered like any other: its input resumes it, and its next request recreates a released checkout.
 
 ## Ultimate and branches
@@ -159,7 +162,7 @@ never the user's.
   user)`. The `board.remote` document maps each key to its message in the same commit, so a repeated post (a retry,
   a replay) returns the first id and delivers nothing new.
 - **One hop back:** with `reply`, the delivery's answer phase posts it to the sender's `messages.remoteReply { key, text,
-  failed }` instead of a local conversation. The sender records it as a reply `from: 'remote'` with `re` and
+  failed, stopped? }` instead of a local conversation. The sender records it as a reply `from: 'remote'` with `re` and
   `reply: false`, delivered by the usual reply phase, so its answer goes nowhere. The sender keeps each reply-enabled
   tell in `board.remote` until its answer arrives (the log drops old messages), so a late answer still lands;
   `remoteReply` refuses any other key, including a one-way tell's, and a second answer returns the first one's id.
@@ -191,7 +194,7 @@ type Message = {
   at: number // Unix milliseconds
   reply: boolean
   re?: number
-  state: 'sent' | 'delivered' | 'answered' | 'dismissed' | 'failed'
+  state: 'sent' | 'delivered' | 'answered' | 'dismissed' | 'failed' | 'stopped'
   entry?: EntryId
   answer?: EntryId
   error?: string
@@ -201,7 +204,7 @@ type Message = {
 ```
 
 `board.message` data: `{ id, from, text, reply, delivery: 'steer' | 'followUp' | 'note', images?, remote? }`, where `images` counts the forwarded images in its model content; the card shows them as thumbnails.
-`board.reply` data: `{ id, re, from, text, failed, images? }`; a reply that a `message` became carries its images like a message does. A reply has its own id and `re` points to the original message.
+`board.reply` data: `{ id, re, from, text, failed, stopped?, images? }` (`stopped` also sets `failed`: neither is an answer); a reply that a `message` became carries its images like a message does. A reply has its own id and `re` points to the original message.
 The reply's `answer` links to the recipient's assistant entry; the original also stores its input `entry`.
 
 ## Actions
@@ -217,6 +220,27 @@ Agents use the `message` tool. The prompt section is stable and lists resident n
 `host.want(MessagesApi)` exposes `send`, a one-way message from a conversation (the lander's deploy
 handoff), and `answer`, the user's reply to an open message (the questions answer card). Landings and submissions
 append no log items. `MessagesApi`, `Message` and the `Messages` document live in `api.ts`.
+
+## Files
+
+Server side, imported in one direction (`log`, `images`, `addresses`, `questions` → `triage` → `delivery` →
+`send` → `route` → `branch`; `remote` → `delivery`), each sharing only the `Messages` log and explicit helpers:
+
+- `server.ts`: wiring: the extension definition, the `message` tool, the prompt section, hooks, actions and the
+  `MessagesApi` and `Handoff` services.
+- `send.ts`: `send()`, its validation, receipts (`Sent`, `Requests`) and the conversion of a message to a sender you
+  owe an answer into that answer.
+- `delivery.ts`: the `board.delivery` task, its `deliver` and `reply` phases.
+- `triage.ts`: triage rules, the summary-model assessment and recording its verdict.
+- `route.ts`: the `board.route` task and `Started`, which return a branch's final answers to its starter.
+- `remote.ts`: `tell`, the `remote` and `remoteReply` actions and `RemoteDoc`.
+- `branch.ts`: the `branch` tool.
+- `addresses.ts`: resolving `to`, sender names, a subagent's parent and the lander.
+- `images.ts`: resolving and attaching forwarded images.
+- `questions.ts`: checking `questions`, open questions and the `board.open` note.
+- `log.ts`: appending to the bounded log.
+
+`api.ts` and `refs.ts` are the contract; `caller.ts` is shared with the browser; the `.tsx` files are the UI.
 
 ## UI
 

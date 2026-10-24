@@ -91,18 +91,14 @@ export const stateTone: Partial<Record<ConversationState, string>> = {
   failed: 'text-error',
 }
 
-type Conversation = {
-  label?: string
-  title?: string
-  parentConversationId?: number
-  ownerTaskId?: number
-}
-/** The primary standing agent's conversation, which uses compact mode with the user: @ultimate's. */
-export const ultimateCompact = (conversation: Conversation) =>
-  conversation.label === 'agent' &&
-  conversation.title === '@ultimate' &&
-  conversation.parentConversationId === undefined &&
-  conversation.ownerTaskId === undefined
+/**
+ * The primary standing agent's conversation, which uses compact mode with the user: @ultimate's, by the standing
+ * agents' index on the root (`StandingDoc`), whatever its title or label.
+ */
+export const ultimateCompact = (
+  conversation: { id: number },
+  standing: Readonly<Record<string, unknown>> | null | undefined,
+) => standing?.ultimate === conversation.id
 
 /**
  * The messages to you that tool call `call` sent, itself or through a script's nested calls, in the order sent (the log
@@ -236,6 +232,7 @@ export const isOpen = (message: Message) =>
 /** Who waits on whom for one message; `yours` is an open question to the user. */
 export function messageStatus(message: Message) {
   if (message.state === 'failed') return 'failed'
+  if (message.state === 'stopped') return 'stopped'
   if (message.state === 'answered') return 'answered'
   if (message.state === 'dismissed') return 'dismissed'
   if (isOpen(message)) return message.to === 'user' ? 'yours' : 'waiting'
@@ -254,6 +251,7 @@ export const sentStatus = (message: Message | undefined, running: boolean) =>
 export function outgoingState(message: Message | undefined, toUser: boolean, running: boolean) {
   if (!message) return running ? 'sending' : undefined
   if (message.state === 'failed') return 'failed'
+  if (message.state === 'stopped') return 'stopped by the user'
   if (message.state === 'answered') return 'answered'
   if (message.state === 'dismissed') return 'dismissed'
   if (message.state === 'sent') return 'sending'

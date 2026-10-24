@@ -620,7 +620,7 @@ describe('provider error recovery', () => {
       expect(await reports(again)).toHaveLength(before + 1)
     },
   )
-  it('sends one watchdog card to the actual parent without a reporter failure', async () => {
+  it('sends one watchdog card to the actual parent without a reporter failure, and gives the action up', async () => {
     const f = await fixture(
       undefined,
       undefined,
@@ -647,6 +647,12 @@ describe('provider error recovery', () => {
       error: 'invalid model configuration',
       retried: false,
     })
+    // Reported, not retried: the action is final, not left `failed` for a retry that never comes.
+    expect(
+      Object.values(
+        (await f.opened.harness.snapshot(Subagents, f.opened.root.id, context))!.actions,
+      ).map((action) => action.status),
+    ).toEqual(['given-up'])
     expect(await reports(f.opened)).toHaveLength(0)
     expect(f.errors).toEqual([])
   })

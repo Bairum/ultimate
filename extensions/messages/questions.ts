@@ -4,10 +4,17 @@
  * question it cannot answer.
  */
 import { Type } from '@earendil-works/pi-ai'
+import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { ConversationId, Tx } from '@earendil-works/pi-durable'
+import { Messages } from './api.ts'
+import type { Message } from './api.ts'
 import type { Question } from './refs.ts'
 
 const optionSchema = Type.Object({
-  label: Type.String({ minLength: 1, description: 'A few words; the reasoning goes in detail.' }),
+  label: Type.String({
+    minLength: 1,
+    description: 'A few words; the reasoning goes in detail.',
+  }),
   key: Type.Optional(Type.String({ pattern: '^[a-z]$', description: 'Its letter, "a".' })),
   detail: Type.Optional(Type.String()),
   recommended: Type.Optional(Type.Boolean({ description: 'Your pick.' })),
@@ -106,4 +113,48 @@ export function checkQuestions(questions: Question[]): Question[] {
     }
     return kept
   })
+}
+
+/** A reply-enabled message to the user that the user has neither answered nor dismissed yet. */
+export const openQuestion = (m: Message) => m.to === 'user' && m.reply && m.state === 'delivered'
+/** A message in one line: its questions by number, else its first line that asks something, else its first line, clipped. */
+export const gist = (message: Pick<Message, 'text' | 'questions'>) => {
+  const lines = message.questions?.length
+    ? [`questions ${message.questions.map((q, i) => `${q.ref ?? i + 1}. ${q.text}`).join('; ')}`]
+    : message.text
+        .split('\n')
+        .map((line) => line.replace(/\*\*/g, '').trim())
+        .filter(Boolean)
+  const line = lines.find((candidate) => candidate.includes('?')) ?? lines[0] ?? ''
+  return line.length > 100 ? `${line.slice(0, 99)}…` : line
+}
+/**
+ * The input that starts a run of the conversation that asked the user questions goes in after a line naming those still
+ * open, so the agent treats them as unanswered. A per-input entry, not a system-prompt section, keeps the prompt cached.
+ */
+export async function openQuestionsNote(tx: Tx, conversationId: ConversationId, now: number) {
+  const open = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.filter(
+    (m) => openQuestion(m) && m.from === conversationId,
+  )
+  if (!open.length) return undefined
+  const ago = (at: number) => {
+    const minutes = Math.max(0, Math.round((now - at) / 60_000))
+    return minutes < 1
+      ? 'just now'
+      : minutes < 60
+        ? `${minutes}m ago`
+        : `${Math.round(minutes / 60)}h ago`
+  }
+  const text = `Open questions to the user, unanswered until they answer or dismiss them:\n${open
+    .map((m) => `- message ${m.id}: ${gist(m)} (asked ${ago(m.at)})`)
+    .join('\n')}`
+  return {
+    entries: [
+      {
+        kind: 'board.open',
+        data: { ids: open.map((m) => m.id) },
+        model: [{ role: 'user' as const, content: text, timestamp: now }],
+      },
+    ],
+  }
 }

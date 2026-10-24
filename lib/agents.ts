@@ -252,11 +252,7 @@ const isOverlay = (text: string) => {
 }
 
 /** A definition file read and its model resolved, as discovery and saving accept it. */
-export function readDefinition(
-  text: string,
-  path: string,
-  modelRuntime: ModelRuntime,
-): AgentDefinition {
+function readDefinition(text: string, path: string, modelRuntime: ModelRuntime): AgentDefinition {
   const { model, thinking, ...definition } = parseDefinition(text, path)
   return { ...definition, ...resolveModel(model, thinking, modelRuntime) }
 }
@@ -393,7 +389,7 @@ export function serializeDefinition(
 }
 
 /** The folder a user or project definition is written to; the project's only once its setup is chosen as local. */
-export function scopeRoot(scope: 'user' | 'project', projectRoot: string, userHome: string) {
+function scopeRoot(scope: 'user' | 'project', projectRoot: string, userHome: string) {
   if (scope === 'user') return join(userHome, '.ultimate/agents')
   if (!useProjectSetup(projectRoot, userHome))
     throw new Error("Choose this project's local setup before saving project definitions")

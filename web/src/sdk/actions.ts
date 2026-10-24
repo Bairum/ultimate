@@ -190,7 +190,7 @@ const core: CommandContribution[] = [
     run: (context) => context.toggleSidebar(),
   },
 ]
-export const coreCommands: CommandItem[] = core.map((command) => ({
+const coreCommands: CommandItem[] = core.map((command) => ({
   ...command,
   group: 'Ultimate',
   extension: 'core',

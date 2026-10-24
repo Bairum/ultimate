@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 /** A JSON file's value, `fallback` when the file is missing; other read and parse errors throw. */
@@ -12,12 +12,21 @@ export async function readJson<T>(path: string, fallback: T): Promise<T> {
   }
 }
 
-/** Write two-space JSON with a trailing newline through a same-directory temporary file and an atomic rename. */
-export async function writeJson(path: string, value: unknown) {
+/**
+ * Write two-space JSON with a trailing newline through a same-directory temporary file, synced to disk, and an atomic
+ * rename; `mode` sets the new file's permissions, such as 0o600 for a file only its owner may read.
+ */
+export async function writeJson(path: string, value: unknown, { mode }: { mode?: number } = {}) {
   await mkdir(dirname(path), { recursive: true })
   const temporary = `${path}.${randomUUID()}.tmp`
   try {
-    await writeFile(temporary, JSON.stringify(value, null, 2) + '\n', { flag: 'wx' })
+    const file = await open(temporary, 'wx', mode)
+    try {
+      await file.writeFile(JSON.stringify(value, null, 2) + '\n')
+      await file.sync()
+    } finally {
+      await file.close()
+    }
     await rename(temporary, path)
   } finally {
     await rm(temporary, { force: true })

@@ -75,6 +75,7 @@ import {
   RunAction,
   ScriptAction,
 } from './refs.ts'
+import { RunLabel, WatcherLabel } from './types.ts'
 import type { Automation, AutomationListItem, Run, Schedule } from './refs.ts'
 
 /**
@@ -95,7 +96,7 @@ export function useLive(overdue: boolean, now: number) {
       ),
     ...conversations
       .filter(
-        (conversation) => conversation.label === 'automation' || conversation.label === 'watcher',
+        (conversation) => conversation.label === RunLabel || conversation.label === WatcherLabel,
       )
       .map((conversation) => `#${conversation.id}:${conversation.busy}`),
   ].join(' ')

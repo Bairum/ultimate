@@ -170,14 +170,14 @@ export interface CommandContribution {
  * into one "worked · N steps" row that expands to the usual rendering.
  */
 export interface CompactContribution {
-  /** Whether a conversation uses compact mode. */
-  when: (conversation: ConversationSummary) => boolean
+  /** Whether a conversation uses compact mode, from its summary and the root documents of `docs`. */
+  when: (conversation: ConversationSummary, docs: CompactDocs) => boolean
   /**
    * Calls that stay visible between folded runs, such as the messages it sends: a tool name, or a test of a call, such
    * as a script whose nested calls sent a message.
    */
   tools?: readonly (string | CompactCallTest)[]
-  /** Kinds of the root conversation's documents the tests read; the transcript follows them and passes them in. */
+  /** Kinds of the root conversation's documents `when` and the tests read; the transcript follows them and passes them in. */
   docs?: readonly string[]
   /**
    * Rows that are background to the conversation, such as traffic between agents: two or more in a row, with the runs of work
@@ -244,6 +244,21 @@ export const ParkedRuns = definePoint<null, ReadonlySet<number>>('ultimate.parke
  * indicator's clock. Undefined while unknown or while nothing provides it.
  */
 export const RunStart = definePoint<number | undefined, number | undefined>('ultimate.runStart')
+/**
+ * What the title bar names a conversation's kind before its title (`messages` provides it: `branch · coordinator` for
+ * the branches it starts); undefined shows the conversation's label as it is.
+ */
+export const ConversationKind = definePoint<ConversationSummary | undefined, string | undefined>(
+  'ultimate.conversationKind',
+)
+/**
+ * The text another conversation can follow to read message `id` of `conversation` (`codemode` provides it); a stored
+ * message offers to copy it. No copy action while nothing provides it.
+ */
+export const MessageReference = definePoint<
+  { conversation: number; id: number },
+  string | undefined
+>('ultimate.messageReference')
 
 /** What a facet provides for a point: `useValue` is a hook, run once per `<Provided>` with its input. */
 export interface Provision {

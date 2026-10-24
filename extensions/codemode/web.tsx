@@ -3,7 +3,7 @@ import { CodeBlock } from '@/components/ai/code-block'
 import { Tool, ToolContent, ToolHeader, ToolImages, ToolSection } from '@/components/ai/tool'
 import { JsonTree } from '@/components/json-tree'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { cn, defineWebExtension, useDoc, useToolDuration } from '@/sdk'
+import { cn, defineWebExtension, MessageReference, provide, useDoc, useToolDuration } from '@/sdk'
 import type { DocumentProps, ToolCallView } from '@/sdk'
 import { SummariesDoc } from './refs.ts'
 import type { CallSummary } from './refs.ts'
@@ -253,7 +253,12 @@ function StoreDocument({ value }: DocumentProps) {
   )
 }
 
+/** The reference another conversation can follow to message `id` of `conversation`: its read in codemode. */
+const messageReference = ({ conversation, id }: { conversation: number; id: number }) =>
+  `Ultimate conversation #${conversation}, message #${id}. Read it in codemode with ultimate.entries(${conversation}, { before: ${id + 1}, limit: 1 }).`
+
 export default defineWebExtension({
+  provides: [provide(MessageReference, messageReference)],
   tools: { codemode: CodemodeCall },
   toolLines: { codemode: CodemodeLine },
   documents: [

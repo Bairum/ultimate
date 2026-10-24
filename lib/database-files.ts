@@ -4,7 +4,7 @@ import { rename } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 
 /** A SQLite database's files: the database, its write-ahead log and its shared-memory index. */
-export const databaseSuffixes = ['', '-wal', '-shm']
+const databaseSuffixes = ['', '-wal', '-shm']
 
 /** Move a SQLite database with its `-wal` and `-shm`; never deletes one. */
 export async function moveDatabase(from: string, to: string) {

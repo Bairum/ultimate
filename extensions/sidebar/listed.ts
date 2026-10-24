@@ -1,12 +1,14 @@
 /**
- * The top-level conversations the sidebar lists as rows, roots or branches. A side chat (label `side-chat`) is a
- * temporary copy of @ultimate: its fork origin is no branch, so it never shows in In flight, Earlier or Concluded; the
- * side-chat extension nests it under @ultimate instead. Browser-safe.
+ * The top-level conversations the sidebar lists as rows, roots or branches. `unlisted` are the ones another extension
+ * shows elsewhere (the `sidebar.unlisted` point): a side chat is a temporary copy of @ultimate whose fork origin is no
+ * branch, so it never shows in In flight, Earlier or Concluded; the side-chat extension nests it under @ultimate
+ * instead. Browser-safe.
  */
-export const topLevelRows = <T extends { parentConversationId?: number; label?: string }>(
+export const topLevelRows = <T extends { id: number; parentConversationId?: number }>(
   conversations: readonly T[],
+  unlisted: ReadonlySet<number>,
 ) =>
   conversations.filter(
     (conversation) =>
-      conversation.parentConversationId === undefined && conversation.label !== 'side-chat',
+      conversation.parentConversationId === undefined && !unlisted.has(conversation.id),
   )

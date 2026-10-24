@@ -12,6 +12,7 @@ import type { ConversationId, Cursor, EntryId, TaskId, Tx } from '@earendil-work
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { Standing } from '../subagents/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
 import { DiscardAction, InjectAction, OpenAction, SideChatDoc, SideChatsDoc } from './refs.ts'
@@ -299,9 +300,8 @@ export const actions = {
     await host.harness().commit(async (tx) => {
       if ((await tx.doc(Side, main)).of !== undefined)
         throw new Error('A side chat cannot open another side chat')
-      const standing = host.doc('ultimate.standing-agents')
-      const residents = standing && (await tx.doc(standing, ROOT_CONVERSATION_ID))
-      if (residents?.ultimate !== main) throw new Error('Only @ultimate can open a side chat')
+      if ((await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate !== main)
+        throw new Error('Only @ultimate can open a side chat')
     }, context)
     const answer = await lastAnswer(host, main)
     const id = await host.harness().commit(async (tx) => {

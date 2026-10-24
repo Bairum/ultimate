@@ -45,6 +45,11 @@ export type ConversationsService = {
    * then stays as set. Off for standing agents, landers, side chats and definitions with `summaries: false`.
    */
   setAutomaticSummaries: typeof setAutomaticSummaries
+  /**
+   * Inside `tx`, mark conversation `id` a standing agent, a fixed part of the project that is never concluded, or
+   * (`false`) an ordinary conversation again. Subagents sets it on residents, workspaces on landers.
+   */
+  setStanding(tx: Tx, id: ConversationId, standing: boolean): Promise<void>
   /** Ask a summary model once with a system prompt and input, or return the response the receipt already holds. */
   askSummaryModel: typeof askSummaryModel
   /** Add a summary model response's usage to the conversation's `pi.usage` inside `tx`, after asking. */

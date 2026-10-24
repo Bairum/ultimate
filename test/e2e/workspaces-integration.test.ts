@@ -50,6 +50,7 @@ import {
 import { ConversationsApi } from '../../extensions/conversations/api.ts'
 import type { ConversationsService } from '../../extensions/conversations/api.ts'
 import { setAutomaticSummaries, Summaries } from '../../extensions/conversations/summary.ts'
+import { setStanding } from '../../extensions/conversations/server.ts'
 import self from '../../extensions/self/server.ts'
 import messagesExtension from '../../extensions/messages/server.ts'
 import { Messages, MessagesApi } from '../../extensions/messages/api.ts'
@@ -58,9 +59,9 @@ import subagents from '../../extensions/subagents/server.ts'
 import { Subagents } from '../../extensions/subagents/api.ts'
 import { seedTally, temp, until } from '../helpers.ts'
 
-/** The part of the conversations service a test stands in for; standing a lander turns its summaries off. */
+/** The part of the conversations service a test stands in for; standing a lander turns its summaries off and marks it standing. */
 const conversations = (service: Partial<ConversationsService>) =>
-  ({ setAutomaticSummaries, ...service }) as ConversationsService
+  ({ setAutomaticSummaries, setStanding, ...service }) as ConversationsService
 
 // Every test has its own repository and harness, so they all run concurrently; fixtures close when the file ends.
 vi.setConfig({ maxConcurrency: 16 })
@@ -1497,6 +1498,10 @@ it.concurrent('lands two submissions in order onto a moved target and reports bo
   // Both submissions logged into one lander conversation, each ending with its landed outcome.
   const { id, metadata, cwd, kinds, log } = await landerLog(f)
   expect(metadata).toEqual({ title: '@lander', label: 'lander' })
+  // The lander the submission created is standing at once: concluding it is refused.
+  await expect(
+    f.opened.harness.commit((tx) => concludeIn(f.host, tx, [id]), context),
+  ).rejects.toThrow(`#${id} is a standing agent`)
   expect(cwd).toMatch(/\/lander\/[0-9a-f]{12}$/)
   expect(kinds.every((kind) => kind === 'ultimate.lander')).toBe(true)
   expect(reportOne).toContain(`lander conversation #${id}`)

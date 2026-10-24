@@ -8,7 +8,7 @@ import {
   SquareArrowOutUpRightIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
@@ -32,7 +32,7 @@ import {
 } from '@/sdk'
 import type { ComposerTarget } from '@/sdk'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
-import { UnderUltimate } from '../sidebar/ui.tsx'
+import { UnderUltimate, Unlisted } from '../sidebar/ui.tsx'
 import { createEndings, endings, frontSide, openSides, togglesSideMode } from './logic.ts'
 import { DiscardAction, InjectAction, OpenAction, SideChatDoc, SideChatsDoc } from './refs.ts'
 import type { SideChatIndex, SideChatSummary } from './refs.ts'
@@ -547,9 +547,15 @@ function useSideRows(main: number | undefined): ReactNode {
   )
 }
 
+/** Every side chat of @ultimate, open or ended: none is a row of the sidebar's own sections. */
+function useSideIds(main: number | undefined): ReadonlySet<number> {
+  const sides = (useDocOf(main, SideChatsDoc) ?? undefined)?.sides
+  return useMemo(() => new Set(sides?.map((side) => side.id)), [sides])
+}
+
 export default defineWebExtension({
   composer: SideComposer,
   slots: { 'conversation.overlay': [Stage] },
   entries: { 'sidechat.summary': SummaryCard },
-  provides: [provide(UnderUltimate, useSideRows)],
+  provides: [provide(UnderUltimate, useSideRows), provide(Unlisted, useSideIds)],
 })

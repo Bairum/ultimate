@@ -13,6 +13,7 @@ import type { Automation, Run } from './types.ts'
 import { RUN_TASK } from './types.ts'
 import type { Automations as Ledger } from './server.ts'
 import { Escalated, Fired } from './refs.ts'
+import { RunLabel } from './types.ts'
 const owner = {
   ownership: { kind: 'conversation' as const },
   conversationId: ROOT_CONVERSATION_ID,
@@ -63,7 +64,7 @@ export function scheduler(
               parentAgent: parent,
               modelRuntime: host.modelRuntime,
               metadata: host.metadata,
-              label: 'automation',
+              label: RunLabel,
               title: `${a.name} · ${new Date(task.input.firedAt).toLocaleString()}`,
               excludeTools: a.agent ? ['automation', 'subagent'] : ['automation'],
               excludeExtensions: ['automations'],
