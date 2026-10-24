@@ -97,9 +97,9 @@ afterEach(() => vi.restoreAllMocks())
 afterAll(async () => {
   await opened?.close()
 })
-async function fixture(text = 'one\ntwo\nthree\n') {
+async function fixture(text = 'one\ntwo\nthree\n', filename = 'a.txt') {
   const cwd = await realpath(await temp('hashline-files-'))
-  await writeFile(join(cwd, 'a.txt'), text)
+  await writeFile(join(cwd, filename), text)
   const conversation = await opened.harness.createConversation(
     { ownership: { kind: 'ownerless' }, agent: { ...(await opened.root.agent(context)), cwd } },
     context,
@@ -108,8 +108,8 @@ async function fixture(text = 'one\ntwo\nthree\n') {
     cwd,
     conversation,
     tag: computeFileHash(text),
-    path: join(cwd, 'a.txt'),
-    read: () => readFile(join(cwd, 'a.txt'), 'utf8'),
+    path: join(cwd, filename),
+    read: () => readFile(join(cwd, filename), 'utf8'),
   }
 }
 async function call(conversation: Conversation, name: string, args: JsonObject) {
@@ -138,7 +138,7 @@ test('wraps replace the edit schema and preserve sequential mutation execution',
   const edit = agent.tools.find((tool) => tool.name === 'edit')!
   expect(edit.parameters).toMatchObject({ properties: { input: { type: 'string' } } })
   expect(edit.executionMode).toBe('sequential')
-  expect(edit.description).toContain('Block * forms are unavailable')
+  expect(edit.description).toContain('PUT N*: / CUT N*')
   expect(edit.description).toContain("Every body needs a header line ending in ':'")
   expect(edit.description).toContain('[file#1A2B]\nPUT 2.=2:\n+replacement\nPUT >3:')
 })
@@ -804,6 +804,126 @@ test('collision mismatch explains the cause and directs write instead of repeate
   })
   expect(edit.isError).toBe(false)
   expect(await f.read()).toBe('resolved again\n')
+})
+
+const blockSource = 'function x() {\n  if (y) {\n  }\n}\n'
+const markdownSource =
+  '# H1\nintro\n\n## H2 alpha\nbody a\nmore a\n\n### H3 deep\ndeep body\n\n## H2 beta\nbody b\n'
+const elispSource =
+  '(use-package magit\n  :commands (magit-status)\n  :config\n  (setq magit-save-repository-buffers nil))\n'
+const blockCases = [
+  {
+    name: 'resolves the inner if block',
+    body: 'PUT 2*:\n+  if (y || z) {\n+  }',
+    after: 'function x() {\n  if (y || z) {\n  }\n}\n',
+  },
+  {
+    name: 'resolves the enclosing function',
+    body: 'PUT 1*:\n+function x() {\n+  return 42;\n+}',
+    after: 'function x() {\n  return 42;\n}\n',
+  },
+  { name: 'cuts the inner if block', body: 'CUT 2*', after: 'function x() {\n}\n' },
+  {
+    name: 'inserts after an Emacs Lisp macro',
+    filename: 'init.el',
+    source: elispSource,
+    body: 'PUT >1*:\n+(message "after")',
+    after: elispSource + '(message "after")\n',
+  },
+  {
+    name: 'inserts after an extensionless .emacs macro',
+    filename: '.emacs',
+    source: elispSource,
+    body: 'PUT >1*:\n+(message "after")',
+    after: elispSource + '(message "after")\n',
+  },
+  {
+    name: 'reports the resolved block diff',
+    body: 'PUT 2*:\n+  if (z) {\n+  }',
+    after: 'function x() {\n  if (z) {\n  }\n}\n',
+    diff: '+  if (z)',
+  },
+  {
+    name: 'echoes the PUT resolution',
+    body: 'PUT 1*:\n+function y() {\n+}',
+    after: 'function y() {\n}\n',
+    echo: 'PUT 1*: → resolved lines 1-4 (4 lines)',
+  },
+  {
+    name: 'echoes the CUT resolution',
+    body: 'CUT 2*',
+    after: 'function x() {\n}\n',
+    echo: 'CUT 2* → resolved lines 2-3 (2 lines)',
+  },
+  {
+    name: 'rejects a lone closer',
+    body: 'PUT 3*:\n+  }',
+    error: 'could not resolve a syntactic block beginning on line 3',
+    guidance: 'Use `PUT 3.=M:` with explicit lines',
+  },
+  {
+    name: 'suggests the next opener for a blank anchor',
+    source: '\nfunction x() {\n  return 1;\n}\n',
+    body: 'PUT 1*:\n+function y() {}',
+    error: 'next multi-line block begins at line 2 and ends at line 4',
+  },
+  {
+    name: 'suggests the enclosing block and exact statement range',
+    source: 'function x() {\n  return 1;\n}\n',
+    body: 'PUT 2*:\n+  return 2;',
+    error: 'single-line',
+    guidance:
+      'For only this statement use `PUT 2:`. The nearest enclosing multi-line block begins at line 1 and ends at line 3',
+  },
+  {
+    name: 'rejects unknown languages',
+    filename: 'data.unknownext',
+    source: 'alpha\nbeta\ngamma\n',
+    body: 'PUT 1*:\n+ALPHA',
+    error: 'could not resolve a syntactic block',
+  },
+  {
+    name: 'cuts a Markdown section including nested subsections',
+    filename: 'plan.md',
+    source: markdownSource,
+    body: 'CUT 4*',
+    after: '# H1\nintro\n\n## H2 beta\nbody b\n',
+  },
+  {
+    name: 'inserts after a Markdown section past nested subsections',
+    filename: 'plan.md',
+    source: markdownSource,
+    body: 'PUT >4*:\n+after section',
+    after: markdownSource.replace('## H2 beta', 'after section\n## H2 beta'),
+  },
+]
+// The 14 name-only parity_block_replace scenarios, using the Rust harness's
+// source and assertions where provided; the remaining cases exercise the host.
+test.each(blockCases)('block parity: $name', async (scenario) => {
+  const filename = scenario.filename ?? 'x.ts'
+  const source = scenario.source ?? blockSource
+  const f = await fixture(source, filename)
+  await call(f.conversation, 'read', { path: filename })
+  const result = await call(f.conversation, 'edit', {
+    input: `[${filename}#${f.tag}]\n${scenario.body}`,
+  })
+  expect(result.isError).toBe(!!scenario.error)
+  expect(await f.read()).toBe(scenario.after ?? source)
+  expect(result.text).toContain(scenario.error ?? '')
+  expect(result.text).toContain(scenario.guidance ?? '')
+  expect(result.text).toContain(scenario.echo ?? '')
+  expect((result.details as { patch?: string }).patch ?? '').toContain(scenario.diff ?? '')
+})
+
+test('Go block cut keeps following siblings', async () => {
+  const source =
+    'package p\n\nfunc f() error {\n\tif err := step(); err != nil {\n\t\treturn err\n\t}\n\tother()\n\treturn nil\n}\n'
+  const f = await fixture(source, 'x.go')
+  await call(f.conversation, 'read', { path: 'x.go' })
+  const result = await call(f.conversation, 'edit', { input: `[x.go#${f.tag}]\nCUT 4*` })
+  expect(result.isError).toBe(false)
+  expect(await f.read()).toBe('package p\n\nfunc f() error {\n\tother()\n\treturn nil\n}\n')
+  expect(result.text).toContain('CUT 4* → resolved lines 4-6 (3 lines)')
 })
 
 test('provenance checkpoints on the 64th delta', () => {

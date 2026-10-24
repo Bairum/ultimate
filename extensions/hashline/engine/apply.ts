@@ -640,6 +640,7 @@ function buildKeepPlans(
   evidence: EdgeEvidence,
   path: string,
   baselineParses: boolean,
+  replacement: readonly AppliedEdit[],
 ): { plans: KeepPlan[]; ambiguous: boolean } {
   const leadingPayload = payloadEdge(payload, 'leading')
   const trailingPayload = payloadEdge(payload, 'trailing')
@@ -661,7 +662,9 @@ function buildKeepPlans(
     if (evidence.first && fitsBefore && trailingIndent > firstIndent) {
       plans.push({ afterLine: group.startLine, kept: 1 })
     } else if (baselineParses && evidence.first && trailingIndent === firstIndent) {
-      ambiguous = true
+      // A same-shape replacement that parses alone is not made ambiguous by
+      // an unrelated broken hunk elsewhere in the batch (upstream Rust guard).
+      ambiguous = !parsesCleanly(path, materializeEdits(fileLines, replacement).text)
     }
     return { plans, ambiguous }
   }
@@ -749,6 +752,7 @@ function buildGroupVariants(
         evidence,
         path,
         baselineParses,
+        [...inserts, ...deletes],
       )
       ambiguous ||= keepResult.ambiguous
       for (const keep of keepResult.plans) {
@@ -1193,7 +1197,20 @@ function repairAfterInsertLandings(
   for (const group of groups.values()) {
     const target = bodyTargetIndent(group.members.map((idx) => insertEditAt(edits, idx).text))
     if (target === undefined) continue
-    const outward = resolveShiftedLanding(group, target, fileLines, targetedLines)
+    let outward = resolveShiftedLanding(group, target, fileLines, targetedLines)
+    if (outward !== undefined && path !== undefined) {
+      const trial = [...(out ?? edits)]
+      for (const idx of group.members) {
+        const edit = insertEditAt(trial, idx)
+        trial[idx] = { ...edit, cursor: { kind: 'after_anchor', anchor: { line: outward.line } } }
+      }
+      // Veto only syntax damage caused by this shift, not unrelated broken hunks.
+      if (
+        parsesCleanly(path, materializeEdits(fileLines, out ?? edits).text) &&
+        !parsesCleanly(path, materializeEdits(fileLines, trial).text)
+      )
+        outward = undefined
+    }
     if (outward !== undefined) {
       retarget(group, outward.line)
       warnings.push(afterInsertLandingShiftWarning(group.anchor, outward.line, outward.crossed))

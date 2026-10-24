@@ -36,6 +36,7 @@ import {
   hash32,
 } from './store.ts'
 import type { ProvenanceState, Seen } from './store.ts'
+import { prepareSyntax, treeSitterBlockResolver } from './parser.ts'
 
 export const docs = [Provenance]
 const normalized = (text: string) => normalizeToLF(stripBom(text).text)
@@ -221,7 +222,7 @@ PUT >3:
 Body rows are final content: +TEXT, + for blank, ++ for a leading plus, +- for a leading minus. No minus/context rows.
 CUT N.=M @name deletes and captures; PUT <N @name or PUT N.=M @name pastes. Omit @name for the anonymous register.
 REM deletes the file; MV destination moves it after edits. Use write to create files.
-Block * forms are unavailable until the parser lands; use concrete ranges. After an edit copy the fresh header and numbers from its response.`
+PUT N*: / CUT N* replace/cut the multi-line syntax block beginning at N; PUT >N*: inserts after it. After an edit copy the fresh header and numbers from its response.`
 
 function editTool(host: Pick<ExtensionHost, 'harness'>) {
   return defineTool({
@@ -274,11 +275,13 @@ function editTool(host: Pick<ExtensionHost, 'harness'>) {
             if (fileOp?.kind === 'move') prior.set(fs.canonicalPath(fileOp.dest), coverage)
           } else if (read.error.code !== 'not_found') throw read.error
         }
+        await prepareSyntax(patch.sections.map((section) => section.path))
         const result = await new Patcher({
           fs,
           snapshots: data.snapshots,
           clipboard,
           enforceSeenLines: !isNested,
+          blockResolver: treeSitterBlockResolver,
         }).apply(patch)
         const output: string[] = [],
           patches: string[] = []
@@ -317,6 +320,14 @@ function editTool(host: Pick<ExtensionHost, 'harness'>) {
           }
           const preview = buildCompactDiffPreview(displayDiff.join('\n')).preview
           if (emit(section.header)) {
+            for (const span of section.blockResolutions ?? []) {
+              const verb = span.op === 'cut' ? 'CUT' : 'PUT'
+              const anchor = span.op === 'insert_after' || span.op === 'paste_after' ? '>' : ''
+              const colon = span.op === 'cut' ? '' : ':'
+              emit(
+                `${verb} ${anchor}${span.anchorLine}*${colon} → resolved lines ${span.start}-${span.end} (${span.end - span.start + 1} lines)`,
+              )
+            }
             if (section.op === 'delete') emit(`Deleted ${authoredPath}`)
             else
               for (const row of (preview || '(no change)').split('\n')) {

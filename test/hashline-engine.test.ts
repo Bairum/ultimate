@@ -2,7 +2,9 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { chmod, mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, test } from 'vitest'
+import { beforeAll, describe, expect, test } from 'vitest'
+import { prepareSyntax, treeSitterProbe } from '../extensions/hashline/parser.ts'
+
 import {
   applyEdits,
   parsePatch,
@@ -25,6 +27,10 @@ import {
   splitAddressableFileLines,
   detectLineEnding,
 } from '../extensions/hashline/engine/index.ts'
+
+beforeAll(async () => {
+  await prepareSyntax(['a.ts', 'a.tsx', 'a.js', 'a.py', 'a.rs', 'a.go', 'a.lua'])
+})
 
 interface Call {
   input: string
@@ -61,114 +67,60 @@ const fixtures = readdirSync(new URL('../extensions/hashline/test/fixtures/', im
   }))
 const legacy = (message: string) => message.replace(/^(InvalidAbsoluteRangeError|Error): /, '')
 
-// Each named call needs tree-sitter structural/parse evidence, deliberately absent in v1.
-const needsSyntax = new Set([
-  'retains a swallowed opening comment fence when syntax and indentation prove the boundary',
-  'drops a duplicated multi-line closing block (the Root.tsx incident)',
-  'preserves a duplicated opener when it does not account for the imbalance',
-  'spares the deleted closing line when the payload omits it',
-  'drops a one-sided JSX closer echo in a single-line expansion',
-  'drops a JSX closer echo after a self-closing tag with a greater-than prop expression',
-  'rejects sparing a deleted closer when the payload claims no position inside the block',
-  'still spares a closer when the payload indentation claims the block interior',
-  'spends the missing-closer residual on the genuine hunk, not an earlier wrapper removal',
-  'keeps the closer when the matching opener is replaced rather than removed',
-  'keeps only the non-restated outer closer for a nested deleted suffix',
-  'ignores non-contiguously deleted openers when choosing which closer to keep',
-  'counts earlier kept closers in later projected prefixes',
-  'does not let an earlier kept closer cover a later orphan closer',
-  'keeps an omitted inner closer when the outer closer survives below',
-  'counts head insertions before replacement payloads in original coordinates',
-  'counts a separately inserted closer immediately below the range',
-  'keeps an omitted outer closer even when the payload restates an inner closer',
-  "still keeps a missing closer when another hunk's dupSuffix repair masks the raw delta",
-  'does not let an unterminated template in one hunk mask a missing closer in another',
-  'spares a leading closer the range swallowed when the payload claims sibling depth',
-  'rejects a swallowed leading closer when the payload claims the block interior',
-  "warns when a balanced payload's range ends mid-block",
-  'spares the swallowed leading closer when the authored edit does not parse',
-  'flags a range that swallows a lifetime-carrying signature line',
-  'does not resurrect a swallowed signature when body indentation matches',
-  'warns when a balance-neutral edit stops the file parsing',
-  'drops a trailing attribute echo in a single-line replacement',
-  'drops the echo when the body carries several new doc rows',
-  'drops a leading attribute echo in a single-line replacement',
-  'rejects a single-line annotation echo whose body cannot fill the range',
-  'drops a trailing decorator echo in a single-line replacement',
-  'applies a same-shape if-opener replacement when an unrelated edit in the batch breaks the parse',
-  'applies a same-shape case-label replacement when an unrelated edit in the batch breaks the parse',
-  'rejects sparing a deleted keyword closer (Lua end) when the payload claims no position inside the block',
-  'applies a same-shape Rust signature replacement with lifetimes when an unrelated edit in the batch breaks the parse',
-  'lands a tab-indented construct body after the block, not inside the opener',
-  'abandons the escape when the relocated result does not parse',
-  'escapes a shallower function body past a class in TypeScript',
-  'keeps a shallower Go case label inside its switch when the shift would break the parse',
-  'keeps an else branch in place instead of duplicating the if closer',
-  'still slides a shallower statement when an unrelated edit in the batch breaks the parse',
-])
-const skippedCalls: string[] = []
-const counts: Record<string, { passing: number; needsSyntax: number }> = {}
+let parityCalls = 0
 
 describe('upstream parse/apply parity', () => {
   for (const fixture of fixtures)
     for (const entry of fixture.cases) {
       for (const mode of ['parse', 'apply'] as const)
         for (const [index, call] of (entry[mode] ?? []).entries()) {
-          const syntax = mode === 'apply' && needsSyntax.has(entry.name)
-          const count = (counts[fixture.name] ??= { passing: 0, needsSyntax: 0 })
-          if (syntax) {
-            count.needsSyntax++
-            skippedCalls.push(entry.name)
-          } else count.passing++
-          test.skipIf(syntax)(
-            `${fixture.name}: ${entry.name} [${mode} ${index}]${syntax ? ' — needs syntax: structural/parse proof' : ''}`,
-            () => {
-              let actual: unknown
-              let error: unknown
-              try {
-                const parsed = parsePatch(call.input)
-                if (mode === 'parse')
-                  actual = {
-                    editCount: parsed.edits.length,
-                    fileOp: parsed.fileOp,
-                    warnings: parsed.warnings,
-                  }
-                else {
-                  const clipboard = call.clipboard && {
-                    ...call.clipboard,
-                    named: call.clipboard.named && new Map(Object.entries(call.clipboard.named)),
-                  }
-                  const result = applyEdits(call.text, parsed.edits, {
-                    path: call.path,
-                    clipboard,
-                    onEmptyPaste: call.onEmptyPaste ?? 'throw',
-                  })
-                  actual = {
-                    text: result.text,
-                    firstChangedLine: result.firstChangedLine ?? null,
-                    warnings: result.warnings ?? [],
-                  }
+          parityCalls++
+          test(`${fixture.name}: ${entry.name} [${mode} ${index}]`, () => {
+            let actual: unknown
+            let error: unknown
+            try {
+              const parsed = parsePatch(call.input)
+              if (mode === 'parse')
+                actual = {
+                  editCount: parsed.edits.length,
+                  fileOp: parsed.fileOp,
+                  warnings: parsed.warnings,
                 }
-              } catch (caught) {
-                error = caught
+              else {
+                const clipboard = call.clipboard && {
+                  ...call.clipboard,
+                  named: call.clipboard.named && new Map(Object.entries(call.clipboard.named)),
+                }
+                const result = applyEdits(call.text, parsed.edits, {
+                  path: call.path,
+                  clipboard,
+                  onEmptyPaste: call.onEmptyPaste ?? 'throw',
+                })
+                actual = {
+                  text: result.text,
+                  firstChangedLine: result.firstChangedLine ?? null,
+                  warnings: result.warnings ?? [],
+                }
               }
-              const observed = error instanceof Error ? { error: legacy(error.message) } : actual
-              const expected = call.error
-                ? { error: legacy(call.error) }
-                : mode === 'parse'
-                  ? {
-                      editCount: call.expect.editCount,
-                      fileOp: call.expect.fileOp,
-                      warnings: call.expect.warnings,
-                    }
-                  : {
-                      text: call.expect.text,
-                      firstChangedLine: call.expect.firstChangedLine ?? null,
-                      warnings: call.expect.warnings ?? [],
-                    }
-              expect(observed).toEqual(expected)
-            },
-          )
+            } catch (caught) {
+              error = caught
+            }
+            const observed = error instanceof Error ? { error: legacy(error.message) } : actual
+            const expected = call.error
+              ? { error: legacy(call.error) }
+              : mode === 'parse'
+                ? {
+                    editCount: call.expect.editCount,
+                    fileOp: call.expect.fileOp,
+                    warnings: call.expect.warnings,
+                  }
+                : {
+                    text: call.expect.text,
+                    firstChangedLine: call.expect.firstChangedLine ?? null,
+                    warnings: call.expect.warnings ?? [],
+                  }
+            expect(observed).toEqual(expected)
+          })
         }
     }
 })
@@ -190,12 +142,8 @@ test('all 19 fixture files are inventoried; call gate excludes name-only host sc
   ).toHaveLength(14)
 })
 
-test('parity accounting and explicit needs-syntax list', () => {
-  expect(skippedCalls).toHaveLength(42)
-  expect(new Set(skippedCalls)).toEqual(needsSyntax)
-  expect(Object.values(counts).reduce((sum, count) => sum + count.passing, 0)).toBe(499)
-  console.table(counts)
-  console.info('needs syntax (42):', skippedCalls)
+test('parity accounting: every call runs with syntax evidence', () => {
+  expect(parityCalls).toBe(541)
 })
 
 interface PatcherCase {
@@ -733,7 +681,7 @@ test('recovery refuses moving an anchor into a different enclosing construct', (
       }),
     ).toBeNull()
   } finally {
-    setSyntaxProbe()
+    setSyntaxProbe(treeSitterProbe)
   }
 })
 
@@ -760,7 +708,7 @@ test('shifted recovery that breaks parsing refuses without publishing CUT regist
     ).toBeNull()
     expect(clipboard.named).toEqual(new Map([['keep', ['original']]]))
   } finally {
-    setSyntaxProbe()
+    setSyntaxProbe(treeSitterProbe)
   }
 })
 
