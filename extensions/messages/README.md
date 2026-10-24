@@ -221,6 +221,27 @@ Agents use the `message` tool. The prompt section is stable and lists resident n
 handoff), and `answer`, the user's reply to an open message (the questions answer card). Landings and submissions
 append no log items. `MessagesApi`, `Message` and the `Messages` document live in `api.ts`.
 
+## Files
+
+Server side, imported in one direction (`log`, `images`, `addresses`, `questions` → `triage` → `delivery` →
+`send` → `route` → `branch`; `remote` → `delivery`), each sharing only the `Messages` log and explicit helpers:
+
+- `server.ts`: wiring: the extension definition, the `message` tool, the prompt section, hooks, actions and the
+  `MessagesApi` and `Handoff` services.
+- `send.ts`: `send()`, its validation, receipts (`Sent`, `Requests`) and the conversion of a message to a sender you
+  owe an answer into that answer.
+- `delivery.ts`: the `board.delivery` task, its `deliver` and `reply` phases.
+- `triage.ts`: triage rules, the summary-model assessment and recording its verdict.
+- `route.ts`: the `board.route` task and `Started`, which return a branch's final answers to its starter.
+- `remote.ts`: `tell`, the `remote` and `remoteReply` actions and `RemoteDoc`.
+- `branch.ts`: the `branch` tool.
+- `addresses.ts`: resolving `to`, sender names, a subagent's parent and the lander.
+- `images.ts`: resolving and attaching forwarded images.
+- `questions.ts`: checking `questions`, open questions and the `board.open` note.
+- `log.ts`: appending to the bounded log.
+
+`api.ts` and `refs.ts` are the contract; `caller.ts` is shared with the browser; the `.tsx` files are the UI.
+
 ## UI
 
 There is no Messages surface: the extension is plumbing, and everything it carries renders in transcripts. You talk to
