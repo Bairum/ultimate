@@ -20,16 +20,27 @@ export type Proposal = {
   status: 'open' | 'approved' | 'rejected' | 'applied' | 'landed'
   branch?: number
   sha?: string
+  /** Why @ultimate decided it, when it decided under a hands-off grant. */
+  reason?: string
 }
 
 /** What the dream learned: three lines in @ultimate's voice, then the journal in Markdown. */
 export type Journal = { learned: string[]; text: string; chapter?: string; at: number }
 
 export type GateResult = { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] }
+/** A granted automation that acted for the user: its id, name and when it acted. */
+export type GrantedBy = { automation: string; name: string; at: number }
 export type Sleep = {
   chapter: string
-  /** `asleep`: the switch happened; this session's chapter is the one it left. */
-  phase: 'seeding' | 'checking' | 'backing up' | 'switching' | 'asleep' | 'failed'
+  /**
+   * `waiting`: a granted Fall asleep holds the session until no conversation works. `asleep`: the switch happened;
+   * this session's chapter is the one it left.
+   */
+  phase: 'waiting' | 'seeding' | 'checking' | 'backing up' | 'switching' | 'asleep' | 'failed'
+  /** The granted automation that started this Fall asleep; absent when the user did. */
+  by?: GrantedBy
+  /** The granted attempt (its task) that holds this sleep; only it writes the sleep while `waiting`. */
+  attempt?: number
   checks?: GateResult['checks']
   backup?: { id?: string; skipped?: string }
   error?: string
@@ -47,12 +58,38 @@ export type Session = {
   proposals: Proposal[]
   /** Every proposal settled, or the user ended the session. */
   endedAt?: number
+  /** The granted automation that started this session; absent when the user did. */
+  by?: GrantedBy
+  /** Set when @ultimate's compaction started this session. */
+  afterCompaction?: AfterCompaction
+}
+
+/**
+ * A dream that @ultimate's context compaction started, through automation `automation` (`name`), at `at`; `handsOff`
+ * when the user granted that automation `dream`, so @ultimate decides the proposals itself. `settling` is the task that
+ * checks the settled session; `outcome` records whether it was worth a fresh chapter: `changes` (landed and applied
+ * proposals) against `threshold`; `stay` in this chapter, `ask` the user to Fall asleep, or `asleep` under the
+ * automation's grant (`error` when that grant's Fall asleep was refused, and the user is asked instead).
+ */
+export type AfterCompaction = {
+  automation: string
+  name: string
+  at: number
+  handsOff?: boolean
+  settling?: number
+  outcome?: {
+    changes: number
+    threshold: number
+    result: 'stay' | 'ask' | 'asleep'
+    error?: string
+    at: number
+  }
 }
 
 /** `{ next, sessions }` on conversation 1, oldest first. */
 export const DreamDoc = docRef<{ next: number; sessions: Session[] }>('dream.sessions')
 
-/** `dream.started` and `dream.journal` entries in @ultimate's conversation name their session. */
+/** `dream.started`, `dream.journal` and `dream.settled` entries in @ultimate's conversation name their session. */
 export type SessionEntry = { session: number }
 
 /** No arguments → `{ session }`: record a session and ask @ultimate to start the dream branch. User-only. */
@@ -92,13 +129,17 @@ export const ChaptersAction = actionRef<
 >('dream', 'chapters')
 /** `{ chapter }`: restart into an existing, idle chapter. User-only; a returned error means restart failed. */
 export const SwitchAction = actionRef<{ chapter: string }, never>('dream', 'switch')
-/** `{ session, proposal, status, branch? }`: @ultimate records the user's decision on one proposal. */
+/**
+ * `{ session, proposal, status, branch?, reason? }`: @ultimate records the user's decision on one proposal, or its own
+ * with `reason` under a hands-off grant.
+ */
 export const DecideAction = actionRef<
   {
     session: number
     proposal: string
     status: 'approved' | 'rejected' | 'applied'
     branch?: number
+    reason?: string
   },
   Proposal
 >('dream', 'decide')

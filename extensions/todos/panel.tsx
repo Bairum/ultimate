@@ -9,8 +9,8 @@ import {
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
-import { api, cn, errorMessage, events, useDocOf, useNow, useUltimate } from '@/sdk'
-import { Address, MessagesDoc, emptyMessages, relativeTime, useAccentOf } from '../messages/ui.tsx'
+import { api, cn, errorMessage, events, formatAgo, useDocOf, useNow, useUltimate } from '@/sdk'
+import { Address, MessagesDoc, emptyMessages, useAccentOf } from '../messages/ui.tsx'
 import type { Question } from '../messages/refs.ts'
 import { waiting } from '../questions/ui.tsx'
 import { StandingAction } from '../subagents/ui.tsx'
@@ -173,7 +173,7 @@ function TodoRow({
   start?: (todo: Todo) => void
 }) {
   const at = todo.done ?? todo.at
-  const age = relativeTime(at, now)
+  const age = formatAgo(at, now)
   const label =
     todo.owner === 'user' ? 'Ask @ultimate to help with this' : 'Have @ultimate work on this'
   return (
@@ -274,7 +274,7 @@ function QuestionRow({ message, now }: { message: Asked; now: number }) {
           dateTime={new Date(message.at).toISOString()}
           title={`Asked ${new Date(message.at).toLocaleString()}`}
         >
-          {relativeTime(message.at, now)}
+          {formatAgo(message.at, now)}
         </time>
       </button>
     </li>

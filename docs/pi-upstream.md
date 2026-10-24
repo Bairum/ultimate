@@ -6,7 +6,7 @@
 - `test/claude-code-incomplete.test.ts` — imports pi-claude-code's patched incompleteResponseError and normalizeError and pi-ai's isRetryableAssistantError. Drop with the patch when upstream makes an incomplete response without a reason retryable.
 - `test/claude-code-native-tool.test.ts` — imports pi-claude-code's patched piToolName and normalizeError, its TurnRelay and pi-ai's isRetryableAssistantError. Drop with the patch when upstream retries a tool_use outside the request.
 - `test/claude-code-slash-replay.test.ts` — imports pi-claude-code's patched rewriteInitialRequest and TurnRelay. Drop with the patch when upstream accepts a string first user message on replay and reports the relay error's message.
-- `extensions/lineage/server.ts` — inlines Pi's unexported createCompaction so tally checks and manual compaction creation share one transaction. Drop when Pi exposes atomic compaction admission.
+- `lib/compaction.ts` — inlines Pi's unexported createCompaction so a caller's checks and manual compaction creation share one transaction (lineage's tally compaction, an automation's granted compact). Drop when Pi exposes atomic compaction admission.
 - `extensions/lineage/rewind.ts` — copies pi-durable's unexported normalizeToolPath (unicode spaces, a leading @) so going back resolves edit and write paths exactly as those tools do, then resolves them with the exported NodeExecutionEnv.absolutePath (home directory and file URLs). Drop when Pi exports resolveToolPath's normalization.
 - `extensions/lineage/catchup.ts` — uses the patched transactional beforeInput hook to place catch-up notes before inputs. Drop the patch when Pi ships input-placement hooks.
 - `extensions/messages/server.ts` — uses the same hook to place the line listing an agent's open questions to the user before the input that starts its run.
@@ -15,6 +15,7 @@
 - `extensions/plan/server.ts` — uses the same hook to empty a new branch's inherited plan in the commit that places its first input.
 - `extensions/setup/server.ts` — uses the same hook to place changed setup warnings before the primary agent's input, recording the note and its deduplication state in one commit.
 - `extensions/todos/server.ts` — uses the same hook to place a changed to-do list before @ultimate's input, recording the note and its deduplication state in one commit. Drop the coupling when Pi ships input-placement hooks.
+- `extensions/goal/server.ts` — uses the patched transactional beforeInput hook to place an open hands-off goal's note before @ultimate's input. Drop the coupling when Pi ships input-placement hooks.
 - `extensions/pause/server.ts` — uses the patched Harness.hold()/release() for the user's soft pause. Drop the patch when Pi Durable ships a scheduler hold.
 - `extensions/dream/server.ts` — uses the patched Harness.hold() after approving a chapter switch so no new tasks start before the replacement core takes over. Drop the coupling when Pi Durable ships a scheduler hold.
 - `extensions/coding-tools/diff.tsx` — internal untyped details.patch/details.diff formats drive the diff renderer. Drop when Pi exports structured diff rows for rendering.

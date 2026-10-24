@@ -3,8 +3,11 @@
  * conversation is about and ask the summary model through this service.
  */
 import type { Context } from '@earendil-works/chord'
+import { defineDoc } from '@earendil-works/pi-durable'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
+import { ContextDoc } from './refs.ts'
+import type { ContextUsage } from './refs.ts'
 import type { ConversationSubject, KeptWork } from './types.ts'
 import type {
   accountResponse,
@@ -42,6 +45,11 @@ export type ConversationsService = {
    * then stays as set. Off for standing agents, landers, side chats and definitions with `summaries: false`.
    */
   setAutomaticSummaries: typeof setAutomaticSummaries
+  /**
+   * Inside `tx`, mark conversation `id` a standing agent, a fixed part of the project that is never concluded, or
+   * (`false`) an ordinary conversation again. Subagents sets it on residents, workspaces on landers.
+   */
+  setStanding(tx: Tx, id: ConversationId, standing: boolean): Promise<void>
   /** Ask a summary model once with a system prompt and input, or return the response the receipt already holds. */
   askSummaryModel: typeof askSummaryModel
   /** Add a summary model response's usage to the conversation's `pi.usage` inside `tx`, after asking. */
@@ -78,6 +86,20 @@ export type ReleaseService = {
 }
 /** The extension point concluding frees resources through; workspaces provides it (worktrees). */
 export const Release = defineApi<ReleaseService>()('conversations.release')
+/**
+ * How full a conversation's context is, on that conversation: the one measure the status line and automations' context
+ * triggers read. The conversations extension keeps it; a fork starts empty until its first answer.
+ */
+export const ContextUsageDoc = defineDoc<ContextUsage>({
+  kind: ContextDoc.kind,
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({ at: 0 }),
+})
+export type { ContextUsage } from './refs.ts'
 /** Conversation subjects and the summary model; core, so `need` it. */
 export const ConversationsApi = defineApi<ConversationsService>()('conversations')
 export const tier = 'core'

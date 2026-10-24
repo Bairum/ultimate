@@ -39,6 +39,8 @@ A project is a forest of conversation trees, like commit histories.
 - **UI polish lands when the user says so.** For small look-and-feel work (an animation, a loading state, spacing,
   a card), run preview rounds (the `ui-preview-round` skill) and do not `workspace submit` until the user has clicked
   around and approved it. Larger UI features and anything with behaviour behind it land as usual.
+- **Hands-off goals.** ⌘K Go hands-off… puts @ultimate on a goal while the user is away: it gives the go, decisions
+  and preview approvals in their place and records each with its reason (`extensions/goal/README.md`).
 
 `extensions/lineage/README.md` has the mechanics.
 

@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import type { JsonValue } from '@earendil-works/chord'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Tx } from '@earendil-works/pi-durable'
@@ -72,7 +73,9 @@ async function fixture() {
     onClose: () => {},
     projectSetup: async () => ({ decision: false }),
     extensions: () => [{ name: 'subagents', enabled: true }],
-    doc: (kind: string) => tokens.find((token) => token.definition.kind === kind),
+    doc: (kind: string) =>
+      tokens.find((token) => token.definition.kind === kind) ??
+      eventHost(() => opened.harness, 'automations').doc(kind),
     onOpen: (callback: () => Promise<void>) => {
       opener = callback
     },
@@ -303,6 +306,36 @@ it('carries the seed into a fresh chapter once, including user memory and its pa
   expect(await chapterEntries()).toEqual([entry])
 })
 
+it("wakes the next chapter's @ultimate with the compaction summary it was working from", async () => {
+  const f = await fixture()
+  await f.source()
+  const seed = await buildSeed(f.host, 1)
+  await writeSeed(join(f.home, 'chapters', 'fresh-roots'), {
+    ...seed,
+    continues: {
+      conversation: 42,
+      summary: 'I was wiring the dream trigger in after-compaction.ts.',
+    },
+  })
+  await f.close()
+  await requestChapter(f.home, 'fresh-roots')
+  await f.open()
+  const standing = await f.harness.snapshot(Standing, ROOT_CONVERSATION_ID, context)
+  const entries = () =>
+    f.harness.commit(
+      async (tx) =>
+        (await tx.scanEntries({ conversationId: standing!.ultimate }, 100)).items.filter(
+          (entry) => entry.kind === 'dream.chapter',
+        ),
+      context,
+    )
+  await until(async () => (await entries()).length === 1)
+  const text = JSON.stringify((await entries())[0].model)
+  expect(text).toContain('I was wiring the dream trigger in after-compaction.ts.')
+  expect(text).toContain('#42 in the-beginning')
+  expect(text).toContain('continue that work')
+})
+
 it('carries subscriber-only schedules as to-dos instead of recreating stale conversation ids', async () => {
   const f = await fixture()
   await f.source()
@@ -329,6 +362,63 @@ it('carries subscriber-only schedules as to-dos instead of recreating stale conv
   ).toBe(true)
   expect((await f.harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context))!.automations).toEqual(
     [],
+  )
+})
+
+it('carries event and standing context triggers, but leaves numeric context targets for recreation', async () => {
+  const f = await fixture()
+  await f.source()
+  const signal = new AbortController().signal
+  const triggers: JsonValue[] = [
+    {
+      name: 'Landed',
+      prompt: 'Review landing',
+      event: { name: 'workspaces.landed', where: { target: 'main' } },
+      thinking: 'high',
+    },
+    {
+      name: 'Standing context',
+      prompt: 'Review context',
+      condition: { metric: 'context', of: '@ultimate', above: 80 },
+    },
+    {
+      name: 'Old context',
+      prompt: 'Review old context',
+      condition: { metric: 'context', of: '#1', above: 80 },
+    },
+  ]
+  for (const args of triggers) await f.host.invoke('automations', 'create', args, signal)
+  const seed = await buildSeed(f.host, 1)
+  expect(seed.counts.automations).toBe(3)
+  expect(seed.automations[0]).toEqual({
+    name: 'Landed',
+    prompt: 'Review landing',
+    event: { name: 'workspaces.landed', where: { target: 'main' } },
+    thinking: 'high',
+  })
+  expect(seed.automations[1].condition).toEqual({
+    metric: 'context',
+    of: '@ultimate',
+    above: 80,
+    cooldownMs: 3600000,
+  })
+  await writeSeed(join(f.home, 'chapters', 'triggers'), seed)
+  await f.close()
+  await requestChapter(f.home, 'triggers')
+  await f.open()
+  await applySeed(f.host)
+  const carried = await automationActions.list(null, { host: f.host } as ActionContext)
+  expect(carried.map((a) => a.name)).toEqual(['Landed', 'Standing context'])
+  expect(carried[0].event).toMatchObject({ name: 'workspaces.landed', where: { target: 'main' } })
+  expect(carried[1].condition).toMatchObject({ of: '@ultimate', armed: true })
+  const todos = (await f.harness.snapshot(Todos, ROOT_CONVERSATION_ID, context))!.items
+  expect(
+    todos.some((item) =>
+      item.text.includes('Recreate context automation (Old context) with new conversation target'),
+    ),
+  ).toBe(true)
+  expect((await f.harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context))?.automations).toEqual(
+    ['Landed', 'Standing context'],
   )
 })
 
@@ -424,6 +514,28 @@ it.each([true, false])(
       error: 'Earlier failure',
     })
     expect(lock.busy).toBe(false)
+  },
+)
+
+it.each(['seeding', 'checking', 'backing up'] as const)(
+  'fails a sleep a restart stopped in %s, so nothing stays stuck and a retry is allowed',
+  async (phase) => {
+    const f = await fixture()
+    const by = { automation: 'A4', name: 'Dream at 80%', at: 1 }
+    await f.harness.commit(async (tx) => {
+      await startSession(tx, 1)
+      const sessions = (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions
+      sessions[0].sleep = { chapter: 'next', phase, at: 1, by }
+    }, context)
+    await f.close()
+    await f.open()
+    const sleep = (await f.harness.snapshot(Sessions, ROOT_CONVERSATION_ID, context))!.sessions[0]
+      .sleep
+    expect(sleep).toMatchObject({
+      phase: 'failed',
+      by,
+      error: expect.stringContaining('nothing moved'),
+    })
   },
 )
 

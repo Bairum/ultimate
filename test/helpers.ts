@@ -17,7 +17,7 @@ import type { ServerOptions } from '../server/main.ts'
 import type { ServerEvents, SystemInfo } from '../shared/protocol.ts'
 import type { Api } from '../shared/extension-api.ts'
 import type { EventData, EventToken } from '../shared/events.ts'
-import { eventLog } from '../server/events.ts'
+import { EventFeed, eventLog } from '../server/events.ts'
 import type { Reactor } from '../server/events.ts'
 
 vi.mock('@earendil-works/pi-ai/providers/faux', async (importOriginal) => {
@@ -64,6 +64,8 @@ export function eventHost(harness: () => Harness, name: string) {
   const reactors: ReturnType<typeof log.reactor>[] = []
   return {
     emit: log.emit,
+    /** The event feed by its kind, as the real host's `doc` finds it; other kinds are the fixture's own. */
+    doc: (kind: string) => (kind === EventFeed.definition.kind ? EventFeed : undefined),
     react: <T extends EventToken>(
       reactor: string,
       events: readonly T[],

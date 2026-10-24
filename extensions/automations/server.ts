@@ -13,9 +13,12 @@ import {
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
+import { admitCompaction } from '../../lib/compaction.ts'
 import type { TaskId, Tx, ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
+import { EVENT_FEED } from '../../shared/events.ts'
+import type { EventRecord } from '../../shared/events.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { actingAs } from '../../lib/acting-as.ts'
 import { discoverAgents } from '../../lib/agents.ts'
@@ -25,7 +28,7 @@ import { writeJson } from '../../lib/json-file.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { MessagesApi } from '../messages/api.ts'
 import { LineageApi } from '../lineage/api.ts'
-import { AutomationsApi } from './api.ts'
+import { AutomationsApi, DreamGrant } from './api.ts'
 import {
   CreateAction,
   DeleteAction,
@@ -41,13 +44,27 @@ import {
   ScriptAction,
   EscalateAction,
   Escalated,
+  EventsAction,
+  GrantRef,
+  Acted as ActedEvent,
 } from './refs.ts'
 import { describeSchedule, nextAt, parseSchedule } from './schedule.ts'
 import { scheduler } from './scheduler.ts'
+import { triggers, TRIGGER_EVENTS, describeTrigger } from './triggers.ts'
 import { supervisor } from './supervisor.ts'
 import type { Prepared } from './supervisor.ts'
-import type { Args, Automation, AutomationListItem, Effect, Run, Manifest } from './types.ts'
-import { isSlug } from './types.ts'
+import type {
+  Acted,
+  Args,
+  Automation,
+  AutomationListItem,
+  Effect,
+  GrantAction,
+  GrantedBy,
+  Run,
+  Manifest,
+} from './types.ts'
+import { GRANT_ACTIONS, isSlug } from './types.ts'
 export type { Automation, Run } from './types.ts'
 export { launchHandshake } from './supervisor.ts'
 type Ledger = { next: number; automations: Record<string, Automation> }
@@ -80,12 +97,22 @@ const Receipt = defineDoc<Partial<Change>>({
   scope: 'task',
   initial: () => ({}),
 })
+/** What one `act` tool call did, on its own tool task, written with the effect: a replay returns it, at any later time. */
+const ActReceipt = defineDoc<{ result?: Acted['result'] }>({
+  kind: 'ultimate.automation-act',
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'task',
+  initial: () => ({}),
+})
 const json = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 function required(v: unknown, field: string): string {
   if (typeof v !== 'string' || !v.trim()) throw new Error(`${field} is required`)
   return v.trim()
 }
 const operations = [
+  'events',
+  'act',
   'list',
   'create',
   'update',
@@ -103,6 +130,7 @@ const operations = [
 function backend(host: ExtensionHost) {
   const schedule = scheduler(host, Automations, (...args) => scripts.deliver(...args))
   const scripts = supervisor(host, Automations, schedule.fire)
+  const trigger = triggers(host, Automations, schedule.fire, schedule.prepareFires)
   const {
     trusted,
     agentFor,
@@ -349,11 +377,14 @@ function backend(host: ExtensionHost) {
       throw new Error('Unknown model')
     if (args.action === 'create') {
       required(args.name, 'name')
-      if ((args.schedule !== undefined) === (args.ask !== undefined))
-        throw new Error('Exactly one of schedule or ask is required')
+      if (
+        [args.schedule, args.ask, args.event, args.condition].filter((value) => value !== undefined)
+          .length !== 1
+      )
+        throw new Error('Exactly one of schedule, ask, event or condition is required')
       if (args.scope !== undefined && args.scope !== 'user' && args.scope !== 'project')
         throw new Error('scope must be user or project')
-      if (args.scope === 'project' && args.schedule !== undefined)
+      if (args.scope === 'project' && args.ask === undefined)
         throw new Error('Project scope is only supported for script triggers')
       if (args.slug !== undefined && args.scope !== 'project')
         throw new Error('slug is only for project automations')
@@ -371,6 +402,26 @@ function backend(host: ExtensionHost) {
         if (!(await host.harness().conversation(id as ConversationId, BACKGROUND_CONTEXT)))
           throw new Error(`Unknown subscriber #${id}`)
     }
+    if (args.event !== undefined) {
+      const event = TRIGGER_EVENTS.find(({ name }) => name === args.event!.name)
+      if (!event) throw new Error(`Unknown event: ${args.event.name}`)
+      for (const [key, value] of Object.entries(args.event.where ?? {})) {
+        if (!Object.hasOwn(event.fields, key)) throw new Error(`Unknown where field: ${key}`)
+        if (!['string', 'number', 'boolean'].includes(typeof value))
+          throw new Error('where values must be strings, numbers or booleans')
+      }
+    }
+    if (args.condition !== undefined) {
+      const c = args.condition
+      if (c.metric !== 'context') throw new Error('condition metric must be context')
+      if (!Number.isInteger(c.above) || c.above < 1 || c.above > 99)
+        throw new Error('above must be an integer from 1 to 99')
+      if (c.cooldownMs !== undefined && (!Number.isFinite(c.cooldownMs) || c.cooldownMs < 0))
+        throw new Error('cooldownMs must be non-negative')
+      const target = typeof c.of === 'string' ? await trigger.resolve(c.of) : undefined
+      if (!target || !(await host.harness().conversation(target, BACKGROUND_CONTEXT)))
+        throw new Error(`Unknown of: ${c.of}`)
+    }
     if (args.name !== undefined) required(args.name, 'name')
     // An empty prompt on update removes the run action; create needs a real one.
     if (args.prompt !== undefined && (args.action === 'create' || args.prompt !== ''))
@@ -385,7 +436,12 @@ function backend(host: ExtensionHost) {
     args.secrets?.forEach(validateName)
     if (args.action === 'update') {
       const a = await scripts.status(required(args.id, 'id'))
-      if ((args.ask !== undefined && !a.script) || (args.schedule !== undefined && !a.schedule))
+      if (
+        (args.ask !== undefined && !a.script) ||
+        (args.schedule !== undefined && !a.schedule) ||
+        (args.event !== undefined && !a.event) ||
+        (args.condition !== undefined && !a.condition)
+      )
         throw new Error('Cannot change trigger kind')
       if (args.ask !== undefined) required(args.ask, 'ask')
     }
@@ -397,8 +453,15 @@ function backend(host: ExtensionHost) {
       await scripts.discover()
       return {}
     }
-    if (args.action === 'create') return {}
-    return prepareScript(args, caller)
+    if (args.action === 'events') return {}
+    const prepared: Prepared = args.action === 'create' ? {} : await prepareScript(args, caller)
+    const condition =
+      args.condition ??
+      (args.action === 'resume'
+        ? (await scripts.status(required(args.id, 'id'))).condition
+        : undefined)
+    if (condition) prepared.target = await trigger.resolve(condition.of)
+    return prepared
   }
   async function change(
     tx: Tx,
@@ -406,6 +469,7 @@ function backend(host: ExtensionHost) {
     prepared: Awaited<ReturnType<typeof prepare>>,
     caller?: number,
   ): Promise<Change> {
+    if (args.action === 'events') return { result: json(TRIGGER_EVENTS) }
     const state = await tx.doc(Automations)
     if (args.action === 'list') return changeScript(tx, args, prepared, caller)
     if (args.action === 'create' && args.ask !== undefined)
@@ -416,7 +480,7 @@ function backend(host: ExtensionHost) {
       state.automations[id] = {
         id,
         name: required(args.name, 'name'),
-        schedule: parseSchedule(args.schedule!),
+        ...(args.schedule !== undefined ? { schedule: parseSchedule(args.schedule) } : {}),
         enabled: true,
         createdAt: now,
         updatedAt: now,
@@ -430,7 +494,7 @@ function backend(host: ExtensionHost) {
     const a = state.automations[id]
     if (!a) throw new Error(`Unknown automation: ${id}`)
     if (args.action === 'runs') return { result: a.runs }
-    if (args.action === 'run' && a.schedule)
+    if (args.action === 'run' && !a.script)
       return { result: await schedule.fire(tx, a, Date.now()) }
     if (args.action === 'abort') {
       const run = a.runs.find((r) => r.id === args.runId)
@@ -469,6 +533,15 @@ function backend(host: ExtensionHost) {
       if (!a.prompt && !a.subscribers.length)
         throw new Error('At least one of prompt or subscribers is required')
       if (args.schedule !== undefined) a.schedule = parseSchedule(args.schedule)
+      if (args.event !== undefined)
+        a.event = { ...args.event, sinceEvent: a.event?.sinceEvent ?? (await newestEvent(tx)) }
+      if (args.condition !== undefined)
+        a.condition = {
+          ...a.condition,
+          ...args.condition,
+          cooldownMs: args.condition.cooldownMs ?? a.condition?.cooldownMs ?? 3600000,
+          armed: a.condition?.armed ?? true,
+        }
       if (a.script) {
         if (args.ask !== undefined) a.script.ask = required(args.ask, 'ask')
         if (args.once !== undefined) a.script.once = args.once
@@ -493,6 +566,9 @@ function backend(host: ExtensionHost) {
     } else if (args.action === 'pause') a.enabled = false
     else if (args.action === 'resume') a.enabled = true
     else throw new Error(`Unknown action: ${args.action}`)
+    if (args.action === 'resume' && a.event) a.event.sinceEvent = await newestEvent(tx)
+    if (args.action === 'create' || args.action === 'resume')
+      await trigger.evaluate(tx, a, prepared.target)
     a.updatedAt = Date.now()
     if (effect) await deliver(tx, a, `update:${a.updatedAt}`, 'writing', a.script!.ask)
     if (!isDeepStrictEqual(a.schedule, oldSchedule)) delete a.nextAt
@@ -525,12 +601,118 @@ function backend(host: ExtensionHost) {
       return json(await scripts.status(required(args.id, 'id')))
     return receipt.result
   }
-  return { ...schedule, ...scripts, prepare, change, apply, operate }
+  /**
+   * The newest event committed before `tx`: an event trigger activated in `tx` handles only later ones. Read from the
+   * root's event feed, which every emit appends to in its own commit.
+   */
+  async function newestEvent(tx: Tx) {
+    const feed = host.doc(EVENT_FEED)
+    if (!feed) throw new Error('The event feed is not available')
+    return (
+      ((await tx.doc(feed, ROOT_CONVERSATION_ID)) as { events: EventRecord[] }).events.at(-1)?.id ??
+      0
+    )
+  }
+  /** Set the user's grant on `id`: the actions its woken agent may take without asking. Only the user calls this. */
+  async function grant(id: string, actions: unknown, source: unknown) {
+    if (!Array.isArray(actions) || actions.some((item) => !GRANT_ACTIONS.includes(item)))
+      throw new Error(`actions must be some of ${GRANT_ACTIONS.join(', ')}`)
+    if (source !== undefined && (typeof source !== 'string' || source.length > 500))
+      throw new Error('source must be text of at most 500 characters')
+    return host.harness().commit(async (tx) => {
+      const a = (await tx.doc(Automations)).automations[validId(id)]
+      if (!a) throw new Error(`Unknown automation: ${id}`)
+      if (!actions.length) delete a.grant
+      else
+        a.grant = {
+          actions: GRANT_ACTIONS.filter((item) => actions.includes(item)),
+          source: source?.trim() || 'Set in the Automations panel',
+          at: Date.now(),
+        }
+      a.updatedAt = Date.now()
+      return json(a)
+    }, BACKGROUND_CONTEXT)
+  }
+  /**
+   * Subscriber `caller` asks to do `action` for the user under automation `id`'s grant. Refused unless the user granted
+   * that action, the automation is enabled and fired within the last six hours, `caller` is one of the conversations it
+   * wakes, and that action was not already taken on this fire. The check, the effect (a compaction task, a dream
+   * session, a granted Fall asleep task) and the record of the act commit in one transaction, so a crash leaves either
+   * all or nothing. `task` keys the act to its tool call: a replay of that call returns the recorded result instead of
+   * acting again.
+   */
+  async function act(id: string, action: unknown, caller: number | undefined, task?: number) {
+    if (!GRANT_ACTIONS.includes(action as GrantAction))
+      throw new Error(`do must be one of ${GRANT_ACTIONS.join(', ')}`)
+    const name = action as GrantAction
+    if (caller === undefined) throw new Error('act needs the conversation that was woken')
+    const dream = name === 'compact' ? undefined : host.want(DreamGrant)
+    if (name !== 'compact' && !dream) throw new Error('The dream extension is not enabled')
+    const status = await scripts.status(id)
+    // The conversation a context trigger watches, else the woken one itself.
+    const target =
+      (status.condition && (await trigger.resolve(status.condition.of))) ??
+      (caller as ConversationId)
+    return host.harness().commit(async (tx) => {
+      const a = (await tx.doc(Automations)).automations[validId(id)]
+      if (!a) throw new Error(`Unknown automation: ${id}`)
+      // The tool call's own receipt, written with its effect: a replay returns it whatever fired since.
+      const receipt = task === undefined ? undefined : await tx.doc(ActReceipt, task as TaskId)
+      if (receipt?.result)
+        return { action: name, ...json(receipt.result), automation: a.id, name: a.name }
+      const done = a.acted?.[name]
+      if (!a.grant?.actions.includes(name))
+        throw new Error(
+          `Automation ${a.id} has no grant for ${name}: ask the user instead. Only the user grants it, in the Automations panel.`,
+        )
+      if (!a.enabled) throw new Error(`Automation ${a.id} is paused`)
+      const now = Date.now()
+      if (a.lastFireAt === undefined || now - a.lastFireAt > 6 * 3600_000)
+        throw new Error(`Automation ${a.id} has not fired in the last six hours`)
+      if (!a.subscribers.includes(caller))
+        throw new Error(
+          `#${caller} is not woken by automation ${a.id}; only its subscribers act on a grant`,
+        )
+      if (done?.fire === a.fires)
+        throw new Error(`Automation ${a.id} already used its ${name} grant on this fire`)
+      const by: GrantedBy = { automation: a.id, name: a.name, at: now }
+      // Every task scan before the first write: Pi refuses scans after a write in one transaction.
+      const result: Acted['result'] =
+        name === 'compact'
+          ? { conversation: target, taskId: Number(await admitCompaction(tx, target)) }
+          : name === 'dream'
+            ? await dream!.start(tx, by, caller)
+            : await dream!.asleep(tx, by, {})
+      a.acted = {
+        ...a.acted,
+        [name]: { fire: a.fires, at: now, by: caller, ...(task ? { task } : {}), result },
+      }
+      if (receipt) receipt.result = result
+      await host.emit(tx, ActedEvent, { id: a.id, action: name, fire: a.fires, by: caller })
+      return { action: name, ...result, automation: a.id, name: a.name }
+    }, BACKGROUND_CONTEXT)
+  }
+  return { ...schedule, ...scripts, prepare, change, apply, operate, trigger, grant, act }
 }
 function input(args: unknown, action: string): Args {
   return { ...(args as Omit<Args, 'action'>), action }
 }
+/** The `act` operation of the automation tool, for conversation `caller` in tool task `task`. */
+export const act = (
+  host: ExtensionHost,
+  id: string,
+  action: unknown,
+  caller: number | undefined,
+  task?: number,
+) => backend(host).act(id, action, caller, task)
+/** Only the user grants: no agent may give itself or another automation the right to act without asking. */
+export const userActions = ['grant']
 export const actions = {
+  events: implementAction(EventsAction, () => TRIGGER_EVENTS),
+  grant: implementAction(GrantRef, (args, { host }) => {
+    const given = (args ?? {}) as Record<string, unknown>
+    return backend(host).grant(required(given.id, 'id'), given.actions, given.source)
+  }),
   list: implementAction(
     ListAction,
     async (args, { host }) =>
@@ -617,10 +799,22 @@ export default function automations(host: ExtensionHost) {
     pause: async (id) => (await api.operate({ action: 'pause', id }), api.status(id)),
     run: async (id) => (await api.operate({ action: 'run', id }), api.status(id)),
     status: api.status,
+    read: async (tx, id) => {
+      const a = (await tx.doc(Automations)).automations[id]
+      return a && json(a)
+    },
   })
-  host.onOpen(api.open)
-  host.onRelease(api.close)
-  host.onClose(api.close)
+  api.trigger.install()
+  host.onOpen(async () => {
+    await api.open()
+    await api.trigger.open()
+  })
+  const close = async () => {
+    await api.trigger.close()
+    await api.close()
+  }
+  host.onRelease(close)
+  host.onClose(close)
   return defineExtension({
     name: 'automations',
     tasks: [api.Scheduler, api.RunTask, api.Deliver],
@@ -629,10 +823,7 @@ export default function automations(host: ExtensionHost) {
         const state = await read.snapshot(Automations, context)
         const lines = Object.values(state?.automations ?? {})
           .filter((a) => a.enabled)
-          .map(
-            (a) =>
-              `${a.id} ${a.name}: ${a.schedule ? describeSchedule(a.schedule) : a.script!.state}`,
-          )
+          .map((a) => `${a.id} ${a.name}: ${describeTrigger(a)}`)
         return lines.length ? lines.join('\n') : undefined
       }),
     ],
@@ -642,13 +833,32 @@ export default function automations(host: ExtensionHost) {
         // Receipts deduplicate ledger changes; process effects reuse their committed pid on replay.
         replay: 'safe',
         description:
-          'Automate background work with one trigger (schedule or ask) and one or both actions (prompt, subscribers). create {name,schedule?|ask?,once?,secrets?,prompt?,agent?,model?,thinking?,subscribers?,scope?,slug?}. ask starts a watcher that writes a supervised script: stdout FIRE wakes subscribers and/or starts a prompt run; DONE then exit 0 stops recurring scripts. Scripts spend tokens only on setup and repair; prompt runs spend tokens every fire. Schedules: cron "0 9 * * 1-5" Europe/Vienna, at 2026-12-01T09:00:00Z, in 30m, every 15m. IDs A<n>, or lowercase slugs for project scripts in <project>/.ultimate/automations/<slug>/. Project scripts never start themselves. list; update; pause/resume; run (fire schedule now or relaunch script); runs; log {id,lines?}; abort {id,runId}; escalate {id,reason}; subscribe/unsubscribe {id,to?: "#id"|"@name"} (default caller); delete (keeps files and conversations). Without prompt or subscribers, caller subscribes. Optional agent selects an existing definition (isolates ignored), model {provider,modelId} and thinking override it; otherwise runs copy the root agent. Failures wake only the watcher; escalation notifies subscribers and @ultimate.',
+          'Automate background work with one trigger (schedule, ask, event or condition) and one or both actions (prompt, subscribers). create {name,schedule?|ask?|event?|condition?,once?,secrets?,prompt?,agent?,model?,thinking?,subscribers?,scope?,slug?}. ask starts a watcher that writes a supervised script: stdout FIRE wakes subscribers and/or starts a prompt run; DONE then exit 0 stops recurring scripts. event {name,where?} watches domain events; events lists names and fields. condition {metric:"context",of:"@name"|"#id",above:1-99,cooldownMs?} watches context fill. Scripts spend tokens only on setup and repair; prompt runs spend tokens every fire. Schedules: cron "0 9 * * 1-5" Europe/Vienna, at 2026-12-01T09:00:00Z, in 30m, every 15m. IDs A<n>, or lowercase slugs for project scripts in <project>/.ultimate/automations/<slug>/. Project scripts never start themselves. list; update; pause/resume; run (fire trigger now or relaunch script); runs; log {id,lines?}; abort {id,runId}; escalate {id,reason}; subscribe/unsubscribe {id,to?: "#id"|"@name"} (default caller); delete (keeps files and conversations). Without prompt or subscribers, caller subscribes. Optional agent selects an existing definition (isolates ignored), model {provider,modelId} and thinking override it; otherwise runs copy the root agent. Failures wake only the watcher; escalation notifies subscribers and @ultimate. act {id,do: "dream"|"compact"|"asleep"} does that for the user without asking, only when the user granted it on that automation (the panel shows grants) and it fired within 6 h, once per fire; without a grant, ask the user instead.',
         parameters: Type.Object({
           action: Type.Union(operations.map((v) => Type.Literal(v))),
           id: Type.Optional(Type.String()),
           name: Type.Optional(Type.String()),
           schedule: Type.Optional(Type.String()),
           ask: Type.Optional(Type.String()),
+          event: Type.Optional(
+            Type.Object({
+              name: Type.String(),
+              where: Type.Optional(
+                Type.Record(
+                  Type.String(),
+                  Type.Union([Type.String(), Type.Number(), Type.Boolean()]),
+                ),
+              ),
+            }),
+          ),
+          condition: Type.Optional(
+            Type.Object({
+              metric: Type.Literal('context'),
+              of: Type.String(),
+              above: Type.Integer({ minimum: 1, maximum: 99 }),
+              cooldownMs: Type.Optional(Type.Number({ minimum: 0 })),
+            }),
+          ),
           once: Type.Optional(Type.Boolean()),
           secrets: Type.Optional(Type.Array(Type.String())),
           prompt: Type.Optional(Type.String()),
@@ -668,6 +878,7 @@ export default function automations(host: ExtensionHost) {
           to: Type.Optional(Type.String()),
           lines: Type.Optional(Type.Integer({ minimum: 1, maximum: 2000 })),
           reason: Type.Optional(Type.String()),
+          do: Type.Optional(Type.Union(GRANT_ACTIONS.map((v) => Type.Literal(v)))),
         }),
         execute: async (args, tool, context) => {
           const cached = await tool.memo<{ output: { type: 'text'; text: string }[] }>(
@@ -675,6 +886,27 @@ export default function automations(host: ExtensionHost) {
             context,
           )
           if (cached) return cached
+          if (args.action === 'act') {
+            // The grant's claim is keyed to this call's task: a replay gets its own claim, not a second act.
+            const acted = await api.act(
+              required(args.id, 'id'),
+              args.do,
+              tool.conversationId,
+              Number(tool.taskId),
+            )
+            return tool.memo(
+              'result',
+              {
+                output: [
+                  {
+                    type: 'text' as const,
+                    text: `Did ${acted.action} under the user's grant on automation ${acted.automation}: ${JSON.stringify(acted)}`,
+                  },
+                ],
+              },
+              context,
+            )
+          }
           const caller =
             args.action === 'create' || args.action === 'subscribe'
               ? await actingAs(host, tool.conversationId, context)
@@ -720,7 +952,7 @@ function concise(value: JsonValue): string {
   if (Array.isArray(value)) return value.length ? value.map(concise).join('\n') : 'None.'
   if (value && typeof value === 'object' && 'enabled' in value) {
     const a = value as Automation
-    return `${a.id} ${a.name} — ${a.schedule ? describeSchedule(a.schedule) : a.script!.state} — ${a.enabled ? 'enabled' : 'paused'}`
+    return `${a.id} ${a.name} — ${describeTrigger(a)} — ${a.enabled ? 'enabled' : 'paused'}`
   }
   if (value && typeof value === 'object' && typeof value.text === 'string') return value.text
   return JSON.stringify(value)

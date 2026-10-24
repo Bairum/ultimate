@@ -3,6 +3,7 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineEntry, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
+import { formatAgo } from '../../lib/ago.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import { git, isolatable } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -39,12 +40,8 @@ async function target(host: ExtensionHost, branch: string) {
   return checkout.target
 }
 
-const ago = (seconds: number) => {
-  const minutes = Math.max(0, Math.round((Date.now() / 1000 - seconds) / 60))
-  if (minutes < 60) return `${minutes}m`
-  if (minutes < 60 * 48) return `${Math.round(minutes / 60)}h`
-  return `${Math.round(minutes / 60 / 24)}d`
-}
+/** A git or landing time in seconds, as the range list shows it. */
+const ago = (seconds: number) => formatAgo(seconds * 1000)
 
 async function ranges(host: ExtensionHost): Promise<ReviewRange[]> {
   const cwd = host.projectRoot

@@ -26,14 +26,15 @@ export async function idleNote(
   const queue = (await tx.doc(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID)).queue
   const excluded = new Set([...concluded, ...queue.map((item) => item.conversationId)])
   const messages = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages
+  // A branch waiting on a reply gets 2 h; one that ended its run with nothing to wait on may have stalled: 30 min.
+  const waiting = new Set<number>()
   for (const message of messages)
     if (
       typeof message.from === 'number' &&
-      message.to === 'user' &&
       message.reply &&
-      message.state === 'delivered'
+      (message.state === 'sent' || message.state === 'delivered')
     )
-      excluded.add(message.from)
+      (message.to === 'user' ? excluded : waiting).add(message.from)
   const conversations = []
   let cursor: Cursor | undefined
   do {
@@ -67,11 +68,12 @@ export async function idleNote(
         metadata.inputAt ?? metadata.answerAt ?? now,
         metadata.answerAt ?? metadata.inputAt ?? now,
       )
-    if (age <= 2 * 60 * 60 * 1000 || (await working(conversation.id))) continue
+    const limit = waiting.has(conversation.id) ? 2 * 3_600_000 : 30 * 60_000
+    if (age <= limit || (await working(conversation.id))) continue
     idle.push({
       id: conversation.id,
       title: metadata.title ?? 'Untitled',
-      hours: Math.floor(age / 3_600_000),
+      idle: age < 3_600_000 ? `${Math.floor(age / 60_000)}m` : `${Math.floor(age / 3_600_000)}h`,
     })
   }
   const key = idle.map((branch) => branch.id).join(',')
@@ -80,10 +82,10 @@ export async function idleNote(
   seen.key = key
   const content = idle.length
     ? [
-        'Open branches idle for more than 2 h; check on each or conclude it:',
+        'Open branches idle (30 min, or 2 h while awaiting a reply); check on each or conclude it:',
         ...idle
           .slice(0, 10)
-          .map((branch) => `- #${branch.id} ${branch.title} (idle ${branch.hours}h)`),
+          .map((branch) => `- #${branch.id} ${branch.title} (idle ${branch.idle})`),
         ...(idle.length > 10 ? [`and ${idle.length - 10} more`] : []),
       ].join('\n')
     : 'No branches are idle.'

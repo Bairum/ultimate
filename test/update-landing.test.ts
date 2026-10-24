@@ -1,5 +1,11 @@
 import { expect, it } from 'vitest'
-import { landingInstalls } from '../extensions/update/server.ts'
+import * as update from '../extensions/update/server.ts'
+
+const { landingInstalls } = update
+
+it('lets agents update the clone: no action is the user’s alone', () => {
+  expect('userActions' in update).toBe(false)
+})
 
 /** A git whose `diff` lists `files` and whose checkout holds the landed commit when `landedHere`. */
 const git =

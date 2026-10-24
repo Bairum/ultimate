@@ -29,7 +29,7 @@ While the clone is behind, the status line shows `↓ 5 new · update` (`↓ 5 n
 
 ## Updating
 
-`update` (user-only):
+`update` (the popover's Update now; agents may call it too):
 
 1. Fetches origin.
 2. Fast-forwards the default branch with `git merge --ff-only`.

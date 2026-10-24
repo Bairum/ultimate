@@ -6,7 +6,8 @@ description: Run a preview round for UI work that lands only with the user's app
 # A preview round
 
 UI polish lands only when the user approved it on a running preview. Checks, a review or your own screenshots are not
-approval, and one approval covers one round.
+approval, and one approval covers one round. On a hands-off goal @ultimate approves in the user's place, from your
+screenshots: send them with the request.
 
 1. **Commit the round** in your branch. A preview runs your checkout as it is on disk; committing keeps each round
    recoverable.

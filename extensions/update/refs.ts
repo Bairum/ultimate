@@ -63,7 +63,7 @@ export const StateAction = actionRef<null, UpdateState>('update', 'state')
 /** No arguments → fetch origin now (bypassing the hourly gate, under the clone's lock), then the refreshed state. */
 export const CheckAction = actionRef<null, UpdateState>('update', 'check')
 /**
- * User-only: fetch origin, fast-forward the clone's default branch and install when the lockfile changed. Refuses a
+ * Fetch origin, fast-forward the clone's default branch and install when the lockfile changed. Refuses a
  * dirty, diverged or switched clone and while the lander lands into it; never stashes, rebases or resets.
  */
 export const UpdateAction = actionRef<null, UpdateResult>('update', 'update')

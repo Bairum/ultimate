@@ -4,6 +4,7 @@ import { events } from './events.ts'
 import { errorMessage } from './format.ts'
 import type {
   CompactCallTest,
+  CompactDocs,
   CompactQuietTest,
   CompactSummaryProps,
   CommandContribution,
@@ -554,14 +555,19 @@ export function messageItems(
   )
 }
 
+/** The kinds of the root conversation's documents that `compact` contributions read (`docs`), sorted. */
+export const compactDocs = (records: readonly ExtensionRecord[]) =>
+  [...new Set(records.flatMap(({ extension }) => extension?.compact?.docs ?? []))].toSorted()
+
 /**
- * Which calls stay visible when `conversation` uses compact mode, and the root documents its tests read (`docs`), or
- * `undefined` when no facet makes it one. A `when` or a call test that throws counts as no and goes to `report`, so one
- * broken extension cannot take down the transcript.
+ * Which calls stay visible when `conversation` uses compact mode, or `undefined` when no facet makes it one; `docs` are
+ * the root documents of `compactDocs` kinds. A `when` or a call test that throws counts as no and goes to `report`, so
+ * one broken extension cannot take down the transcript.
  */
 export function compactTools(
   records: readonly ExtensionRecord[],
   conversation: ConversationSummary | undefined,
+  rootDocs: CompactDocs,
   report: (extension: string, error: unknown) => void,
 ):
   | {
@@ -572,14 +578,13 @@ export function compactTools(
         version: number
         component: ComponentType<CompactSummaryProps>
       }
-      docs: readonly string[]
     }
   | undefined {
   if (!conversation) return undefined
   const matching = records.flatMap(({ name, version, extension }) => {
     if (!extension?.compact) return []
     try {
-      return extension.compact.when(conversation)
+      return extension.compact.when(conversation, rootDocs)
         ? [{ name, version, compact: extension.compact }]
         : []
     } catch (error) {
@@ -620,6 +625,5 @@ export function compactTools(
     summary: matching.flatMap(({ name, version, compact }) =>
       compact.summary ? [{ extension: name, version, component: compact.summary }] : [],
     )[0],
-    docs: [...new Set(matching.flatMap(({ compact }) => compact.docs ?? []))].toSorted(),
   }
 }

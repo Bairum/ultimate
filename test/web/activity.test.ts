@@ -4,8 +4,9 @@ import { expect, it, vi } from 'vitest'
 import { Feed, joined, shows } from '../../extensions/activity/feed.tsx'
 import type { ActivityEvent } from '../../extensions/activity/feed.tsx'
 
-vi.mock('@/sdk', () => ({
+vi.mock('@/sdk', async () => ({
   cn: (...names: unknown[]) => names.filter(Boolean).join(' '),
+  formatAgo: (await import('../../lib/ago.ts')).formatAgo,
   definePoint: (name: string) => ({ name }),
   events: { emit: () => {} },
   useUltimate: () => ({ showSurface: () => {}, switchConversation: () => {} }),

@@ -14,13 +14,15 @@ import {
   useConversations as useAllConversations,
   useModels,
   useSystem,
-  useAction,
+  useDoc,
   useTranscript,
 } from '@/sdk'
 import type { AssistantMessage, EntryRecord, Usage } from '@/sdk'
 import { useWorkspaceConversations as useConversations } from '../workspaces/ui.tsx'
-import { lastAssistant, promptTokens as prompt, usageTotals } from './context.ts'
-import { EstimateAction, RatesAction } from './refs.ts'
+import { ContextDoc } from '../conversations/ui.tsx'
+import { lastAssistant, promptTokens as prompt } from '../../lib/context-usage.ts'
+import { usageTotals } from './context.ts'
+import { RatesAction } from './refs.ts'
 import type { RateSample } from './refs.ts'
 import { responseAfter, turnOf } from './turns.ts'
 
@@ -231,25 +233,8 @@ function ModelRow({ label, bucket }: { label: string; bucket: Usage }) {
 }
 
 function Context() {
-  const { entries, agent } = useConversation()
-  const models = useModels()
-  const model = models?.models.find(
-    (candidate) =>
-      candidate.provider === agent.model?.provider && candidate.id === agent.model.modelId,
-  )
-  const window = model?.contextWindow
-  const { message, stale, marker } = lastAssistant(entries)
-  // After a compaction or reset, an estimate stands in until the next response measures the context.
-  const estimate = useAction(
-    EstimateAction,
-    { marker: marker ?? 0 },
-    // A failed estimate leaves the meter at '?', as before estimates existed; no notice for a status readout.
-    { enabled: !!window && marker !== undefined, onError: () => undefined },
-  ).data
+  const { tokens: used, window, percent, estimated } = useDoc(ContextDoc) ?? {}
   if (!window) return null
-  // A fresh conversation has an empty context.
-  const used = stale ? (estimate ?? undefined) : message ? prompt(message.usage) : 0
-  const percent = used === undefined ? undefined : (used / window) * 100
   return (
     <Item
       className={cn(
@@ -262,7 +247,7 @@ function Context() {
       tip={
         used === undefined
           ? 'Context size is known after the next response'
-          : `${stale ? 'About ' : ''}${used.toLocaleString()} of ${window.toLocaleString()} tokens in context${stale ? ', estimated until the next response' : ''}`
+          : `${estimated ? 'About ' : ''}${used.toLocaleString()} of ${window.toLocaleString()} tokens in context${estimated ? ', estimated until the next response' : ''}`
       }
     >
       <span className="relative h-1.5 w-8 overflow-hidden rounded-full bg-muted">

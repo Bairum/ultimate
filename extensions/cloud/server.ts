@@ -43,6 +43,7 @@ interface Running {
 async function setup(host: ExtensionHost) {
   const config = await cloudConfig(host)
   if (!config) return { status: 'off' as const }
+  if (config.satellite) return { status: 'satellite' as const, config }
   const identity = await projectIdentity(host.projectRoot)
   if (!identity) return { status: 'local' as const, config }
   const { chapter } = host
@@ -76,6 +77,10 @@ export async function backup(host: ExtensionHost, force: boolean) {
     const ready = await setup(host)
     if (ready.status === 'off')
       throw new Error('Cloud backups are off: join the fleet with ⌘K → Join cloud fleet')
+    if (ready.status === 'satellite')
+      throw new Error(
+        'This machine is a satellite (cloud.satellite in user settings): it never backs up, so it cannot replace the backups of the machine that owns this project',
+      )
     if (ready.status === 'local')
       throw new Error(`${host.projectRoot} has no GitHub origin remote, so it cannot be backed up`)
     return await upload(host, running, ready, force)
@@ -152,6 +157,8 @@ export const actions = {
     const ready = await setup(host)
     const running = runningIn(host)
     const name = basename(host.projectRoot)
+    if (ready.status === 'satellite')
+      return { status: 'satellite', name, machine: ready.config.machine }
     if (ready.status !== 'on') return { status: ready.status, name }
     const saved = await readBackup(ready.dir, ready.key)
     return {
@@ -165,7 +172,7 @@ export const actions = {
       ...(running.lastError ? { lastError: running.lastError } : {}),
     }
   }),
-  /** User-only `{ force? }`: Back up now; resolves once the backup is committed. */
+  /** `{ force? }`: Back up now; resolves once the backup is committed. */
   backup: implementAction(BackupAction, (args, { host }) =>
     backup(host, (args as { force?: unknown } | null)?.force === true),
   ),
@@ -184,8 +191,8 @@ export const actions = {
     )
   }),
 }
-/** Backups and the Join card's secrets never come from an agent. */
-export const userActions = ['backup', 'join']
+/** The Join card's secrets never come from an agent; a backup only adds one, so agents may start it. */
+export const userActions = ['join']
 
 export default function cloud(host: ExtensionHost) {
   host.implement(CloudApi, {

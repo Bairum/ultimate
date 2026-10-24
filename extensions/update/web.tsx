@@ -9,22 +9,13 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { api, cn, defineWebExtension, useAction, useRestart, useSystem } from '@/sdk'
+import { api, cn, defineWebExtension, formatAgo, useAction, useRestart, useSystem } from '@/sdk'
 import { itemOf } from './item.ts'
 import { CheckAction, StateAction, UpdateAction } from './refs.ts'
 import type { Layers, UpdateResult, UpdateState } from './refs.ts'
 
 const statusButton =
   '-mx-1 flex cursor-pointer items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent'
-
-/** `just now`, `12m ago`, `3h ago`. */
-function ago(at: number) {
-  const minutes = Math.max(0, Math.floor((Date.now() - at) / 60000))
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`
-}
 
 const short = (root: string) => root.replace(/^\/(?:home|Users)\/[^/]+/, '~')
 
@@ -246,7 +237,7 @@ function Popup({
       <div className="flex items-center justify-between gap-2 border-t border-border/70 px-3 py-1.5">
         <span className="text-[10.5px] text-muted-foreground">
           {state.fetchedAt !== undefined && !(state.refused && !updated)
-            ? `checked ${ago(state.fetchedAt)}`
+            ? `checked ${formatAgo(state.fetchedAt, Date.now(), { ago: true })}`
             : ''}
         </span>
         <div className="flex items-center gap-1">

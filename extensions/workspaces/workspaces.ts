@@ -198,8 +198,9 @@ export function workspaces(host: Host) {
     started.add(index.landers[source])
   }
   /**
-   * The lander conversation of `source`, created once with title "@lander" and label `lander`; its cwd is the
-   * lander's checkout. Reads before writes, as a transaction requires: call it before anything else writes.
+   * The lander conversation of `source`, created once with title "@lander" and label `lander`, and marked standing so
+   * it is never concluded; its cwd is the lander's checkout. Reads before writes, as a transaction requires: call it
+   * before anything else writes.
    */
   async function ensureLander(
     tx: Tx,
@@ -212,6 +213,7 @@ export function workspaces(host: Host) {
     const known = index.landerConversations[source] as ConversationId | undefined
     if (known !== undefined && (await tx.conversation(known))) {
       ;(await tx.doc(host.metadata, known)).title = '@lander'
+      await host.need(ConversationsApi).setStanding(tx, known, true)
       return known
     }
     const lander = (await tx.createConversation({ ownership: { kind: 'ownerless' } })).id
@@ -220,6 +222,7 @@ export function workspaces(host: Host) {
       title: '@lander',
       label: 'lander',
     })
+    await host.need(ConversationsApi).setStanding(tx, lander, true)
     index.landerConversations[source] = lander
     return lander
   }
@@ -229,6 +232,12 @@ export function workspaces(host: Host) {
    * Git, or before its first commit) has none until it can.
    */
   async function standLander(context: Context) {
+    // Landers stay standing even when preparing the checkout below fails.
+    await host.harness().commit(async (tx) => {
+      const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+      for (const id of Object.values(index.landerConversations) as ConversationId[])
+        if (await tx.conversation(id)) await host.need(ConversationsApi).setStanding(tx, id, true)
+    }, context)
     const checkout = await isolatable(host.projectRoot)
     const { source, target } = 'source' in checkout ? checkout : {}
     const { change } = await landerAgent(host, context)

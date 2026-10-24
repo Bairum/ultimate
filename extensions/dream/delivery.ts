@@ -6,7 +6,7 @@ type Delivery = {
   to: number
   type: 'input' | 'write'
   session: number
-  kind: 'dream.started' | 'dream.journal' | 'dream.chapter'
+  kind: 'dream.started' | 'dream.journal' | 'dream.chapter' | 'dream.settled'
   data?: JsonObject
   content: string
 }

@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { writeJson } from '../../lib/json-file.ts'
 import type { ProviderHealth } from './refs.ts'
 
 /** One provider's record in `health.json`; times are epoch milliseconds. */
@@ -290,14 +290,7 @@ function write(userHome: string, change: (file: HealthFile) => void) {
     .then(async () => {
       const file = await readFileHealth(userHome)
       change(file)
-      await mkdir(dirname(path), { recursive: true })
-      const temporary = `${path}.${randomUUID()}.tmp`
-      try {
-        await writeFile(temporary, JSON.stringify(file, null, 2) + '\n', { flag: 'wx' })
-        await rename(temporary, path)
-      } finally {
-        await rm(temporary, { force: true })
-      }
+      await writeJson(path, file)
       return file
     })
   writes.set(path, operation)

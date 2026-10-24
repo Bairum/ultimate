@@ -965,3 +965,37 @@ it('includes only idle open branches, does not repeat unchanged IDs, clears the 
   }
   expect((await note())?.entries[0].model[0].content).toContain('and 2 more')
 })
+
+it('reports a branch idle after 30 minutes, and one awaiting a reply only after 2 h', async () => {
+  const f = await fixture()
+  const ids: Record<string, ConversationId> = {}
+  for (const name of ['stalled', 'fresh', 'asking']) {
+    const id = await f.conversation(name)
+    ids[name] = id
+    await f.harness.commit(async (tx) => {
+      ;(await tx.doc(Branch, id)).branch = { from: ROOT_CONVERSATION_ID, at: 0, intent: name }
+      ;(await tx.doc(Metadata, id)).answerAt = name === 'fresh' ? 20 * 60_000 : 0
+    }, context)
+  }
+  await f.harness.commit(async (tx) => {
+    ;(await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.push({
+      id: 1,
+      from: ids.asking,
+      to: f.ultimate,
+      text: 'Which option?',
+      at: 0,
+      reply: true,
+      state: 'delivered',
+    })
+  }, context)
+  const note = (now: number) =>
+    f.harness.commit((tx) => idleNote(tx, f.host, f.ultimate, now), context)
+  const early = await note(45 * 60_000)
+  expect(early?.entries[0].data.ids).toEqual([ids.stalled])
+  expect(early?.entries[0].model[0].content).toContain(`- #${ids.stalled} stalled (idle 45m)`)
+  expect((await note(2 * 3_600_000 + 1))?.entries[0].data.ids).toEqual([
+    ids.stalled,
+    ids.fresh,
+    ids.asking,
+  ])
+})

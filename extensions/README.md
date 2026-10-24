@@ -181,7 +181,9 @@ export default defineWebExtension({ provides: [provide(Phase, (id) => usePhaseWo
 ```
 
 The provider's function is a hook, run once per `<Provided>`; the last facet in discovery order providing a point wins,
-and while none does the render prop gets `undefined`. The server's counterpart is an extension point
+and while none does the render prop gets `undefined`. The web core declares its own points in the SDK: `ParkedRuns`
+(pause), `RunStart` (tasks), `ConversationKind` (the title bar's kind before a title; messages names coordinator
+branches `branch · coordinator`) and `MessageReference` (the copyable reference to a stored message; codemode). The server's counterpart is an extension point
 ([docs/extensions.md](../docs/extensions.md#extension-apis)).
 
 The provider calls `host.implement(Echo, { echo: (text) => text })` in its factory; it is staged, replaced and
@@ -430,13 +432,14 @@ of plain text. A folded "worked · N steps" row lists its newest calls this way 
 line, the tool name when no facet provides one); the last facet providing a name wins. Coding tools give their verb and
 path or programs, codemode its one-line summary.
 
-`compact` makes conversations use compact mode: `{ when(conversation), tools? }` decides from a conversation's summary
-(label, title, owner), and in a matching transcript each run of tool calls and thinking between inputs, messages and
-answers folds into one quiet "worked · N steps" row that expands to the usual rendering. Calls the listed `tools` keep
-stay visible and split the run: a tool name, or a test `(call, docs) => boolean` of a call; `docs` lists the kinds of
-the root conversation's documents the tests read, which the transcript follows and passes to them by kind. The tools
-and docs of every matching facet combine. Renderers check `useCompact()`, that test for the shown conversation or
-`undefined`, to adapt to it. Messages turns it on for @ultimate's conversation, keeping messages, branch starts,
+`compact` makes conversations use compact mode: `{ when(conversation, docs), tools? }` decides from a conversation's
+summary and the root conversation's documents, and in a matching transcript each run of tool calls and thinking
+between inputs, messages and answers folds into one quiet "worked · N steps" row that expands to the usual rendering.
+Calls the listed `tools` keep stay visible and split the run: a tool name, or a test `(call, docs) => boolean` of a
+call; `docs` lists the kinds of the root conversation's documents `when` and the tests read, which the transcript
+follows and passes to them by kind. The tools of every matching facet combine. Renderers check `useCompact()`, that
+test for the shown conversation or `undefined`, to adapt to it. Messages turns it on for @ultimate's conversation, found
+by the standing agents' index (`StandingDoc`) rather than its title, keeping messages, branch starts,
 workspace outcomes and scripts its log says messaged you, and shows its messages to you as bubbles. Revealing an entry
 in a folded run opens the run.
 
@@ -703,6 +706,8 @@ Import them from `@/sdk`. Each is a thin wrapper over the shell's own parts; the
 | `<Slot name variant? />`                  | Any slot by name, each item in its own error boundary; `variant="inline"` for one-line places                                                                                                                                                                                                       |
 
 Everything else on a surface is your own components, styled like the rest of Ultimate (see [Styling](#styling)).
+A transcript card (a subagent report, a message, a catch-up) is a `<Card>`: a bordered section with the brand accent on
+its left edge; `className` adds layout, such as padding or `overflow-hidden`.
 Pass the header your own title or controls as children: `<Header><span className="text-[13px]">12 open</span></Header>`.
 
 ### Example: a Commits app
@@ -925,7 +930,8 @@ conversation.
 
 `api.cancelSubmission(submissionId, conversationId?)` withdraws one queued input without stopping the run.
 
-Helpers: `cn()` for class names, `formatTokens`, `formatBytes`, `formatDuration`, `shortenPath(path, { cwd, home })`
+Helpers: `cn()` for class names, `formatTokens`, `formatBytes`, `formatDuration`, `formatTime`, `formatAgo(at, now)`
+(`now`, `5m`, `3h`, `2d`, then a date; `{ ago: true }` reads `just now`, `5m ago`), `shortenPath(path, { cwd, home })`
 (`home` is `useSystem().machine.home`), `elidePath`, `formatKeys`, and `errorMessage(error)` for a caught value. Types
 for everything above are exported too (`EntryRecord`, `AssistantMessage`, `SystemInfo`, …).
 

@@ -1,6 +1,6 @@
 /** Agent definitions: parsing, discovery across the `agents/` folders, and the agent change a definition makes. */
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { clampThinkingLevel } from '@earendil-works/pi-ai'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { Agent, AgentChange } from '@earendil-works/pi-durable'
@@ -18,6 +18,8 @@ export interface AgentDefinition {
   model?: { provider: string; modelId: string }
   thinking?: ModelThinkingLevel
   tools?: string[]
+  /** Tools overlays added to a definition without a `tools` list: it has every tool already, and deferred ones load. */
+  addTools?: string[]
   denyTools?: string[]
   isolate?: 'none' | 'worktree'
   /** A standing agent: one conversation per project, started on first use. */
@@ -66,13 +68,11 @@ export function definitionAgent(
   const tools = [
     ...new Map([...parent.tools, ...parent.deferred].map((tool) => [tool.name, tool])).values(),
   ]
+  const named = [...(definition?.tools ?? []), ...(definition?.addTools ?? [])]
   return {
     modelTools: {
       add: tools.filter(
-        (tool) =>
-          tool.deferred &&
-          !excludeTools.includes(tool.name) &&
-          definition?.tools?.includes(tool.name),
+        (tool) => tool.deferred && !excludeTools.includes(tool.name) && named.includes(tool.name),
       ),
     },
     tools: tools.filter(
@@ -252,11 +252,7 @@ const isOverlay = (text: string) => {
 }
 
 /** A definition file read and its model resolved, as discovery and saving accept it. */
-export function readDefinition(
-  text: string,
-  path: string,
-  modelRuntime: ModelRuntime,
-): AgentDefinition {
+function readDefinition(text: string, path: string, modelRuntime: ModelRuntime): AgentDefinition {
   const { model, thinking, ...definition } = parseDefinition(text, path)
   return { ...definition, ...resolveModel(model, thinking, modelRuntime) }
 }
@@ -281,6 +277,8 @@ export async function discoverAgents(
   projectRoot: string,
   userHome: string,
   modelRuntime: ModelRuntime,
+  /** A file read as if absent: saving an overlay diffs against what applies without it. */
+  skip?: string,
 ): Promise<AgentDiscovery> {
   const definitions = new Map<string, AgentDefinition & { source: Source }>()
   const errors: AgentDiscovery['errors'] = []
@@ -297,6 +295,7 @@ export async function discoverAgents(
     }
     for (const file of files.filter((entry) => entry.endsWith('.md')).toSorted()) {
       const path = join(directory, file)
+      if (path === skip) continue
       try {
         const text = await readFile(path, 'utf8')
         if (isOverlay(text)) {
@@ -314,8 +313,12 @@ export async function discoverAgents(
                   ],
                 }
               : {}),
-            // A base that inherits every tool already has them; only a list grows.
-            ...(base.tools ? { tools: [...new Set([...base.tools, ...overlay.addTools])] } : {}),
+            // A list grows; a base that inherits every tool keeps the names, so deferred ones load.
+            ...(base.tools
+              ? { tools: [...new Set([...base.tools, ...overlay.addTools])] }
+              : overlay.addTools.length
+                ? { addTools: [...new Set([...(base.addTools ?? []), ...overlay.addTools])] }
+                : {}),
             instructions: overlay.instructions
               ? `${base.instructions}\n\n## ${heading}\n\n${overlay.instructions}`
               : base.instructions,
@@ -393,7 +396,7 @@ export function serializeDefinition(
 }
 
 /** The folder a user or project definition is written to; the project's only once its setup is chosen as local. */
-export function scopeRoot(scope: 'user' | 'project', projectRoot: string, userHome: string) {
+function scopeRoot(scope: 'user' | 'project', projectRoot: string, userHome: string) {
   if (scope === 'user') return join(userHome, '.ultimate/agents')
   if (!useProjectSetup(projectRoot, userHome))
     throw new Error("Choose this project's local setup before saving project definitions")
@@ -416,16 +419,118 @@ export async function saveDefinition(
   const text = serializeDefinition(name, frontmatter, instructions)
   // Reading it back checks the name before it becomes a path.
   const definition = readDefinition(text, join(directory, `${name}.md`), modelRuntime)
+  await writeAtomically(definition.path, text)
+  return { ...definition, source: scope }
+}
+
+async function writeAtomically(path: string, text: string) {
+  const directory = dirname(path)
   await mkdir(directory, { recursive: true })
-  const temporary = join(directory, `.${name}.${process.pid}.${Date.now()}.tmp`)
+  const temporary = join(directory, `.${basename(path)}.${process.pid}.${Date.now()}.tmp`)
   try {
     await writeFile(temporary, text)
-    await rename(temporary, definition.path)
+    await rename(temporary, path)
   } catch (error) {
     await rm(temporary, { force: true })
     throw error
   }
-  return { ...definition, source: scope }
+}
+
+/**
+ * Save the form of a definition overlays extend as the overlay `<scope>/agents/<name>.md`: only what differs from
+ * the definition that applies without that file, so the base stays the source of its instructions and tool list.
+ * A change an overlay cannot express (removing a base tool, rewriting the base instructions) throws and writes nothing.
+ */
+export async function saveOverlay(
+  roots: { ultimateRoot: string; projectRoot: string; userHome: string },
+  modelRuntime: ModelRuntime,
+  scope: 'user' | 'project',
+  name: string,
+  form: DefinitionFields,
+  instructions: string,
+) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error('name must be a nonempty identifier')
+  const path = join(scopeRoot(scope, roots.projectRoot, roots.userHome), `${name}.md`)
+  const { ultimateRoot, projectRoot, userHome } = roots
+  const { definitions } = await discoverAgents(
+    ultimateRoot,
+    projectRoot,
+    userHome,
+    modelRuntime,
+    path,
+  )
+  const base = definitions.find((definition) => definition.name === name)
+  if (!base) throw new Error(`No definition named ${name} for an overlay to extend`)
+  // A project file applies over a user overlay, so the form shows it; saving it to the user file would copy it there.
+  const later = agentRoots(ultimateRoot, projectRoot, userHome)
+    .slice(scope === 'user' ? 2 : 3)
+    .map((root) => root.path)
+  const shadowing = [base.path, ...(base.overlays ?? [])].find((file) =>
+    later.includes(dirname(file)),
+  )
+  if (shadowing) throw new Error(`${shadowing} applies over the ${scope} file: save to project`)
+
+  const cannot = (what: string) =>
+    new Error(`An overlay cannot ${what}: edit ${base.path}, or Duplicate ${name}`)
+  const settings: string[] = []
+  if (form.description.trim() !== base.description)
+    settings.push(`description: ${scalar(form.description.trim())}`)
+  const baseModel = base.model && `${base.model.provider}/${base.model.modelId}`
+  if (form.model !== baseModel) {
+    if (!form.model) throw cannot('clear the model')
+    settings.push(`model: ${scalar(form.model)}`)
+  }
+  if (form.thinking !== base.thinking) {
+    if (!form.thinking) throw cannot('clear thinking')
+    settings.push(`thinking: ${scalar(form.thinking)}`)
+  }
+  if ((form.isolate ?? 'none') !== (base.isolate ?? 'none'))
+    settings.push(`isolate: ${form.isolate ?? 'none'}`)
+  if ((form.resident ?? false) !== (base.resident ?? false))
+    settings.push(`resident: ${form.resident ?? false}`)
+  if (form.onFailure !== base.onFailure) {
+    if (!form.onFailure) throw cannot('clear onFailure')
+    settings.push(`onFailure: ${form.onFailure}`)
+  }
+  if ((form.fast ?? false) !== (base.fast ?? false)) settings.push(`fast: ${form.fast ?? false}`)
+  if ((form.summaries ?? true) !== (base.summaries ?? true))
+    settings.push(`summaries: ${form.summaries ?? true}`)
+
+  if (!base.tools && form.tools) throw cannot('limit the tools of a definition that inherits all')
+  if (base.tools && !form.tools) throw cannot('make it inherit every tool')
+  const removed = base.tools?.filter((tool) => !form.tools?.includes(tool)) ?? []
+  if (removed.length) throw cannot(`remove ${removed.join(', ')}`)
+  // A base that inherits every tool shows no list in the form, so the file keeps the names it adds (deferred ones).
+  const addTools =
+    form.tools?.filter((tool) => !base.tools?.includes(tool)) ??
+    (await readFile(path, 'utf8').then(
+      (text) => {
+        const kept = parseFrontmatter(text).frontmatter.addTools
+        return isTools(kept) ? kept : []
+      },
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return []
+        throw error
+      },
+    ))
+  const baseDeny = base.denyTools ?? []
+  const undenied = baseDeny.filter((tool) => !form.denyTools?.includes(tool))
+  if (undenied.length) throw cannot(`allow ${undenied.join(', ')} again`)
+  const denyTools = (form.denyTools ?? []).filter((tool) => !baseDeny.includes(tool))
+  if (denyTools.length) settings.push(`denyTools: ${toolList(denyTools)}`)
+
+  const start = base.instructions.trim()
+  const text = instructions.trim()
+  if (!text.startsWith(start)) throw cannot('change the instructions it starts with')
+  const heading = `## ${scope === 'user' ? 'User' : 'Project'} additions`
+  let body = text.slice(start.length).trim()
+  if (body.startsWith(heading)) body = body.slice(heading.length).trim()
+
+  const overlay = `---\n${[`name: ${scalar(name)}`, `addTools: ${toolList(addTools)}`, ...settings].join('\n')}\n---\n${body ? `\n${body}\n` : ''}`
+  // Reading it back resolves the model, so an unknown one writes nothing.
+  parseOverlay(overlay, path, modelRuntime)
+  await writeAtomically(path, overlay)
+  return { path }
 }
 
 /** Remove a user or project definition file; a built-in of the same name applies again. */

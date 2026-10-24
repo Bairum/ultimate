@@ -328,8 +328,6 @@ async function apply(
   return result
 }
 
-export const userActions = ['update']
-
 export const actions = {
   /** The clone's update state from the last check. */
   state: implementAction(StateAction, async (_args, { host }) => {

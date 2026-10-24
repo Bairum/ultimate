@@ -47,6 +47,7 @@ available chapters. `chapter` and `project` cannot be combined. Cross-chapter li
 
 - this project reads its own storage;
 - another running project on this machine answers over loopback (`ultimate.projects()`'s URL);
+- with a `machine` the user named in `cloud.satellites` for that project, the URL set there (a satellite never backs up, so the register has no address for it; see [Cloud](../cloud/README.md#satellites));
 - otherwise the cloud's register (`GET /sync/register`, with the cloud token) names the machine that last backed the project up, and the tailnet address it registered (on that backup, else on its machine record) answers.
 
 The call is the target's `codemode.read {op, args}` action, sent with the target's own `Origin`; on the tailnet, Tailscale Serve's identity header and `tailscale.allow` admit it, the same rule as the UI. Nothing falls back to a copy: a machine that registered no tailnet address ("<name> was last backed up from <machine>, which registered no tailnet address") and an unknown name each fail with a sentence that names the machine or lists the known projects. Answers are capped at 1 MiB of JSON (ask for a smaller `limit`). Locating and calling the other instance lives in `lib/remote.ts`, shared with Messages’ Ultimate-to-Ultimate messages.

@@ -151,11 +151,12 @@ it.concurrent('starts a lineage branch with a message input and caller attributi
   const f = await fixture()
   await seedTally(f.server.harness)
   const ultimate = await f.subagents.standing('ultimate', context)
-  // A project overlay pins the coordinator's model; `max` exceeds what the model supports and clamps to `high`.
+  // A project overlay pins the coordinator's model; `max` exceeds what the model supports and clamps to `high`. Its
+  // `addTools` loads the deferred `debug`, though the coordinator has no tool list.
   const overlay = join(f.root, '.ultimate/agents/coordinator.md')
   await writeFile(
     overlay,
-    '---\nname: coordinator\nmodel: faux/faux-think\nthinking: max\naddTools: []\n---\n',
+    '---\nname: coordinator\nmodel: faux/faux-think\nthinking: max\naddTools: [debug]\n---\n',
   )
   await ask(
     f.server,
@@ -227,6 +228,7 @@ it.concurrent('starts a lineage branch with a message input and caller attributi
   expect(configured.instructions).toBe(coordinator.instructions)
   expect(configured.model).toEqual({ provider: 'faux', modelId: 'faux-think' })
   expect(configured.thinkingLevel).toBe('high')
+  expect(configured.tools.map((tool) => tool.name)).toContain('debug')
   expect(configured.tools.map((tool) => tool.name)).not.toContain('branch')
   const agentBranch = (await f.server.root.agent(context)).deferred.find(
     (tool) => tool.name === 'branch',
@@ -257,7 +259,7 @@ it.concurrent('starts a lineage branch with a message input and caller attributi
   expect(overridden.model).toEqual({ provider: 'faux', modelId: 'faux-1' })
   expect(overridden.thinkingLevel).toBe(rootAgent.thinkingLevel)
   expect(overridden.tools.map((tool) => tool.name)).toEqual(
-    configured.tools.map((tool) => tool.name),
+    configured.tools.map((tool) => tool.name).filter((name) => name !== 'debug'),
   )
   // The branch's later run (woken by its child's reply) routes its answer to its starter as a note.
   await until(async () =>

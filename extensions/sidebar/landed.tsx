@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react'
-import { api, events, useStore, useUltimate } from '@/sdk'
+import { api, events, formatAgo, useStore, useUltimate } from '@/sdk'
 import { store } from '@/sdk/client'
 import { RecentAction, TallyDoc } from '../lineage/ui.tsx'
 import { groupLandings, groupRange } from './landings.ts'
 import type { Landing, LandingGroup } from './landings.ts'
 import { CommitCount } from '../workspaces/ui.tsx'
 import { FeatureTag } from '../conversations/ui.tsx'
-import { ago } from './lander.tsx'
 import { More, Section } from './section.tsx'
 import { useSidebarState } from './state.tsx'
 
@@ -127,7 +126,7 @@ function LandedRow({ group, now }: { group: LandingGroup; now: number }) {
           className="w-6 shrink-0 text-right text-muted-foreground/60"
           title={new Date(latest.at).toLocaleString()}
         >
-          {ago(latest.at, now)}
+          {formatAgo(latest.at, now)}
         </span>
       )}
     </li>

@@ -2,8 +2,10 @@ import type { EntryRecord } from '@earendil-works/pi-durable'
 import { useEffect, useState } from 'react'
 import {
   api,
+  ConversationKind,
   defineWebExtension,
   events,
+  provide,
   useConversation,
   useDocOf,
   useEvent,
@@ -25,6 +27,7 @@ import {
   ultimateCompact,
 } from './data.tsx'
 import { callerOf } from './caller.ts'
+import { StandingDoc } from '../subagents/ui.tsx'
 import { MessagesDoc, CallerAction } from './refs.ts'
 import type { MessagesData } from './refs.ts'
 
@@ -89,7 +92,7 @@ export default defineWebExtension({
   },
   tools: { message: MessageCall, branch: BranchCall },
   compact: {
-    when: ultimateCompact,
+    when: (conversation, docs) => ultimateCompact(conversation, docs[StandingDoc.kind]),
     tools: [
       'message',
       'branch',
@@ -98,10 +101,16 @@ export default defineWebExtension({
       // A script that messaged you stays visible, so its messages show as bubbles, even when it was interrupted.
       (call, docs) => scriptMessaged(call, docs.board as MessagesData | null | undefined),
     ],
-    docs: ['board'],
+    docs: ['board', StandingDoc.kind],
     // Traffic between agents is background to your conversation with @ultimate: each stretch of it folds into one line.
     quiet: (row, docs) => backgroundRow(row, docs.board as MessagesData | null | undefined),
     summary: BackgroundSummary,
   },
   answerLabels: [MessageAnswerLabel],
+  // The `branch` tool labels the coordinator branches it starts; the title bar names their kind before the agent.
+  provides: [
+    provide(ConversationKind, (conversation) =>
+      conversation?.label === 'coordinator' ? 'branch · coordinator' : undefined,
+    ),
+  ],
 })

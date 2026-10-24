@@ -2,6 +2,16 @@
  * Triage: whether a message to the primary agent needs it to act now, or is only an update it reads with its next
  * input. The summary model decides what the sender left open; a declared decision skips the model.
  */
+import type { Context } from '@earendil-works/chord'
+import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { TaskRuntime, Tx } from '@earendil-works/pi-durable'
+import type { ExtensionHost } from '../../server/extensions.ts'
+import { Standing } from '../subagents/api.ts'
+import { ConversationsApi } from '../conversations/api.ts'
+import type { ResponseReceipt } from '../conversations/summary.ts'
+import type { SummaryModel } from '../conversations/summary-model.ts'
+import { Messages, Gate, Triaged } from './api.ts'
+import type { Triage } from './refs.ts'
 
 const bare = (line: string) => line.trim().replace(/[*_`]+$/, '')
 
@@ -62,4 +72,160 @@ export function parseVerdict(text: string): Verdict {
 /** The triage request: who sent what kind of message, all of it data. */
 export function triageInput(kind: 'message' | 'reply' | 'note', from: string, text: string) {
   return JSON.stringify({ kind, from, untrustedMessage: text })
+}
+
+type Recipient = NonNullable<
+  Awaited<ReturnType<ReturnType<ExtensionHost['harness']>['conversation']>>
+>
+/**
+ * Triage for the primary agent: whether message `m` needs it to act now. A model failure or timeout acts, so the agent
+ * wakes as it would without triage. The model and response are memos, so a resumed task asks once.
+ */
+async function assess(
+  host: ExtensionHost,
+  runtime: Pick<
+    TaskRuntime<unknown, unknown, unknown, object>,
+    'memo' | 'models' | 'signal' | 'taskId' | 'conversationId'
+  >,
+  model: SummaryModel,
+  input: { kind: 'message' | 'reply'; from: string; text: string },
+  ctx: Context,
+): Promise<{ verdict: Verdict; response?: ResponseReceipt }> {
+  const conversations = host.need(ConversationsApi)
+  let response = await runtime.memo<ResponseReceipt>('triage-response', ctx)
+  const ask = () =>
+    conversations.askSummaryModel(
+      runtime.models,
+      TRIAGE_SYSTEM,
+      triageInput(input.kind, input.from, input.text),
+      // The timeout starts with the call, not while the gate holds it.
+      AbortSignal.any([runtime.signal, AbortSignal.timeout(30_000)]),
+      {
+        model,
+        response,
+        save: (received) => runtime.memo('triage-response', received, ctx),
+      },
+    )
+  // The gate (pause, when enabled) holds the call while paused and counts it as running while it runs.
+  const gate = host.want(Gate)
+  const call = {
+    task: runtime.taskId,
+    conversationId: runtime.conversationId,
+    what: 'triage',
+  }
+  try {
+    response = gate ? await gate.work(call, ask, runtime.signal) : await ask()
+    if (response.stopReason !== 'stop') throw new Error(`Triage stopped: ${response.stopReason}`)
+    return { verdict: parseVerdict(response.text), response }
+  } catch (error) {
+    if (runtime.signal.aborted) throw error
+    // Triage only saves a turn: when it cannot decide, the agent wakes as it would without triage.
+    return {
+      verdict: { verdict: 'act', reason: 'assessment failed; woke as usual' },
+      response,
+    }
+  }
+}
+/** The primary agent's conversation, whose incoming messages are triaged. */
+export async function primaryConversation(host: ExtensionHost, ctx: Context) {
+  const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
+  return standing?.ultimate
+}
+/**
+ * The summary model a triage asks, chosen once per task. Without one, nothing is gated: the message wakes the agent as
+ * it would without triage.
+ */
+export async function triageModel(
+  host: ExtensionHost,
+  runtime: Pick<TaskRuntime<unknown, unknown, unknown, object>, 'memo'>,
+  ctx: Context,
+) {
+  const kept = await runtime.memo<SummaryModel | false>('triage-model', ctx)
+  if (kept !== undefined) return kept || undefined
+  const chosen = await host.need(ConversationsApi).summaryModel()
+  return (await runtime.memo('triage-model', chosen ?? false, ctx)) || undefined
+}
+/** Record message `id`'s verdict, emitting `board.triaged` once, when the log still holds it. */
+export async function recordTriage(host: ExtensionHost, tx: Tx, id: number, triage: Triage) {
+  const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find((m) => m.id === id)
+  if (!stored || (stored.triage && stored.triage.verdict !== 'assessing')) return
+  stored.triage = triage
+  if (
+    triage.verdict !== 'assessing' &&
+    (typeof stored.from === 'number' || stored.from === 'remote') &&
+    typeof stored.to === 'number'
+  )
+    await host.emit(tx, Triaged, {
+      message: id,
+      from: stored.from,
+      to: stored.to,
+      verdict: triage.verdict,
+      reason: triage.reason ?? '',
+    })
+}
+type TriageRuntime = Pick<
+  TaskRuntime<unknown, unknown, unknown, object>,
+  'memo' | 'models' | 'signal' | 'commit' | 'taskId' | 'conversationId'
+>
+/**
+ * After a triaged message was written as context (no run), assess it and record the verdict: `act` wakes the agent with
+ * one short input that points at it, `fyi` leaves it for the next input. Returns the wake's answer, if one ran.
+ */
+export async function settleTriage(
+  host: ExtensionHost,
+  runtime: TriageRuntime,
+  recipient: Recipient,
+  input: {
+    id: number
+    kind: 'message' | 'reply'
+    fromLabel: string
+    text: string
+    whenBusy: 'steer' | 'followUp'
+  },
+  model: SummaryModel,
+  ctx: Context,
+) {
+  // The verdict is a memo, so a replay after a failed or timed-out assessment wakes as decided, never reassesses.
+  let verdict = await runtime.memo<Verdict>('triage-verdict', ctx)
+  if (!verdict) {
+    const assessed = await assess(
+      host,
+      runtime,
+      model,
+      { kind: input.kind, from: input.fromLabel, text: input.text },
+      ctx,
+    )
+    verdict = await runtime.memo('triage-verdict', assessed.verdict, ctx)
+  }
+  // The memoized response's usage commits with the verdict's record, once: only while the message still assesses,
+  // so a replay after either memo or this commit neither drops nor repeats it.
+  const response = await runtime.memo<ResponseReceipt>('triage-response', ctx)
+  const decided = verdict
+  // The verdict commits before the wake, so the row shows it while the run starts.
+  await runtime.commit(async (tx) => {
+    const stored = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.find(
+      (m) => m.id === input.id,
+    )
+    if (stored?.triage?.verdict === 'assessing')
+      await host.need(ConversationsApi).accountResponse(tx, recipient.id, response)
+    await recordTriage(host, tx, input.id, decided)
+    return undefined
+  }, ctx)
+  if (verdict.verdict === 'fyi') return undefined
+  const wake = await recipient.submit(
+    {
+      type: 'input',
+      requestId: `board-wake:${input.id}`,
+      whenBusy: input.whenBusy,
+      entry: {
+        kind: 'board.wake',
+        data: { id: input.id, reason: verdict.reason },
+      },
+      content: `The ${input.kind} from ${input.fromLabel} above needs you now${verdict.reason ? `: ${verdict.reason}` : ''}.`,
+    },
+    ctx,
+  )
+  if (input.kind === 'reply') return undefined
+  const settled = await wake.wait(ctx)
+  return settled.status === 'done' && settled.type === 'input' ? settled.answer : undefined
 }

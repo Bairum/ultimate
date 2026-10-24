@@ -7,7 +7,7 @@ import {
   TriangleAlertIcon,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { cn, events, useUltimate } from '@/sdk'
+import { cn, events, formatAgo, useUltimate } from '@/sdk'
 import type { EventData, EventRecord } from '@/sdk'
 import { compareUrl } from '../../lib/compare.ts'
 import { defineEvent, NoticeEvent } from '../../shared/events.ts'
@@ -84,22 +84,6 @@ export const joined = (lists: readonly (readonly ActivityEvent[])[]) =>
     (a, b) => b.id - a.id,
   )
 
-/** `now`, `5m`, `3h`, `2d`, then a short date, as the sidebar's root rows show ages. */
-function ago(at: number, now: number) {
-  const minutes = Math.max(0, (now - at) / 60000)
-  if (minutes < 1) return 'now'
-  if (minutes < 60) return `${Math.floor(minutes)}m`
-  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)}h`
-  if (minutes < 60 * 24 * 7) return `${Math.floor(minutes / 60 / 24)}d`
-  const date = new Date(at)
-  return date.toLocaleDateString(
-    undefined,
-    date.getFullYear() === new Date(now).getFullYear()
-      ? { month: 'short', day: 'numeric' }
-      : { month: 'short', year: '2-digit' },
-  )
-}
-
 /** Where a row leads: a conversation, at an entry when there is one. */
 type Target = { conversation: number; entry?: number }
 
@@ -170,7 +154,7 @@ function Row({
         dateTime={event.at}
         title={new Date(at).toLocaleString()}
       >
-        {ago(at, now)}
+        {formatAgo(at, now)}
       </time>
     </li>
   )

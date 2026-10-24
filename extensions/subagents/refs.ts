@@ -26,6 +26,8 @@ export type Definition = {
   onFailure?: 'diagnose' | 'fix'
   fast?: boolean
   summaries?: boolean
+  /** Overlay files merged into it, in order; saving it writes an overlay, not a whole copy. */
+  overlays?: string[]
 }
 /** A definition file that failed to parse, with the reason. */
 export type Invalid = { name: string; path: string; source: Source; error: string }

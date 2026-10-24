@@ -2,6 +2,7 @@ import { BlocksIcon, CheckIcon, FolderCogIcon, GitBranchIcon } from 'lucide-reac
 import { useEffect, useRef, useState } from 'react'
 import {
   api,
+  Card,
   defineWebExtension,
   errorMessage,
   provide,
@@ -168,10 +169,7 @@ function SetupCall({ call }: { call: ToolCallView }) {
         ? "Use this project's setup?"
         : 'Set up Git for this folder?'
   return (
-    <section
-      className="overflow-hidden rounded-md border border-border border-l-2 border-l-brand/50 bg-muted/20"
-      data-setup-card={card}
-    >
+    <Card className="overflow-hidden" data-setup-card={card}>
       <header className="border-b border-border px-4 py-2.5 font-mono text-xs text-muted-foreground">
         {title}
       </header>
@@ -197,7 +195,7 @@ function SetupCall({ call }: { call: ToolCallView }) {
       ) : (
         <GitCard isolation={isolation} onDone={done} />
       )}
-    </section>
+    </Card>
   )
 }
 function ChoiceCard({ entry }: { entry: EntryRecord }) {

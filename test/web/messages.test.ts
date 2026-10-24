@@ -12,7 +12,6 @@ import {
   stateWord,
   messageStatus,
   outgoingState,
-  relativeTime,
   scriptMessaged,
   sentBy,
   sentStatus,
@@ -126,12 +125,6 @@ describe('compact messages', () => {
     ).toBe(1)
     expect(waitingOnUser({ messages: [], next: 1 })).toBe(0)
   })
-  it('shows elapsed minutes, hours and days without future negative times', () => {
-    expect(relativeTime(1000, 0)).toBe('now')
-    expect(relativeTime(0, 60000)).toBe('1m')
-    expect(relativeTime(0, 3600000)).toBe('1h')
-    expect(relativeTime(0, 86400000)).toBe('1d')
-  })
 })
 
 describe('sender accents', () => {
@@ -159,15 +152,20 @@ describe('sender accents', () => {
 })
 
 describe('@ultimate compact mode', () => {
-  const ultimate = { label: 'agent', title: '@ultimate' }
-  it("is @ultimate's own top-level standing conversation", () => {
-    expect(ultimateCompact(ultimate)).toBe(true)
+  const standing = { ultimate: 7, lander: 8 }
+  it("is @ultimate's conversation by the standing agents' index, whatever its title or label", () => {
+    expect(ultimateCompact({ id: 7 }, standing)).toBe(true)
+    // A rename or relabel changes nothing: the summary's title and label are not read.
+    expect(
+      ultimateCompact({ id: 7, title: 'Renamed', label: 'x' } as { id: number }, standing),
+    ).toBe(true)
   })
-  it('excludes other standing agents, subagents and coordinators', () => {
-    expect(ultimateCompact({ ...ultimate, title: '@lander' })).toBe(false)
-    expect(ultimateCompact({ ...ultimate, parentConversationId: 4 })).toBe(false)
-    expect(ultimateCompact({ ...ultimate, ownerTaskId: 9 })).toBe(false)
-    expect(ultimateCompact({ ...ultimate, label: 'coordinator' })).toBe(false)
+  it('excludes other standing agents and conversations titled @ultimate, and waits for the index', () => {
+    expect(ultimateCompact({ id: 8 }, standing)).toBe(false)
+    expect(
+      ultimateCompact({ id: 9, title: '@ultimate', label: 'agent' } as { id: number }, standing),
+    ).toBe(false)
+    expect(ultimateCompact({ id: 7 }, undefined)).toBe(false)
   })
 })
 

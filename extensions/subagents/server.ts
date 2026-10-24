@@ -39,7 +39,9 @@ import {
   deleteDefinition,
   discoverAgents,
   saveDefinition,
+  saveOverlay,
 } from '../../lib/agents.ts'
+import type { DefinitionFields } from '../../lib/agents.ts'
 import { createChild, started } from './children.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { exec } from '../../lib/exec.ts'
@@ -174,8 +176,9 @@ function createReporter() {
                 },
               }
             }
-            // Provider failures belong to the watchdog. Keep the failed action so recover()
-            // delivers the answer of a later watchdog-retry (or manual continuation).
+            // Provider failures belong to the watchdog, which marks the action `given-up` once it reports
+            // instead of retrying. Either way recover() delivers the answer of a later watchdog retry (or
+            // manual continuation).
             if (
               settled.status === 'unanswered' &&
               (settled.reason === 'model_error' || settled.reason === 'no_model')
@@ -471,30 +474,31 @@ export const actions = {
     )
     const existing = definitions.find((definition) => definition.name === name)
     if (create === true && existing) throw new Error(`A definition named ${name} exists already`)
-    // The form shows the merged definition; saving it would write the overlays' additions into a whole copy.
-    if (existing?.overlays?.length)
-      throw new Error(
-        `${name} is extended by ${existing.overlays.join(', ')}: edit that file to change its additions`,
+    const fields: DefinitionFields = {
+      description,
+      ...(model ? { model } : {}),
+      ...(thinking ? { thinking } : {}),
+      ...(tools ? { tools } : {}),
+      ...(denyTools?.length ? { denyTools } : {}),
+      ...(isolate ? { isolate } : {}),
+      ...(resident !== undefined ? { resident } : {}),
+      ...(onFailure ? { onFailure } : {}),
+      ...(fast ? { fast } : {}),
+      ...(!summaries ? { summaries } : {}),
+    }
+    // The form shows the merged definition; a whole copy would freeze the overlays' additions and the base's
+    // instructions, so the save becomes an overlay holding only what differs from the base.
+    if (existing?.overlays?.length) {
+      await saveOverlay(host, host.modelRuntime, scope, name, fields, instructions)
+      const { definitions: saved } = await discoverAgents(
+        host.ultimateRoot,
+        host.projectRoot,
+        host.userHome,
+        host.modelRuntime,
       )
-    return saveDefinition(
-      host,
-      host.modelRuntime,
-      scope,
-      name,
-      {
-        description,
-        ...(model ? { model } : {}),
-        ...(thinking ? { thinking } : {}),
-        ...(tools ? { tools } : {}),
-        ...(denyTools?.length ? { denyTools } : {}),
-        ...(isolate ? { isolate } : {}),
-        ...(resident !== undefined ? { resident } : {}),
-        ...(onFailure ? { onFailure } : {}),
-        ...(fast ? { fast } : {}),
-        ...(!summaries ? { summaries } : {}),
-      },
-      instructions,
-    )
+      return saved.find((definition) => definition.name === name)!
+    }
+    return saveDefinition(host, host.modelRuntime, scope, name, fields, instructions)
   }),
   /** `{name, scope}`: remove a user or project definition; a built-in or user one of that name applies again. */
   deleteDefinition: implementAction(DeleteDefinitionAction, async (args, { host }) => {
@@ -536,7 +540,8 @@ export default function subagents(
     ).definitions.filter((definition) => definition.resident === true)
   /** Drops standing agents whose definition is gone; their conversations become ordinary ones. Retirement waits
    * until every definition parses: an error names a file, not the agent it defines, so a typo retires nothing. The
-   * ones kept get their automatic summaries turned off, as `standing` does on every refresh. */
+   * ones kept, every one while a definition fails to parse, get their automatic summaries turned off and stay
+   * standing, as `standing` does on every refresh. */
   const pruneRetired = async (ctx: Context) => {
     const { definitions, errors } = await discoverAgents(
       host.ultimateRoot,
@@ -544,7 +549,6 @@ export default function subagents(
       host.userHome,
       host.modelRuntime,
     )
-    if (errors.length > 0) return
     const kept = new Set(
       definitions
         .filter((definition) => definition.resident === true)
@@ -555,12 +559,18 @@ export default function subagents(
       for (const name of Object.keys(index)) {
         const id = index[name]
         const exists = await tx.conversation(id)
-        if (kept.has(name)) {
-          if (exists) await conversations.setAutomaticSummaries(tx, id, false)
+        if (kept.has(name) || errors.length > 0) {
+          if (exists) {
+            await conversations.setAutomaticSummaries(tx, id, false)
+            await conversations.setStanding(tx, id, true)
+          }
           continue
         }
         delete index[name]
-        if (exists) delete (await tx.doc(host.metadata, id)).label
+        if (exists) {
+          delete (await tx.doc(host.metadata, id)).label
+          await conversations.setStanding(tx, id, false)
+        }
       }
     }, ctx)
   }
@@ -608,6 +618,7 @@ export default function subagents(
         Object.assign(await tx.doc(host.metadata, id), { label: 'agent', title: `@${name}` })
         // A standing agent keeps its `@name`: no automatic title, summary or reply activity.
         await conversations.setAutomaticSummaries(tx, id, false)
+        await conversations.setStanding(tx, id, true)
         ;(await tx.doc(Profile, id)).definition = name
         // Only a new conversation starts: a refresh reconfigures one that already runs.
         if (created) await started(host, tx, created, name, 'standing')
@@ -657,7 +668,11 @@ export default function subagents(
       if (!messaged && !submission.requestId?.startsWith('watchdog-retry:')) {
         const action = childActions.at(-1)
         const interrupted = action?.status === 'interrupted'
-        if (action?.status !== 'unanswered' && action?.status !== 'failed' && !interrupted) return
+        if (
+          !action ||
+          (!['unanswered', 'failed', 'given-up'].includes(action.status ?? '') && !interrupted)
+        )
+          return
         const failed = await tx.submissionByRequest(
           submission.conversationId,
           `subagent:${action.reporter}`,

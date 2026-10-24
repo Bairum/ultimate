@@ -52,6 +52,12 @@ async function fixture() {
   })
   expect(standing.status).toBe(200)
   const main = standing.data.result as ConversationId
+  // Dream makes its built-in automation once @ultimate exists; it joins @ultimate's prompt, so wait before the first turn.
+  await until(
+    async () =>
+      (await post(server, '/api/extensions/automations/actions/list', { args: null })).data.result
+        .length > 0,
+  )
   const hold = Promise.withResolvers<void>()
   const gate = { afterTool: false, entered: false, summaryFailure: undefined as string | undefined }
   const requests: { system: string; text: string; messages: string }[] = []

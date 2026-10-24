@@ -8,7 +8,7 @@ import { MessageResponse } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { api, errorMessage, Fold, useAction, useConversation, useUltimate } from '@/sdk'
+import { api, Card, errorMessage, Fold, useAction, useConversation, useUltimate } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { RewindAction, RewindPreviewAction } from './refs.ts'
@@ -223,10 +223,7 @@ export function Rewound({ entry }: { entry: EntryRecord }) {
         </>
       }
     >
-      <section
-        className="min-w-0 rounded-md border border-l-2 border-border border-l-brand/50 bg-muted/20"
-        data-lineage-rewound={at}
-      >
+      <Card data-lineage-rewound={at}>
         <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
           <UndoDotIcon className="size-3.5 shrink-0 text-brand" />
           <span className="shrink-0 text-foreground">
@@ -280,7 +277,7 @@ export function Rewound({ entry }: { entry: EntryRecord }) {
             </div>
           )}
         </div>
-      </section>
+      </Card>
     </Fold>
   )
 }

@@ -8,6 +8,7 @@ import {
   RadarIcon,
   SlidersHorizontalIcon,
   XIcon,
+  ZapIcon,
 } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
@@ -32,14 +33,21 @@ import {
   useNow,
   useUltimate,
 } from '@/sdk'
-import { clock, full, until, words } from './parts.tsx'
+import { GrantEditor, GrantSwitches, clock, full, until, words } from './parts.tsx'
 import { DefinitionsAction } from '../subagents/ui.tsx'
-import { CreateAction, DescribeAction, UpdateAction } from './refs.ts'
-import type { Automation } from './refs.ts'
+import { CreateAction, DescribeAction, EventsAction, GrantRef, UpdateAction } from './refs.ts'
+import type { Automation, GrantAction } from './refs.ts'
 
 type Mode = 'cron' | 'at' | 'every'
 interface Draft {
-  trigger: 'schedule' | 'script'
+  trigger: 'schedule' | 'script' | 'ultimate'
+  ultimate: 'event' | 'context'
+  event: string
+  filters: Record<string, string>
+  filterTypes: Record<string, 'string' | 'number' | 'boolean'>
+  of: string
+  above: number
+  cooldownMinutes: number
   name: string
   prompt: string
   /** What a script watches for, in plain words; its watcher writes the script from it. */
@@ -79,6 +87,7 @@ const triggers = [
     hint: 'a script watches for it',
     icon: RadarIcon,
   },
+  { value: 'ultimate', label: 'When Ultimate…', hint: 'an event or context fill', icon: ZapIcon },
 ] as const
 const modes: { value: Mode; label: string; hint: string }[] = [
   { value: 'cron', label: 'Cron', hint: 'minute hour day month weekday · Sunday is 0' },
@@ -89,6 +98,13 @@ const modes: { value: Mode; label: string; hint: string }[] = [
 function draftOf(automation?: Automation): Draft {
   const blank: Draft = {
     trigger: 'schedule',
+    ultimate: 'context',
+    event: '',
+    filters: {},
+    filterTypes: {},
+    of: '@ultimate',
+    above: 80,
+    cooldownMinutes: 60,
     name: '',
     prompt: '',
     ask: '',
@@ -101,6 +117,28 @@ function draftOf(automation?: Automation): Draft {
     every: '1h',
     agent: '',
   }
+  if (automation?.event || automation?.condition)
+    return {
+      ...blank,
+      trigger: 'ultimate',
+      ultimate: automation.event ? 'event' : 'context',
+      name: automation.name,
+      prompt: automation.prompt ?? '',
+      agent: automation.agent ?? '',
+      event: automation.event?.name ?? '',
+      filters: Object.fromEntries(
+        Object.entries(automation.event?.where ?? {}).map(([key, value]) => [key, String(value)]),
+      ),
+      filterTypes: Object.fromEntries(
+        Object.entries(automation.event?.where ?? {}).map(([key, value]) => [
+          key,
+          typeof value as 'string' | 'number' | 'boolean',
+        ]),
+      ),
+      of: automation.condition?.of ?? '@ultimate',
+      above: automation.condition?.above ?? 80,
+      cooldownMinutes: (automation.condition?.cooldownMs ?? 3600000) / 60000,
+    }
   if (automation?.script)
     return {
       ...blank,
@@ -382,6 +420,10 @@ export function AutomationForm({
 }) {
   const [draft, setDraft] = useState(() => draftOf(automation))
   const [saving, setSaving] = useState(false)
+  const [grants, setGrants] = useState<GrantAction[]>([])
+  // If granting fails after creation, retry the grant without creating a duplicate.
+  const created = useRef<Automation>(undefined)
+  const eventChoices = useAction(EventsAction, null, { enabled: open, onError: () => {} })
   const [error, setError] = useState<string>()
   const ids = useId()
   const name = useRef<HTMLInputElement>(null)
@@ -389,39 +431,98 @@ export function AutomationForm({
   // A fire wakes the conversation the form opens beside: the shown one, which actions run on behalf of.
   const { conversationId } = useUltimate()
   const script = draft.trigger === 'script'
+  const ultimate = draft.trigger === 'ultimate'
+  const wakeable = script || ultimate
   const schedule = scheduleOf(draft)
   const prompt = draft.prompt.trim()
   // A fire needs something to do: wake a conversation, run a prompt, or both. An edit keeps its subscribers.
-  const acts = !!prompt || (automation ? automation.subscribers.length > 0 : script && draft.wake)
-  const ready =
-    draft.name.trim() && (script ? draft.ask.trim() : schedule !== undefined) && acts && !saving
+  const acts = !!prompt || (automation ? automation.subscribers.length > 0 : wakeable && draft.wake)
+  const validTrigger = script
+    ? !!draft.ask.trim()
+    : ultimate
+      ? draft.ultimate === 'event'
+        ? !!draft.event &&
+          Object.entries(draft.filters).every(
+            ([key, value]) =>
+              !value ||
+              (draft.filterTypes[key] === 'boolean'
+                ? value === 'true' || value === 'false'
+                : draft.filterTypes[key] !== 'number' || Number.isFinite(Number(value))),
+          )
+        : /^(@[a-zA-Z0-9_-]+|#[1-9]\d*)$/.test(draft.of) &&
+          Number.isInteger(draft.above) &&
+          draft.above >= 1 &&
+          draft.above <= 99 &&
+          Number.isFinite(draft.cooldownMinutes) &&
+          draft.cooldownMinutes >= 0
+      : schedule !== undefined
+  const ready = draft.name.trim() && validTrigger && acts && !saving
   const save = async () => {
     if (!ready) return
     setSaving(true)
     setError(undefined)
     try {
-      const trigger = script ? { ask: draft.ask.trim(), once: draft.once } : { schedule }
+      const where = Object.fromEntries(
+        Object.entries(draft.filters)
+          .filter(([, value]) => value !== '')
+          .map(([key, value]) => [
+            key,
+            draft.filterTypes[key] === 'number'
+              ? Number(value)
+              : draft.filterTypes[key] === 'boolean'
+                ? value === 'true'
+                : value,
+          ]),
+      )
+      const trigger = script
+        ? { ask: draft.ask.trim(), once: draft.once }
+        : ultimate
+          ? draft.ultimate === 'event'
+            ? { event: { name: draft.event, where } }
+            : {
+                condition: {
+                  metric: 'context' as const,
+                  of: draft.of,
+                  above: draft.above,
+                  cooldownMs: draft.cooldownMinutes * 60000,
+                },
+              }
+          : { schedule }
       const fields = { name: draft.name.trim(), ...trigger, ...(prompt ? { prompt } : {}) }
-      const saved = automation
+      const existing = automation ?? created.current
+      let saved = existing
         ? await api.action(UpdateAction, {
-            id: automation.id,
+            id: existing.id,
             ...fields,
             // An empty prompt removes the run action the automation had.
-            ...(!prompt && automation.prompt ? { prompt: '' } : {}),
+            ...(!prompt && existing.prompt ? { prompt: '' } : {}),
             ...(prompt ? { agent: draft.agent } : {}),
           })
         : await api.action(CreateAction, {
             ...fields,
             ...(prompt && draft.agent ? { agent: draft.agent } : {}),
             // Without a prompt the server subscribes the caller by itself; with one only when asked.
-            ...(script && prompt && draft.wake && conversationId !== undefined
+            ...(wakeable && prompt && draft.wake && conversationId !== undefined
               ? { subscribers: [conversationId] }
               : {}),
           })
+      if (!automation) created.current = saved
+      if (!automation && saved.subscribers.length && (grants.length || saved.grant)) {
+        saved = await api.action(GrantRef, {
+          id: saved.id,
+          actions: grants,
+          source: 'Set in Automations form',
+        })
+      }
       onSaved(saved)
       onOpenChange(false)
     } catch (failure) {
-      setError(errorMessage(failure).replace(/^automations\/\w+: /, ''))
+      const message = errorMessage(failure).replace(/^automations\/\w+: /, '')
+      setError(
+        created.current
+          ? `Automation ${created.current.id} exists. Could not finish saving: ${message}`
+          : message,
+      )
     } finally {
       setSaving(false)
     }
@@ -463,14 +564,16 @@ export function AutomationForm({
             <DialogDescription className="mt-1.5 text-[12.5px] leading-relaxed">
               {script
                 ? 'An agent writes a small script that watches for it, then wakes you or runs a prompt when it happens.'
-                : 'Runs the prompt on a schedule. Each run is a new conversation you can open.'}
+                : ultimate
+                  ? 'Wake a conversation or run a prompt when Ultimate emits an event or a context fills up.'
+                  : 'Runs the prompt on a schedule. Each run is a new conversation you can open.'}
             </DialogDescription>
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pt-1 pb-5">
             {!automation && (
               <div
                 aria-label="Trigger"
-                className="grid grid-cols-2 gap-1 rounded-md border border-border/80 bg-background p-0.5"
+                className="grid grid-cols-1 gap-1 rounded-md border border-border/80 bg-background p-0.5 sm:grid-cols-3"
                 role="radiogroup"
               >
                 {triggers.map((option) => (
@@ -502,34 +605,171 @@ export function AutomationForm({
                 className={input}
                 id={`${ids}-name`}
                 onChange={(event) => set({ name: event.target.value })}
-                placeholder={script ? 'CI of PR #812' : 'Morning summary'}
+                placeholder={
+                  script ? 'CI of PR #812' : ultimate ? 'Context care' : 'Morning summary'
+                }
                 ref={name}
                 value={draft.name}
               />
             </Field>
-            {script ? (
+            {ultimate && (
+              <fieldset className="flex flex-col gap-3">
+                <legend className="mb-1.5 text-[12.5px] font-medium">When Ultimate…</legend>
+                <div className="flex gap-2" role="group" aria-label="Ultimate trigger">
+                  {(['event', 'context'] as const).map((kind) => (
+                    <Button
+                      aria-pressed={draft.ultimate === kind}
+                      disabled={!!automation && draft.ultimate !== kind}
+                      key={kind}
+                      onClick={() => set({ ultimate: kind })}
+                      size="sm"
+                      type="button"
+                      variant={draft.ultimate === kind ? 'secondary' : 'outline'}
+                    >
+                      {kind === 'event' ? 'Something happens' : 'Context reaches'}
+                    </Button>
+                  ))}
+                </div>
+                {draft.ultimate === 'event' ? (
+                  <>
+                    <Field htmlFor={`${ids}-event`} label="Event">
+                      <select
+                        className={input}
+                        id={`${ids}-event`}
+                        onChange={(event) =>
+                          set({ event: event.target.value, filters: {}, filterTypes: {} })
+                        }
+                        value={draft.event}
+                      >
+                        <option value="">Choose an event…</option>
+                        {eventChoices.data?.map((event) => (
+                          <option key={event.name} value={event.name}>
+                            {event.description} · {event.name}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    {eventChoices.error && (
+                      <p role="alert" className="text-[12px] text-error">
+                        Could not load events: {errorMessage(eventChoices.error)}
+                      </p>
+                    )}
+                    {Object.entries(
+                      eventChoices.data?.find((event) => event.name === draft.event)?.fields ?? {},
+                    ).map(([field, description]) => (
+                      <Field
+                        htmlFor={`${ids}-filter-${field}`}
+                        key={field}
+                        label={`${field} (optional filter)`}
+                      >
+                        <div className="flex gap-2">
+                          <input
+                            className={input}
+                            id={`${ids}-filter-${field}`}
+                            onChange={(event) =>
+                              set({ filters: { ...draft.filters, [field]: event.target.value } })
+                            }
+                            placeholder={description}
+                            value={draft.filters[field] ?? ''}
+                          />
+                          <select
+                            aria-label={`${field} value type`}
+                            className={cn(input, 'w-24 shrink-0')}
+                            onChange={(event) =>
+                              set({
+                                filterTypes: {
+                                  ...draft.filterTypes,
+                                  [field]: event.target.value as 'string' | 'number' | 'boolean',
+                                },
+                                filters: { ...draft.filters, [field]: '' },
+                              })
+                            }
+                            value={draft.filterTypes[field] ?? 'string'}
+                          >
+                            <option value="string">Text</option>
+                            <option value="number">Number</option>
+                            <option value="boolean">Boolean</option>
+                          </select>
+                        </div>
+                        {draft.filterTypes[field] === 'boolean' && (
+                          <p className="text-[11px] text-muted-foreground">Enter true or false.</p>
+                        )}
+                      </Field>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    <Field htmlFor={`${ids}-of`} label="Agent or conversation">
+                      <input
+                        className={input}
+                        id={`${ids}-of`}
+                        onChange={(event) => set({ of: event.target.value })}
+                        placeholder="@ultimate or #123"
+                        value={draft.of}
+                      />
+                    </Field>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field htmlFor={`${ids}-above`} label="Context reaches (%)">
+                        <input
+                          className={input}
+                          id={`${ids}-above`}
+                          max={99}
+                          min={1}
+                          onChange={(event) => set({ above: Number(event.target.value) })}
+                          type="number"
+                          value={draft.above}
+                        />
+                      </Field>
+                      <Field htmlFor={`${ids}-cooldown`} label="Cooldown (minutes)">
+                        <input
+                          className={input}
+                          id={`${ids}-cooldown`}
+                          min={0}
+                          step="any"
+                          onChange={(event) => set({ cooldownMinutes: Number(event.target.value) })}
+                          type="number"
+                          value={draft.cooldownMinutes}
+                        />
+                      </Field>
+                    </div>
+                    <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+                      Fires once, again after it drops below {draft.above - 10}% and{' '}
+                      {draft.cooldownMinutes === 60
+                        ? 'an hour has'
+                        : `${draft.cooldownMinutes} minutes have`}{' '}
+                      passed.
+                    </p>
+                  </>
+                )}
+              </fieldset>
+            )}
+            {wakeable ? (
               <>
-                <Field htmlFor={`${ids}-ask`} label="Watch for">
-                  <textarea
-                    className={cn(input, 'h-auto min-h-20 resize-y py-2 leading-relaxed')}
-                    id={`${ids}-ask`}
-                    onChange={(event) => set({ ask: event.target.value })}
-                    onKeyDown={submitOnModEnter}
-                    placeholder="The CI of PR #812 finishes, green or red."
-                    rows={3}
-                    value={draft.ask}
-                  />
-                </Field>
-                <label className="-mt-1.5 flex items-center gap-2 text-[12.5px] text-foreground/90">
-                  <Checkbox
-                    checked={!draft.once}
-                    onCheckedChange={(checked) => set({ once: checked !== true })}
-                  />
-                  Keep watching after it happens
-                  <span className="text-[11.5px] text-muted-foreground">
-                    {draft.once ? 'stops after the first time' : 'fires every time'}
-                  </span>
-                </label>
+                {script && (
+                  <>
+                    <Field htmlFor={`${ids}-ask`} label="Watch for">
+                      <textarea
+                        className={cn(input, 'h-auto min-h-20 resize-y py-2 leading-relaxed')}
+                        id={`${ids}-ask`}
+                        onChange={(event) => set({ ask: event.target.value })}
+                        onKeyDown={submitOnModEnter}
+                        placeholder="The CI of PR #812 finishes, green or red."
+                        rows={3}
+                        value={draft.ask}
+                      />
+                    </Field>
+                    <label className="-mt-1.5 flex items-center gap-2 text-[12.5px] text-foreground/90">
+                      <Checkbox
+                        checked={!draft.once}
+                        onCheckedChange={(checked) => set({ once: checked !== true })}
+                      />
+                      Keep watching after it happens
+                      <span className="text-[11.5px] text-muted-foreground">
+                        {draft.once ? 'stops after the first time' : 'fires every time'}
+                      </span>
+                    </label>
+                  </>
+                )}
                 <fieldset className="flex flex-col gap-2">
                   <legend className="mb-1.5 text-[12.5px] font-medium text-foreground/90">
                     When it happens
@@ -684,6 +924,19 @@ export function AutomationForm({
                 </Field>
               </>
             )}
+            {automation ? (
+              <GrantEditor automation={automation} />
+            ) : (
+              <GrantSwitches
+                // A new automation that wakes no one gets no grant: the switches show it, nothing is skipped silently.
+                actions={!prompt || (wakeable && draft.wake) ? grants : []}
+                busy={saving}
+                // Without a prompt the caller is woken; with one, only when "Wake this conversation" is on.
+                wakes={!prompt || (wakeable && draft.wake)}
+                onChange={setGrants}
+                source="Set in Automations form"
+              />
+            )}
             {error && (
               <p className="flex items-start gap-1.5 font-mono text-[11.5px] leading-snug break-words text-error">
                 <XIcon className="mt-px size-3 shrink-0" />
@@ -694,9 +947,9 @@ export function AutomationForm({
           <div className="flex items-center gap-2 border-t border-border/70 bg-sidebar px-5 py-3">
             <p className="flex min-w-0 items-start gap-1.5 text-[11.5px] leading-snug text-muted-foreground">
               <CoinsIcon className="mt-px size-3.5 shrink-0 text-warning" />
-              {script && !prompt
-                ? 'Writing and repairing the script costs tokens; watching does not.'
-                : 'Each run uses the model and costs tokens.'}
+              {script
+                ? 'Writing and repairing the script costs tokens; watching does not. Each fire wakes the agent, which costs tokens.'
+                : 'Each fire wakes the agent, which costs tokens.'}
             </p>
             <Button
               className="ml-auto"

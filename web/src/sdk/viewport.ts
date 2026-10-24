@@ -3,7 +3,8 @@ import { useSyncExternalStore } from 'react'
 /**
  * How much room the window has. On a `phone` the sidebar and the panel overlay the conversation; on a `tablet` (an
  * unfolded foldable, a narrow window) the sidebar docks beside it and the panel overlays; on a `desktop` both dock.
- * Below `desktop` their open state is the tab's own and starts closed, so a phone never folds away the desktop's.
+ * Below `desktop` their open state is the tab's own, so a phone never folds away the desktop's; it starts closed, except
+ * a tablet's docked sidebar (`ownDefault` in actions.ts).
  */
 export type Viewport = 'phone' | 'tablet' | 'desktop'
 

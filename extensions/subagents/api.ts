@@ -9,7 +9,7 @@ import { defineApi } from '../../shared/extension-api.ts'
 import { StandingDoc } from './refs.ts'
 import type { createChild } from './children.ts'
 
-export { Started } from './refs.ts'
+export { Started, StandingDoc } from './refs.ts'
 
 /** Each conversation's subagents and pending subagent actions, on the conversation that started them. */
 export const Subagents = defineDoc<{
@@ -28,6 +28,11 @@ export const Subagents = defineDoc<{
       conversationId: ConversationId
       reporter: TaskId
       answer?: EntryId
+      /**
+       * Unset while delivering; then `done`, `unanswered` (stopped by the parent), `interrupted` (stopped in the
+       * child), `failed` (a provider error the watchdog holds, or a delivery error) or `given-up` (the watchdog
+       * reported that provider error instead of retrying it: final).
+       */
       status?: string
     }
   >

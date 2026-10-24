@@ -30,7 +30,8 @@ import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import { Overview, overviewBehavior } from './overview.ts'
 import { activityBehavior } from './activity.ts'
 import { compactionEvents } from './compactions.ts'
-import { ConversationsApi, Release, Trees } from './api.ts'
+import { contextBehavior } from './context.ts'
+import { ContextUsageDoc, ConversationsApi, Release, Trees } from './api.ts'
 import {
   ConcludeAction,
   RenameAction,
@@ -39,7 +40,18 @@ import {
   SummaryModelAction,
 } from './refs.ts'
 
-export const docs = [Summaries, Overview]
+/** Set on a standing agent's conversation (@ultimate, the lander, other residents) by the extension that keeps it. */
+const Fixed = defineDoc<{ fixed?: true }>({
+  kind: 'conversations.fixed',
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
+
+export const docs = [Summaries, Overview, Fixed, ContextUsageDoc]
 
 /** A fork needs its own identity; a new context head (compaction or reset) needs it again. */
 const SeenIdentity = defineDoc<{ head?: number }>({
@@ -84,10 +96,10 @@ async function topLevelId(host: ExtensionHost, args: ActionInput<{ id: number }>
 
 /**
  * Roots and standing agents (@ultimate, the lander, other residents) are fixed parts of the project: refuse `verb`
- * on them. Reads documents by kind, so it holds without lineage or subagents too.
+ * on them. Reads roots by kind, so it holds without lineage too; standing agents carry the `Fixed` flag.
  */
 async function refuseFixed(
-  host: Pick<ExtensionHost, 'doc' | 'metadata'>,
+  host: Pick<ExtensionHost, 'doc'>,
   tx: Tx,
   id: ConversationId,
   verb: string,
@@ -95,14 +107,15 @@ async function refuseFixed(
   const roots = host.doc('lineage.roots')
   const listed = roots && ((await tx.doc(roots, ROOT_CONVERSATION_ID)) as { roots?: number[] })
   if (listed?.roots?.includes(id)) throw new Error(`#${id} is a root; roots cannot be ${verb}`)
-  const standing = host.doc('ultimate.standing-agents')
-  const residents =
-    standing && ((await tx.doc(standing, ROOT_CONVERSATION_ID)) as Record<string, number>)
-  if (
-    Object.values(residents ?? {}).includes(id) ||
-    (await tx.doc(host.metadata, id)).label === 'lander'
-  )
+  if ((await tx.doc(Fixed, id)).fixed)
     throw new Error(`#${id} is a standing agent; standing agents cannot be ${verb}`)
+}
+
+/** Mark conversation `id` a standing agent inside `tx`, or (`false`) an ordinary conversation again. */
+export async function setStanding(tx: Tx, id: ConversationId, standing: boolean) {
+  const state = await tx.doc(Fixed, id)
+  if (standing) state.fixed = true
+  else delete state.fixed
 }
 
 const projectFile = (host: ExtensionHost) => join(host.projectRoot, '.ultimate/settings.json')
@@ -174,11 +187,7 @@ async function conclude(host: ExtensionHost, ids: ConversationId[], caller: Cont
   return { concluded: ids, kept }
 }
 /** Add top-level conversations `ids` to the concluded list inside `tx`; throws for unknown, owned or fixed ones. */
-export async function concludeIn(
-  host: Pick<ExtensionHost, 'doc' | 'metadata'>,
-  tx: Tx,
-  ids: ConversationId[],
-) {
+export async function concludeIn(host: Pick<ExtensionHost, 'doc'>, tx: Tx, ids: ConversationId[]) {
   for (const id of ids) {
     const found = await tx.conversation(id)
     if (!found) throw new Error(`Unknown conversation ${id}`)
@@ -267,6 +276,7 @@ export default (host: ExtensionHost) => {
     summaryModelStatus: () => summaryModelStatus(host),
     requestSummary: (tx, id, request, model) => requestSummary(tx, host, id, request, model),
     setAutomaticSummaries,
+    setStanding,
     askSummaryModel,
     accountResponse,
     concluded: async (caller) => {
@@ -283,6 +293,7 @@ export default (host: ExtensionHost) => {
   activityBehavior(host)
   overviewBehavior(host)
   compactionEvents(host)
+  contextBehavior(host)
   /** Whether each conversation is top-level, read once: `owner` and `parent` never change after creation. */
   const topLevel = new Map<ConversationId, boolean>()
   const summaries = summaryBehavior(host)

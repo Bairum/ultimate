@@ -6,11 +6,8 @@ import type { ReactNode } from 'react'
 import { formatTime } from '../sdk/format.ts'
 import { useExtensions } from '../sdk/hooks.ts'
 import { messageItems } from '../sdk/registry.ts'
-import { ExtensionBoundary } from './boundary.tsx'
-
-/** The reference another conversation can follow to message `id` of `conversation`. */
-export const messageReference = (conversation: number, id: number) =>
-  `Ultimate conversation #${conversation}, message #${id}. Read it in codemode with ultimate.entries(${conversation}, { before: ${id + 1}, limit: 1 }).`
+import { MessageReference } from '../sdk/types.ts'
+import { ExtensionBoundary, Provided } from './boundary.tsx'
 
 /**
  * Hover actions on a stored message, always shown on touch screens: extensions' details (`messageDetails`), its time,
@@ -63,12 +60,15 @@ export function MessageActions({
           <Action entry={entry} />
         </ExtensionBoundary>
       ))}
-      <CopyButton
-        label={`Copy reference to message #${id}`}
-        value={messageReference(conversation, id)}
-      >
-        <LinkIcon />
-      </CopyButton>
+      <Provided input={{ conversation, id }} point={MessageReference}>
+        {(reference) =>
+          reference && (
+            <CopyButton label={`Copy reference to message #${id}`} value={reference}>
+              <LinkIcon />
+            </CopyButton>
+          )
+        }
+      </Provided>
     </div>
   )
 }

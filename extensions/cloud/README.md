@@ -21,9 +21,38 @@ A project is its GitHub repository (`lib/project-identity.ts`): the `origin` rem
 `github.com/<owner>/<repo>`, lowercased. A project without a GitHub origin cannot be backed up; its status line says
 `not backed up`.
 
-`api.ts` exposes optional `CloudApi`: `status()` returns `off`, `local` or `on`, and `backup()` performs the same
+## Satellites
+
+A satellite is another machine that runs a project beside the machine that backs it up (the project's owner), for
+example a laptop doing platform work that it pushes as `satellite/*` branches for the owner to land. Its own history
+must never replace the owner's backups, so on the satellite set, in user settings:
+
+```json
+{ "cloud": { "url": "wss://example.com", "machine": "my-laptop", "satellite": true } }
+```
+
+Its backups then refuse before uploading anything, forced or not, for agents, Dream and the status line alike; the
+status line shows `satellite · no backups` with no backup buttons. The satellite still reads the register, so it
+reaches the owner (answers to its `tell`s included).
+
+A satellite never commits a backup, so the register holds no tailnet address for it. On each machine that reaches it,
+name its address in user settings, per machine and project:
+
+```json
+{
+  "cloud": {
+    "satellites": { "my-laptop": { "ultimate": "https://my-laptop.tail1234.ts.net:4747" } }
+  }
+}
+```
+
+`tell({ project, machine })` and codemode reads with that machine then go to that URL (`lib/remote.ts`), before the
+register is asked. The URL is the satellite's Tailscale Serve address (its status line's tailnet link), and the caller's
+tailnet login must be in the satellite's `tailscale.allow`.
+
+`api.ts` exposes optional `CloudApi`: `status()` returns `off`, `local`, `satellite` or `on`, and `backup()` performs the same
 non-forced backup of the active chapter as the user action. Dream uses it for the final backup before falling asleep;
-missing, off or local-only cloud is skipped explicitly. Cloud still ships disabled by default.
+missing, off, local-only or satellite cloud is skipped explicitly. Cloud still ships disabled by default.
 
 ## Cloud backups
 
@@ -40,7 +69,7 @@ needs `Authorization: Bearer <ULTIMATE_CLOUD_TOKEN>`; `<p>` is the SHA-256 hex o
   `{ id, machine, at, bytes, uploaded, parent, tailnet? }`).
 - `GET /sync/register`: `{ projects: [{ hash, key, name, latest }], machines: [{ machine, at, projects }] }`.
 
-**Back up now** (`backup { force? }`, user-only) uploads an encrypted snapshot of the open database and the `ultimate/*`
+**Back up now** (`backup { force? }`, also callable by agents) uploads an encrypted snapshot of the open database and the `ultimate/*`
 branches, then commits it with this home's **parent**: the backup it last uploaded or restored, kept in
 `<home>/cloud-backup.json` (`{ key, parent, last }`). The commit names the machine, the project's folder name, the key, the chapter's name and number,
 and the tailnet address (from `tailscale`, when published). On 200 the new backup

@@ -16,6 +16,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   api,
+  Card,
   cn,
   defineWebExtension,
   events,
@@ -23,6 +24,7 @@ import {
   Fold,
   provide,
   Provided,
+  formatAgo,
   formatTime,
   formatTokens,
   useConversation,
@@ -100,10 +102,7 @@ function Started({ entry }: { entry: EntryRecord }) {
   const [open, setOpen] = useState(false)
   const timestamp = entry.model?.[0]?.timestamp
   return (
-    <section
-      className="min-w-0 rounded-md border border-l-2 border-border border-l-brand/50 bg-muted/20"
-      data-lineage-started={branch}
-    >
+    <Card data-lineage-started={branch}>
       <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <GitForkIcon className="size-3.5 shrink-0 text-brand" />
         <span className="shrink-0 text-foreground">Started</span>
@@ -151,7 +150,7 @@ function Started({ entry }: { entry: EntryRecord }) {
           </span>
         )}
       </button>
-    </section>
+    </Card>
   )
 }
 
@@ -317,10 +316,7 @@ function Note({ entry, core }: { entry: EntryRecord; core: React.ReactNode }) {
 /** A catch-up on the tally and main. */
 function Catchup({ text }: { text: string }) {
   return (
-    <section
-      className="min-w-0 rounded-md border border-l-2 border-border border-l-brand/50 bg-muted/20"
-      data-lineage-note="main"
-    >
+    <Card data-lineage-note="main">
       <header
         className={cn(
           'flex items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-foreground',
@@ -333,7 +329,7 @@ function Catchup({ text }: { text: string }) {
       <div className="min-w-0 px-3 py-2.5 text-[13px] leading-relaxed">
         <MessageResponse>{text}</MessageResponse>
       </div>
-    </section>
+    </Card>
   )
 }
 
@@ -485,16 +481,6 @@ const kindTones: Record<MemoryItem['kind'], string> = {
   lesson: 'bg-note/15 text-amber-700 dark:text-note',
 }
 
-/** How long ago `at` was, in the sidebar's short form: now, 5m, 3h, 2d, then a date. */
-function age(at: number, now: number) {
-  const minutes = Math.max(0, (now - at) / 60000)
-  if (minutes < 1) return 'now'
-  if (minutes < 60) return `${Math.floor(minutes)}m`
-  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)}h`
-  if (minutes < 60 * 24 * 7) return `${Math.floor(minutes / 60 / 24)}d`
-  return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-}
-
 /** Where a memory was learned, `#conversation/entry`, as that conversation's chip; a click opens it at the entry. */
 function MemorySource({ source }: { source: string }) {
   const { switchConversation, showSurface } = useUltimate()
@@ -595,7 +581,7 @@ function MemoryRow({
               className="ml-auto shrink-0 pl-1 text-muted-foreground/60"
               title={new Date(item.updated).toLocaleString()}
             >
-              {age(item.updated, now)}
+              {formatAgo(item.updated, now)}
             </span>
           </span>
           <span

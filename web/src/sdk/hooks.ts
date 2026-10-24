@@ -18,7 +18,7 @@ import type {
   LiveState,
   UsageState,
 } from '@earendil-works/pi-durable'
-import { actions, allCommands, regionKeys, shellKeys, shownSurface } from './actions.ts'
+import { actions, allCommands, ownDefault, regionKeys, shellKeys, shownSurface } from './actions.ts'
 import type { Region } from './actions.ts'
 import { actionMessage, ROOT } from './api.ts'
 import { EVENT_FEED } from '../../../shared/events.ts'
@@ -28,7 +28,7 @@ import type { ActionArgs, ActionError, ActionOptions } from './api.ts'
 import { actionRef, docRef } from '../../../shared/extension-api.ts'
 import type { ActionRef, DocRef } from '../../../shared/extension-api.ts'
 import { api, registry, store, uiState } from './client.ts'
-import { HOME, compactTools, documentItems, introOf } from './registry.ts'
+import { HOME, compactDocs, compactTools, documentItems, introOf } from './registry.ts'
 import type { State } from './store.ts'
 import { errorMessage, formatDuration } from './format.ts'
 import type { CompactRow, ToolCallView, UltimateContext } from './types.ts'
@@ -246,7 +246,7 @@ export function useRegionOpen(region: Region) {
   const [shared] = useUiState<boolean>(key, fallback)
   const on = useViewport()
   const own = useStore((state) =>
-    on === 'desktop' ? false : (state.ui.open?.[on]?.[region] ?? false),
+    on === 'desktop' ? false : (state.ui.open?.[on]?.[region] ?? ownDefault(region, on)),
   )
   return on === 'desktop' ? shared : own
 }
@@ -327,16 +327,16 @@ function useCompactConfig() {
   const records = useExtensions()
   const id = useConversation((conversation) => conversation.id)
   const conversation = useStore((state) => state.conversations.find((summary) => summary.id === id))
-  const compact = useMemo(
-    () => compactTools(records, conversation, reportCompact),
-    [records, conversation],
-  )
-  const kinds = compact?.docs.join(',') ?? ''
+  const kinds = useMemo(() => compactDocs(records).join(','), [records])
   useEffect(() => {
     const releases = kinds ? kinds.split(',').map((kind) => store.watchDocOf(1, kind)) : []
     return () => releases.forEach((release) => release())
   }, [kinds])
   const docs = useStore((state) => (kinds ? state.docsOf[1] : undefined)) ?? noDocs
+  const compact = useMemo(
+    () => compactTools(records, conversation, docs, reportCompact),
+    [records, conversation, docs],
+  )
   return { compact, docs }
 }
 const introFailures = new Set<string>()

@@ -22,6 +22,10 @@ export type PauseDocState = {
   since?: number
   runs?: Record<string, { task: number; input?: number }>
   limit?: RateLimit
+  /** The user pressed Pause during this pause: it never plays by itself. */
+  manual?: boolean
+  /** The user's setting: minutes after a rate-limit pause began that Ultimate presses Play by itself; unset is off. */
+  autoPlay?: number
   /** Bumped when gated in-task work (a triage model call) ends while paused, so the footer refreshes. */
   work?: number
 }
@@ -43,6 +47,10 @@ export type PauseState = {
   since?: number
   /** The rate limit that paused Ultimate, if one did. */
   limit?: RateLimit
+  /** Minutes after a rate-limit pause began that Play is pressed by itself; unset is off. */
+  autoPlay?: number
+  /** When this pause plays by itself (ms): a rate-limit pause the user did not also pause, with the setting on. */
+  autoPlayAt?: number
   /** Foreground tasks still running: while paused, the pause is safe once this is empty. */
   running: RunningTask[]
 }
@@ -58,9 +66,17 @@ export const StateAction = actionRef<null, PauseState>('pause', 'state')
 export const PauseAction = actionRef<null, PauseState>('pause', 'pause')
 /** User-only: continue. Each run that was mid-turn when paused gets one "Paused for …" note. Returns the state. */
 export const PlayAction = actionRef<null, PauseState>('pause', 'play')
+/**
+ * User-only `{ minutes }`: play by itself that many minutes (1 to 1440) after a rate limit paused Ultimate, once per
+ * pause; `null` turns it off. A pause the user pressed never plays by itself. Returns the state.
+ */
+export const AutoPlayAction = actionRef<{ minutes: number | null }, PauseState>('pause', 'autoPlay')
 
 /**
  * The note Play leaves on a run that was mid-turn: paused from `since` to `until` (ms); `finished` when the run gave
  * its last answer while the pause drained.
  */
-export type PauseNote = { since: number; until: number; finished?: boolean }
+export type PauseNote = { since: number; until: number; finished?: boolean; auto?: boolean }
+
+/** The `pause.autoplay` entry in @ultimate's transcript: the rate-limit pause from `since` played by itself at `at`. */
+export type AutoPlayed = { since: number; at: number; minutes: number }
