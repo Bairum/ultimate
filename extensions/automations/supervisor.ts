@@ -111,7 +111,9 @@ export function supervisor(
 ) {
   // Only process state is reload-stable: running children and in-flight work. The functions below are rebuilt on each
   // install, so they always use the current ledger token and fire callback.
-  const shared = host.resource('automations.supervisor', () => ({
+  // A new key: a process still holding the old `automations.supervisor` object (the whole supervisor) gets fresh
+  // state on the first reload; the old facet's close stops its scripts and this one's open relaunches them.
+  const shared = host.resource('automations.supervisor.state', () => ({
     runs: new Map<string, Run>(),
     launches: new Set<Promise<void>>(),
     /** Project slugs whose create runs between publishing the manifest and committing the record. */
