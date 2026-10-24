@@ -88,8 +88,10 @@ store.subscribe(() => {
       followSelection()
     } else if (!detached) uiState.receive(shared)
   }
+  // Only a chosen conversation goes into the URL: the stream's fallback to the root is not a choice, and a reload of
+  // `?conversation=1` would make it one (a fresh preview's Vite reloads once), keeping the page off @ultimate.
   const { view, requested } = store.getState()
-  if (initialized && view && (requested === undefined || requested === view.conversation.id)) {
+  if (initialized && view && requested === view.conversation.id) {
     writeConversation(view.conversation.id, true)
     replaceSelection = false
   }
@@ -126,7 +128,7 @@ addEventListener('popstate', () => {
   // An unchanged selection emits no notification, but may still need URL canonicalization.
   followSelection()
   const { view, requested } = store.getState()
-  if (view && (requested === undefined || requested === view.conversation.id)) {
+  if (view && requested === view.conversation.id) {
     writeConversation(view.conversation.id, true)
     replaceSelection = false
   }

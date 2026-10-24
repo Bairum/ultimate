@@ -19,6 +19,7 @@ import {
 } from '@/components/ai/tool'
 import { Button } from '@/components/ui/button'
 import {
+  api,
   cn,
   defineWebExtension,
   Provided,
@@ -36,8 +37,8 @@ import type { Workspace as Isolate, LandResult } from '../workspaces/types.ts'
 import { DefinitionDialog, Definitions } from './definitions.tsx'
 import { Tag } from './parts.tsx'
 import { AgentInbox, AgentInput, AgentMessages } from './messages.tsx'
-import { openAgentSource } from './ui.tsx'
-import { StandingDoc } from './refs.ts'
+import { openAgentSource, talkToUltimate } from './ui.tsx'
+import { StandingAction, StandingDoc } from './refs.ts'
 import { landing } from './landing.ts'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
@@ -309,11 +310,17 @@ function ChildList({ output }: { output: string }) {
 function LandOnUltimate() {
   const loaded = useStore((state) => state.shared !== undefined)
   const [chosen] = useUiState<number | null>('shell.conversation', null)
-  const ultimate = useDocOf(1, StandingDoc)?.ultimate
+  const standing = useDocOf(1, StandingDoc)
   const { switchConversation } = useUltimate()
-  const target = landing(loaded, chosen ?? undefined, ultimate)
+  const target = landing(loaded, chosen ?? undefined, standing)
   useEffect(() => {
-    if (target !== undefined) switchConversation(target, { replace: true })
+    if (target === undefined) return
+    if (target !== 'create') return switchConversation(target, { replace: true })
+    // A fresh home (a preview) has no @ultimate yet: start it, as its sidebar row does.
+    api
+      .action(StandingAction, { name: 'ultimate' })
+      .then((id) => switchConversation(id, { replace: true }))
+      .catch((error: unknown) => console.error('Could not open @ultimate', error))
   }, [target, switchConversation])
   return null
 }
@@ -325,6 +332,12 @@ export default defineWebExtension({
   inbox: AgentInbox,
   slots: { overlay: [DefinitionDialog, LandOnUltimate], 'header.right': [AgentMessages] },
   commands: [
+    {
+      id: 'subagents.ultimate',
+      title: 'Talk to @ultimate',
+      keys: 'mod+0',
+      run: (context) => talkToUltimate(context),
+    },
     {
       id: 'subagents.open',
       title: 'Show agent definitions',

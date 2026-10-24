@@ -38,7 +38,7 @@ export function screenshotFile(home: string, cwd: string, path?: string) {
   if (path === undefined) return join(home, 'screenshots', `${Date.now()}-${randomUUID()}.png`)
   if (!path.endsWith('.png'))
     throw new Error(
-      `path is where the PNG is saved and must end in .png, not ${JSON.stringify(path)}; pass the page to load as url, such as /?conversation=1.`,
+      `path is where the PNG is saved and must end in .png, not ${JSON.stringify(path)}; pass the page to load as url, such as / (it opens @ultimate).`,
     )
   return resolve(cwd, path)
 }
@@ -113,7 +113,7 @@ export default function browserExtension(host: ExtensionHost) {
       section(
         'visual_verification',
         () =>
-          'After UI changes, use screenshot and look at the image before claiming success. Use browser to drive fresh pages and inspect errors. Omit url to see your own UI, or pass a relative url such as /?conversation=1; do not guess its port. Omit path: the PNG then goes to the home, outside your checkout, where a stray file would block landing; pass path: `<file>.png` only for a screenshot you commit. Pass an instance URL to test another server.',
+          'After UI changes, use screenshot and look at the image before claiming success. Use browser to drive fresh pages and inspect errors. Omit url to see your own UI, or pass a relative url such as / (it opens @ultimate) or /?conversation=<id>; do not guess its port. Omit path: the PNG then goes to the home, outside your checkout, where a stray file would block landing; pass path: `<file>.png` only for a screenshot you commit. Pass an instance URL to test another server.',
       ),
     ],
     tools: [
