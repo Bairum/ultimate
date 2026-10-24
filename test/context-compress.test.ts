@@ -24,6 +24,17 @@ import { Ledger } from '../extensions/context-hygiene/api.ts'
 import { apis } from './helpers.ts'
 
 const user = (content: string): Message => ({ role: 'user', content, timestamp: 1 })
+function toolReply(message: Message | undefined) {
+  if (message?.role !== 'toolResult') throw new Error('Expected tool result')
+  const part = message.content.find((item) => item.type === 'text')
+  if (!part) throw new Error('Expected text result')
+  return JSON.parse(part.text) as {
+    restored?: boolean
+    from?: number
+    to?: number
+    reason?: string
+  }
+}
 const assistant = fauxAssistantMessage('finished')
 const tools: Message[] = [
   fauxAssistantMessage(
@@ -53,7 +64,7 @@ const tools: Message[] = [
     timestamp: 1,
   },
 ]
-async function fixture(reverse = false) {
+async function fixture(reverse = false, defect?: 'missing' | 'duplicate') {
   const models = createModels(),
     faux = fauxProvider({ tokensPerSecond: 0 })
   models.setProvider(faux.provider)
@@ -104,7 +115,11 @@ async function fixture(reverse = false) {
     for (const message of [
       user('First task\nDetails'),
       { role: 'system', content: 'System instructions. '.repeat(3000), timestamp: 1 } as Message,
-      ...tools,
+      ...tools.filter(
+        (item) =>
+          defect !== 'missing' || item.role !== 'toolResult' || item.toolCallId !== 'read-a',
+      ),
+      ...(defect === 'duplicate' ? [tools.at(-1)!] : []),
       assistant,
       user('Second task'),
       fauxAssistantMessage('second'.repeat(1000)),
@@ -238,16 +253,23 @@ it.each([false, true])(
           (m) =>
             m.role === 'system' ||
             !view.contributions
-              .filter(
-                (_batch, i) =>
-                  view.entries[i].id >= ranges[0].fromEntry &&
-                  view.entries[i].id <= ranges[0].toEntry,
-              )
+              .filter((_batch, i) => ranges[0].entryIds.includes(view.entries[i].id))
               .flat()
               .some((old) => JSON.stringify(old) === JSON.stringify(m)),
         ),
       )
-      await f.invoke('decompress', { id: ranges[0].id })
+      const restored = await f.invoke('decompress', { id: ranges[0].id })
+      expect(toolReply(restored)).toMatchObject({
+        restored: true,
+        from: listed[0].id,
+        to: listed[1].id,
+      })
+      expect(toolReply(await f.invoke('decompress', { id: ranges[0].id }))).toMatchObject({
+        restored: false,
+        reason: 'Range is already inactive',
+        from: listed[0].id,
+        to: listed[1].id,
+      })
       expect(f.sent.at(-1)!.some((m) => m.role === 'toolResult' && m.toolCallId === 'read-a')).toBe(
         true,
       )
@@ -276,6 +298,9 @@ it('rejects partial turns, reversed ranges, overlap, protect-window ranges, empt
     const recent = view.entries.findLast((e) => e.kind === 'pi.user')!.id
     expect(() => validate(view, [], from, recent, 'summary')).toThrow('whole turns')
     expect(() => validate(view, [], from, to, ' ')).toThrow('non-empty')
+    expect(() => validate(view, [], from, to, 'unsafe </compressed> summary')).toThrow(
+      'must not contain',
+    )
     expect(() => validate(view, [], from, to, 'oversized'.repeat(10000))).toThrow('25%')
   } finally {
     await f.harness.close(ctx)
@@ -307,6 +332,13 @@ it('inherits the rewindable ledger as of a fork and deactivates ranges after com
     }, ctx)
     await f.invoke()
     expect((await f.harness.snapshot(Ranges, f.root.id, ctx))!.ranges[0].active).toBe(false)
+    const range = (await f.harness.snapshot(Ranges, f.root.id, ctx))!.ranges[0]
+    expect(toolReply(await f.invoke('decompress', { id: range.id }))).toMatchObject({
+      restored: false,
+      reason: 'Range is no longer in the active context',
+      from: available[0].id,
+      to: available[1].id,
+    })
   } finally {
     await f.harness.close(ctx)
   }
@@ -334,14 +366,15 @@ it('fails open with an explicit reason on inconsistent mapping, and rejects spli
     ).toThrow('align')
     const split = {
       ...range,
-      toEntry: view.entries.find((e) =>
-        e.model?.some(
-          (m) => m.role === 'assistant' && m.content.some((part) => part.type === 'toolCall'),
-        ),
-      )!.id,
+      entryIds: range.entryIds.filter(
+        (id) =>
+          !view.entries
+            .find((entry) => entry.id === id)
+            ?.model?.some((message) => message.role === 'toolResult'),
+      ),
     }
     expect(() => rewrite(view.messages, view, [split], (m) => m)).toThrow('pair')
-    const broken = { ...range, fromEntry: range.toEntry + 1000, toEntry: range.toEntry + 1001 }
+    const broken = { ...range, entryIds: [range.toEntry + 1000] }
     await f.harness.commit(async (tx) => {
       ;(await tx.doc(Ranges, f.root.id)).ranges.push(broken)
     }, ctx)
@@ -365,6 +398,121 @@ it('fails open with an explicit reason on inconsistent mapping, and rejects spli
     const ranges = [range]
     prune(ranges, { ...view, entries: [] })
     expect(ranges[0].active).toBe(false)
+  } finally {
+    await f.harness.close(ctx)
+  }
+})
+
+it.each(['missing', 'duplicate'] as const)(
+  'rejects compression before recording a range when tool results are %s',
+  async (defect) => {
+    const f = await fixture(false, defect)
+    try {
+      const available = turns(await f.root.context(ctx), [])
+      const result = await f.invoke('compress', {
+        from: available[0].id,
+        to: available[1].id,
+        summary: 'Finished tasks.',
+      })
+      expect(result).toMatchObject({ isError: true })
+      expect(result?.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ text: expect.stringContaining('Cannot compress this range:') }),
+        ]),
+      )
+      expect((await f.harness.snapshot(Ranges, f.root.id, ctx))?.ranges ?? []).toEqual([])
+    } finally {
+      await f.harness.close(ctx)
+    }
+  },
+)
+
+it('uses positional membership across compaction and never folds the head summary', async () => {
+  const f = await fixture()
+  try {
+    const original = await f.root.context(ctx)
+    const ids = await f.harness.commit(async (tx) => {
+      const head = await tx.appendEntry(f.root.id, {
+        kind: 'pi.compaction',
+        head: original.entries[0].id,
+        model: [user('Keep this compaction summary')],
+      })
+      const turn = await tx.appendEntry(f.root.id, {
+        kind: 'pi.user',
+        model: [user('After compaction')],
+      })
+      await tx.appendEntry(f.root.id, {
+        kind: 'test.seed',
+        model: [fauxAssistantMessage('finished')],
+      })
+      await tx.appendEntry(f.root.id, { kind: 'pi.user', model: [user('Protected task')] })
+      await tx.appendEntry(f.root.id, {
+        kind: 'test.seed',
+        model: [fauxAssistantMessage('padding'.repeat(14000))],
+      })
+      return { head: head.id, turn: turn.id }
+    }, ctx)
+    const view = await f.root.context(ctx)
+    expect(view.entries[0].id).toBe(ids.head)
+    const selected = validate(view, [], original.entries[0].id, ids.turn, 'Finished old work.')
+    expect(selected.fromEntry).toBeLessThan(ids.head)
+    expect(selected.toEntry).toBeGreaterThan(ids.head)
+    expect(selected.entryIds).not.toContain(ids.head)
+    const range: Range = {
+      ...selected,
+      id: 'c-head',
+      summary: 'Finished old work.',
+      active: true,
+      at: 1,
+    }
+    for (const entryIds of [range.entryIds, [ids.head, ...range.entryIds]]) {
+      const output = rewrite(view.messages, view, [{ ...range, entryIds }], (messages) => messages)
+      expect(
+        output.filter(
+          (message) =>
+            message.role === 'user' && message.content === 'Keep this compaction summary',
+        ),
+      ).toHaveLength(1)
+      expect(
+        output.filter(
+          (message) =>
+            message.role === 'user' &&
+            typeof message.content === 'string' &&
+            message.content.startsWith('<compressed'),
+        ),
+      ).toHaveLength(1)
+    }
+    await f.invoke('compress', {
+      from: selected.turnIds[0],
+      to: ids.turn,
+      summary: 'Finished old work.',
+    })
+    expect(f.notices).toEqual([])
+    expect(
+      f.sent
+        .at(-1)!
+        .filter(
+          (message) =>
+            message.role === 'user' && message.content === 'Keep this compaction summary',
+        ),
+    ).toHaveLength(1)
+    expect(
+      f.sent
+        .at(-1)!
+        .filter(
+          (message) =>
+            message.role === 'user' &&
+            typeof message.content === 'string' &&
+            message.content.startsWith('<compressed'),
+        ),
+    ).toHaveLength(1)
+    expect(() => validate(view, [range], ids.turn, ids.turn, 'summary')).toThrow('overlaps')
+    const missingMiddle = {
+      ...view,
+      entries: view.entries.filter((entry) => entry.id !== selected.entryIds[1]),
+    }
+    prune([range], missingMiddle)
+    expect(range.active).toBe(false)
   } finally {
     await f.harness.close(ctx)
   }

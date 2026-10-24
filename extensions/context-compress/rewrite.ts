@@ -1,10 +1,17 @@
 import type { Message } from '@earendil-works/pi-ai'
 import { estimateMessageTokens, estimateTextTokens } from '@earendil-works/pi-ai/utils/estimate'
-import type { ContextView } from '@earendil-works/pi-durable'
+import type { ContextView, EntryRecord } from '@earendil-works/pi-durable'
 import type { Range, Turn } from './refs.ts'
-export function turns(view: ContextView, ranges: readonly Range[]): Turn[] {
-  const result: Turn[] = []
-  let current: Turn | undefined
+
+const isHead = (view: ContextView, entry: EntryRecord) =>
+  entry.id === view.head?.id ||
+  entry.head !== undefined ||
+  entry.kind === 'pi.compaction' ||
+  entry.kind === 'pi.reset'
+type Span = Turn & { entryIds: number[] }
+function spans(view: ContextView, ranges: readonly Range[]): Span[] {
+  const result: Span[] = []
+  let current: Span | undefined
   let suffix = 0
   const protectedEntries = new Set<number>()
   for (let i = view.entries.length - 1; i >= 0; i--) {
@@ -13,6 +20,10 @@ export function turns(view: ContextView, ranges: readonly Range[]): Turn[] {
   }
   for (let i = 0; i < view.entries.length; i++) {
     const entry = view.entries[i]
+    if (isHead(view, entry)) {
+      current = undefined
+      continue
+    }
     const messages = view.contributions[i]
     if (entry.kind === 'pi.user') {
       const user = messages.find((m) => m.role === 'user')
@@ -28,10 +39,12 @@ export function turns(view: ContextView, ranges: readonly Range[]): Turn[] {
         tokens: 0,
         gist: text.split('\n')[0],
         compressed: null,
+        entryIds: [],
       }
       result.push(current)
     }
     if (!current) continue
+    current.entryIds.push(entry.id)
     current.toEntry = entry.id
     // System baselines stay in the request, even when stored between this turn's entries.
     current.tokens += messages.reduce(
@@ -48,17 +61,18 @@ export function turns(view: ContextView, ranges: readonly Range[]): Turn[] {
   return result
     .filter(
       (turn, index) =>
-        index < result.length - 1 &&
-        !view.entries.some(
-          (e) => e.id >= turn.fromEntry && e.id <= turn.toEntry && protectedEntries.has(e.id),
-        ),
+        index < result.length - 1 && !turn.entryIds.some((id) => protectedEntries.has(id)),
     )
     .map((turn) => ({
       ...turn,
       compressed:
-        ranges.find((r) => r.active && r.fromEntry <= turn.fromEntry && r.toEntry >= turn.toEntry)
-          ?.id ?? null,
+        ranges.find(
+          (range) => range.active && turn.entryIds.every((id) => range.entryIds.includes(id)),
+        )?.id ?? null,
     }))
+}
+export function turns(view: ContextView, ranges: readonly Range[]): Turn[] {
+  return spans(view, ranges).map(({ entryIds: _entryIds, ...turn }) => turn)
 }
 export function validate(
   view: ContextView,
@@ -67,25 +81,37 @@ export function validate(
   to: number,
   summary: string,
 ) {
-  const available = turns(view, ranges)
-  const start = available.findIndex((t) => t.id === from)
-  const end = available.findIndex((t) => t.id === to)
+  const available = spans(view, ranges)
+  const start = available.findIndex((t) => t.id === from),
+    end = available.findIndex((t) => t.id === to)
   if (start < 0 || end < start)
     throw new Error('Choose whole turns outside the newest 16k tokens from context_ranges')
   const selected = available.slice(start, end + 1)
-  const fromEntry = selected[0].fromEntry,
-    toEntry = selected.at(-1)!.toEntry
-  if (ranges.some((r) => r.active && r.fromEntry <= toEntry && r.toEntry >= fromEntry))
+  const entryIds = selected.flatMap((turn) => turn.entryIds)
+  // Context heads are not chronological: membership is the selected positional span, not an id interval.
+  const positions = entryIds.map((id) => view.entries.findIndex((entry) => entry.id === id))
+  if (positions.some((position, i) => i > 0 && position !== positions[i - 1] + 1))
+    throw new Error('Range must be contiguous and cannot cross a context head')
+  if (ranges.some((range) => range.active && range.entryIds.some((id) => entryIds.includes(id))))
     throw new Error('Range overlaps an active compression')
-  const tokens = selected.reduce((n, t) => n + t.tokens, 0)
+  const tokens = selected.reduce((n, turn) => n + turn.tokens, 0)
+  if (summary.includes('</compressed>')) throw new Error('Summary must not contain </compressed>')
   if (!summary.trim() || estimateTextTokens(summary) > tokens / 4)
     throw new Error('Summary must be non-empty and at most 25% of the original tokens')
-  return { fromEntry, toEntry, tokens }
+  return {
+    fromEntry: selected[0].fromEntry,
+    toEntry: selected.at(-1)!.toEntry,
+    entryIds,
+    turnIds: selected.map((turn) => turn.id),
+    tokens,
+  }
 }
 export function prune(ranges: Range[], view: ContextView) {
-  const present = new Set<number>(view.entries.map((e) => e.id))
+  const present = new Set<number>(
+    view.entries.filter((entry) => !isHead(view, entry)).map((entry) => entry.id),
+  )
   for (const range of ranges)
-    if (!present.has(range.fromEntry) || !present.has(range.toEntry)) range.active = false
+    if (range.entryIds.some((id) => !present.has(id))) range.active = false
 }
 
 /** Content aligns contributions, never identifies turns. Entry ids alone own ranges. */
@@ -95,8 +121,11 @@ export function rewrite(
   ranges: readonly Range[],
   hygienize: (messages: readonly Message[]) => readonly Message[],
 ): readonly Message[] {
-  const active = ranges.filter((r) => r.active)
+  const active = ranges.filter((range) => range.active)
   if (!active.length) return messages
+  const foldable = new Set<number>(
+    view.entries.filter((entry) => !isHead(view, entry)).map((entry) => entry.id),
+  )
   const originals = view.contributions.flatMap((batch, i) =>
     batch.map((message) => ({ message, entry: view.entries[i].id, used: false })),
   )
@@ -111,9 +140,7 @@ export function rewrite(
     const index = candidates.find((i) => !originals[i].used)
     if (index === undefined) {
       if (
-        candidates.some((i) =>
-          active.some((r) => originals[i].entry >= r.fromEntry && originals[i].entry <= r.toEntry),
-        )
+        candidates.some((i) => active.some((range) => range.entryIds.includes(originals[i].entry)))
       )
         throw new Error('Ambiguous injected copy of a compressed message')
       return undefined // Other hooks' injected messages stay exactly where they were.
@@ -121,11 +148,11 @@ export function rewrite(
     originals[index].used = true
     return originals[index].entry
   })
-  const replacements = new Map<number, Message>()
-  const removed = new Set<number>()
+  const replacements = new Map<number, Message>(),
+    removed = new Set<number>()
   for (const range of active) {
-    const inside = (entry: number | undefined) =>
-      entry !== undefined && entry >= range.fromEntry && entry <= range.toEntry
+    const members = new Set(range.entryIds.filter((id) => foldable.has(id)))
+    const inside = (entry: number | undefined) => entry !== undefined && members.has(entry)
     if (
       originals.some((item) => inside(item.entry) && !item.used && item.message.role !== 'system')
     )
@@ -154,12 +181,10 @@ export function rewrite(
       )
         throw new Error(`Split or ambiguous tool pair in ${range.id}`)
     }
-    const lastTurn = view.entries.findLast((entry) => entry.kind === 'pi.user' && inside(entry.id))
-    if (!lastTurn) throw new Error(`Cannot find turns for ${range.id}`)
     indices.forEach((i) => removed.add(i))
     replacements.set(indices[0], {
       role: 'user',
-      content: `<compressed id="${range.id}" turns="${range.fromEntry}–${lastTurn.id}">${range.summary}</compressed>`,
+      content: `<compressed id="${range.id}" turns="${range.turnIds[0]}–${range.turnIds.at(-1)}">${range.summary}</compressed>`,
       timestamp: 0,
     })
   }

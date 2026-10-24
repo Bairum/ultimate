@@ -3,6 +3,8 @@ export type Range = {
   id: string
   fromEntry: number
   toEntry: number
+  entryIds: number[]
+  turnIds: number[]
   summary: string
   tokens: number
   active: boolean

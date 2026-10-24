@@ -47,7 +47,11 @@ export default function contextCompress(host: Pick<ExtensionHost, 'harness' | 'n
             const ranges = await host.harness().commit(async (tx) => {
               const ledger = await tx.doc(Ranges, api.conversationId)
               prune(ledger.ranges, view)
-              return ledger.ranges.map((range) => ({ ...range }))
+              return ledger.ranges.map((range) => ({
+                ...range,
+                entryIds: [...range.entryIds],
+                turnIds: [...range.turnIds],
+              }))
             }, ctx)
             const ledger = await api.snapshot(Ledger, api.conversationId, ctx)
             return {
@@ -109,6 +113,14 @@ export default function contextCompress(host: Pick<ExtensionHost, 'harness' | 'n
             prune(ranges, view)
             const selected = validate(view, ranges, args.from, args.to, args.summary)
             const range = { id, ...selected, summary: args.summary, active: true, at: Date.now() }
+            const hygieneLedger = await tx.doc(Ledger, api.conversationId)
+            try {
+              rewrite(view.messages, view, [...ranges, range], (batch) =>
+                hygiene.rewrite(batch, hygieneLedger.decisions),
+              )
+            } catch (error) {
+              throw new Error(`Cannot compress this range: ${String(error)}`, { cause: error })
+            }
             ranges.push(range)
             return reply({ ...range, saved: range.tokens - estimateTextTokens(range.summary) })
           }, ctx)
@@ -121,14 +133,31 @@ export default function contextCompress(host: Pick<ExtensionHost, 'harness' | 'n
         // Marking a range inactive twice is idempotent.
         replay: 'safe',
         parameters: Type.Object({ id: Type.String() }),
-        execute: async ({ id }, api, ctx) =>
-          api.commit(async (tx) => {
+        execute: async ({ id }, api, ctx) => {
+          const conversation = await host.harness().conversation(api.conversationId, ctx)
+          if (!conversation) throw new Error('Conversation unavailable')
+          const view = await conversation.context(ctx)
+          return api.commit(async (tx) => {
             const { ranges } = await tx.doc(Ranges, api.conversationId)
             const range = ranges.find((r) => r.id === id)
             if (!range) throw new Error(`Unknown compressed range ${id}`)
+            const present = { ...range, active: true }
+            prune([present], view)
+            const reason = !present.active
+              ? 'Range is no longer in the active context'
+              : !range.active
+                ? 'Range is already inactive'
+                : undefined
             range.active = false
-            return reply({ id, restored: true })
-          }, ctx),
+            return reply({
+              id,
+              from: range.turnIds[0],
+              to: range.turnIds.at(-1),
+              restored: reason === undefined,
+              ...(reason ? { reason } : {}),
+            })
+          }, ctx)
+        },
       }),
     ],
   })
