@@ -35,13 +35,10 @@ export function backend(mode: CloneMode, platform = process.platform): 'apfs' | 
  * refusal under sparse checkout or split index, and the fallback to a plain checkout.
  */
 export async function populate(source: string, path: string, mode: CloneMode) {
-  const common = await realpath(await gitPath(source, '--common'))
+  const common = await commonDir(source)
   const guard = async () => {
     const top = await git(path, 'rev-parse', '--show-toplevel')
-    if (
-      (await realpath(top)) !== (await realpath(path)) ||
-      (await realpath(await gitPath(path, '--common'))) !== common
-    )
+    if ((await realpath(top)) !== (await realpath(path)) || (await commonDir(path)) !== common)
       throw new Error(`Unsafe worktree repository: ${path}`)
   }
   await guard()
@@ -84,25 +81,14 @@ async function clone(source: string, path: string, kind: 'apfs' | 'reflink') {
     .split('\0')
     .filter((entry) => entry.startsWith('160000 '))
     .map((entry) => entry.slice(entry.indexOf('\t') + 1))
-  // Walk directories to exclude nested submodules and source-pointing absolute symlinks.
+  // Clone directories whole unless they contain a submodule that must be excluded.
   const copy = async (relative: string) => {
     await mkdir(join(path, relative), { recursive: true })
     for (const entry of await readdir(join(source, relative))) {
       const name = join(relative, entry)
       if (name === '.git' || submodules.includes(name)) continue
       const stat = await lstat(join(source, name))
-      if (stat.isSymbolicLink()) {
-        const target = await readlink(join(source, name))
-        const inside = relativePath(resolve(source), resolve(target))
-        if (
-          isAbsolute(target) &&
-          inside !== '..' &&
-          !inside.startsWith('../') &&
-          !isAbsolute(inside)
-        )
-          continue
-      }
-      if (stat.isDirectory()) {
+      if (stat.isDirectory() && submodules.some((module) => module.startsWith(`${name}/`))) {
         await copy(name)
         continue
       }
@@ -118,6 +104,27 @@ async function clone(source: string, path: string, kind: 'apfs' | 'reflink') {
     }
   }
   await copy('')
+  // Inspect copied links without spawning a process per file or following directory symlinks.
+  const removeSourceLinks = async (directory: string) => {
+    for (const entry of await readdir(directory)) {
+      if (directory === path && entry === '.git') continue
+      const name = join(directory, entry)
+      const stat = await lstat(name)
+      if (stat.isDirectory()) await removeSourceLinks(name)
+      else if (stat.isSymbolicLink()) {
+        const target = await readlink(name)
+        const inside = relativePath(resolve(source), resolve(target))
+        if (
+          isAbsolute(target) &&
+          inside !== '..' &&
+          !inside.startsWith('../') &&
+          !isAbsolute(inside)
+        )
+          await rm(name)
+      }
+    }
+  }
+  await removeSourceLinks(path)
   await copyFile(await gitPath(source, 'index'), await gitPath(path, 'index')).catch(
     (error: NodeJS.ErrnoException) => {
       // A repository without commits staged has no index; reset builds one.
@@ -126,11 +133,12 @@ async function clone(source: string, path: string, kind: 'apfs' | 'reflink') {
   )
 }
 
+async function commonDir(checkout: string) {
+  const path = await git(checkout, 'rev-parse', '--git-common-dir')
+  return realpath(isAbsolute(path) ? path : join(checkout, path))
+}
+
 async function gitPath(checkout: string, name: string) {
-  const path = await git(
-    checkout,
-    'rev-parse',
-    ...(name === '--common' ? ['--git-common-dir'] : ['--git-path', name]),
-  )
+  const path = await git(checkout, 'rev-parse', '--git-path', name)
   return isAbsolute(path) ? path : join(checkout, path)
 }
