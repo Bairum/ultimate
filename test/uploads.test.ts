@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { pruneUploads, safeFileName, saveUpload, UploadTooLarge } from '../server/uploads.ts'
 import { insertAt, quotePath } from '../web/src/components/insert-path.ts'
 
@@ -14,6 +14,31 @@ it('makes macOS screenshot names and traversal attempts safe', () => {
   )
   expect(safeFileName('../../etc/passwd')).toBe('_.._etc_passwd')
   expect(safeFileName('...')).toBe('file')
+})
+
+it('truncates by code point while preserving a short extension', () => {
+  expect(safeFileName(`${'😀'.repeat(120)}.png`)).toBe(`${'😀'.repeat(116)}.png`)
+  expect(Array.from(safeFileName('a'.repeat(121))).length).toBe(120)
+  expect(safeFileName(`${'a'.repeat(120)}.${'b'.repeat(17)}`)).toBe('a'.repeat(120))
+})
+
+it('keeps both same-name uploads saved in the same millisecond', async () => {
+  const root = await home()
+  const now = vi.spyOn(Date, 'now').mockReturnValue(123456789)
+  try {
+    const paths = await Promise.all(
+      ['first', 'second'].map((text) =>
+        saveUpload(root, 7, 'same.txt', Readable.from([Buffer.from(text)])),
+      ),
+    )
+    expect(paths[0]).not.toBe(paths[1])
+    expect(await Promise.all(paths.map((path) => readFile(path, 'utf8')))).toEqual([
+      'first',
+      'second',
+    ])
+  } finally {
+    now.mockRestore()
+  }
 })
 
 it('saves a file under its conversation and rejects one past the limit', async () => {

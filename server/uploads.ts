@@ -1,5 +1,6 @@
+import { randomBytes } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { mkdir, readdir, rm, stat } from 'node:fs/promises'
+import { mkdir, readdir, rm, rmdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -15,8 +16,11 @@ export function safeFileName(name: string): string {
     .replace(/[/\\:\p{Cc}"'`$]/gu, '_')
     .replace(/^[.\s]+/, '')
     .trim()
-    .slice(0, 120)
-  return cleaned || 'file'
+  const points = Array.from(cleaned)
+  if (points.length <= 120) return cleaned || 'file'
+  const extension = /\.[^.]{1,15}$/u.exec(cleaned)?.[0] ?? ''
+  const suffix = Array.from(extension)
+  return points.slice(0, 120 - suffix.length).join('') + extension
 }
 
 /** Streams `source` into `<home>/uploads/<conversation>/<stamp>-<name>`, rejecting it past `limit` bytes. */
@@ -29,7 +33,8 @@ export async function saveUpload(
 ): Promise<string> {
   const folder = join(home, 'uploads', String(conversation))
   await mkdir(folder, { recursive: true })
-  const path = join(folder, `${Date.now().toString(36)}-${safeFileName(name)}`)
+  const stamp = `${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`
+  const path = join(folder, `${stamp}-${safeFileName(name)}`)
   let size = 0
   const cap = new Transform({
     transform(chunk: Buffer, _encoding, done) {
@@ -37,10 +42,15 @@ export async function saveUpload(
       done(size > limit ? new UploadTooLarge() : undefined, chunk)
     },
   })
+  const destination = createWriteStream(path, { flags: 'wx' })
+  let created = false
+  destination.once('open', () => {
+    created = true
+  })
   try {
-    await pipeline(source, cap, createWriteStream(path, { flags: 'wx' }))
+    await pipeline(source, cap, destination)
   } catch (failure) {
-    await rm(path, { force: true })
+    if (created) await rm(path, { force: true })
     throw failure
   }
   return path
@@ -69,6 +79,9 @@ export async function pruneUploads(home: string, now = Date.now()) {
         left--
       }
     }
-    if (left === 0) await rm(dir, { recursive: true, force: true })
+    if (left === 0)
+      await rmdir(dir).catch(() => {
+        // A fresh upload may have arrived, or another prune already removed the folder.
+      })
   }
 }

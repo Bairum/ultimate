@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { Readable } from 'node:stream'
 import type {
   ConversationId,
   Cursor,
@@ -73,11 +74,13 @@ function reply(response: ServerResponse, status: number, data: unknown) {
   response.end(JSON.stringify(data))
 }
 function failed(response: ServerResponse, error: unknown) {
-  if (!response.headersSent)
+  if (!response.headersSent) {
+    if (error instanceof HttpError && error.status === 413)
+      response.setHeader('Connection', 'close')
     reply(response, error instanceof HttpError ? error.status : 500, {
       error: error instanceof HttpError ? error.message : 'Request failed',
     })
-  else response.destroy()
+  } else response.destroy()
 }
 /** Start a server-sent event stream; `end` stops its heartbeat and closes it. */
 function eventStream(response: ServerResponse) {
@@ -160,7 +163,13 @@ export async function createApi(
   let closed = false
   let summaries: ConversationSummary[] = []
   const projectIndex = conversationIndex(host.home)
-  void pruneUploads(host.home).catch((failure) => console.error('Pruning uploads failed', failure))
+  const prune = () =>
+    void pruneUploads(host.home).catch((failure) =>
+      console.error('Pruning uploads failed', failure),
+    )
+  prune()
+  const pruneTimer = setInterval(prune, 24 * 60 * 60 * 1000)
+  pruneTimer.unref()
   const indexListener: Parameters<typeof events.listeners.add>[0] = (name, data) => {
     if (name === 'conversations') projectIndex.update(data as ConversationSummary[])
   }
@@ -417,7 +426,9 @@ export async function createApi(
             throw new HttpError(404, 'Unknown conversation')
           if (Number(request.headers['content-length'] ?? 0) > maxUploadBytes)
             throw new HttpError(413, 'File exceeds 50 MiB')
-          const path = await saveUpload(host.home, Number(upload[1]), name, request).catch(
+          // Keep the request socket alive long enough to send a 413 if the stream exceeds the cap.
+          const source = Readable.from(request.iterator({ destroyOnReturn: false }))
+          const path = await saveUpload(host.home, Number(upload[1]), name, source).catch(
             (failure: unknown) => {
               throw failure instanceof UploadTooLarge
                 ? new HttpError(413, failure.message)
@@ -672,6 +683,7 @@ export async function createApi(
     },
     async close() {
       closed = true
+      clearInterval(pruneTimer)
       unsubscribe()
       unsubscribeGraph()
       clearTimeout(timer)

@@ -46,10 +46,30 @@ export function useFileDrop({
     depth.current = 0
     setOver(false)
     const files = Array.from(event.dataTransfer.files)
-    if (!files.length || disabled()) return
+    if (!files.length) return
+    if (disabled()) {
+      setError('Cannot upload files while the composer is disabled')
+      return
+    }
     setError(undefined)
     setUploading((count) => count + files.length)
-    const settled = await Promise.allSettled(files.map((file) => api.upload(conversation, file)))
+    const settled: PromiseSettledResult<string>[] = []
+    let pending = 0
+    await Promise.all(
+      Array.from({ length: Math.min(3, files.length) }, async () => {
+        while (pending < files.length) {
+          const index = pending++
+          try {
+            settled[index] = {
+              status: 'fulfilled',
+              value: await api.upload(conversation, files[index]),
+            }
+          } catch (reason) {
+            settled[index] = { status: 'rejected', reason }
+          }
+        }
+      }),
+    )
     if (!alive.current) return
     setUploading((count) => count - files.length)
     const paths = settled.flatMap((result) =>

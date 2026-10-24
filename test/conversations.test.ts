@@ -1,4 +1,5 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { request as httpRequest } from 'node:http'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
@@ -15,6 +16,7 @@ import { actionExec } from '../server/actions.ts'
 import { currentAnswer, exchangeUser } from '../extensions/conversations/summary.ts'
 import { Overview } from '../extensions/conversations/overview.ts'
 import { Branch } from '../extensions/lineage/api.ts'
+import { maxUploadBytes } from '../server/uploads.ts'
 
 type Server = Awaited<ReturnType<typeof fauxServer>>
 const servers: Server[] = []
@@ -95,6 +97,63 @@ async function launch() {
       post(server, `/api/extensions/conversations/actions/${name}`, { args }),
   }
 }
+it.concurrent('validates uploads, closes oversized requests and saves accepted files', async () => {
+  const { server } = await launch()
+  const upload = (path: string, body = 'hello') =>
+    fetch(server.url + path, {
+      method: 'POST',
+      headers: { Origin: server.url, 'Content-Type': 'application/octet-stream' },
+      body,
+    })
+  const missing = await upload('/api/conversations/1/upload')
+  expect(missing.status).toBe(400)
+  expect(await missing.json()).toEqual({ error: 'Expected name' })
+  const unknown = await upload('/api/conversations/999999/upload?name=test.txt')
+  expect(unknown.status).toBe(404)
+  expect(await unknown.json()).toEqual({ error: 'Unknown conversation' })
+
+  // Send only headers: the server must reject without waiting for the advertised body.
+  const refuse = (precheck: boolean) =>
+    new Promise<{ status?: number; connection?: string; body: string }>((done, reject) => {
+      const req = httpRequest(
+        server.url + '/api/conversations/1/upload?name=big',
+        {
+          method: 'POST',
+          headers: {
+            Origin: server.url,
+            ...(precheck
+              ? { 'Content-Length': maxUploadBytes + 1 }
+              : { 'Transfer-Encoding': 'chunked' }),
+          },
+        },
+        (res) => {
+          let body = ''
+          res.setEncoding('utf8')
+          res.on('data', (chunk) => (body += chunk))
+          res.on('error', reject)
+          res.on('end', () =>
+            done({ status: res.statusCode, connection: res.headers.connection, body }),
+          )
+        },
+      )
+      req.on('error', reject)
+      if (precheck) req.flushHeaders()
+      else req.end(Buffer.alloc(maxUploadBytes + 1))
+    })
+  for (const precheck of [true, false]) {
+    const oversized = await refuse(precheck)
+    expect(oversized.status).toBe(413)
+    expect(oversized.connection).toBe('close')
+    expect(JSON.parse(oversized.body)).toEqual({ error: 'File exceeds 50 MiB' })
+  }
+
+  const saved = await upload('/api/conversations/1/upload?name=test.txt')
+  expect(saved.status).toBe(200)
+  const { path } = await saved.json()
+  expect(path).toMatch(/\/uploads\/1\/[^/]+-test\.txt$/)
+  expect(await readFile(path, 'utf8')).toBe('hello')
+})
+
 it.concurrent('reads concluded IDs from the current transaction without exposing mutable document state', async () => {
   const { server, create } = await launch()
   const id = await create()

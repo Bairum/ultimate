@@ -27,6 +27,8 @@ export type ActionArgs<Args, Options> = null extends Args
 /** The root conversation's id (`ROOT_CONVERSATION_ID` in Pi Durable): Ultimate's one ongoing conversation. */
 export const ROOT = 1
 
+const maxUploadBytes = 50 * 1024 * 1024
+
 /** A failed `api.action()`; one nobody catches becomes a notice. */
 export class ActionError extends Error {
   readonly extension: string
@@ -90,6 +92,7 @@ export function createApi(store: Store, options: { fetch?: typeof fetch } = {}) 
   return {
     /** Saves a dropped file under the project home and returns its path. */
     upload: async (id: number | undefined, file: File): Promise<string> => {
+      if (file.size > maxUploadBytes) throw new HttpError(413, 'File exceeds 50 MiB')
       const response = await request(
         `${conversation(id, 'upload')}?${new URLSearchParams({ name: file.name })}`,
         { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file },
