@@ -324,7 +324,7 @@ it('runs every gate for a granted Fall asleep once nothing works, and records wh
   await f.journal()
   let busy = true
   f.host.conversations = () =>
-    (busy ? [{ id: 20, busy: true, title: 'Woken by the automation' }] : []) as never
+    busy ? ([{ id: 20, busy: true, title: 'Woken by the automation' }] as never) : []
   let release!: (value: boolean) => void
   const waited = new Promise<boolean>((resolve) => (release = resolve))
   // The woken agent's own turn is still running when it asks: the check passes, the gates wait.
@@ -366,7 +366,7 @@ it.each(['no journal', 'open'])(
         })
       }, context)
     }
-    const wait = vi.fn(async () => true)
+    const wait = vi.fn<() => Promise<boolean>>(async () => true)
     await expect(grantedSleep(f.host, by, {}, wait)).rejects.toThrow(
       reason === 'open' ? 'Settle every' : 'No dream session has a journal yet',
     )
