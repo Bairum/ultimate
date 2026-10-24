@@ -30,7 +30,8 @@ import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import { Overview, overviewBehavior } from './overview.ts'
 import { activityBehavior } from './activity.ts'
 import { compactionEvents } from './compactions.ts'
-import { ConversationsApi, Release, Trees } from './api.ts'
+import { contextBehavior } from './context.ts'
+import { ContextUsageDoc, ConversationsApi, Release, Trees } from './api.ts'
 import {
   ConcludeAction,
   RenameAction,
@@ -50,7 +51,7 @@ const Fixed = defineDoc<{ fixed?: true }>({
   initial: () => ({}),
 })
 
-export const docs = [Summaries, Overview, Fixed]
+export const docs = [Summaries, Overview, Fixed, ContextUsageDoc]
 
 /** A fork needs its own identity; a new context head (compaction or reset) needs it again. */
 const SeenIdentity = defineDoc<{ head?: number }>({
@@ -292,6 +293,7 @@ export default (host: ExtensionHost) => {
   activityBehavior(host)
   overviewBehavior(host)
   compactionEvents(host)
+  contextBehavior(host)
   /** Whether each conversation is top-level, read once: `owner` and `parent` never change after creation. */
   const topLevel = new Map<ConversationId, boolean>()
   const summaries = summaryBehavior(host)

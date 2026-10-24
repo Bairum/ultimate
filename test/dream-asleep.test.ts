@@ -25,14 +25,16 @@ import { Todos } from '../extensions/todos/server.ts'
 import {
   actions,
   fileJournal,
+  grantedSleep,
   Sessions,
+  sleepWhenIdle,
   startSession,
   userActions,
 } from '../extensions/dream/server.ts'
 import type { Sleep } from '../extensions/dream/refs.ts'
 import type { Seed } from '../extensions/dream/types.ts'
 import { inspection } from './dream-fixture.ts'
-import { temp } from './helpers.ts'
+import { temp, until } from './helpers.ts'
 
 const harnesses: Harness[] = []
 afterEach(async () => {
@@ -314,6 +316,139 @@ it('stays when the backup fails or the instance service is missing', async () =>
   expect(await actions.asleep({ session: 1 }, f.call)).toMatchObject({
     sleep: { phase: 'failed', error: expect.stringContaining('instance extension') },
   })
+})
+
+const by = { automation: 'A4', name: 'Dream at 80%', at: 5 }
+
+/** Admit a granted Fall asleep in one commit, as `automation act` does; returns the attempt that holds the session. */
+async function admit(f: Awaited<ReturnType<typeof fixture>>) {
+  await f.harness.commit((tx) => grantedSleep(f.host, tx, by, {}), context)
+  const sleep = (await f.harness.snapshot(Sessions, ROOT_CONVERSATION_ID, context))!.sessions[0]
+    .sleep!
+  return sleep.attempt!
+}
+
+it('runs every gate for a granted Fall asleep once nothing works, and records who did it', async () => {
+  const f = await fixture()
+  await f.journal()
+  let busy = true
+  f.host.conversations = () =>
+    busy ? ([{ id: 20, busy: true, title: 'Woken by the automation' }] as never) : []
+  // The woken agent's own turn is still running when it asks: the session is reserved, the gates wait.
+  const attempt = await admit(f)
+  const input = { session: 1, by, deadline: by.at + 60_000 }
+  expect(await sleepWhenIdle(f.host, input, attempt, by.at)).toBe('look')
+  expect(f.phases.map((item) => item.phase)).toEqual(['waiting'])
+  // The user cannot start a second sleep over the reservation.
+  await expect(actions.asleep({ session: 1 }, f.call)).rejects.toThrow('already falling asleep')
+  busy = false
+  // The gates run outside the task step: a successful switch never returns, and a step waiting on it would hold the
+  // old process's shutdown.
+  expect(await sleepWhenIdle(f.host, input, attempt, by.at)).toBe('started')
+  await until(() => f.phases.at(-1)?.phase === 'failed')
+  expect(f.phases.at(-1)?.error).toBe('Error: Restart refused')
+  expect(f.phases.map((item) => item.phase)).toEqual([
+    'waiting',
+    'seeding',
+    'checking',
+    'backing up',
+    'backing up',
+    'switching',
+    'failed',
+  ])
+  expect(f.phases.every((item) => item.by?.automation === 'A4')).toBe(true)
+  expect(f.instances.start).toHaveBeenCalledOnce()
+  expect(f.cloud.backup).toHaveBeenCalledOnce()
+  expect(f.host.restart).toHaveBeenCalledOnce()
+  // The seed the next chapter opens with names the automation, so its morning card can say so.
+  expect(f.current().by).toEqual(by)
+  expect(existsSync(join(f.home, 'pending-chapter.json'))).toBe(false)
+})
+
+it.each(['no journal', 'open'])(
+  'refuses a granted Fall asleep with %s at once, before any wait',
+  async (reason) => {
+    const f = await fixture()
+    if (reason === 'open') {
+      await f.journal()
+      await f.harness.commit(async (tx) => {
+        ;(await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions[0].proposals.push({
+          id: 'p',
+          pass: 'tools',
+          title: 'Fix',
+          status: 'open',
+        })
+      }, context)
+    }
+    await expect(admit(f)).rejects.toThrow(
+      reason === 'open' ? 'Settle every' : 'No dream session has a journal yet',
+    )
+    expect(f.phases).toEqual([])
+    expect(f.instances.start).not.toHaveBeenCalled()
+  },
+)
+
+it('records a granted Fall asleep whose wait ran out, and switches nothing', async () => {
+  const f = await fixture()
+  await f.journal()
+  f.host.conversations = () => [{ id: 20, busy: true, title: 'Still working' }] as never
+  const attempt = await admit(f)
+  const input = { session: 1, by, deadline: by.at + 60_000 }
+  expect(await sleepWhenIdle(f.host, input, attempt, input.deadline)).toBe('done')
+  expect(f.phases.at(-1)).toMatchObject({
+    phase: 'failed',
+    by,
+    error: expect.stringContaining('kept working'),
+  })
+  expect(f.instances.start).not.toHaveBeenCalled()
+  expect(f.host.restart).not.toHaveBeenCalled()
+})
+
+it("credits the user's own retry after a failed granted sleep to the user", async () => {
+  const f = await fixture()
+  await f.journal()
+  f.host.conversations = () => [{ id: 20, busy: true, title: 'Still working' }] as never
+  const attempt = await admit(f)
+  const input = { session: 1, by, deadline: by.at + 60_000 }
+  await sleepWhenIdle(f.host, input, attempt, input.deadline)
+  expect(f.phases.at(-1)).toMatchObject({ phase: 'failed', by })
+  f.host.conversations = () => []
+  await actions.asleep({ session: 1 }, f.call)
+  const admitted = f.phases.find((item, index) => index > 1 && item.phase === 'seeding')
+  expect(admitted?.by).toBeUndefined()
+  expect(f.phases.slice(2).every((item) => item.by === undefined)).toBe(true)
+})
+
+it('never frees the lock of a chapter change it was refused by', async () => {
+  const f = await fixture()
+  await f.journal()
+  const attempt = await admit(f)
+  // The user's own chapter change holds the lock while the granted attempt looks.
+  const lock = f.host.resource('dream.switching', () => ({ busy: false }))
+  lock.busy = true
+  const input = { session: 1, by, deadline: by.at + 60_000 }
+  expect(await sleepWhenIdle(f.host, input, attempt, by.at)).toBe('done')
+  expect(lock.busy).toBe(true)
+  expect(f.phases.at(-1)).toMatchObject({
+    phase: 'failed',
+    error: expect.stringContaining('already running'),
+  })
+  expect(f.instances.start).not.toHaveBeenCalled()
+})
+
+it('leaves a sleep another attempt holds alone', async () => {
+  const f = await fixture()
+  await f.journal()
+  const attempt = await admit(f)
+  // The reservation fails and the user falls asleep themselves; the stale attempt must not touch that sleep.
+  await f.harness.commit(async (tx) => {
+    const found = (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions[0]
+    found.sleep = { chapter: 'fresh-roots', phase: 'checking', at: 9 }
+  }, context)
+  const input = { session: 1, by, deadline: by.at + 60_000 }
+  expect(await sleepWhenIdle(f.host, input, attempt, by.at)).toBe('done')
+  expect(f.phases.at(-1)).toEqual({ chapter: 'fresh-roots', phase: 'checking', at: 9 })
+  expect(f.instances.start).not.toHaveBeenCalled()
 })
 
 it('stays when another conversation starts during the gate or backup', async () => {

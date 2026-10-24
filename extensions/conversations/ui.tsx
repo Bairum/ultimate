@@ -26,4 +26,11 @@ export { ConversationRef, FeatureTag, useOverview, useStandingName } from './fea
 export { AgentMark, agentTitle } from './marks.tsx'
 export type { Presence } from './marks.tsx'
 export { hiddenConversationIds } from './visible.tsx'
-export { Compacted, ConcludeAction, OverviewDoc, RenameAction, ResumeAction } from './refs.ts'
+export {
+  Compacted,
+  ConcludeAction,
+  ContextDoc,
+  OverviewDoc,
+  RenameAction,
+  ResumeAction,
+} from './refs.ts'

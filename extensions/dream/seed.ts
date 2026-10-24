@@ -4,17 +4,18 @@ import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { readJson, writeJson } from '../../lib/json-file.ts'
-import { SubagentsApi } from '../subagents/api.ts'
+import { Standing, SubagentsApi } from '../subagents/api.ts'
 import type { MemoryItem } from '../lineage/refs.ts'
 import type { Todo } from '../todos/refs.ts'
 import { Roots } from '../lineage/api.ts'
 import { Messages } from '../messages/api.ts'
 import type { Automation } from '../automations/types.ts'
+import { AfterCompactionDoc, compactionSummary } from './after-compaction.ts'
 import { deliver } from './delivery.ts'
 import type { Session } from './refs.ts'
 import type { Seed } from './types.ts'
 
-/** Application and schedule receipts on conversation 1; the seed file itself stays on disk. */
+/** Application and automation receipts on conversation 1; the seed file itself stays on disk. */
 export const SeedState = defineDoc<{ applied?: number; automations: string[] }>({
   kind: 'dream.seed',
   checkpointWhen: () => false,
@@ -73,22 +74,51 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
     const todos = (await document<{ items: Todo[] }>(host, tx, 'todos')).items
       .filter((item) => item.done === undefined)
       .map(({ text, owner }) => ({ text, owner }))
-    const schedules = automations
-      .filter((item) => item.enabled && item.schedule)
+    // The built-in dream trigger is dream's own: the new chapter makes it again, as it was here.
+    const own = (await tx.doc(AfterCompactionDoc, ROOT_CONVERSATION_ID)).id
+    const builtIn = automations.find((item) => item.id === own)
+    // A compaction's dream continues what @ultimate was doing: its latest summary goes along.
+    const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
+    const summary =
+      found.afterCompaction && ultimate !== undefined
+        ? await compactionSummary(tx, ultimate)
+        : undefined
+    const triggers = automations
+      .filter(
+        (item) =>
+          item.id !== own && item.enabled && (item.schedule || item.event || item.condition),
+      )
       .map((item) => {
         const { name, prompt, agent, model, thinking } = item
-        const schedule = item.schedule!
         return {
           name,
           prompt,
-          schedule,
+          ...(item.schedule ? { schedule: item.schedule } : {}),
+          ...(item.event
+            ? {
+                event: {
+                  name: item.event.name,
+                  ...(item.event.where ? { where: item.event.where } : {}),
+                },
+              }
+            : {}),
+          ...(item.condition
+            ? {
+                condition: {
+                  metric: item.condition.metric,
+                  of: item.condition.of,
+                  above: item.condition.above,
+                  cooldownMs: item.condition.cooldownMs,
+                },
+              }
+            : {}),
           ...(agent ? { agent } : {}),
           ...(model ? { model } : {}),
           ...(thinking ? { thinking } : {}),
         }
       })
     const names = new Set<string>()
-    for (const { name } of schedules) {
+    for (const { name } of triggers) {
       if (names.has(name)) throw new Error(`Chapter seed needs unique automation names: ${name}`)
       names.add(name)
     }
@@ -113,15 +143,19 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
         memories,
         todos,
         questions,
-        automations: schedules,
+        automations: triggers,
         scripts: watchers,
         counts: {
           memories: Object.keys(memories).length,
           todos: todos.length,
           questions: questions.length,
-          automations: schedules.length,
+          automations: triggers.length,
           scripts: watchers.length,
         },
+        afterCompaction: builtIn ? { enabled: builtIn.enabled } : null,
+        ...(summary && ultimate !== undefined
+          ? { continues: { conversation: ultimate, summary } }
+          : {}),
       }),
     ) as Seed
   }, context)
@@ -138,14 +172,29 @@ function chapterText(host: ExtensionHost, seed: Seed) {
     `Carried: ${Object.entries(seed.counts)
       .map(([kind, count]) => `${count} ${kind}`)
       .join(', ')}.`,
-    'Greet the user in one or two lines and say you are ready. They check you next in a side chat: what this project is, what is open, what the rules are and who you work with.',
+    ...(seed.continues
+      ? [
+          '',
+          `A compaction of your context started the dream that led here. Before it, you were working on this (your compaction summary, #${seed.continues.conversation} in ${from.name}):`,
+          '<summary>',
+          seed.continues.summary,
+          '</summary>',
+          '',
+          'Greet the user in one or two lines, say you are ready, then continue that work: check what is still open (branches, questions, to-dos) and pick it up. The user may check you in a side chat: what this project is, what is open, what the rules are and who you work with.',
+        ]
+      : [
+          'Greet the user in one or two lines and say you are ready. They check you next in a side chat: what this project is, what is open, what the rules are and who you work with.',
+        ]),
   ].join('\n')
 }
 
-/** Apply documents and schedule the chapter entry atomically; reconcile scheduler effects after that commit. */
+/**
+ * Apply documents and schedule the chapter entry atomically; reconcile scheduler effects after that commit. Returns the
+ * chapter's seed, if it has one.
+ */
 export async function applySeed(host: ExtensionHost) {
   const seed = await readJson<Seed | undefined>(join(host.chapter.dir, 'seed.json'), undefined)
-  if (!seed) return
+  if (!seed) return undefined
   const harness = host.harness()
   const state = await harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context)
   if (state?.applied === undefined) {
@@ -174,10 +223,10 @@ export async function applySeed(host: ExtensionHost) {
             text: `Recreate script ${id} (${name}): ${ask}${prompt ? ` · prompt: ${prompt}${agent ? ` (agent ${agent})` : ''}` : ''}`,
           })),
         ...seed.automations
-          .filter((item) => !item.prompt)
-          .map(({ name, schedule }) => ({
+          .filter((item) => !item.prompt || item.condition?.of.startsWith('#'))
+          .map(({ name, schedule, event, condition }) => ({
             owner: 'ultimate' as const,
-            text: `Recreate schedule automation (${name}) with new subscribers: ${JSON.stringify(schedule)}`,
+            text: `Recreate ${schedule ? 'schedule' : event ? 'event' : 'context'} automation (${name}) with new ${condition?.of.startsWith('#') ? 'conversation target' : 'subscribers'}: ${JSON.stringify(schedule ?? event ?? condition)}`,
           })),
       ]
       for (const item of carried) todos.items.push({ ...item, id: todos.next++, at: Date.now() })
@@ -195,6 +244,7 @@ export async function applySeed(host: ExtensionHost) {
           session: seed.session,
           learned: seed.journal.learned,
           carried: seed.counts,
+          ...(seed.by ? { by: seed.by } : {}),
         },
         content: chapterText(host, seed),
       })
@@ -203,20 +253,23 @@ export async function applySeed(host: ExtensionHost) {
   }
   const signal = new AbortController().signal
   for (const automation of seed.automations) {
-    if (!automation.prompt) continue
+    if (!automation.prompt || automation.condition?.of.startsWith('#')) continue
     const receipt = await harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context)
     if (receipt?.automations.includes(automation.name)) continue
     if (seed.gate) {
       // The gate's preview runs against the real project: it checks each schedule but creates nothing that could fire.
-      await host.invoke('automations', 'describe', { schedule: automation.schedule }, signal)
+      if (automation.schedule)
+        await host.invoke('automations', 'describe', { schedule: automation.schedule }, signal)
     } else {
       // Names are unique in a seed and the destination starts empty: a matching name is a create whose receipt was lost.
-      // A rediscovered project script may share the name: only a schedule counts as the lost create.
-      const current = (await host.invoke('automations', 'list', null, signal)) as {
-        name: string
-        schedule?: unknown
-      }[]
-      if (!current.some((item) => item.schedule && item.name === automation.name))
+      // A rediscovered project script may share the name: only a carried trigger counts as the lost create.
+      const current = (await host.invoke('automations', 'list', null, signal)) as Automation[]
+      if (
+        !current.some(
+          (item) =>
+            (item.schedule || item.event || item.condition) && item.name === automation.name,
+        )
+      )
         await host.invoke('automations', 'create', automation, signal)
     }
     await harness.commit(async (tx) => {
@@ -225,4 +278,5 @@ export async function applySeed(host: ExtensionHost) {
     }, context)
   }
   harness.resume()
+  return seed
 }

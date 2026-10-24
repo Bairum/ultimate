@@ -6,12 +6,14 @@ import {
   RadarIcon,
   SkipForwardIcon,
   XIcon,
+  ZapIcon,
 } from 'lucide-react'
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { api, cn, formatDuration, formatTime, useUltimate } from '@/sdk'
-import { ListAction } from './refs.ts'
-import type { Automation, AutomationListItem, Run, Schedule } from './refs.ts'
+import { Switch } from '@/components/ui/switch'
+import { api, cn, errorMessage, formatDuration, formatTime, useUltimate } from '@/sdk'
+import { GrantRef, ListAction } from './refs.ts'
+import type { Automation, AutomationListItem, GrantAction, Run, Schedule } from './refs.ts'
 
 /** A one-shot schedule whose time has passed: resuming it would fire at once, so its switch stays off. */
 export const spent = (automation: Automation, now: number) =>
@@ -112,6 +114,8 @@ export type Look =
   | 'working'
   | 'watching'
   | 'scheduled'
+  | 'armed'
+  | 'waiting'
   | 'paused'
   | 'done'
 export const looks: Record<
@@ -130,6 +134,8 @@ export const looks: Record<
   working: { dot: 'bg-brand', text: 'text-brand', word: 'working', rank: 2, busy: true },
   watching: { dot: 'bg-success', text: 'text-success', word: 'watching', rank: 3 },
   scheduled: { dot: 'bg-success', text: 'text-success', word: 'scheduled', rank: 3 },
+  armed: { dot: 'bg-success', text: 'text-success', word: 'armed', rank: 3 },
+  waiting: { dot: 'bg-success', text: 'text-success', word: 'waiting', rank: 3 },
   paused: { dot: 'bg-muted-foreground/50', text: 'text-muted-foreground', word: 'paused', rank: 4 },
   done: { dot: 'bg-muted-foreground/50', text: 'text-muted-foreground', word: 'done', rank: 5 },
 }
@@ -144,7 +150,11 @@ export function lookOf(automation: Automation, now: number): Look {
   if (last === 'failed' && (automation.enabled || state === 'done')) return 'failed'
   if (state === 'running') return 'watching'
   if (state === 'done') return 'done'
-  if (automation.enabled) return 'scheduled'
+  if (automation.enabled) {
+    if (automation.condition) return automation.condition.armed ? 'armed' : 'waiting'
+    if (automation.event) return 'watching'
+    return 'scheduled'
+  }
   return spent(automation, now) ? 'done' : 'paused'
 }
 
@@ -175,7 +185,7 @@ export function Dot({ look, className }: { look: Look; className?: string }) {
   )
 }
 
-/** The trigger at a glance: a clock for a schedule, a radar for a watching script. */
+/** A clock for schedules, radar for scripts, bolt for Ultimate events and context. */
 export function KindIcon({
   automation,
   className,
@@ -183,12 +193,21 @@ export function KindIcon({
   automation: Automation
   className?: string
 }) {
-  const Icon = automation.script ? RadarIcon : CalendarClockIcon
+  const kind = automation.event
+    ? 'event'
+    : automation.condition
+      ? 'context'
+      : automation.script
+        ? 'script'
+        : 'schedule'
+  const Icon =
+    automation.event || automation.condition
+      ? ZapIcon
+      : automation.script
+        ? RadarIcon
+        : CalendarClockIcon
   return (
-    <Icon
-      aria-label={automation.script ? 'script' : 'schedule'}
-      className={cn('size-3 shrink-0 text-muted-foreground/70', className)}
-    />
+    <Icon aria-label={kind} className={cn('size-3 shrink-0 text-muted-foreground/70', className)} />
   )
 }
 
@@ -214,6 +233,18 @@ export function stateLine(automation: Automation, now: number): string {
   const look = lookOf(automation, now)
   const script = automation.script
   const last = automation.runs.at(-1)
+  if (automation.condition && !attention(look) && look !== 'working') {
+    const condition = automation.condition
+    return condition.armed
+      ? condition.value === undefined
+        ? 'context not seen yet'
+        : `${Math.round(condition.value)}% now`
+      : `${automation.lastFireAt ? `fired ${clock(automation.lastFireAt, now)} · ` : ''}${condition.above > 10 ? `re-arms below ${condition.above - 10}%` : 're-arms after a compaction'}`
+  }
+  if (automation.event && !attention(look) && look !== 'working')
+    return automation.fires
+      ? `fired ${automation.fires} ${automation.fires === 1 ? 'time' : 'times'}${automation.lastFireAt ? ` · last ${clock(automation.lastFireAt, now)}` : ''}`
+      : 'never fired'
   const parts: (string | false | undefined)[] = []
   if (look === 'failed')
     parts.push(
@@ -240,6 +271,148 @@ export function stateLine(automation: Automation, now: number): string {
       parts.push(`last ${statusLabel(last.status)} ${ago(last.finishedAt ?? last.firedAt, now)}`)
   }
   return parts.filter(Boolean).join(' · ')
+}
+
+/** Browser-safe wording for the two domain triggers. */
+export function triggerWords(automation: Automation) {
+  if (automation.event) {
+    const filters = Object.entries(automation.event.where ?? {}).map(
+      ([key, value]) => `${key}=${value}`,
+    )
+    return `on ${automation.event.name}${filters.length ? ` where ${filters.join(', ')}` : ''}`
+  }
+  if (automation.condition)
+    return `when ${automation.condition.of} context ≥ ${automation.condition.above}%`
+  return ''
+}
+
+const grantActions: { action: GrantAction; label: string; hint: string }[] = [
+  { action: 'dream', label: 'Start a dream', hint: 'Start a dream session without asking.' },
+  {
+    action: 'compact',
+    label: 'Compact',
+    hint: 'Compact the watched context, or the woken conversation.',
+  },
+  {
+    action: 'asleep',
+    label: 'Fall asleep (switch chapter)',
+    hint: 'Switch chapters after every gate passes, without asking.',
+  },
+]
+
+export function GrantBadge({ automation }: { automation: Automation }) {
+  // Only a woken subscriber can act on a grant; prompt runs never do.
+  if (!automation.subscribers.length)
+    return automation.grant?.actions.length ? (
+      <p
+        className="mt-1 w-fit max-w-full text-[11.5px] break-words text-muted-foreground"
+        data-automation-grant={automation.id}
+      >
+        Granted, but unused: it wakes no conversation
+      </p>
+    ) : null
+  return (
+    <p
+      className={cn(
+        'mt-1 w-fit max-w-full rounded-sm px-1.5 py-0.5 text-[11.5px] break-words',
+        automation.grant?.actions.length
+          ? 'border border-brand/30 bg-brand/5 text-foreground'
+          : 'text-muted-foreground',
+      )}
+      data-automation-grant={automation.id}
+    >
+      {automation.grant?.actions.length
+        ? `Acts on its own: ${automation.grant.actions.map((action) => (action === 'asleep' ? 'fall asleep (switch chapter)' : action)).join(', ')}`
+        : 'No permission to act on its own'}
+    </p>
+  )
+}
+
+/** Three independent permissions: dreaming never implies switching chapters. */
+export function GrantSwitches({
+  actions,
+  source,
+  busy,
+  wakes = true,
+  onChange,
+}: {
+  actions: GrantAction[]
+  source: string
+  busy?: boolean
+  /** Whether the automation wakes a conversation: only a woken one can act on a grant. */
+  wakes?: boolean
+  onChange: (actions: GrantAction[]) => void
+}) {
+  return (
+    <fieldset className="flex flex-col gap-2 rounded-md border border-border/80 bg-card/40 p-2.5">
+      <legend className="px-1 text-[12.5px] font-medium">May act without asking</legend>
+      {!wakes && (
+        <p className="text-[11.5px] text-muted-foreground">
+          Only a conversation it wakes can act on a grant; prompt runs never do.
+        </p>
+      )}
+      {grantActions.map(({ action, label, hint }) => (
+        <label className="flex items-start gap-2 text-[12px]" key={action}>
+          <Switch
+            aria-label={label}
+            checked={actions.includes(action)}
+            busy={busy}
+            // Without a woken conversation a permission can be withdrawn but not added.
+            disabled={!wakes && !actions.includes(action)}
+            onCheckedChange={(checked) =>
+              onChange(checked ? [...actions, action] : actions.filter((item) => item !== action))
+            }
+          />
+          <span className="min-w-0">
+            <span className="block">{label}</span>
+            <span className="block text-[11.5px] text-muted-foreground">{hint}</span>
+          </span>
+        </label>
+      ))}
+      <p className="text-[11px] break-words text-muted-foreground">Source: {source}</p>
+    </fieldset>
+  )
+}
+
+/** User-only grant action, shared by the edit form and expanded rows. */
+export function GrantEditor({ automation }: { automation: Automation }) {
+  const [current, setCurrent] = useState(automation)
+  useEffect(() => setCurrent(automation), [automation])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const source = current.grant?.source ?? 'Set in Automations'
+  const change = async (actions: GrantAction[]) => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      setCurrent(await api.action(GrantRef, { id: automation.id, actions, source }))
+      await refreshAutomations()
+    } catch (failure) {
+      setError(errorMessage(failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <GrantSwitches
+        actions={current.grant?.actions ?? []}
+        busy={busy}
+        wakes={current.subscribers.length > 0}
+        onChange={(actions) => {
+          // oxlint-disable-next-line typescript/no-floating-promises -- change displays failures inline.
+          void change(actions)
+        }}
+        source={source}
+      />
+      <p className="text-[11px] text-muted-foreground">Permission changes apply immediately.</p>
+      {error && (
+        <p role="alert" className="text-[11.5px] text-error">
+          {error}
+        </p>
+      )}
+    </div>
+  )
 }
 
 type Polled = { data?: AutomationListItem[]; error?: unknown }

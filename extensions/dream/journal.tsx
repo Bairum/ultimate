@@ -9,6 +9,7 @@ import type { EntryRecord } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { MoonRow, Passes, passLabels } from './moon.tsx'
 import { FallAsleep } from './sleep.tsx'
+import { Granted } from './morning.tsx'
 import { DreamDoc, EndAction } from './refs.ts'
 import type { Proposal, Session, SessionEntry } from './refs.ts'
 
@@ -65,6 +66,20 @@ export function StartedCard({ entry }: { entry: EntryRecord }) {
       }
       session={id}
     >
+      {session?.by && (
+        <div className="border-b border-border/60 px-3 py-1.5">
+          <Granted by={session.by} what="started this dream" />
+        </div>
+      )}
+      {session?.afterCompaction && (
+        <p
+          className="border-b border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground"
+          data-dream-after-compaction={session.afterCompaction.automation}
+        >
+          Started after my context compacted · automation {session.afterCompaction.automation}
+          {session.afterCompaction.handsOff && ' · I decide the proposals under your grant'}
+        </p>
+      )}
       {session && !filed && (
         <>
           <div className="px-3 py-2.5">
@@ -80,6 +95,61 @@ export function StartedCard({ entry }: { entry: EntryRecord }) {
             ? 'Journal filed below.'
             : `Journal filed below. Session complete.`}
         </p>
+      )}
+    </Card>
+  )
+}
+
+/**
+ * `dream.settled`: a compaction's dream settled, and whether it was worth a fresh chapter. Below the threshold we stay;
+ * at or above it either the automation's grant falls asleep (its progress shows here), or the user decides with the
+ * Fall asleep section below.
+ */
+export function SettledCard({ entry }: { entry: EntryRecord }) {
+  const { session: id } = entry.data as SessionEntry
+  const session = useSession(id)
+  const outcome = session?.afterCompaction?.outcome
+  // Only the newest session falls asleep, as on the journal card.
+  const newest = useDocOf(1, DreamDoc)?.sessions.at(-1)?.id === id
+  return (
+    <Card
+      header={
+        <>
+          <MoonStarIcon className="size-3.5 text-brand" />
+          <span className="text-foreground">Dream settled</span>
+          <span>session {id}</span>
+          {outcome && <span>{formatTime(outcome.at)}</span>}
+        </>
+      }
+      session={id}
+    >
+      {!session || !outcome ? (
+        <p className="px-3 py-3 text-[12px] text-muted-foreground">Loading…</p>
+      ) : (
+        <>
+          <div className="space-y-1 px-4 py-3" data-dream-settled={outcome.result}>
+            <p className="text-[13px] text-foreground">
+              {outcome.result === 'stay'
+                ? 'Staying in this chapter'
+                : outcome.result === 'asleep'
+                  ? 'Worth a fresh chapter: falling asleep under your grant'
+                  : 'Worth a fresh chapter'}
+            </p>
+            <p className="font-mono text-[11px] text-muted-foreground">
+              {outcome.changes} change{outcome.changes === 1 ? '' : 's'} landed or applied · a fresh
+              chapter takes {outcome.threshold}
+            </p>
+            {outcome.error && (
+              <p className="text-[12px] text-muted-foreground">
+                <span className="text-warning">The grant could not fall asleep:</span>{' '}
+                {outcome.error}
+              </p>
+            )}
+          </div>
+          {outcome.result !== 'stay' && (newest || session.sleep) && (
+            <FallAsleep session={session} />
+          )}
+        </>
       )}
     </Card>
   )
@@ -119,7 +189,11 @@ export function JournalCard({ entry }: { entry: EntryRecord }) {
           <Text text={journal.text} />
           {session.proposals.length > 0 && <Proposals session={session} />}
           <Footer session={session} />
-          {(newest || session.sleep) && <FallAsleep session={session} />}
+          {/* A compaction's dream that was worth a chapter offers Fall asleep on its settled card, below. */}
+          {(newest || session.sleep) &&
+            !(
+              session.afterCompaction?.outcome && session.afterCompaction.outcome.result !== 'stay'
+            ) && <FallAsleep session={session} />}
         </>
       )}
     </Card>
@@ -205,6 +279,7 @@ function Proposals({ session }: { session: Session }) {
                     · retires memory <span className="text-foreground/80">{proposal.retire}</span>
                   </span>
                 )}
+                {proposal.reason && <span title="Why I decided it">· {proposal.reason}</span>}
                 {proposal.branch !== undefined && (
                   <button
                     className="flex min-w-0 cursor-pointer items-center gap-1 hover:text-foreground"

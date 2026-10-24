@@ -14,13 +14,19 @@ errors are found in conversation entries.
 
 ## For @ultimate
 
-A `dream.started` input means the user pressed Dream. Start one branch with `branch`, prompt:
+A `dream.started` input means a dream began: the user pressed Dream, a granted automation started it, or your own
+context compaction did (the built-in "Dream after compaction" automation, which waits until no other conversation
+works). Start one branch with `branch`, prompt:
 
 > Dream session N. Follow "For the dream branch" in the clone's extensions/dream/DREAM.md.
 
 Name the memory slugs the user cares about most in it, always including the memory about the user (`about-<name>`).
 The branch answers you with the journal's proposals as a `Decisions:` block; its card is already in your conversation.
-Relay the decisions to the user. For each answer:
+Relay the decisions to the user as one message with structured `questions`; at night they wait for the morning. Only
+when the `dream.started` input says the user granted "dream" on the automation that started it are you hands-off:
+decide each proposal yourself, as the user would (keep what is evidenced and small; skip what is risky or vague), and
+record it with `decide {…, reason}`, one line on why; then tell the user what you decided in one message with
+reply: false. Never decide hands-off otherwise. For each decision:
 
 - **Approved code, prompt or doc change:** start a branch for it (it is ordinary work: assess or build, review, land),
   then `decide {status: 'approved', branch}`. The dream marks it landed when that branch lands.
@@ -29,6 +35,12 @@ Relay the decisions to the user. For each answer:
 
 A codified memory (`retire` on the proposal) stays until its branch lands; then delete or update it with `remember`.
 The session ends by itself once every proposal is settled; the user can also end it from the journal card.
+
+When a compaction's dream settles, a `dream.settled` entry says whether it was worth a fresh chapter (landed and
+applied changes against the `dream.asleepAfter` setting, default 5). Below it, carry on in this chapter. At or above
+it, either the automation's `asleep` grant falls asleep by itself (every gate still runs; nothing to do), or the input
+asks you to ask the user: send one message with a `choice` question (Fall asleep now / Later) and point at the card's
+Fall asleep button, which only they press. Never call `asleep` or `automation act {do: 'asleep'}` for it yourself.
 
 ## For the dream branch
 
@@ -70,4 +82,5 @@ conversation only where they point at something.
   skill (a multi-step procedure agents repeat across conversations but need only sometimes: clone `skills/`, the
   project's `.ultimate/skills/` or the user's `~/.ultimate/skills/`), or stays a memory (context about the project or
   the user). Say the memory delete or update that follows once it is
-  codified.
+  codified. Also check the skills that exist: one that is stale, duplicated or never read gets an update or removal
+  proposal.
