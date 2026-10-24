@@ -40,7 +40,7 @@ needs `Authorization: Bearer <ULTIMATE_CLOUD_TOKEN>`; `<p>` is the SHA-256 hex o
   `{ id, machine, at, bytes, uploaded, parent, tailnet? }`).
 - `GET /sync/register`: `{ projects: [{ hash, key, name, latest }], machines: [{ machine, at, projects }] }`.
 
-**Back up now** (`backup { force? }`, user-only) uploads an encrypted snapshot of the open database and the `ultimate/*`
+**Back up now** (`backup { force? }`, also callable by agents) uploads an encrypted snapshot of the open database and the `ultimate/*`
 branches, then commits it with this home's **parent**: the backup it last uploaded or restored, kept in
 `<home>/cloud-backup.json` (`{ key, parent, last }`). The commit names the machine, the project's folder name, the key, the chapter's name and number,
 and the tailnet address (from `tailscale`, when published). On 200 the new backup

@@ -52,7 +52,11 @@ export const branchTool = (host: ExtensionHost) =>
         const rootAgent = await (await host
           .harness()
           .conversation(root as ConversationId, ctx))!.agent(ctx)
-        const { model, thinkingLevel } = definitionAgent(coordinator, rootAgent, host.modelRuntime)
+        const { model, thinkingLevel, modelTools } = definitionAgent(
+          coordinator,
+          rootAgent,
+          host.modelRuntime,
+        )
         const branch = await lineage.branch(
           {
             from: root,
@@ -67,10 +71,12 @@ export const branchTool = (host: ExtensionHost) =>
           },
           ctx,
         )
-        // The fork has no input yet. Its instructions come from the definition; its tools stay inherited.
+        // The fork has no input yet. Its instructions come from the definition; its tools stay inherited, plus the
+        // deferred ones the definition names (an overlay's `addTools: [debug]`).
         await host.harness().commit(async (tx) => {
           await configure(tx, branch.id, {
             instructions: coordinator.instructions,
+            ...(modelTools && 'add' in modelTools && modelTools.add?.length ? { modelTools } : {}),
           })
           ;(await tx.doc(host.metadata, branch.id)).label = 'coordinator'
           ;(await tx.doc(Started, branch.id)).by = from

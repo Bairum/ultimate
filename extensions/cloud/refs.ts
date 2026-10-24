@@ -6,7 +6,7 @@ import type { CloudState, LastBackup } from './types.ts'
 /** No arguments → whether backups run here, the last backup, a running upload and a refused one. */
 export const StateAction = actionRef<null, CloudState>('cloud', 'state')
 /**
- * User-only `{ force? }` → the finished backup: upload an encrypted snapshot of the database and the `ultimate/*`
+ * `{ force? }` → the finished backup: upload an encrypted snapshot of the database and the `ultimate/*`
  * branches, then commit it with this home's parent. Fails with the Worker's sentence when another machine backed up
  * after that parent; `force` replaces that backup. One at a time, never while paused.
  */

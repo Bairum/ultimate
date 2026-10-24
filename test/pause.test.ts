@@ -21,7 +21,12 @@ import { prepareHarness } from '../server/harness.ts'
 import type { OpenHost } from '../server/harness.ts'
 import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
-import pauseExtension, { actions, passive } from '../extensions/pause/server.ts'
+import pauseExtension, {
+  actions,
+  autoPlay,
+  passive,
+  userActions,
+} from '../extensions/pause/server.ts'
 import { lasted } from '../extensions/pause/lasted.ts'
 import { PauseApi } from '../extensions/pause/api.ts'
 import { apis, removeTemps, temp, until } from './helpers.ts'
@@ -123,6 +128,9 @@ async function fixture(home?: string) {
     prepared,
     open,
     action,
+    setAutoPlay: (minutes: number | null) =>
+      actions.autoPlay({ minutes }, { host } as unknown as ActionContext),
+    autoPlay: (now: number) => autoPlay(host, now),
     paused: () => services.want(PauseApi)!.paused(),
     get opened() {
       return opened!
@@ -468,6 +476,89 @@ it('records a limit into a pause the user started, so it still shows', async () 
   await until(async () => (await f.action('state')).limit !== undefined)
   await f.action('play')
   expect((await submission.wait(context)).status).toBe('done')
+})
+
+it('plays a rate-limit pause by itself once, N minutes in, only when the user switched it on', async () => {
+  const f = await fixture()
+  let responses = 0
+  f.prepared.faux!.setResponses([
+    () => {
+      responses++
+      return fauxAssistantMessage('', { stopReason: 'error', errorMessage: limit })
+    },
+    () => {
+      responses++
+      return fauxAssistantMessage([fauxText('done')])
+    },
+  ])
+  const { root, harness } = await f.open()
+  const ultimate = await harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
+  await harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = ultimate.id
+  }, context)
+  const submission = await root.submit({ type: 'input', content: 'go' }, context)
+  await until(async () => (await f.action('state')).limit !== undefined)
+  const { since } = await f.action('state')
+  // Off by default: no time ever plays it.
+  expect((await f.action('state')).autoPlay).toBeUndefined()
+  expect(await f.autoPlay(since! + 365 * 86_400_000)).toBe(false)
+  expect(f.paused()).toBe(true)
+
+  const set = await f.setAutoPlay(30)
+  expect(set).toMatchObject({ autoPlay: 30, autoPlayAt: since! + 30 * 60_000 })
+  // Not yet due.
+  expect(await f.autoPlay(since! + 29 * 60_000)).toBe(false)
+  expect(f.paused()).toBe(true)
+  expect(await f.autoPlay(since! + 30 * 60_000)).toBe(true)
+  expect(f.paused()).toBe(false)
+  expect((await submission.wait(context)).status).toBe('done')
+  expect(responses).toBe(2)
+  // Once: the pause is over, so a second due timer finds nothing to play.
+  expect(await f.autoPlay(since! + 31 * 60_000)).toBe(false)
+  const played = (await ultimate.context(context)).entries.filter(
+    (entry) => entry.kind === 'pause.autoplay',
+  )
+  expect(played).toHaveLength(1)
+  expect(played[0].data).toMatchObject({ since, at: since! + 30 * 60_000, minutes: 30 })
+  const notes = (await root.context(context)).entries.filter((entry) => entry.kind === 'pause.note')
+  expect(notes[0].data).toMatchObject({ auto: true })
+  expect(notes[0].model?.[0]?.content).toMatch(/continued after Ultimate played by itself\.$/)
+  // The setting stays for the next limit.
+  expect((await f.action('state')).autoPlay).toBe(30)
+})
+
+it('never plays a pause the user pressed, also when a rate limit joins it', async () => {
+  const f = await fixture()
+  let asked = false
+  const answer = Promise.withResolvers<void>()
+  f.prepared.faux!.setResponses([
+    async () => {
+      asked = true
+      await answer.promise
+      return fauxAssistantMessage('', { stopReason: 'error', errorMessage: limit })
+    },
+    () => fauxAssistantMessage([fauxText('done')]),
+  ])
+  const { root } = await f.open()
+  await f.setAutoPlay(1)
+  const submission = await root.submit({ type: 'input', content: 'go' }, context)
+  await until(() => asked)
+  const { since } = await f.action('pause')
+  answer.resolve()
+  await until(async () => (await f.action('state')).limit !== undefined)
+  expect((await f.action('state')).autoPlayAt).toBeUndefined()
+  expect(await f.autoPlay(since! + 86_400_000)).toBe(false)
+  expect(f.paused()).toBe(true)
+  await f.action('play')
+  expect((await submission.wait(context)).status).toBe('done')
+})
+
+it('keeps Pause, Play and the play-by-itself setting from agents, and checks the minutes', async () => {
+  expect(userActions).toEqual(expect.arrayContaining(['pause', 'play', 'autoPlay']))
+  const f = await fixture()
+  await f.open()
+  await expect(f.setAutoPlay(0)).rejects.toThrow('minutes must be a whole number')
+  expect((await f.setAutoPlay(null)).autoPlay).toBeUndefined()
 })
 
 /** A task record as `running()` reads it: it decides by task kind and checkpoint phase only. */

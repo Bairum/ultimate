@@ -165,7 +165,7 @@ export const actions = {
       ...(running.lastError ? { lastError: running.lastError } : {}),
     }
   }),
-  /** User-only `{ force? }`: Back up now; resolves once the backup is committed. */
+  /** `{ force? }`: Back up now; resolves once the backup is committed. */
   backup: implementAction(BackupAction, (args, { host }) =>
     backup(host, (args as { force?: unknown } | null)?.force === true),
   ),
@@ -184,8 +184,8 @@ export const actions = {
     )
   }),
 }
-/** Backups and the Join card's secrets never come from an agent. */
-export const userActions = ['backup', 'join']
+/** The Join card's secrets never come from an agent; a backup only adds one, so agents may start it. */
+export const userActions = ['join']
 
 export default function cloud(host: ExtensionHost) {
   host.implement(CloudApi, {

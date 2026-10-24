@@ -635,8 +635,7 @@ it.concurrent('wakes @ultimate once after its manual compaction, never after an 
   expect(await wakeTasks()).toEqual([])
   expect(await kinds()).not.toContain('lineage.woken')
 
-  // Only @ultimate compacts itself with the tool; a second call while one runs is refused.
-  await expect(run(server, 'compact', {}, ROOT_CONVERSATION_ID)).rejects.toThrow('Only @ultimate')
+  // A second call while one runs is refused.
   const { taskId } = JSON.parse(await run(server, 'compact', {}, ultimate.id))
   await expect(run(server, 'compact', {}, ultimate.id)).rejects.toThrow('Already compacting')
   await server.harness.waitForTask(taskId, context)
@@ -670,6 +669,35 @@ it.concurrent('wakes @ultimate once after its manual compaction, never after an 
     compaction: stale,
   })
   expect(await kinds()).toEqual(['pi.reset'])
+})
+
+it.concurrent('lets any conversation compact itself with the tool and wakes it to continue', async () => {
+  const { server } = await fixture()
+  const other = await server.harness.createConversation(
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  const { model } = await server.root.agent(context)
+  await server.harness.commit(async (tx) => {
+    await configure(tx, other.id, { model })
+    for (let n = 0; n < 8; n++)
+      await tx.appendEntry(other.id, {
+        kind: 'pi.user',
+        model: [{ role: 'user', content: `Part ${n} ${'word '.repeat(4000)}`, timestamp: n }],
+      })
+  }, context)
+  const { taskId } = JSON.parse(await run(server, 'compact', {}, other.id))
+  await server.harness.waitForTask(taskId, context)
+  const kinds = async () => (await other.context(context)).entries.map((entry) => entry.kind)
+  await until(async () => (await kinds()).includes('lineage.woken'))
+  await other.waitForIdle(context)
+  const view = await other.context(context)
+  expect(view.entries[0].kind).toBe('pi.compaction')
+  const woken = view.entries.filter((entry) => entry.kind === 'lineage.woken')
+  expect(woken).toHaveLength(1)
+  expect(textOf(woken[0].model?.[0]?.content)).toBe(
+    'Your context was just compacted. Read the summary above, then continue where you left off.',
+  )
 })
 
 it.concurrent('completes a landing task without asking when no summary model runs', async () => {

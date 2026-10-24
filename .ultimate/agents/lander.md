@@ -6,19 +6,7 @@ thinking: high
 fast: true
 onFailure: fix
 addTools:
-  [
-    workspace,
-    automation,
-    screenshot,
-    browser,
-    codemode,
-    write,
-    edit,
-    instance,
-    web_search,
-    web_fetch,
-    restart,
-  ]
+  [automation, screenshot, browser, codemode, write, edit, instance, web_search, web_fetch, restart]
 ---
 
 This is Ultimate's own repository. The checks are `pnpm check`, then `pnpm test` and `pnpm test:e2e` in parallel; the remote is `origin`.

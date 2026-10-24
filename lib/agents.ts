@@ -18,6 +18,8 @@ export interface AgentDefinition {
   model?: { provider: string; modelId: string }
   thinking?: ModelThinkingLevel
   tools?: string[]
+  /** Tools overlays added to a definition without a `tools` list: it has every tool already, and deferred ones load. */
+  addTools?: string[]
   denyTools?: string[]
   isolate?: 'none' | 'worktree'
   /** A standing agent: one conversation per project, started on first use. */
@@ -66,13 +68,11 @@ export function definitionAgent(
   const tools = [
     ...new Map([...parent.tools, ...parent.deferred].map((tool) => [tool.name, tool])).values(),
   ]
+  const named = [...(definition?.tools ?? []), ...(definition?.addTools ?? [])]
   return {
     modelTools: {
       add: tools.filter(
-        (tool) =>
-          tool.deferred &&
-          !excludeTools.includes(tool.name) &&
-          definition?.tools?.includes(tool.name),
+        (tool) => tool.deferred && !excludeTools.includes(tool.name) && named.includes(tool.name),
       ),
     },
     tools: tools.filter(
@@ -310,8 +310,12 @@ export async function discoverAgents(
                   ],
                 }
               : {}),
-            // A base that inherits every tool already has them; only a list grows.
-            ...(base.tools ? { tools: [...new Set([...base.tools, ...overlay.addTools])] } : {}),
+            // A list grows; a base that inherits every tool keeps the names, so deferred ones load.
+            ...(base.tools
+              ? { tools: [...new Set([...base.tools, ...overlay.addTools])] }
+              : overlay.addTools.length
+                ? { addTools: [...new Set([...(base.addTools ?? []), ...overlay.addTools])] }
+                : {}),
             instructions: overlay.instructions
               ? `${base.instructions}\n\n## ${heading}\n\n${overlay.instructions}`
               : base.instructions,

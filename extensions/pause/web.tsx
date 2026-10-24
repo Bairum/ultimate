@@ -22,8 +22,8 @@ import { store } from '@/sdk/client'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { lasted } from './lasted.ts'
 import { parkedConversations } from './parked.ts'
-import { PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
-import type { PauseNote, PauseState, RateLimit } from './refs.ts'
+import { AutoPlayAction, PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
+import type { AutoPlayed, PauseNote, PauseState, RateLimit } from './refs.ts'
 
 const statusButton =
   '-mx-1 flex cursor-pointer items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent'
@@ -116,8 +116,10 @@ function Popup({
               “{said(limit.error)}”
             </div>
             <div className="text-muted-foreground">
-              No reset time given: nothing retries until Play. A model you switch meanwhile applies
-              on Play.
+              {state.autoPlayAt !== undefined
+                ? `No reset time given: plays by itself in ${lasted(Math.max(0, state.autoPlayAt - now))}, or press Play.`
+                : 'No reset time given: nothing retries until Play.'}{' '}
+              A model you switch meanwhile applies on Play.
             </div>
           </div>
         )}
@@ -148,6 +150,7 @@ function Popup({
           </div>
         )}
         {error && <div className="break-words text-error">{error}</div>}
+        <AutoPlay minutes={state.autoPlay} />
       </div>
       <div className="flex justify-end border-t border-border/70 px-3 py-1.5">
         <Button
@@ -163,6 +166,48 @@ function Popup({
         </Button>
       </div>
     </>
+  )
+}
+
+/** The user's setting: after a rate limit, play by itself after N minutes. Off by default; a Pause you press waits. */
+function AutoPlay({ minutes }: { minutes?: number }) {
+  const [draft, setDraft] = useState(String(minutes ?? 30))
+  const [error, setError] = useState<string>()
+  const save = (next: number | null) => {
+    setError(undefined)
+    api
+      .action(AutoPlayAction, { minutes: next })
+      .catch((failure: unknown) => setError(errorMessage(failure)))
+  }
+  return (
+    <div
+      className="space-y-1 border-t border-border/50 pt-2 text-muted-foreground"
+      data-pause-autoplay
+    >
+      <label className="flex items-center gap-2">
+        <input
+          checked={minutes !== undefined}
+          className="accent-brand"
+          onChange={(event) => save(event.target.checked ? Number(draft) || 30 : null)}
+          type="checkbox"
+        />
+        <span>Play by itself after</span>
+        <input
+          className="w-12 rounded-sm border border-border bg-transparent px-1 text-right tabular-nums"
+          max={1440}
+          min={1}
+          onBlur={() => minutes !== undefined && Number(draft) !== minutes && save(Number(draft))}
+          onChange={(event) => setDraft(event.target.value)}
+          type="number"
+          value={draft}
+        />
+        <span>min</span>
+      </label>
+      <div className="text-muted-foreground/70">
+        Only after a rate limit, once per limit. A Pause you press waits for you.
+      </div>
+      {error && <div className="break-words text-error">{error}</div>}
+    </div>
   )
 }
 
@@ -278,7 +323,12 @@ function Note({ entry }: { entry: EntryRecord }) {
         <PlayIcon className="size-3 shrink-0 text-warning" />
         <span className="text-warning">Paused for {lasted(note.until - note.since)}</span>
         <span className="truncate">
-          · {note.finished ? 'after its last answer' : 'continued after Play'}
+          ·{' '}
+          {note.finished
+            ? 'after its last answer'
+            : note.auto
+              ? 'played by itself'
+              : 'continued after Play'}
         </span>
       </span>
     </div>
@@ -322,8 +372,11 @@ function Limit({ entry }: { entry: EntryRecord }) {
           · no reset time given
         </p>
         <p className="text-[12px] text-muted-foreground">
-          Nothing retries until you press Play; held runs then continue where they stopped. A model
-          you switch meanwhile applies on Play.
+          {holding && doc.autoPlay && !doc.manual
+            ? `Plays by itself ${doc.autoPlay} min after the limit, or press Play`
+            : 'Nothing retries until you press Play'}
+          ; held runs then continue where they stopped. A model you switch meanwhile applies on
+          Play.
         </p>
       </div>
       <footer className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
@@ -360,6 +413,27 @@ function Limit({ entry }: { entry: EntryRecord }) {
   )
 }
 
+/** A rate-limit pause that played by itself, in @ultimate's transcript: one quiet divider saying when. */
+function AutoPlayedNote({ entry }: { entry: EntryRecord }) {
+  const data = (entry.data ?? {}) as Partial<AutoPlayed>
+  if (data.since === undefined || data.at === undefined) return null
+  return (
+    <div
+      className="flex items-center gap-3 font-mono text-[11px] text-muted-foreground/80 before:h-px before:flex-1 before:bg-warning/25 after:h-px after:flex-1 after:bg-warning/25"
+      data-pause-autoplayed
+    >
+      <span className="flex min-w-0 items-center gap-1.5">
+        <PlayIcon className="size-3 shrink-0 text-warning" />
+        <span className="text-warning">Played by itself</span>
+        <span className="truncate">
+          · {lasted(data.at - data.since)} after the rate limit ·{' '}
+          {new Date(data.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </span>
+      </span>
+    </div>
+  )
+}
+
 const paused = () => getState().docsOf[1]?.[PauseDoc.kind]?.paused === true
 
 /** The conversations this pause parked, for the transcript and the lists of conversations. */
@@ -378,7 +452,7 @@ export default defineWebExtension({
     ],
     'composer.status': [Hint],
   },
-  entries: { 'pause.note': Note, 'pause.limit': Limit },
+  entries: { 'pause.note': Note, 'pause.limit': Limit, 'pause.autoplay': AutoPlayedNote },
   commands: [
     {
       id: 'pause.pause',

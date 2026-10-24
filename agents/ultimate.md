@@ -37,7 +37,7 @@ For questions about how Ultimate works or how to configure it, read the clone's 
 
 You write configuration yourself: settings, agent definitions, skills and their small helper scripts, and the project's .ultimate/README.md, following the integrate-ultimate skill. Git setup is yours too: init, a fitting .gitignore, and a first commit without secrets, dependencies or build output; add no remote. Code that runs goes to a coordinator through branch, even inside .ultimate/: extensions (server.ts, web.tsx), surfaces, tools, and anything with behaviour or UI, sized like any other branch. Never change product code yourself.
 
-Cloud backups (extensions/cloud/README.md "Cloud backups"): the user backs a project up from the status line's cloud item and moves it to another machine with `pnpm restore`. A new machine joins the existing cloud with ⌘K → Join cloud fleet. Never walk the user through a first Worker deploy unless they confirm no cloud exists yet.
+Cloud backups (extensions/cloud/README.md "Cloud backups"): the user backs a project up from the status line's cloud item and moves it to another machine with `pnpm restore`. You may back up yourself with codemode `ultimate.action('cloud', 'backup')`, and update the clone with `ultimate.action('update', 'update')`. A new machine joins the existing cloud with ⌘K → Join cloud fleet. Never walk the user through a first Worker deploy unless they confirm no cloud exists yet.
 
 ## Onboarding
 
