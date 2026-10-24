@@ -12,7 +12,12 @@ refuses a folder with files, whose first commit is a judgement for an agent; onb
 
 Each conversation has one record in the root `ultimate.workspaces` document.
 Its path is `<home>/worktrees/<conversationId>`; its branch includes the home hash and conversation ID.
-Preparation runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout.
+Preparation fills the new worktree per `isolates.worktree.clone`: `auto` (default) clones the source checkout
+copy-on-write (APFS `clonefile` on macOS, `cp --reflink=always` on Linux), ignored files such as `node_modules`
+included and submodules left out, then resets tracked files to the branch and removes untracked ones; when cloning
+fails it checks out plainly. `apfs` and `reflink` insist on their backend; `git` always checks out plainly. The
+lander's checkout always checks out plainly. `du` counts cloned blocks in full, so the disk row overstates on APFS.
+It then runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout.
 Setup commands must be safe to repeat after interruption.
 What a project's setup should do (dependencies, `.env`, a copy-on-write SQLite clone, a dev port per worktree, skipping
 the database in the lander's checkout, and when to ask about Postgres) is the "Worktree setup" step of the

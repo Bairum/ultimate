@@ -17,6 +17,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { WorkspacesDoc } from './refs.ts'
 import { setup } from './setup.ts'
+import { cloneMode, populate } from './clone.ts'
 import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
 import type {
   LandResult,
@@ -309,6 +310,8 @@ export function workspaces(host: Host) {
         const workspace = (await get(task.input.id, context))!
         let created = false
         try {
+          const settings = await host.projectSettings()
+          const mode = cloneMode(settings)
           // Git reads every `.git/worktrees/<name>` on list and add, and fails on one a concurrent add has only half
           // written ("failed to read .git/worktrees/<name>/locked"), so preparations of one source take turns.
           await serial(workspace.source, async () => {
@@ -345,6 +348,7 @@ export function workspaces(host: Host) {
                 workspace.source,
                 'worktree',
                 'add',
+                '--no-checkout',
                 ...(task.input.preserve
                   ? [workspace.path, workspace.branch]
                   : [
@@ -357,12 +361,12 @@ export function workspaces(host: Host) {
             }
           })
           created = true
-          await setup(
-            workspace.source,
-            workspace.path,
-            await host.projectSettings(),
-            runtime.signal,
-          )
+          // A crash mid-clone leaves the registered checkout half filled; populate starts over by clearing it.
+          if (!(await runtime.memo<boolean>('populated', context))) {
+            await populate(workspace.source, workspace.path, mode)
+            await runtime.memo('populated', true, context)
+          }
+          await setup(workspace.source, workspace.path, settings, runtime.signal)
           await runtime.commit(async (tx) => {
             ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(task.input.id)].state =
               'ready'
