@@ -279,13 +279,23 @@ const switching = (host: ExtensionHost) =>
   host.resource('dream.switching', (): { busy: boolean; harness?: object } => ({ busy: false }))
 
 async function changing<T>(host: ExtensionHost, run: () => Promise<T>) {
-  const state = switching(host)
-  if (state.busy) throw new Error('A chapter change is already running')
-  state.busy = true
+  const release = lockChapter(host)
   try {
     return await run()
   } finally {
-    state.busy = false
+    release()
+  }
+}
+
+/** Take the chapter-change lock, or refuse; returns its release, which frees only this hold. */
+function lockChapter(host: ExtensionHost) {
+  const state = switching(host)
+  if (state.busy) throw new Error('A chapter change is already running')
+  state.busy = true
+  let held = true
+  return () => {
+    if (held) state.busy = false
+    held = false
   }
 }
 
@@ -676,14 +686,14 @@ export async function sleepWhenIdle(
     return 'done'
   }
   // Admission commits inside this step, so the task never ends while the session is still reserved as `waiting`.
-  const state = switching(host)
+  // The lock it takes is held through the gates below; a refusal here never frees a lock someone else holds.
+  let release: (() => void) | undefined
   let admitted: { session: number; name: string }
   try {
-    if (state.busy) throw new Error('A chapter change is already running')
-    state.busy = true
+    release = lockChapter(host)
     admitted = await admitSleep(host, { session: input.session }, attempt)
   } catch (error) {
-    if (state.busy) state.busy = false
+    release?.()
     // Refused before its gates began (busy again, a chapter change running): the reservation is still this attempt's.
     await host.harness().commit((tx) => releaseSleep(tx, input, attempt, String(error)), context)
     return 'done'
@@ -691,9 +701,7 @@ export async function sleepWhenIdle(
   // Only the gates run on: fallAsleep records its own failures, and a crash in them is settled on the next open.
   fallAsleep(host, admitted)
     .catch((error: unknown) => host.notice(`Granted Fall asleep: ${String(error)}`))
-    .finally(() => {
-      state.busy = false
-    })
+    .finally(release)
   return 'started'
 }
 

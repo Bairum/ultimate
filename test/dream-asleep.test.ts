@@ -419,6 +419,23 @@ it("credits the user's own retry after a failed granted sleep to the user", asyn
   expect(f.phases.slice(2).every((item) => item.by === undefined)).toBe(true)
 })
 
+it('never frees the lock of a chapter change it was refused by', async () => {
+  const f = await fixture()
+  await f.journal()
+  const attempt = await admit(f)
+  // The user's own chapter change holds the lock while the granted attempt looks.
+  const lock = f.host.resource('dream.switching', () => ({ busy: false }))
+  lock.busy = true
+  const input = { session: 1, by, deadline: by.at + 60_000 }
+  expect(await sleepWhenIdle(f.host, input, attempt, by.at)).toBe('done')
+  expect(lock.busy).toBe(true)
+  expect(f.phases.at(-1)).toMatchObject({
+    phase: 'failed',
+    error: expect.stringContaining('already running'),
+  })
+  expect(f.instances.start).not.toHaveBeenCalled()
+})
+
 it('leaves a sleep another attempt holds alone', async () => {
   const f = await fixture()
   await f.journal()
