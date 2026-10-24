@@ -1,5 +1,5 @@
 import type { JsonObject } from '@earendil-works/pi-durable'
-import { lstat, readdir, rm, copyFile } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, readdir, rm } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { exec } from '../../lib/exec.ts'
 import { git } from '../../lib/git.ts'
@@ -41,7 +41,8 @@ export async function populate(source: string, path: string, mode: CloneMode) {
     try {
       await clone(source, path, kind)
       await git(path, 'reset', '--hard', '--quiet', 'HEAD')
-      await git(path, 'clean', '-fdq')
+      // The second -f also drops untracked nested repositories.
+      await git(path, 'clean', '-ffdq')
       return kind
     } catch (error) {
       if (mode !== 'auto') throw error
@@ -66,25 +67,33 @@ async function clone(source: string, path: string, kind: 'apfs' | 'reflink') {
       throw new Error(`Cannot clone a checkout with ${key} enabled`)
   // `git submodule status` lists each submodule's path; their `.git` files point into the source's module store,
   // which two checkouts must not share, so they stay out of the clone.
-  const submodules = new Set(
-    (await git(source, 'submodule', 'status').catch(() => ''))
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => line.trim().split(/\s+/)[1].split('/')[0]),
-  )
-  for (const entry of await readdir(source)) {
-    if (entry === '.git' || submodules.has(entry)) continue
-    const stat = await lstat(join(source, entry))
-    // Sockets, fifos and devices belong to running processes; clonefile refuses them.
-    if (!stat.isFile() && !stat.isDirectory() && !stat.isSymbolicLink()) continue
-    await exec(
-      'cp',
-      kind === 'apfs'
-        ? ['-c', '-R', '-P', join(source, entry), join(path, entry)]
-        : ['-R', '-P', '--reflink=always', join(source, entry), join(path, entry)],
-      { timeout: 600_000 },
-    )
+  const submodules = (await git(source, 'submodule', 'status').catch(() => ''))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => line.trim().split(/\s+/)[1])
+  // A directory holding a submodule deeper down is entered rather than cloned whole, so only the submodule stays out.
+  const copy = async (relative: string) => {
+    await mkdir(join(path, relative), { recursive: true })
+    for (const entry of await readdir(join(source, relative))) {
+      const name = join(relative, entry)
+      if (name === '.git' || submodules.includes(name)) continue
+      const stat = await lstat(join(source, name))
+      if (stat.isDirectory() && submodules.some((module) => module.startsWith(`${name}/`))) {
+        await copy(name)
+        continue
+      }
+      // Sockets, fifos and devices belong to running processes; clonefile refuses them.
+      if (!stat.isFile() && !stat.isDirectory() && !stat.isSymbolicLink()) continue
+      await exec(
+        'cp',
+        kind === 'apfs'
+          ? ['-c', '-R', '-P', join(source, name), join(path, name)]
+          : ['-R', '-P', '--reflink=always', join(source, name), join(path, name)],
+        { timeout: 600_000 },
+      )
+    }
   }
+  await copy('')
   await copyFile(await gitPath(source, 'index'), await gitPath(path, 'index')).catch(
     (error: NodeJS.ErrnoException) => {
       // A repository without commits staged has no index; reset builds one.

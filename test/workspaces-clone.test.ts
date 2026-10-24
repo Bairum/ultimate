@@ -54,6 +54,33 @@ it('clones the checkout at the branch commit with ignored files, without uncommi
   expect(deps).toBe(used === 'git' ? null : 'installed\n')
 })
 
+it('leaves a nested submodule out of the clone but keeps ignored files beside it', async () => {
+  const dir = await temp('ultimate-clone-')
+  const lib = join(dir, 'lib')
+  await mkdir(lib)
+  await git(lib, 'init', '--quiet')
+  await git(lib, 'commit', '--quiet', '--allow-empty', '-m', 'lib')
+  const src = join(dir, 'src')
+  await mkdir(src)
+  await git(src, 'init', '--quiet')
+  await writeFile(join(src, '.gitignore'), 'build/\n')
+  await git(src, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', lib, 'libs/sub')
+  await git(src, 'add', '.')
+  await git(src, '-c', 'user.name=T', '-c', 'user.email=t@e', 'commit', '--quiet', '-m', 'first')
+  await mkdir(join(src, 'libs', 'build'))
+  await writeFile(join(src, 'libs', 'build', 'out'), 'built\n')
+  const path = join(dir, 'wt')
+  await git(src, 'worktree', 'add', '--quiet', '--no-checkout', '-b', 'feature', path, 'HEAD')
+  const used = await populate(src, path, 'auto')
+  expect(await readdir(join(path, 'libs', 'sub'))).toEqual([])
+  const built = await readFile(join(path, 'libs', 'build', 'out'), 'utf8').catch(
+    // A plain checkout has no ignored files.
+    () => null,
+  )
+  expect(built).toBe(used === 'git' ? null : 'built\n')
+  expect(await git(path, 'status', '--porcelain')).toBe('')
+})
+
 it('checks out plainly with the git mode, starting over on a half-filled checkout', async () => {
   const { src, path } = await source()
   await writeFile(join(path, 'leftover'), 'from a crash\n')
