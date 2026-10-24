@@ -824,7 +824,8 @@ export default function automations(host: ExtensionHost) {
         const lines = Object.values(state?.automations ?? {})
           .filter((a) => a.enabled)
           .map((a) => `${a.id} ${a.name}: ${describeTrigger(a)}`)
-        return lines.length ? lines.join('\n') : undefined
+        // Always rendered: a section that disappears and reappears reorders the prompt, which rebuilds it whole.
+        return lines.length ? lines.join('\n') : 'None enabled.'
       }),
     ],
     tools: [

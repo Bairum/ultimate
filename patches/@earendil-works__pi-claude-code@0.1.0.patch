@@ -156,6 +156,100 @@ index b516241c794b5dd7054822921d445a2169c6b70e..8754a4b6eecd02b07689bb6111dd32f3
        this.stream.push({ type: "toolcall_delta", contentIndex, delta: delta.partial_json, partial: this.output });
      }
    }
+diff --git a/src/transcript.ts b/src/transcript.ts
+index e0a824be43db62a92a0329ff7c63fc0f14f3af65..3d1ce16fbcba0e880a73a9059e3da7d60c05631f 100644
+--- a/src/transcript.ts
++++ b/src/transcript.ts
+@@ -1,7 +1,5 @@
+ import {
+-  getDeclaredTools,
+   getInitialSystemMessage,
+-  hasToolRedefinitions,
+   renderSystemMessageUpdate,
+   type AssistantMessage,
+   type ImageContent,
+@@ -17,7 +15,7 @@ import type { NativeContentBlock, NativeFrame, NativeMessage } from "./native-ty
+ 
+ export const TOOL_PREFIX = "mcp__pi__";
+ export const NATIVE_REPLAY_DIAGNOSTIC = "claude-code.native-assistant.v1";
+-export const NATIVE_TOOL_CHANGES_BETA = "mid-conversation-tool-changes-2026-07-01";
++export const NATIVE_TOOL_CHANGES_BETA = "inline-tools-2026-09-15";
+ 
+ const DEFERRED_TOOL_PLACEHOLDER = {
+   name: "__pi_deferred_placeholder__",
+@@ -292,28 +290,35 @@ export function prepareTools(tools: Tool[]): {
+   return { manifest, nativeTools, names };
+ }
+ 
++/**
++ * A later system message as native blocks. Tools are defined by value in `tool_addition`, so a new
++ * definition under an existing name replaces the old one and needs no removal, as in pi-ai's
++ * Anthropic transport.
++ */
+ function nativeSystemBlocks(message: SystemMessage): Array<Record<string, unknown>> {
+   const blocks: Array<Record<string, unknown>> = [];
+   const text = renderSystemMessageUpdate(message);
+   if (text) blocks.push({ type: "text", text: sanitizeSurrogates(text) });
++  const added = message.toolsAdded ?? [];
++  const redefined = new Set(added.map((tool) => tool.name));
+   for (const tool of message.toolsRemoved ?? []) {
++    if (redefined.has(tool.name)) continue;
+     blocks.push({
+       type: "tool_removal",
+       tool: { type: "tool_reference", name: `${TOOL_PREFIX}${tool.name}` },
+     });
+   }
+-  for (const tool of message.toolsAdded ?? []) {
+-    blocks.push({
+-      type: "tool_addition",
+-      tool: { type: "tool_reference", name: `${TOOL_PREFIX}${tool.name}` },
+-    });
++  for (const definition of prepareTools(added).nativeTools) {
++    blocks.push({ type: "tool_addition", tool: { type: "tool_definition", definition } });
+   }
+   return blocks;
+ }
+ 
+ /**
+  * Build Anthropic's cache-preserving native representation of transcript tool changes.
+- * The placeholder keeps deferred-tool prompt scaffolding stable from the first request.
++ * The request tool list holds the initial tools and the placeholder and never changes; later
++ * tools, redefinitions included, arrive inline at their message. The placeholder keeps
++ * deferred-tool prompt scaffolding stable from the first request.
+  */
+ export function prepareNativeTranscript(
+   messages: Message[],
+@@ -321,19 +326,10 @@ export function prepareNativeTranscript(
+ ): NativeTranscriptPlan | undefined {
+   const initial = getInitialSystemMessage(messages);
+   const initialTools = initial?.toolsAdded ?? [];
+-  if (!supported || initialTools.length === 0 || hasToolRedefinitions(messages)) return undefined;
++  if (!supported || initialTools.length === 0) return undefined;
+ 
+-  const declared = getDeclaredTools(messages);
+-  const prepared = prepareTools(declared);
+-  const nativeByName = new Map(
+-    prepared.nativeTools.map((tool) => [String(tool.name).slice(TOOL_PREFIX.length), tool]),
+-  );
+-  const initialNames = new Set(initialTools.map((tool) => tool.name));
+-  const initialNative = initialTools.map((tool) => structuredClone(nativeByName.get(tool.name)!));
++  const initialNative = prepareTools(initialTools).nativeTools;
+   initialNative.at(-1)!.cache_control = { type: "ephemeral", ttl: "1h" };
+-  const laterNative = declared
+-    .filter((tool) => !initialNames.has(tool.name))
+-    .map((tool) => ({ ...structuredClone(nativeByName.get(tool.name)!), defer_loading: true }));
+ 
+   const systemInjections: NativeSystemInjection[] = [];
+   let pending: Array<Array<Record<string, unknown>>> = [];
+@@ -356,7 +352,7 @@ export function prepareNativeTranscript(
+   flush(null);
+ 
+   return {
+-    requestTools: [...initialNative, structuredClone(DEFERRED_TOOL_PLACEHOLDER), ...laterNative],
++    requestTools: [...initialNative, structuredClone(DEFERRED_TOOL_PLACEHOLDER)],
+     systemInjections,
+   };
+ }
 diff --git a/src/turn-relay.ts b/src/turn-relay.ts
 index 08ec86e5df1baac866a1cd97cea4dc94a523fbd7..b3aa4007e5154b2d9cd21e8d2ad8fbc622f919c8 100644
 --- a/src/turn-relay.ts
