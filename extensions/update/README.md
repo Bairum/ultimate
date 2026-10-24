@@ -1,6 +1,6 @@
 # Update
 
-Keeps the Ultimate clone the host runs from (`host.ultimateRoot`, the `<self>` block's "Ultimate (running host)") current with its `origin`, by fast-forward only.
+Keeps the Ultimate clone the host runs from (`host.ultimateRoot`, the `<self>` block's "Ultimate (running host)") current with its `origin`, by fast-forward only. On by default, so everyone hears about upstream changes; `extensions.disable: ["update"]` turns it off.
 
 ## Checking
 
@@ -44,6 +44,12 @@ It refuses, and changes nothing, when:
 - another Ultimate holds the clone's lock.
 
 It never stashes, rebases or resets.
+
+## Updating with @ultimate
+
+When the clone's only refusal is a diverged branch (commits of its own plus new ones on origin) and the clone is the project this Ultimate serves, the state carries `merge` and the popover offers **Update with @ultimate** instead of the refusal. The item stays brand-coloured, not amber. `merge` (user-only) checks the state again, sends @ultimate an input naming the branch, the clone and both counts, asking for a coordinator branch that merges `origin/<branch>` with a normal merge (never a rebase, reset or force push), resolves the conflicts it safely can, asks about the rest, runs the checks and lands with `workspace submit`. It then opens @ultimate's conversation. The input is deduplicated per `<head>..<origin head>`, so a second click adds nothing.
+
+Where the clone is not the project (a project run from a separate Ultimate clone), nothing is offered: a branch lives in the project's repository and the lander lands into the project, so it cannot merge into the clone. That clone keeps the plain refusal; merge it by hand.
 
 ## After a landing
 

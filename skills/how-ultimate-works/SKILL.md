@@ -41,6 +41,8 @@ you ⇄ @ultimate
 - The **lander** runs every check, merges into main and usually pushes. UI polish lands only after you approve a
   running preview.
 - Branches show in the sidebar under the project; open one any time to watch or steer it.
+- Ultimate itself gets updates too: the status line says when there are new ones, and one click pulls them in (or
+  @ultimate merges them with your own changes on a branch).
 
 Question (choice): "Questions about this?" — All clear · How do I steer a branch? · Skip the rest
 

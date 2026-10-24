@@ -3,8 +3,8 @@ import * as update from '../extensions/update/server.ts'
 
 const { landingInstalls } = update
 
-it('lets agents update the clone: no action is the user’s alone', () => {
-  expect('userActions' in update).toBe(false)
+it('lets agents update the clone; only asking @ultimate to merge is the user’s alone', () => {
+  expect(update.userActions).toEqual(['merge'])
 })
 
 /** A git whose `diff` lists `files` and whose checkout holds the landed commit when `landedHere`. */

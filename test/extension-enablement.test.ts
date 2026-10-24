@@ -394,14 +394,33 @@ it.concurrent('turns a default-off built-in on from user or project settings', a
   )
   await writeFile(
     join(projectRoot, '.ultimate/settings.json'),
-    JSON.stringify({ extensions: { enable: ['update'] } }),
+    JSON.stringify({ extensions: { enable: ['health'] } }),
   )
   new ProjectTrustStore(join(home, '.ultimate')).set(projectRoot, true)
   const discovered = await discoverExtensions(resolve('.'), projectRoot, home)
   const enabled = (name: string) => discovered.find((entry) => entry.name === name)?.enabled
   expect(enabled('sounds')).toBe(true)
-  expect(enabled('update')).toBe(true)
+  expect(enabled('health')).toBe(true)
   expect(enabled('cloud')).toBe(false)
   expect(discovered.settings.layers.get('sounds')).toBe('user')
-  expect(discovered.settings.layers.get('update')).toBe('project')
+  expect(discovered.settings.layers.get('health')).toBe('project')
+})
+
+it.concurrent('turns the updater on by default, and keeps it off for a user who disabled it', async () => {
+  const home = await temp()
+  homes.push(home)
+  const projectRoot = join(home, 'project')
+  await mkdir(projectRoot)
+  const enabled = async () =>
+    (await discoverExtensions(resolve('.'), projectRoot, home)).find(
+      (entry) => entry.name === 'update',
+    )?.enabled
+  expect(defaultOff).not.toContain('update')
+  expect(await enabled()).toBe(true)
+  await mkdir(join(home, '.ultimate'), { recursive: true })
+  await writeFile(
+    join(home, '.ultimate/settings.json'),
+    JSON.stringify({ extensions: { disable: ['update'] } }),
+  )
+  expect(await enabled()).toBe(false)
 })

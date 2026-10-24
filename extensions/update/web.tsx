@@ -9,9 +9,19 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { api, cn, defineWebExtension, formatAgo, useAction, useRestart, useSystem } from '@/sdk'
+import {
+  api,
+  cn,
+  defineWebExtension,
+  events,
+  formatAgo,
+  useAction,
+  useRestart,
+  useSystem,
+  useUltimate,
+} from '@/sdk'
 import { itemOf } from './item.ts'
-import { CheckAction, StateAction, UpdateAction } from './refs.ts'
+import { CheckAction, MergeAction, StateAction, UpdateAction } from './refs.ts'
 import type { Layers, UpdateResult, UpdateState } from './refs.ts'
 
 const statusButton =
@@ -113,6 +123,7 @@ function Popup({
   error,
   run,
   check,
+  merge,
 }: {
   state: UpdateState
   busy: boolean
@@ -120,6 +131,7 @@ function Popup({
   error?: string
   run: () => void
   check: () => void
+  merge: () => void
 }) {
   const coreStale = useSystem()?.code.coreStale
   const updated = state.behind === 0 ? state.updated : undefined
@@ -221,11 +233,20 @@ function Popup({
               : 'Packages were installed after this Ultimate started: restart it to load them.'}
           </div>
         )}
-        {state.refused && !updated && (
-          <div className="flex items-start gap-1.5 text-warning">
-            <TriangleAlertIcon className="mt-0.5 size-3 shrink-0" />
-            <span>Can't update: {state.refused}. Nothing was stashed, rebased or reset.</span>
+        {state.merge && !updated ? (
+          <div data-update-diverged>
+            {state.branch ?? 'main'} also has {state.ahead}{' '}
+            {state.ahead === 1 ? 'commit' : 'commits'} of its own, so it can't fast-forward.
+            @ultimate can merge origin into them on a branch and land it once the checks pass.
           </div>
+        ) : (
+          state.refused &&
+          !updated && (
+            <div className="flex items-start gap-1.5 text-warning">
+              <TriangleAlertIcon className="mt-0.5 size-3 shrink-0" />
+              <span>Can't update: {state.refused}. Nothing was stashed, rebased or reset.</span>
+            </div>
+          )
         )}
         {state.error && (
           <div className="break-words text-error" title={state.error}>
@@ -236,13 +257,20 @@ function Popup({
       </div>
       <div className="flex items-center justify-between gap-2 border-t border-border/70 px-3 py-1.5">
         <span className="text-[10.5px] text-muted-foreground">
-          {state.fetchedAt !== undefined && !(state.refused && !updated)
+          {state.fetchedAt !== undefined && !(state.refused && !state.merge && !updated)
             ? `checked ${formatAgo(state.fetchedAt, Date.now(), { ago: true })}`
             : ''}
         </span>
         <div className="flex items-center gap-1">
           {!updated && <CheckNow checking={checking} onClick={check} />}
-          <Action busy={busy} coreStale={coreStale} owes={owes} run={run} state={state} />
+          <Action
+            busy={busy}
+            coreStale={coreStale}
+            merge={merge}
+            owes={owes}
+            run={run}
+            state={state}
+          />
         </div>
       </div>
     </>
@@ -256,12 +284,14 @@ function Action({
   owes,
   coreStale,
   run,
+  merge,
 }: {
   state: UpdateState
   busy: boolean
   owes: boolean
   coreStale?: boolean
   run: () => void
+  merge: () => void
 }) {
   const restart = useRestart()
   const updated = state.behind === 0 ? state.updated : undefined
@@ -291,6 +321,17 @@ function Action({
             {restart.busy ? 'Restarting…' : 'Restart now'}
           </Button>
         )
+      ) : state.merge ? (
+        <Button
+          className="h-7 font-sans text-[12px]"
+          data-update-merge
+          disabled={busy}
+          onClick={merge}
+          size="sm"
+          variant="outline"
+        >
+          {busy ? 'Asking…' : 'Update with @ultimate'}
+        </Button>
       ) : (
         <Button
           className="h-7 font-sans text-[12px]"
@@ -319,6 +360,7 @@ function Update() {
   const [busy, setBusy] = useState(false)
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState<string>()
+  const { showSurface, switchConversation } = useUltimate()
   useEffect(() => {
     const timer = setInterval(() => void refetch(), 60_000)
     return () => clearInterval(timer)
@@ -353,6 +395,22 @@ function Update() {
         void refetch()
       })
   }
+  // Hands the merge to @ultimate and opens its conversation, where the branch it starts shows up.
+  const merge = () => {
+    setBusy(true)
+    setError(undefined)
+    api
+      .action(MergeAction)
+      .then(({ id }) => {
+        events.emit('ultimate:sent', { conversationId: id })
+        showSurface('agent')
+        switchConversation(id)
+      })
+      .catch((failure: unknown) =>
+        setError(failure instanceof Error ? failure.message : String(failure)),
+      )
+      .finally(() => setBusy(false))
+  }
   const label =
     item === 'current' ? (
       <>
@@ -377,7 +435,7 @@ function Update() {
       <>
         {busy || checking ? (
           <LoaderCircleIcon className="size-3 animate-spin" />
-        ) : state.refused ? (
+        ) : state.refused && !state.merge ? (
           <TriangleAlertIcon className="size-3" />
         ) : (
           <ArrowDownIcon className="size-3" />
@@ -395,7 +453,7 @@ function Update() {
               ? 'text-muted-foreground/70 hover:text-foreground'
               : busy
                 ? 'text-brand'
-                : !state.behind || state.refused
+                : !state.behind || (state.refused && !state.merge)
                   ? 'text-warning'
                   : 'text-brand',
           )}
@@ -416,6 +474,7 @@ function Update() {
           check={check}
           checking={checking}
           error={error}
+          merge={merge}
           run={run}
           state={state}
         />

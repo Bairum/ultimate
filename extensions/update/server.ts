@@ -13,6 +13,7 @@ import { fastForward, Refusal } from '../../lib/fast-forward.ts'
 import type { Git } from '../../lib/fast-forward.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { SubagentsApi } from '../subagents/api.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import type { LandedData } from '../workspaces/api.ts'
 import { PauseApi } from '../pause/api.ts'
@@ -25,7 +26,7 @@ import {
   summaryFor,
   withLock,
 } from './clone.ts'
-import { Applied, CheckAction, Refused, StateAction, UpdateAction } from './refs.ts'
+import { Applied, CheckAction, MergeAction, Refused, StateAction, UpdateAction } from './refs.ts'
 import type { UpdateResult, UpdateState } from './refs.ts'
 
 /** How often the clone is compared with origin locally; origin itself is fetched at most hourly (`FETCH_EVERY`). */
@@ -115,6 +116,7 @@ export default function update(host: ExtensionHost) {
   // Resolved where they are called; declared here so the catalogue lists them.
   host.need(WorkspacesApi)
   host.need(ConversationsApi)
+  host.need(SubagentsApi)
   host.want(PauseApi)
   const shared = state(host)
   // A preview never fetches: it must not race the host on the same clone.
@@ -228,13 +230,14 @@ async function refresh(host: ExtensionHost, check: boolean, force = false) {
   const clone = await cloneState(git, root)
   const repo = clone.remoteHead ? await githubRepo(root) : undefined
   const startedAt = Date.parse(host.system().process.startedAt)
-  const { head, remoteHead, ...rest } = clone
+  const { head, remoteHead, diverged, ...rest } = clone
   const summary = await summarize(false)
   shared.latest = {
     root,
     ...rest,
     ...(summary ? { summary } : {}),
     refused: rest.refused ?? (rest.behind ? await landing(host) : undefined),
+    ...(diverged && (await isProject(host)) ? { merge: true as const } : {}),
     ...(error ? { error } : {}),
     ...(repo && remoteHead ? { compare: compareUrl(repo, head, remoteHead) } : {}),
     install: await installOwed(root),
@@ -243,6 +246,22 @@ async function refresh(host: ExtensionHost, check: boolean, force = false) {
   }
   if (!shared.latest.refused) delete shared.latest.refused
 }
+
+/**
+ * Whether the clone is the project this Ultimate serves. Only then can a branch merge origin into it: the lander lands
+ * a branch into the project's checkout, never into a separate clone Ultimate runs from.
+ */
+const isProject = async (host: ExtensionHost) =>
+  (await realpath(host.ultimateRoot)) === (await realpath(host.projectRoot))
+
+/** What @ultimate reads when the user asks it to merge origin into the diverged clone. */
+const mergeInput = (branch: string, root: string, ahead: number, behind: number) =>
+  [
+    `Update with @ultimate: ${branch} in ${root} has diverged from origin/${branch} (${ahead} local ${ahead === 1 ? 'commit' : 'commits'}, ${behind} new upstream), so Update now can't fast-forward it.`,
+    `Start a coordinator branch that merges origin/${branch} into ${branch} in its worktree: git fetch origin, then a normal git merge origin/${branch}, never a rebase, reset or force push.`,
+    'It resolves the conflicts it can resolve safely, sends the unclear ones back as decisions, runs the checks and the tests covering the conflicts, and lands the merge with workspace submit.',
+    'Afterwards the update item asks for any restart the upstream changes need.',
+  ].join('\n')
 
 /** Why an update must wait: the lander is landing into the clone (it fast-forwards the same branch). */
 async function landing(host: ExtensionHost) {
@@ -328,6 +347,8 @@ async function apply(
   return result
 }
 
+export const userActions = ['merge']
+
 export const actions = {
   /** The clone's update state from the last check. */
   state: implementAction(StateAction, async (_args, { host }) => {
@@ -357,5 +378,25 @@ export const actions = {
     const result = await shared.updating
     await refresh(host, false)
     return result
+  }),
+  merge: implementAction(MergeAction, async (_args, { host }) => {
+    if (preview()) throw new Error('A preview never updates the clone it runs from')
+    await refresh(host, false)
+    const latest = state(host).latest!
+    if (!latest.merge) throw new Error(latest.refused ?? `${latest.branch} has not diverged`)
+    const { head, remoteHead } = await cloneState(gitIn(host.ultimateRoot), host.ultimateRoot)
+    const id = await host.need(SubagentsApi).standing('ultimate', context)
+    const conversation = (await host.harness().conversation(id, context))!
+    await conversation.submit(
+      {
+        type: 'input',
+        content: mergeInput(latest.branch!, latest.root, latest.ahead ?? 0, latest.behind),
+        // One ask per range: a second click while @ultimate is on it adds nothing.
+        requestId: `update-merge:${head}..${remoteHead}`,
+        whenBusy: 'followUp',
+      },
+      context,
+    )
+    return { id }
   }),
 }
