@@ -1984,6 +1984,35 @@ describe('subagents', () => {
     )
     expect(await readFile(overlay, 'utf8')).toBe(written)
   })
+  it('keeps the tools an overlay adds to a base that inherits every tool when its form is saved', async () => {
+    const { prepared, opened, userHome, ultimateRoot } = await fixture()
+    const ctx = {
+      host: { ...prepared, harness: () => opened.harness },
+    } as unknown as ActionContext
+    await writeFile(
+      join(ultimateRoot, 'agents/helper.md'),
+      '---\nname: helper\ndescription: Helps\n---\nHelp.\n',
+    )
+    const overlay = join(userHome, '.ultimate/agents/helper.md')
+    await mkdir(join(userHome, '.ultimate/agents'), { recursive: true })
+    await writeFile(overlay, '---\nname: helper\naddTools: [debug]\n---\n')
+    // The form shows an inherit-all definition without a tools list, so it sends none.
+    await actions.saveDefinition(
+      {
+        name: 'helper',
+        scope: 'user',
+        frontmatter: { description: 'Helps more', resident: false },
+        instructions: 'Help.',
+      },
+      ctx,
+    )
+    expect(await readFile(overlay, 'utf8')).toBe(
+      '---\nname: helper\naddTools: [debug]\ndescription: Helps more\n---\n',
+    )
+    expect(await actions.definition({ name: 'helper' }, ctx)).toMatchObject({
+      definition: { description: 'Helps more', addTools: ['debug'] },
+    })
+  })
   it('foreground returns the answer, exposes child details, inherits the parent and rereads scout on next start', async () => {
     const { opened, ultimateRoot } = await fixture()
     const result = await call(opened, { action: 'start', agent: 'scout', task: 'facts' })

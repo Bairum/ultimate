@@ -500,7 +500,19 @@ export async function saveOverlay(
   if (base.tools && !form.tools) throw cannot('make it inherit every tool')
   const removed = base.tools?.filter((tool) => !form.tools?.includes(tool)) ?? []
   if (removed.length) throw cannot(`remove ${removed.join(', ')}`)
-  const addTools = form.tools?.filter((tool) => !base.tools?.includes(tool)) ?? []
+  // A base that inherits every tool shows no list in the form, so the file keeps the names it adds (deferred ones).
+  const addTools =
+    form.tools?.filter((tool) => !base.tools?.includes(tool)) ??
+    (await readFile(path, 'utf8').then(
+      (text) => {
+        const kept = parseFrontmatter(text).frontmatter.addTools
+        return isTools(kept) ? kept : []
+      },
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return []
+        throw error
+      },
+    ))
   const baseDeny = base.denyTools ?? []
   const undenied = baseDeny.filter((tool) => !form.denyTools?.includes(tool))
   if (undenied.length) throw cannot(`allow ${undenied.join(', ')} again`)
