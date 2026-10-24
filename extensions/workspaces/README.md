@@ -16,7 +16,7 @@ Preparation fills the new worktree per `isolates.worktree.clone`: `auto` (defaul
 copy-on-write (APFS `clonefile` on macOS, `cp --reflink=always` on Linux), ignored files such as `node_modules`
 included and submodules left out, then resets tracked files to the branch and removes untracked ones; when cloning
 fails it checks out plainly and reports the backend and reason in a notice. Repository identity failures always
-abort before destructive operations. Absolute symlinks pointing inside the source are skipped during copying
+abort before destructive operations. Absolute symlinks pointing inside the source are removed after copying
 (tracked links are restored by reset), so ignored links cannot lead back into the source. `apfs` and `reflink` insist on their backend; `git` always checks out plainly. The
 lander's checkout always checks out plainly. `du` counts cloned blocks in full, so the disk row overstates on APFS.
 It then runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout.

@@ -42,6 +42,31 @@ it('refuses a missing git file without touching the enclosing source', async () 
   expect(await readFile(join(src, 'tracked'), 'utf8')).toBe('dirty\n')
 })
 
+it('refuses a git file that points at the source repository itself', async () => {
+  const { src, path } = await source()
+  await writeFile(join(path, '.git'), `gitdir: ${join(src, '.git')}\n`)
+  await expect(populate(src, path, 'auto')).rejects.toThrow(/Unsafe worktree repository/)
+  expect(await readFile(join(src, 'tracked'), 'utf8')).toBe('dirty\n')
+  expect(await git(src, 'diff', '--name-only')).toBe('tracked')
+})
+
+it('clones a repository whose file list exceeds 1 MiB', async () => {
+  const { src, path } = await source()
+  await mkdir(join(src, 'many'))
+  // About 120 bytes per `ls-files -s -z` entry: 10,000 files list 1.2 MB.
+  const name = 'x'.repeat(60)
+  await Promise.all(
+    Array.from({ length: 10_000 }, (_, i) => writeFile(join(src, 'many', `${name}${i}`), '')),
+  )
+  await git(src, 'add', 'many')
+  await git(src, 'commit', '--quiet', '-m', 'many')
+  await git(path, 'reset', '--soft', '--quiet', await git(src, 'rev-parse', 'HEAD'))
+  const { backend: used, reason } = await populate(src, path, 'auto')
+  expect(reason).toBeUndefined()
+  expect(used).toBe(backend('auto'))
+  expect(await git(path, 'status', '--porcelain')).toBe('')
+})
+
 it('falls back visibly on a failed gitlink listing, but explicit backends throw', async () => {
   const { src, path } = await source()
   const original = gitModule.git
@@ -62,7 +87,8 @@ it('refreshes the copied index before resetting, so unchanged cloned files are n
   const calls: string[] = []
   const original = gitModule.git
   vi.spyOn(gitModule, 'git').mockImplementation((cwd, ...args) => {
-    if (cwd === path && (args[0] === 'update-index' || args[0] === 'reset')) calls.push(args[0])
+    const dir = typeof cwd === 'string' ? cwd : cwd.cwd
+    if (dir === path && (args[0] === 'update-index' || args[0] === 'reset')) calls.push(args[0])
     return original(cwd, ...args)
   })
   const { backend: used } = await populate(src, path, 'auto')

@@ -1,5 +1,5 @@
 import type { JsonObject } from '@earendil-works/pi-durable'
-import { copyFile, lstat, mkdir, readdir, readlink, realpath, rm } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, readdir, readlink, realpath, rm, statfs } from 'node:fs/promises'
 import { isAbsolute, join, relative as relativePath, resolve } from 'node:path'
 import { exec } from '../../lib/exec.ts'
 import { git } from '../../lib/git.ts'
@@ -38,7 +38,13 @@ export async function populate(source: string, path: string, mode: CloneMode) {
   const common = await commonDir(source)
   const guard = async () => {
     const top = await git(path, 'rev-parse', '--show-toplevel')
-    if ((await realpath(top)) !== (await realpath(path)) || (await commonDir(path)) !== common)
+    // A linked worktree has its own git dir inside the common one; a `.git` pointing at the common dir is the source.
+    const own = await realpath(await git(path, 'rev-parse', '--absolute-git-dir'))
+    if (
+      (await realpath(top)) !== (await realpath(path)) ||
+      (await commonDir(path)) !== common ||
+      own === common
+    )
       throw new Error(`Unsafe worktree repository: ${path}`)
   }
   await guard()
@@ -57,14 +63,18 @@ export async function populate(source: string, path: string, mode: CloneMode) {
   }
   await guard()
   // The copied index holds the source's inodes and ctimes; without a refresh reset rewrites every tracked file and
-  // the clone shares no blocks. A refresh reports changed files with a non-zero exit, which is expected here.
+  // the clone shares no blocks. Refreshing re-reads every tracked file, so these steps get the copy's long timeout.
+  const long = { cwd: path, timeout: 600_000 }
   if (kind && !reason)
-    await git(path, 'update-index', '-q', '--refresh').catch(() => 'changed files are expected')
-  await git(path, 'reset', '--hard', '--quiet', 'HEAD')
+    await git(long, 'update-index', '-q', '--refresh').catch((error: { code?: unknown }) => {
+      // Exit 1 lists files that differ from the index, which reset then rewrites; anything else is a real failure.
+      if (error.code !== 1) throw error
+    })
+  await git(long, 'reset', '--hard', '--quiet', 'HEAD')
   if (kind && !reason) {
     // The second -f also drops untracked nested repositories.
     await guard()
-    await git(path, 'clean', '-ffdq')
+    await git(long, 'clean', '-ffdq')
   }
   return { backend: reason ? ('git' as const) : (kind ?? ('git' as const)), reason }
 }
@@ -76,12 +86,21 @@ async function clear(path: string) {
   await rm(await gitPath(path, 'index'), { force: true })
 }
 
+/** The `statfs` type macOS reports for APFS. */
+const APFS = 26
+
 async function clone(source: string, path: string, kind: 'apfs' | 'reflink') {
+  // `cp -c` silently copies in full across volumes or on a volume without clones, so check before cloning.
+  if ((await lstat(source)).dev !== (await lstat(path)).dev)
+    throw new Error('The source and the worktree are on different volumes')
+  if (kind === 'apfs' && (await statfs(path)).type !== APFS)
+    throw new Error('The volume does not support APFS clones')
   for (const key of ['core.sparseCheckout', 'core.splitIndex'])
     if ((await git(source, 'config', '--bool', key).catch(() => 'false')) === 'true')
       throw new Error(`Cannot clone a checkout with ${key} enabled`)
   // Gitlinks stay out: their .git files point into the source's module store.
-  const submodules = (await git(source, 'ls-files', '-s', '-z'))
+  // Every tracked file is listed, about 80 bytes each: allow far more than git()'s 1 MiB default.
+  const submodules = (await git({ cwd: source, maxBuffer: 1024 ** 3 }, 'ls-files', '-s', '-z'))
     .split('\0')
     .filter((entry) => entry.startsWith('160000 '))
     .map((entry) => entry.slice(entry.indexOf('\t') + 1))
@@ -109,6 +128,12 @@ async function clone(source: string, path: string, kind: 'apfs' | 'reflink') {
   }
   await copy('')
   // Inspect copied links without spawning a process per file or following directory symlinks.
+  const real = await realpath(source)
+  const into = (target: string) =>
+    [resolve(source), real].some((root) => {
+      const inside = relativePath(root, resolve(target))
+      return inside !== '..' && !inside.startsWith('../') && !isAbsolute(inside)
+    })
   const removeSourceLinks = async (directory: string) => {
     for (const entry of await readdir(directory)) {
       if (directory === path && entry === '.git') continue
@@ -117,14 +142,7 @@ async function clone(source: string, path: string, kind: 'apfs' | 'reflink') {
       if (stat.isDirectory()) await removeSourceLinks(name)
       else if (stat.isSymbolicLink()) {
         const target = await readlink(name)
-        const inside = relativePath(resolve(source), resolve(target))
-        if (
-          isAbsolute(target) &&
-          inside !== '..' &&
-          !inside.startsWith('../') &&
-          !isAbsolute(inside)
-        )
-          await rm(name)
+        if (isAbsolute(target) && into(target)) await rm(name)
       }
     }
   }
