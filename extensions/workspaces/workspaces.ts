@@ -16,6 +16,7 @@ import { git, isolatable } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { WorkspacesDoc } from './refs.ts'
+import { removeWorktree } from './remove.ts'
 import { setup } from './setup.ts'
 import { cloneMode, populate } from './clone.ts'
 import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
@@ -94,8 +95,10 @@ async function changes(
 ): Promise<KeptWork> {
   return {
     id,
-    uncommitted: (await git(workspace.path, 'status', '--porcelain')).split('\n').filter(Boolean)
-      .length,
+    // Untracked files count whatever status.showUntrackedFiles says.
+    uncommitted: (await git(workspace.path, 'status', '--porcelain', '--untracked-files=all'))
+      .split('\n')
+      .filter(Boolean).length,
     unlanded: Number(
       await git(
         workspace.path,
@@ -544,8 +547,9 @@ export function workspaces(host: Host) {
           (await git(workspace.source, 'rev-parse', workspace.branch))
         )
           throw new Error(`Workspace #${id} no longer checks out its recorded branch tip`)
-        // Never force: Git refuses uncommitted changes made since the status check.
-        await git(workspace.source, 'worktree', 'remove', workspace.path)
+        // Git refuses uncommitted changes made since the status check; removeWorktree forces only past submodules
+        // that hold nothing unique, after checking the checkout again.
+        await removeWorktree(workspace.source, workspace.path)
       } else if (await onDisk(workspace.path))
         // Release clears the leftover folder of its own checkout first; any other folder there is not ours to remove.
         throw new Error(`Workspace path is not a registered checkout: ${workspace.path}`)
@@ -562,6 +566,12 @@ export function workspaces(host: Host) {
         )
         if (merged) await git(workspace.source, 'branch', '-D', workspace.branch)
       }
+      // A removal refused earlier, for example for submodule work, left its reason on the record.
+      await host.harness().commit(async (tx) => {
+        const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)]
+        saved.state = 'removed'
+        delete saved.error
+      }, context)
       return undefined
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
@@ -983,8 +993,7 @@ export function workspaces(host: Host) {
       if (!workspace) throw new Error('Conversation has no workspace')
       if (workspace.state === 'preparing') throw new Error('Workspace is preparing')
       if (workspace.state !== 'removed') {
-        if (await listedBySource(workspace))
-          await git(workspace.source, 'worktree', 'remove', workspace.path)
+        if (await listedBySource(workspace)) await removeWorktree(workspace.source, workspace.path)
         await host.harness().commit(async (tx) => {
           ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'removed'
         }, context)

@@ -57,7 +57,11 @@ ancestors, reported with `descendant: <id>`. The removal transaction also checks
 from the checkout, so a descendant resumed during the batch keeps its source ancestors. Nested recreation checks
 its source parent's `ready` state and folder in the transaction that starts preparation; otherwise it readies the
 parent and retries. Source queues are acquired ancestor-first for that decision and filesystem recovery.
-Git writes are serialized per source and removal is never forced.
+Git writes are serialized per source. Removal refuses a missing checkout and a HEAD that no branch, tag or remote
+reaches. It forces only past submodules, which Git refuses even in a clean checkout, and only when the checkout is
+clean, no submodule has uncommitted changes, and every submodule repository's commits are on a remote-tracking ref
+after a fetch that prunes deleted branches; an unreachable remote keeps the checkout. Ignored files are deleted, as
+Git does.
 Release atomically checks run admission and marks the record `removed` before deleting the folder. Requests wait
 on that same source queue before checking the record and recreating. Reconciliation and recreation finish
 interrupted removals; newly found pending work is kept and the checkout returns to `ready`. Unlanded counts include
