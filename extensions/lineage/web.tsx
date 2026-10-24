@@ -43,6 +43,7 @@ import { CompactAction, ForgetAction, MemoryDoc, TallyDoc } from './refs.ts'
 import type { MemoryItem } from './refs.ts'
 import { column, EmptyRoot, MEMORY_PANEL, MemoryHeader, useRoots } from './ui.tsx'
 import { GoBackAction, Rewound, RewoundDependent } from './rewind.tsx'
+import { emptyRoot } from './empty-root.ts'
 
 function userText(entry: EntryRecord) {
   const message = entry.model?.[0]
@@ -398,11 +399,12 @@ function RootComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
 /** Only a root subscribes to its `lineage.tally` document; a root from before tallies has none and shows the footer. */
 function TallyComposer({ id, dock }: { id: number; dock?: boolean }) {
   const tally = useDocOf(id, TallyDoc)
+  const memories = useDocOf(id, MemoryDoc)
   const history = useConversation((conversation) =>
     conversation.loading ? undefined : conversation.entries.length > 0,
   )
-  if (tally === undefined || history === undefined) return null
-  if (tally?.since === undefined && !history)
+  if (tally === undefined || memories === undefined || history === undefined) return null
+  if (emptyRoot(tally, history, memories))
     return (
       <Provided input={{ id, dock }} point={EmptyRoot}>
         {(start) => start}

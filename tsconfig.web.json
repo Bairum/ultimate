@@ -44,6 +44,8 @@
     "extensions/pause/parked.ts",
     "extensions/sidebar/work.ts",
     "extensions/sidebar/landings.ts",
+    "extensions/subagents/landing.ts",
+    "extensions/lineage/empty-root.ts",
     "extensions/sidebar/label.ts",
     "extensions/sidebar/listed.ts",
     "extensions/side-chat/logic.ts",
