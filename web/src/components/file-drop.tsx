@@ -8,10 +8,9 @@ const hasFiles = (event: { dataTransfer: DataTransfer | null }) =>
   event.dataTransfer?.types.includes('Files') ?? false
 
 // Dropping a file anywhere else would navigate the tab away to it.
-for (const name of ['dragover', 'drop'] as const)
-  window.addEventListener(name, (event) => {
-    if (hasFiles(event)) event.preventDefault()
-  })
+const keepTab = (event: globalThis.DragEvent) => {
+  if (hasFiles(event)) event.preventDefault()
+}
 
 /** Drops files onto a composer: each is saved by the server and its quoted path inserted at the cursor. */
 export function useFileDrop({
@@ -35,8 +34,12 @@ export function useFileDrop({
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
+    window.addEventListener('dragover', keepTab)
+    window.addEventListener('drop', keepTab)
     return () => {
       alive.current = false
+      window.removeEventListener('dragover', keepTab)
+      window.removeEventListener('drop', keepTab)
     }
   }, [])
 
