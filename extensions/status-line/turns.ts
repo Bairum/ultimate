@@ -1,6 +1,6 @@
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import type { EntryRecord } from '@earendil-works/pi-durable'
-import { promptTokens } from './context.ts'
+import { promptTokens } from '../../lib/context-usage.ts'
 
 /** Whether an entry is an input that starts a turn: a user message, but not a compaction's summary. */
 const isInput = (entry: EntryRecord) =>

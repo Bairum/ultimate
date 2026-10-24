@@ -1,9 +1,7 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, fauxText, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate'
 import { defineExtension, defineTask, LiveDoc, UsageDoc } from '@earendil-works/pi-durable'
-import type { ConversationId, EntryRecord, Tx } from '@earendil-works/pi-durable'
-import { lastAssistant } from '../extensions/status-line/context.ts'
+import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import { describe, expect, it, vi } from 'vitest'
 import { createRateSampler, type Rates } from '../extensions/status-line/rates.ts'
 import statusLine, { actions } from '../extensions/status-line/server.ts'
@@ -85,86 +83,6 @@ async function fixture() {
     },
   }
 }
-
-describe('context estimate after a compaction', () => {
-  it('marks the meter stale until an answer newer than the marker, though the view lists the marker first', () => {
-    const record = (id: number, kind: string, output = 0) =>
-      ({
-        id,
-        kind,
-        model: kind === 'pi.assistant' ? [message(output)] : [],
-      }) as unknown as EntryRecord
-    // A compaction's view: the marker, then the kept entries it heads, including an answer.
-    const view = [record(9, 'pi.compaction'), record(4, 'pi.user'), record(5, 'pi.assistant', 7)]
-    expect(lastAssistant(view)).toEqual({ stale: true, marker: 9 })
-    const answered = lastAssistant([...view, record(10, 'pi.assistant', 8)])
-    expect(answered).toMatchObject({ stale: false, message: { usage: { output: 8 } } })
-    expect(lastAssistant([record(2, 'pi.assistant', 3)])).toMatchObject({ stale: false })
-    expect(lastAssistant([])).toEqual({ stale: false })
-  })
-
-  it('counts the prompt and tools before the marker plus the summary and kept entries, once', async () => {
-    const f = await fixture()
-    try {
-      const id = f.root.id
-      const system = {
-        role: 'system' as const,
-        content: 'base',
-        sections: { rules: 'r'.repeat(3500) },
-        toolsAdded: [{ name: 'bash', description: 'd'.repeat(700), parameters: {} }],
-        timestamp: 1,
-      }
-      const answer = message(1)
-      answer.usage = { ...answer.usage, input: 900000, cacheRead: 0, cacheWrite: 0 }
-      const { kept, marker } = await f.harness.commit(async (tx) => {
-        await tx.appendEntry(id, {
-          kind: 'pi.user',
-          model: [{ role: 'user', content: 'x'.repeat(7000), timestamp: 0 }],
-        })
-        await tx.appendEntry(id, { kind: 'pi.system', model: [system] })
-        await tx.appendEntry(id, { kind: 'pi.assistant', model: [answer] })
-        const first = await tx.appendEntry(id, {
-          kind: 'pi.user',
-          model: [{ role: 'user', content: 'k'.repeat(350), timestamp: 3 }],
-        })
-        return {
-          kept: first,
-          marker: await tx.appendEntry(id, {
-            kind: 'pi.compaction',
-            head: first.id,
-            data: { reason: 'manual' },
-            model: [{ role: 'user', content: 's'.repeat(700), timestamp: 4 }],
-          }),
-        }
-      }, context)
-      const host = { harness: () => f.harness } as unknown as ExtensionHost
-      const estimate = (head: number) =>
-        actions.estimate({ marker: head }, { host, conversationId: id })
-      const expected =
-        estimateMessageTokens({ ...system, sections: { rules: system.sections.rules } }) +
-        estimateMessageTokens({ role: 'user', content: 's'.repeat(700), timestamp: 4 }) +
-        estimateMessageTokens({ role: 'user', content: 'k'.repeat(350), timestamp: 3 })
-      // The 7000-character input before the kept entry and the 900k measured response are gone.
-      expect(await estimate(marker.id)).toBe(expected)
-      expect(expected).toBeLessThan(2000)
-      // A marker that no longer heads the context has no estimate.
-      expect(await estimate(kept.id)).toBeNull()
-      // A kept `pi.system` entry counts once, through the replayed prompt.
-      const again = await f.harness.commit(async (tx) => {
-        await tx.appendEntry(id, { kind: 'pi.system', model: [{ ...system, timestamp: 5 }] })
-        return tx.appendEntry(id, {
-          kind: 'pi.compaction',
-          head: kept.id,
-          data: { reason: 'manual' },
-          model: [{ role: 'user', content: 's'.repeat(700), timestamp: 6 }],
-        })
-      }, context)
-      expect(await estimate(again.id)).toBe(expected)
-    } finally {
-      await f.cleanup()
-    }
-  })
-})
 
 describe('instance aggregate sampling', () => {
   it('baselines history once and uses signed aggregate differences with a common time', () => {
