@@ -1498,6 +1498,10 @@ it.concurrent('lands two submissions in order onto a moved target and reports bo
   // Both submissions logged into one lander conversation, each ending with its landed outcome.
   const { id, metadata, cwd, kinds, log } = await landerLog(f)
   expect(metadata).toEqual({ title: '@lander', label: 'lander' })
+  // The lander the submission created is standing at once: concluding it is refused.
+  await expect(
+    f.opened.harness.commit((tx) => concludeIn(f.host, tx, [id]), context),
+  ).rejects.toThrow(`#${id} is a standing agent`)
   expect(cwd).toMatch(/\/lander\/[0-9a-f]{12}$/)
   expect(kinds.every((kind) => kind === 'ultimate.lander')).toBe(true)
   expect(reportOne).toContain(`lander conversation #${id}`)
