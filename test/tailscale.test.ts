@@ -9,6 +9,18 @@ import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { createServer } from '../server/main.ts'
 import { copyApis, linkDependencies, post, temp, until } from './helpers.ts'
 
+// The host's own macOS app is the default CLI's fallback: hide it, so "not installed" holds on a Mac with Tailscale too.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...fs,
+    access: (path: string, mode?: number) =>
+      path.startsWith('/Applications/Tailscale.app/')
+        ? Promise.reject(Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' }))
+        : fs.access(path, mode),
+  }
+})
+
 const closes: (() => Promise<void>)[] = []
 afterEach(async () => {
   for (const close of closes.splice(0)) await close()

@@ -1,11 +1,15 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import type { CommandItem } from '../../web/src/sdk/registry.ts'
 
-const { runCommand, commands, ui } = vi.hoisted(() => ({
-  runCommand: vi.fn<(id: string, context: { conversationId?: number }) => void>(),
-  commands: vi.fn<() => CommandItem[]>(),
-  ui: { paletteOpen: false },
-}))
+const { runCommand, commands, ui } = vi.hoisted(() => {
+  // keys.ts reads the platform once at import: pin it, so `mod` is Ctrl on every host, macOS included.
+  vi.stubGlobal('navigator', { platform: 'Linux x86_64' })
+  return {
+    runCommand: vi.fn<(id: string, context: { conversationId?: number }) => void>(),
+    commands: vi.fn<() => CommandItem[]>(),
+    ui: { paletteOpen: false },
+  }
+})
 vi.mock('../../web/src/sdk/actions.ts', () => ({
   runCommand,
   allCommands: commands,
