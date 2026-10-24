@@ -520,12 +520,10 @@ async function fallAsleep(
   try {
     const instances = host.want(InstanceApi)
     if (!instances) throw new Error('Fall asleep needs the instance extension for its gate')
-    const by = await host
-      .harness()
-      .commit(async (tx) => {
-        const found = (await find(tx, session)).sleep?.by
-        return found && (JSON.parse(JSON.stringify(found)) as GrantedBy)
-      }, context)
+    const by = await host.harness().commit(async (tx) => {
+      const found = (await find(tx, session)).sleep?.by
+      return found && (JSON.parse(JSON.stringify(found)) as GrantedBy)
+    }, context)
     const build = async () => ({ ...(await buildSeed(host, session)), ...(by ? { by } : {}) })
     let seed = await build()
     await progress({ phase: 'checking' })
