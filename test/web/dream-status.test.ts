@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { pinnedOf, progress, sleepLeads } from '../../extensions/dream/types.ts'
+import { pinnedOf, progress, sleepLeads, stepOf } from '../../extensions/dream/types.ts'
 import type { Proposal, Session } from '../../extensions/dream/refs.ts'
 
 const waiting = { status: 'waiting' } as const
@@ -80,6 +80,34 @@ it('leads the pinned dialog with Fall asleep once settled, also for a compaction
     false,
   )
   expect(sleepLeads(settled, false)).toBe(false)
+})
+
+it('walks the sidebar from the handoff to the switch, naming the one thing to do', () => {
+  expect(stepOf({ sessions: [] })).toBeUndefined()
+  expect(stepOf({ sessions: [], waiting: { at: 0, task: 7 } })).toEqual({
+    stage: 'handoff',
+    text: 'Writing my handoff',
+  })
+  expect(stepOf({ sessions: [session(1)] })?.stage).toBe('dreaming')
+  expect(
+    stepOf({ sessions: [session(1, { journal, proposals: proposals('open', 'landed') })] }),
+  ).toMatchObject({ stage: 'deciding', action: 'decide', text: '1 proposal to decide' })
+  const settled = session(1, {
+    journal: { ...journal, chapter: 'trim-and-trust' },
+    endedAt: 2,
+    proposals: proposals('landed'),
+  })
+  expect(stepOf({ sessions: [settled] })).toMatchObject({
+    stage: 'settled',
+    action: 'sleep',
+    text: 'Ready for a fresh chapter: trim-and-trust',
+  })
+  expect(
+    stepOf({ sessions: [{ ...settled, sleep: { chapter: 'a', phase: 'checking', at: 3 } }] }),
+  ).toEqual({ session: 1, stage: 'asleep', text: 'Falling asleep · step 2 of 4' })
+  expect(
+    stepOf({ sessions: [{ ...settled, sleep: { chapter: 'a', phase: 'failed', at: 3 } }] })?.action,
+  ).toBe('failed')
 })
 
 it('says where the session stands', () => {

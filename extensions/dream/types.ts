@@ -3,7 +3,7 @@ import type { MemoryItem } from '../lineage/refs.ts'
 import type { Todo } from '../todos/refs.ts'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { CreateArgs, Schedule } from '../automations/refs.ts'
-import type { GrantedBy, Journal, Proposal, Session } from './refs.ts'
+import type { GrantedBy, Journal, Proposal, Session, Waiting } from './refs.ts'
 
 /** Everything a dream carries to a fresh chapter; numeric trigger targets and subscribers need recreating. */
 export type Seed = {
@@ -93,6 +93,71 @@ export function sleepLeads(session: Session, newest: boolean) {
     !!session.sleep ||
     !session.proposals.some((item) => item.status === 'open' || item.status === 'approved')
   )
+}
+
+/** The stages a dream walks through, as the sidebar's strip shows them. */
+export const STAGES = ['handoff', 'dreaming', 'deciding', 'settled', 'asleep'] as const
+
+/**
+ * Where a dream stands for the sidebar: its `stage`, one sentence, and the one thing the user has to do, if any:
+ * `decide` proposals with @ultimate, `sleep` (press Fall asleep) or look at a `failed` sleep. Undefined when no dream
+ * needs following.
+ */
+export type DreamStep = {
+  session?: number
+  stage: (typeof STAGES)[number]
+  text: string
+  action?: 'decide' | 'sleep' | 'failed'
+}
+
+export function stepOf(doc?: { sessions: Session[]; waiting?: Waiting }): DreamStep | undefined {
+  const session = pinnedOf(doc?.sessions)
+  if (!session) {
+    const waiting = doc?.waiting
+    if (!waiting || waiting.gaveUp) return undefined
+    return {
+      stage: 'handoff',
+      text: waiting.handoff
+        ? 'Handed off · dreaming once nothing else works'
+        : 'Writing my handoff',
+    }
+  }
+  const at = { session: session.id }
+  const sleep = session.sleep
+  if (sleep?.phase === 'failed')
+    return { ...at, stage: 'asleep', text: 'Falling asleep failed', action: 'failed' }
+  if (sleep) {
+    if (sleep.phase === 'waiting')
+      return { ...at, stage: 'asleep', text: 'Waiting for every conversation to finish' }
+    const step = ['seeding', 'checking', 'backing up', 'switching'].indexOf(sleep.phase) + 1
+    return { ...at, stage: 'asleep', text: `Falling asleep · step ${step} of 4` }
+  }
+  if (!session.journal) {
+    const done = PASSES.filter((pass) => session.passes[pass].status === 'done').length
+    return { ...at, stage: 'dreaming', text: `Dreaming · ${done} of ${PASSES.length} passes` }
+  }
+  const open = session.proposals.filter((item) => item.status === 'open').length
+  const approved = session.proposals.filter((item) => item.status === 'approved').length
+  if (open > 0)
+    return session.beforeCompaction?.handsOff
+      ? { ...at, stage: 'deciding', text: `I'm deciding ${open} under your grant` }
+      : {
+          ...at,
+          stage: 'deciding',
+          text: `${open} proposal${open === 1 ? '' : 's'} to decide`,
+          action: 'decide',
+        }
+  if (approved > 0) return { ...at, stage: 'deciding', text: `${approved} on branches, landing` }
+  const compaction = session.beforeCompaction
+  if (compaction && !compaction.outcome)
+    return { ...at, stage: 'settled', text: 'Settled · weighing a fresh chapter' }
+  const chapter = session.journal.chapter
+  return {
+    ...at,
+    stage: 'settled',
+    text: chapter ? `Ready for a fresh chapter: ${chapter}` : 'Ready to fall asleep',
+    action: 'sleep',
+  }
 }
 
 const settled = (session: Session) =>
