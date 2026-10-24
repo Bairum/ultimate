@@ -35,6 +35,7 @@ import {
   previewParts,
   recallQueued,
   recalledText,
+  spliced,
   withdrawQueuedSteer,
 } from './queued.ts'
 
@@ -228,16 +229,11 @@ export function insertIntoComposer(id: number, text: string) {
   const editor = document.querySelector<HTMLTextAreaElement>(`textarea[data-conversation="${id}"]`)
   const start = editor?.selectionStart ?? current.length
   const end = editor?.selectionEnd ?? current.length
-  const before = current.slice(0, start)
-  const after = current.slice(end)
-  const inserted = `${before && !/\s$/.test(before) ? ' ' : ''}${text}${after && !/^\s/.test(after) ? ' ' : ''}`
-  const next = before + inserted + after
+  const { text: next, cursor } = spliced(current, start, end, text)
   draft.set({ text: next, revision: draft.get().revision + 1 })
   if (draft.key) localStorage.setItem(draft.key, next)
   // The cursor follows the inserted text once React has rendered the new value.
-  requestAnimationFrame(() =>
-    editor?.setSelectionRange(start + inserted.length, start + inserted.length),
-  )
+  requestAnimationFrame(() => editor?.setSelectionRange(cursor, cursor))
 }
 
 function clearDraft(

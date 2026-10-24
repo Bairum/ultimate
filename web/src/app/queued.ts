@@ -7,6 +7,17 @@ type QueueApi = {
   cancelSubmission: (submissionId: number, id?: number) => Promise<unknown>
 }
 
+/**
+ * `current` with `text` replacing `start..end`, spaced from neighbouring words as typing it would be, and the cursor
+ * after it.
+ */
+export function spliced(current: string, start: number, end: number, text: string) {
+  const before = current.slice(0, start)
+  const after = current.slice(end)
+  const inserted = `${before && !/\s$/.test(before) ? ' ' : ''}${text}${after && !/^\s/.test(after) ? ' ' : ''}`
+  return { text: before + inserted + after, cursor: start + inserted.length }
+}
+
 /** The text and images of a queued input; an entry write has none. */
 export function queuedInput(item: InboxItem): QueuedInput | undefined {
   if (item.mode === 'write') return undefined
