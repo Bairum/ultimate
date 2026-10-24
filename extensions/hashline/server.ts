@@ -1,3 +1,4 @@
+import { chmod, stat } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import type { Context } from '@earendil-works/chord'
 import { withCancel } from '@earendil-works/chord/context'
@@ -109,15 +110,18 @@ class EnvFilesystem extends Filesystem {
   override async move(from: string, to: string, text?: string): Promise<void> {
     if (await this.exists(to))
       throw new Error(
-        `MV destination already exists: ${to}. REM it first with its current tagged header.`,
+        `MV destination already exists: ${to}. REM it first in a separate edit call with its current tagged header.`,
       )
     const target = this.ioPath(to)
     value(await this.env.createDir(dirname(target), { recursive: true }, this.context))
     if (text === undefined)
       value(await this.env.renameFile(this.ioPath(from), target, this.context))
     else {
-      // Never cut/edit the source before the new destination is persisted.
+      // ExecutionEnv has no mode API; this host uses NodeExecutionEnv. Keep
+      // permissions on its resolved local paths before removing the source.
+      const mode = (await stat(this.ioPath(from))).mode & 0o7777
       await this.writeText(to, text)
+      await chmod(target, mode)
       await this.delete(from)
     }
   }

@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
@@ -310,6 +310,25 @@ test('Node filesystem moves neither overwrite destinations nor modify a source o
       fs.move(source, path.join(destination, 'not-a-directory'), 'after cut\n'),
     ).rejects.toThrow(/ENOTDIR|EEXIST/)
     expect(await fs.readText(source)).toBe('original\n')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Node filesystem preserves executable permissions across plain and edited moves', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'hashline-mode-'))
+  const fs = new NodeFilesystem()
+  const source = path.join(dir, 'source.sh'),
+    renamed = path.join(dir, 'renamed.sh'),
+    edited = path.join(dir, 'edited.sh')
+  try {
+    await fs.writeText(source, '#!/bin/sh\necho old\n')
+    await chmod(source, 0o755)
+    await fs.move(source, renamed)
+    expect((await stat(renamed)).mode & 0o7777).toBe(0o755)
+    await fs.move(renamed, edited, '#!/bin/sh\necho new\n')
+    expect((await stat(edited)).mode & 0o7777).toBe(0o755)
+    expect(await fs.readText(edited)).toBe('#!/bin/sh\necho new\n')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
