@@ -1,0 +1,23 @@
+Hashline adds snapshot-tagged reads, line-addressed edits and editable grep results, off by default.
+
+Enable with `"extensions": { "enable": ["hashline"] }` in settings. Disabling it restores Pi's normal read/edit/write tools. The coding-tools extension is unchanged: hashline wraps its tools and composes over its cards.
+
+Read or grep prints `[path#TAG]` and `N:TEXT` rows. Copy the latest header into an edit; line numbers always refer to that original snapshot. `PUT N.=M:` replaces a range, `PUT <N:`/`PUT >N:` inserts, and `PUT >$:` appends. Body rows are `+TEXT` (`+` for blank). `CUT` and register pastes move text; `REM` removes a file and `MV destination` moves it. Use write to create a file. Parser-backed `*` forms are not available yet; use concrete ranges.
+
+Edits preflight all sections before writing, then return new headers and compact numbered previews. Reads preserve Pi's text caps, continuation notes and image handling. Grep uses installed `rg --json`, with pattern/path/glob/ignore-case/context options, at most 100 matches and 20 files; narrow a capped search.
+
+Full snapshot text lives in a bounded process cache (16 conversations, each using the engine's 256-path/four-version/64 MiB bounds). `hashline.provenance` is a rewindable, fork-as-of conversation document containing absolute-path versions, full 32-bit hashes, compact seen-line ranges and registers. A short-tag collision is rejected before the engine can write. After restart a live tag works only with unique retained full-hash provenance and its durable seen-line restrictions; unknown, aged-out or ambiguous tags are refused. Stale line edits can recover only when their text is cached or a full successful read in the active transcript can rebuild it. Partial reads cannot rebuild full snapshots. REM and MV never recover from stale tags, and MV refuses an existing destination: remove it explicitly with its own tagged REM first.
+
+Read, grep and edit results set `details.offloadExempt = true`: their output is already bounded, and downstream offloading must not shorten away rows recorded as displayed.
+
+Only displayed, complete rows count as seen. Edit results carry unchanged rows only when their authored-snapshot and result line numbers agree and live-matching provenance exists, plus their displayed preview. Missing coverage carries nothing; only an explicit verified write is unrestricted. A write whose read-back differs from the normalized authored content records no seen rows. Nested/codemode reads cache text without granting displayed-line provenance; nested edits intentionally bypass the seen-line guard because the program computed its anchors. Tags and collision checks still apply.
+
+The read card shows clean code and gutter numbers, not the model's `N:` prefixes. Edit cards show per-file unified diffs; warnings and recovery notices use tool diagnostics. Grep cards group numbered excerpts per file.
+
+## Credits and boundaries
+
+The engine and fixture provenance are in [SOURCE.md](SOURCE.md); MIT copyrights and license are in [LICENSE-omp](LICENSE-omp). The edit description adapts oh-my-pi's `crates/pi-edit/prompts/hashline.md` at commit `0b5c27a`, by Mario Zechner, Can Bölük and Stencil Labs. Its earlier TypeScript engine is `@oh-my-pi/hashline@18.1.5`.
+
+No parser, notebook conversion, LSP, plan-mode policy or internal-URL filesystem is introduced here. File operations use Pi's execution environment, including its write/remove/rename capabilities. Edited moves persist a new destination before removing the source, so a failed destination write cannot cut text out of the source. Preflight prevents parse/tag failures from partially writing a batch; filesystem write failures are not transactional and report any already-written prefix. Like other filesystem tools, a separate external writer can still race between validation and commit.
+
+Known costs: reads and grep load whole files to compute snapshot hashes even when displaying a small window. Edit recovery scans the active transcript for full reads and may hash their text again. Retained text has cache limits, but whole-file I/O, temporary read memory and active-transcript scanning can still be expensive. They are not redesigned here.
