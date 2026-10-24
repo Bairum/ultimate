@@ -69,6 +69,7 @@ export const defaultOff: readonly string[] = [
   'sounds',
   'output-offload',
   'context-hygiene',
+  'context-compress',
 ]
 
 /** Who provides and who consumes each API, as `host.catalogue()` reports it. */
