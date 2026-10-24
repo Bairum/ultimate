@@ -37,20 +37,27 @@ import {
   DecideAction,
   DreamDoc,
   EndAction,
+  HandoffAction,
   JournalAction,
   PassAction,
   StartAction,
   StatsAction,
 } from './refs.ts'
-import type { AfterCompaction, PassState, Proposal, Session, Sleep, ToolStats } from './refs.ts'
+import type { PassState, Proposal, Session, Sleep, ToolStats, Waiting } from './refs.ts'
 import { busyElsewhere, PASSES } from './types.ts'
 import { deliver, deliverTask } from './delivery.ts'
 import { applySeed, buildSeed, SeedState, writeSeed } from './seed.ts'
 import { gate } from './gate.ts'
-import { AfterCompactionDoc, compactionDream, ensureAutomation } from './after-compaction.ts'
+import {
+  BuiltInDoc,
+  compactionDream,
+  ensureAutomation,
+  HANDOFF_CHARS,
+} from './before-compaction.ts'
+import type { Origin } from './before-compaction.ts'
 import type { PassName } from './types.ts'
 
-export const Sessions = defineDoc<{ next: number; sessions: Session[] }>({
+export const Sessions = defineDoc<{ next: number; sessions: Session[]; waiting?: Waiting }>({
   kind: DreamDoc.kind,
   checkpointWhen: () => false,
   version: 1,
@@ -59,7 +66,7 @@ export const Sessions = defineDoc<{ next: number; sessions: Session[] }>({
   fork: 'initial',
   initial: () => ({ next: 1, sessions: [] }),
 })
-export const docs = [Sessions, SeedState, AfterCompactionDoc]
+export const docs = [Sessions, SeedState, BuiltInDoc]
 export const userActions = ['start', 'end', 'asleep', 'switch']
 
 const LEARNED_LINES = 3
@@ -111,12 +118,7 @@ function settle(found: Session, now: number) {
 }
 
 /** Record a new session in `tx`; refuses while one is open. */
-export async function startSession(
-  tx: Tx,
-  now: number,
-  by?: GrantedBy,
-  afterCompaction?: AfterCompaction,
-) {
+export async function startSession(tx: Tx, now: number, by?: GrantedBy, origin: Origin = {}) {
   const doc = await tx.doc(Sessions, ROOT_CONVERSATION_ID)
   const active = doc.sessions.find((item) => item.endedAt === undefined)
   if (active)
@@ -133,7 +135,8 @@ export async function startSession(
     passes,
     proposals: [],
     ...(by ? { by } : {}),
-    ...(afterCompaction ? { afterCompaction } : {}),
+    ...(origin.beforeCompaction ? { beforeCompaction: origin.beforeCompaction } : {}),
+    ...(origin.handoff ? { handoff: origin.handoff } : {}),
   }
   doc.sessions.push(created)
   return created.id
@@ -435,7 +438,17 @@ export const actions = {
     const input = fields(args)
     return changing(host, async () => fallAsleep(host, await admitSleep(host, input)))
   }),
-  start: implementAction(StartAction, async (_args, { host }) => startDream(host)),
+  start: implementAction(StartAction, async (_args, { host }) => askHandoff(host)),
+  handoff: implementAction(HandoffAction, async (args, { host }) =>
+    host.harness().commit(async (tx) => {
+      const body = text(fields(args).text, 'text', HANDOFF_CHARS)
+      const waiting = (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).waiting
+      if (!waiting) throw new Error('No dream waits for a handoff')
+      // A second call replaces the first: the dream reads the handoff only once it starts.
+      waiting.handoff = { text: body, at: Date.now() }
+      return { task: waiting.task }
+    }, context),
+  ),
   end: implementAction(EndAction, async (args, { host }) =>
     host.harness().commit(async (tx) => {
       const found = await open(tx, fields(args).session)
@@ -490,44 +503,61 @@ export const actions = {
 }
 
 /**
- * Start a dream session: the user's Dream button, or a granted automation `by` acting for the user. Both refuse while
- * other top-level conversations work (besides @ultimate and the conversation acting) or a session is open.
+ * The user's Dream button: ask @ultimate for its handoff; the dream starts once it is recorded and nothing else works.
+ * Refuses while other top-level conversations work (besides @ultimate), a session is open or a request waits.
  */
-export async function startDream(host: ExtensionHost) {
-  const session = await host.harness().commit((tx) => startDreamIn(host, tx), context)
+export async function askHandoff(host: ExtensionHost) {
+  const task = await host.harness().commit(async (tx) => {
+    const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
+    if (ultimate === undefined) throw new Error('@ultimate has no conversation yet')
+    refuseBusy(host, ultimate)
+    return (await compaction(host).request(tx, Date.now(), ultimate)).task
+  }, context)
   host.harness().resume()
-  return session
+  return { task }
+}
+
+function refuseBusy(host: ExtensionHost, ultimate: number, acting?: number) {
+  const busy = busyElsewhere(host.conversations(), ultimate).filter((item) => item.id !== acting)
+  if (busy.length)
+    throw new Error(
+      `Wait for these to finish before dreaming: ${busy.map((item) => `#${item.id} ${item.title}`).join(', ')}`,
+    )
 }
 
 /**
- * `startDream` inside `tx`: for the user (no `by`), a granted automation `by` acting from conversation `acting`, or
- * @ultimate's compaction through the built-in automation (`after`).
+ * Start a dream session inside `tx`: for a granted automation `by` acting from conversation `acting`, or for a handoff
+ * request (`origin`): the user's Dream button, or the built-in automation (`origin.beforeCompaction`). Refuses while
+ * other top-level conversations work (besides @ultimate and the conversation acting) or a session is open.
  */
 export async function startDreamIn(
   host: ExtensionHost,
   tx: Tx,
   by?: GrantedBy,
   acting?: number,
-  after?: AfterCompaction,
+  origin: Origin = {},
 ) {
   const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
   if (ultimate === undefined) throw new Error('@ultimate has no conversation yet')
-  const busy = busyElsewhere(host.conversations(), ultimate).filter((item) => item.id !== acting)
-  if (busy.length)
-    throw new Error(
-      `Wait for these to finish before dreaming: ${busy.map((item) => `#${item.id} ${item.title}`).join(', ')}`,
-    )
-  const session = await startSession(tx, Date.now(), by, after)
+  refuseBusy(host, ultimate, acting)
+  const session = await startSession(tx, Date.now(), by, origin)
+  const before = origin.beforeCompaction
   const who = by
     ? `Automation ${by.automation} "${by.name}" started dream session ${session} under the user's grant`
-    : after
-      ? `Your context compaction started dream session ${session} (automation ${after.automation} "${after.name}"${after.handsOff ? `, which the user granted "dream": decide each proposal yourself and record your reason with decide {reason}` : ''})`
+    : before
+      ? `Dream session ${session} started after your context passed its threshold (automation ${before.automation} "${before.name}"${before.handsOff ? `, which the user granted "dream": decide each proposal yourself and record your reason with decide {reason}` : ''})`
       : `The user started dream session ${session}`
+  const handoff = origin.handoff
+  const read = handoff?.text
+    ? ` It carries your handoff: the dream branch reads it first.`
+    : handoff?.missing
+      ? ` It started without your handoff (${handoff.missing}); the dream reads your transcript instead.`
+      : ''
   await deliver(host, tx, ultimate, {
     type: 'input',
     session,
     kind: 'dream.started',
-    content: `${who}. Follow "For @ultimate" in the clone's extensions/dream/DREAM.md: start the dream branch now.`,
+    content: `${who}.${read} Follow "For @ultimate" in the clone's extensions/dream/DREAM.md: start the dream branch now.`,
   })
   return { session }
 }
@@ -748,16 +778,16 @@ async function releaseSleep(tx: Tx, input: GrantedSleepInput, attempt: number, e
   found.sleep = { ...found.sleep, phase: 'failed', error, at: Date.now() }
 }
 
-/** Dream after compaction, bound to this extension's documents, lock and session start. */
+/** Dream before compaction, bound to this extension's documents, lock and session start. */
 const compaction = (host: ExtensionHost) =>
   compactionDream(host, {
     Sessions,
     switching: () => switching(host).busy,
-    start: (tx, after) => startDreamIn(host, tx, undefined, undefined, after),
+    start: (tx, origin) => startDreamIn(host, tx, undefined, undefined, origin),
     grantedSleep: (tx, by, input) => grantedSleep(host, tx, by, input),
   })
 
-/** Inside `tx`: a compaction's session that has just settled gets its "worth a fresh chapter?" check, once. */
+/** Inside `tx`: the built-in automation's session that has just settled gets its "worth a fresh chapter?" check, once. */
 const settled = (host: ExtensionHost, tx: Tx, found: Session) => compaction(host).settled(tx, found)
 
 export default function dream(host: ExtensionHost) {
@@ -773,7 +803,7 @@ export default function dream(host: ExtensionHost) {
     const run = queue.last.then(() => ensureAutomation(host))
     // The queue only orders the checks: the failure is reported below, and the next check still runs.
     queue.last = run.catch(() => undefined)
-    return run.catch((error: unknown) => host.notice(`Dream after compaction: ${String(error)}`))
+    return run.catch((error: unknown) => host.notice(`Dream before compaction: ${String(error)}`))
   }
   host.onOpen(async () => {
     await settleSleep(host)
@@ -796,8 +826,10 @@ export default function dream(host: ExtensionHost) {
     for (const found of await landed(tx, data.conversationId, data.sha, Date.now()))
       await settled(host, tx, found)
   })
-  // Only the built-in automation's fires start a dream, and only by waiting for every other conversation.
-  host.react('after-compaction', [Fired], (tx, { data }) => fired(tx, data.id), { from: 'now' })
+  // Only the built-in automation's fires start a dream: after @ultimate's handoff, once every other conversation is done.
+  host.react('after-compaction', [Fired], (tx, { data }) => fired(tx, data.id, Date.now()), {
+    from: 'now',
+  })
   return defineExtension({
     name: 'dream',
     tasks: [deliverTask(host), grantedSleepTask(host), Wait, Settle],

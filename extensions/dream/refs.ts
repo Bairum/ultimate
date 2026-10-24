@@ -60,18 +60,38 @@ export type Session = {
   endedAt?: number
   /** The granted automation that started this session; absent when the user did. */
   by?: GrantedBy
-  /** Set when @ultimate's compaction started this session. */
-  afterCompaction?: AfterCompaction
+  /** Set when the built-in "Dream before compaction" automation started this session. */
+  beforeCompaction?: BeforeCompaction
+  /**
+   * @ultimate's handoff, the dream's primary input, when a handoff request (`task`, its wait) started this session:
+   * its `text`, or why there is none (`missing`). Absent when a granted automation started the session directly.
+   */
+  handoff?: Handoff
+}
+
+export type Handoff = { task: number; text?: string; at?: number; missing?: string }
+
+/**
+ * A dream waiting for @ultimate's handoff and then for every other conversation to finish: asked at `at` by the
+ * built-in `automation`'s fire, or by the user's Dream button (no `automation`); `task` is the wait. `handoff` once
+ * @ultimate recorded it.
+ */
+export type Waiting = {
+  at: number
+  task: number
+  automation?: { id: string; name: string }
+  handoff?: { text: string; at: number }
 }
 
 /**
- * A dream that @ultimate's context compaction started, through automation `automation` (`name`), at `at`; `handsOff`
- * when the user granted that automation `dream`, so @ultimate decides the proposals itself. `settling` is the task that
- * checks the settled session; `outcome` records whether it was worth a fresh chapter: `changes` (landed and applied
- * proposals) against `threshold`; `stay` in this chapter, `ask` the user to Fall asleep, or `asleep` under the
- * automation's grant (`error` when that grant's Fall asleep was refused, and the user is asked instead).
+ * A dream that the built-in automation `automation` (`name`) started at `at`, once @ultimate's context passed its
+ * threshold; `handsOff` when the user granted that automation `dream`, so @ultimate decides the proposals itself.
+ * `settling` is the task that checks the settled session; `outcome` records whether it was worth a fresh chapter:
+ * `changes` (landed and applied proposals) against `threshold`; `stay` in this chapter, `ask` the user to Fall asleep,
+ * or `asleep` under the automation's grant (`error` when that grant's Fall asleep was refused, and the user is asked
+ * instead).
  */
-export type AfterCompaction = {
+export type BeforeCompaction = {
   automation: string
   name: string
   at: number
@@ -86,14 +106,23 @@ export type AfterCompaction = {
   }
 }
 
-/** `{ next, sessions }` on conversation 1, oldest first. */
-export const DreamDoc = docRef<{ next: number; sessions: Session[] }>('dream.sessions')
+/** `{ next, sessions, waiting? }` on conversation 1, sessions oldest first. */
+export const DreamDoc = docRef<{ next: number; sessions: Session[]; waiting?: Waiting }>(
+  'dream.sessions',
+)
 
 /** `dream.started`, `dream.journal` and `dream.settled` entries in @ultimate's conversation name their session. */
 export type SessionEntry = { session: number }
+/** A `dream.handoff` entry asks @ultimate for its handoff: `task` is the request's wait. */
+export type HandoffEntry = { task: number; automation?: { id: string; name: string } }
 
-/** No arguments → `{ session }`: record a session and ask @ultimate to start the dream branch. User-only. */
-export const StartAction = actionRef<null, { session: number }>('dream', 'start')
+/**
+ * No arguments → `{ task }`: ask @ultimate for its handoff; the dream starts once it is recorded (or after 30 minutes)
+ * and nothing else works. User-only.
+ */
+export const StartAction = actionRef<null, { task: number }>('dream', 'start')
+/** `{ text }` → `{ task }`: @ultimate records its handoff for the dream that waits for it (at most 12,000 characters). */
+export const HandoffAction = actionRef<{ text: string }, { task: number }>('dream', 'handoff')
 /** `{ session }` → `{ session }`: end a session whatever its proposals' state. User-only. */
 export const EndAction = actionRef<{ session: number }, { session: number }>('dream', 'end')
 /** `{ session, pass, status, note? }`: the dream coordinator reports a pass; its first report names it the dreamer. */

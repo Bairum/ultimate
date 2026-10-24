@@ -2,11 +2,15 @@ import { defineTask } from '@earendil-works/pi-durable'
 import type { ConversationId, JsonObject, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
+/**
+ * One entry for @ultimate: an `input` that wakes it, or a `write` the model reads at its next step. `session` keys its
+ * request id; a handoff request is keyed by its wait task instead.
+ */
 type Delivery = {
   to: number
   type: 'input' | 'write'
   session: number
-  kind: 'dream.started' | 'dream.journal' | 'dream.chapter' | 'dream.settled'
+  kind: 'dream.started' | 'dream.journal' | 'dream.chapter' | 'dream.settled' | 'dream.handoff'
   data?: JsonObject
   content: string
 }

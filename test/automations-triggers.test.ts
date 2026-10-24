@@ -421,12 +421,27 @@ it('lists ten event definitions and validates trigger inputs and kind changes', 
     name: 'Event',
     event: { name: 'health.changed' },
   })) as Automation
-  await expect(
-    f.action('update', { id: a.id, condition: { metric: 'context', of: '@ultimate', above: 80 } }),
-  ).rejects.toThrow('Cannot change trigger kind')
   await f.action('update', {
     id: a.id,
     event: { name: 'health.changed', where: { provider: 'openai' } },
   })
   expect((await f.record(a.id)).event?.where).toEqual({ provider: 'openai' })
+  // An event may become a condition (one trigger at a time), never a script.
+  await expect(
+    f.action('update', {
+      id: a.id,
+      event: { name: 'health.changed' },
+      condition: { metric: 'context', of: '@ultimate', above: 80 },
+    }),
+  ).rejects.toThrow('Cannot change trigger kind')
+  await expect(f.action('update', { id: a.id, ask: 'Watch something' })).rejects.toThrow(
+    'Cannot change trigger kind',
+  )
+  await f.action('update', {
+    id: a.id,
+    condition: { metric: 'context', of: '@ultimate', above: 80 },
+  })
+  const changed = await f.record(a.id)
+  expect(changed.event).toBeUndefined()
+  expect(changed.condition).toMatchObject({ of: '@ultimate', above: 80, armed: true })
 })

@@ -23,6 +23,7 @@ import dream, {
   landed,
   reportPass,
   Sessions,
+  startDreamIn,
   startSession,
   toolStats,
 } from '../extensions/dream/server.ts'
@@ -164,7 +165,13 @@ it('delivers the start and the journal to @ultimate once, through a real harness
   } as unknown as ExtensionHost
   registry.install(dream(host))
   const call = { host } as ActionContext
-  expect(await actions.start(null, call)).toEqual({ session: 1 })
+  // A granted automation starts the session at once; the user's Dream button asks for a handoff first.
+  expect(
+    await harness.commit(
+      (tx) => startDreamIn(host, tx, { automation: 'A1', name: 'Dream', at: 1 }, ultimate),
+      context,
+    ),
+  ).toEqual({ session: 1 })
   const filing = JSON.parse(JSON.stringify(journal)) as JsonValue
   expect(await actions.journal(filing, call)).toEqual({ session: 1, proposals: 2 })
   expect(await actions.journal(filing, call)).toEqual({ session: 1, proposals: 2 })

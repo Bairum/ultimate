@@ -45,15 +45,15 @@ export type Seed = {
     scripts: number
   }
   /**
-   * The built-in "Dream after compaction" automation, recreated in the new chapter as it was; `null` when the user
+   * The built-in "Dream before compaction" automation, recreated in the new chapter as it was; `null` when the user
    * deleted it. Absent in seeds from before it existed: the new chapter makes it.
    */
-  afterCompaction?: { enabled: boolean } | null
+  builtIn?: { enabled: boolean } | null
   /**
-   * What @ultimate was doing: its latest compaction summary in the chapter it left, carried when a compaction started
-   * the dream, so the new chapter continues the task.
+   * What @ultimate was doing in conversation `conversation` of the chapter it left, so the new chapter continues it:
+   * the handoff it wrote for the dream, else its latest compaction summary (capped at 12,000 characters).
    */
-  continues?: { conversation: number; summary: string }
+  continues?: { conversation: number; handoff?: string; summary?: string }
 }
 
 /** The five passes a dream runs, in the order the journal lists them. */

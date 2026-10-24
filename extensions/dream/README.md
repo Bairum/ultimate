@@ -7,9 +7,13 @@ for @ultimate and the dream branch, is in [DREAM.md](DREAM.md); this file is the
    conversation list and `dream.sessions`: conversations at work besides @ultimate, or a session still open. The
    session's started card has End session until its journal is filed, so a dream that stopped early never blocks the
    next one.
-2. User-only `start` refuses the same way, records session N in `dream.sessions` on conversation 1 and submits a
-   `dream.started` input to @ultimate (request id `dream.started:N`, a follow-up when it is busy). The input goes
-   through a `dream.deliver` task created in the session's own commit, so a crash cannot strand a session.
+2. User-only `start` refuses the same way (and while a request already waits), records a handoff request as
+   `waiting` in `dream.sessions` on conversation 1 and asks @ultimate for its handoff with a `dream.handoff` input
+   (below, "Dream before compaction"). Once the handoff is recorded (or 30 minutes passed) and nothing else works, the
+   request's wait records session N and submits a `dream.started` input to @ultimate (request id `dream.started:N`, a
+   follow-up when it is busy). Each input goes through a `dream.deliver` task created in the commit of the state it
+   announces, so a crash cannot strand a request or a session. A granted automation's `act {do: 'dream'}` starts the
+   session at once, without a handoff.
 3. @ultimate starts one branch that runs the five passes (memory, failures, tools, corrections, codify) as
    `dream-pass` subagents (`agents/dream-pass.md`), reporting each with `pass`. Its first report names it the
    session's `dreamer`.
@@ -25,40 +29,55 @@ for @ultimate and the dream branch, is in [DREAM.md](DREAM.md); this file is the
 The session flow does not edit code or memory. Once its journal is filed and every proposal is settled, the user can
 call `asleep { session, name? }` to start a new chapter. The name defaults to the journal's proposed `chapter`.
 
-## Dream after compaction
+## Dream before compaction
 
-When @ultimate's own context compacts, a dream starts by itself (`after-compaction.ts`). Dream ships the trigger as an
-ordinary event automation, **Dream after compaction** (`conversations.compacted where conversation=@ultimate`,
-subscriber @ultimate), made once per chapter when the harness opens or @ultimate first starts; its id is kept in
-`dream.after-compaction` on conversation 1. It shows in the Automations panel like any other: pausing it stops the
-dreams, deleting it is remembered (dream does not make it again), and a new chapter makes it again only as the seed
-carried it (paused stays paused). `@ultimate` in the filter resolves to @ultimate's conversation when the event
-comes, so it follows @ultimate across chapters; a tally compaction from a root's footer is another conversation and
-never matches.
+When @ultimate's context passes 80%, it writes a handoff while it still remembers everything, and then a dream starts
+by itself (`before-compaction.ts`). Dream ships the trigger as an ordinary context automation, **Dream before
+compaction** (`condition {metric: 'context', of: '@ultimate', above: 80}`, subscriber @ultimate), made once per
+chapter when the harness opens or @ultimate first starts; its id is kept in `dream.after-compaction` on conversation 1
+(the kind keeps its first name). It shows in the Automations panel like any other: the threshold is edited there,
+pausing it stops the dreams, deleting it is remembered (dream does not make it again), and a new chapter makes it
+again only as the seed carried it (`builtIn`; paused stays paused). As any condition it fires once, re-arms 10 points
+below the threshold and waits an hour between fires. `@ultimate` resolves to @ultimate's conversation, so it follows
+@ultimate across chapters.
 
-- **Start.** Reactor `dream/after-compaction` sees `automations.fired` of that automation only (its id in dream's own
-  document) and creates one durable `dream.after-compaction` wait, unless one already waits, a session is open, a
-  sleep is under way or a chapter change holds the lock. The wait looks every 15 seconds until no top-level
-  conversation other than @ultimate works, then starts the session through `startDreamIn` (every refusal of the Dream
-  button applies; a refusal looks again). After two hours it gives up and leaves @ultimate a quiet note through
-  lineage's `leaveNote`. The session records `afterCompaction {automation, name, at, handsOff?}`. No grant is needed:
-  the user decided this read-only analysis runs by default; the user-only `start` stays user-only.
+The automation from before this feature, **Dream after compaction** (an event on `conversations.compacted where
+conversation=@ultimate`), is migrated in place by `ensureAutomation` through automations' `update`, which may now
+switch a schedule, event or condition to another of these: same id, enabled state, grant and subscribers. A lost
+receipt is found by name and trigger target (the new name with a condition on `@ultimate`, or the old name and exact
+event), never by threshold or subscribers, so it is never made twice.
+
+- **Handoff.** Reactor `dream/after-compaction` sees `automations.fired` of that automation only (its id in dream's own
+  document) and, unless a request already waits, a session is open, a sleep is under way or a chapter change holds the
+  lock, records `waiting {at, task, automation}` in `dream.sessions` and a durable `dream.handoff-wait` task in one
+  commit with a `dream.handoff` input to @ultimate (request id `dream.handoff:<task>`). The fire's own
+  `automations.fired` input reaches @ultimate as well; whichever comes second is a follow-up in the same run, so the
+  handoff costs one turn. The user's Dream button takes the same path without `automation`. @ultimate records the
+  handoff with `handoff {text}` (nonempty, at most 12,000 characters; a later call replaces it while the request
+  waits).
+- **Start.** The wait looks every 15 seconds. It starts the session through `startDreamIn` once the handoff is
+  recorded, or 30 minutes after the request without one, and no top-level conversation other than @ultimate works
+  (every refusal of the Dream button applies). The session records `handoff {task, text, at}` or `{task, missing}`
+  and, for the automation, `beforeCompaction {automation, name, at, handsOff?}`; the `dream.started` input and card
+  say whether the handoff came. Two hours after the request the wait gives up and leaves @ultimate a quiet note
+  through lineage's `leaveNote`; a paused or deleted automation ends it. No grant is needed: the user decided this
+  read-only analysis runs by default; the user-only `start` stays user-only.
 - **Deciding.** The `dream.started` input says whether the user granted `dream` on that automation (`handsOff`); only
   then does @ultimate decide the proposals itself, recording each with `decide {…, reason}` (the journal shows it).
   Otherwise the user decides, as for any dream. The rule lives in DREAM.md and `agents/ultimate.md`.
 - **Worth a fresh chapter?** When the session settles (the journal filed and every proposal rejected, applied or
   landed; through `journal`, `decide` or a landing), a `dream.settled` task counts its changes: proposals `landed` or
-  `applied`. Below `dream.asleepAfter` (settings, project over user, default **5**) we stay in this chapter. At or above
-  it, an `asleep` grant on the enabled automation goes through the granted Fall asleep (`grantedSleep`, every gate);
-  otherwise, or when that grant is refused, @ultimate is asked to ask the user, and the `dream.settled` card carries
-  the Fall asleep section. The outcome is kept as `afterCompaction.outcome`; only `ask` wakes @ultimate, the others are
-  passive entries. A session the user ended early never settles this way. Nothing here switches chapters without the
-  `asleep` grant or the user's tap.
-- **Continuing.** The seed of a compaction's dream carries @ultimate's newest compaction summary as `continues`
-  (Pi's wrapper and the project memory lineage appends stripped; at most 12,000 characters, about 3k tokens, beside the
-  6,000-token memory brief). The new chapter's wake-up entry quotes it and tells @ultimate to continue that work.
-
-The user's Dream button and ⌘K "Dream…" are unchanged.
+  `applied`. Below `dream.asleepAfter` (settings, project over user, default **5**) we stay in this chapter, and a
+  normal compaction comes later. At or above it, an `asleep` grant on the enabled automation goes through the granted
+  Fall asleep (`grantedSleep`, every gate); otherwise, or when that grant is refused, @ultimate is asked to ask the
+  user, and the `dream.settled` card carries the Fall asleep section. The outcome is kept as
+  `beforeCompaction.outcome`; only `ask` wakes @ultimate, the others are passive entries. A session the user ended
+  early never settles this way. Nothing here switches chapters without the `asleep` grant or the user's tap.
+- **Continuing.** The seed of a session that asked for a handoff carries it as `continues.handoff`; without one (the
+  30 minutes passed) it carries @ultimate's newest compaction summary as `continues.summary` (Pi's wrapper and the
+  project memory lineage appends stripped, cut at 12,000 characters). Either is at most 12,000 characters, about 3k
+  tokens, beside the 6,000-token memory brief; a handoff is never cut, its limit is enforced when recorded. The new
+  chapter's wake-up entry quotes it and tells @ultimate to continue that work.
 
 ## Chapters
 
@@ -85,8 +104,8 @@ made active again (`lib/chapters.ts`).
 `seed.ts` builds a JSON manifest with `buildSeed(host, session)` and atomically writes it with
 `writeSeed(chapterDir, seed)` to `seed.json`. It carries the journal and proposal statuses, every root's memories
 (slug collisions keep the newest `updated`, including `about-*`), open to-dos and questions, and enabled automations
-and scripts, with counts for the later gate. The built-in Dream after compaction automation is not among them: the seed
-says only whether it was enabled (`afterCompaction`), and the new chapter makes its own. Conversation docs are read through the host's exported tokens;
+and scripts, with counts for the later gate. The built-in Dream before compaction automation is not among them: the seed
+says only whether it was enabled (`builtIn`), and the new chapter makes its own. Conversation docs are read through the host's exported tokens;
 both trigger kinds are read through the single automations list action. Enabled schedule records keep name, optional prompt, schedule and run profile, but no subscribers: conversation ids do not survive a chapter. Schedules without a prompt become recreation to-dos.
 
 On open, dream applies a chapter's seed in one commit with `dream.seed.applied` on conversation 1: memories keep

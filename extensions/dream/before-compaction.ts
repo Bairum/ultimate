@@ -1,12 +1,13 @@
 /**
- * Dream after compaction: when @ultimate's own context compacts, a dream starts by itself once nothing else works; once
- * that dream settles, Ultimate falls asleep into a fresh chapter only when it was worth it.
+ * Dream before compaction: when @ultimate's context passes 80%, it writes a handoff while it still remembers everything,
+ * then a dream starts by itself once nothing else works; once that dream settles, Ultimate falls asleep into a fresh
+ * chapter only when it was worth it. The user's Dream button takes the same path: handoff first, then the dream.
  *
- * The trigger is an ordinary event automation, "Dream after compaction", that dream creates once per chapter, so the
- * user sees it in the Automations panel and can pause, delete or grant it like any other. It subscribes @ultimate, the
- * conversation its grants speak to. Its fires reach dream as `automations.fired`; only a fire of this automation,
- * checked by its id in dream's own document, starts the wait, and the wait starts a session only through
- * `startDreamIn`'s own refusals. The user-only `start` stays user-only.
+ * The trigger is an ordinary context automation, "Dream before compaction", that dream creates once per chapter, so the
+ * user sees it in the Automations panel and can pause, delete, grant or re-threshold it like any other. It subscribes
+ * @ultimate: its fire is the input that asks for the handoff. Its fires reach dream as `automations.fired`; only a fire
+ * of this automation, checked by its id in dream's own document, records a `waiting` request and starts the wait, and
+ * the wait starts a session only through `startDreamIn`'s own refusals. The user-only `start` stays user-only.
  */
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import {
@@ -27,19 +28,26 @@ import type { Automation } from '../automations/refs.ts'
 import { LineageApi } from '../lineage/api.ts'
 import { Standing } from '../subagents/api.ts'
 import { deliver } from './delivery.ts'
-import type { AfterCompaction, Session } from './refs.ts'
+import type { BeforeCompaction, Handoff, Session, Waiting } from './refs.ts'
 import type { Seed } from './types.ts'
 import { busyElsewhere } from './types.ts'
 
 /** The built-in automation's name, shown in the Automations panel. */
-export const AUTOMATION_NAME = 'Dream after compaction'
-const TRIGGER = { name: 'conversations.compacted', where: { conversation: '@ultimate' } }
+export const AUTOMATION_NAME = 'Dream before compaction'
+/** Its trigger as dream first makes it; the user may change the threshold. */
+export const CONDITION = { metric: 'context' as const, of: '@ultimate', above: 80 }
+/** The automation before this feature: dream migrates it in place to the condition above. */
+const OLD_NAME = 'Dream after compaction'
+const OLD_EVENT = { name: 'conversations.compacted', where: { conversation: '@ultimate' } }
+const isOld = (item: Automation) =>
+  item.event?.name === OLD_EVENT.name && isDeepStrictEqual(item.event.where, OLD_EVENT.where)
 
 /**
  * The built-in automation dream created in this chapter, by id; `deleted` once the user deleted it, so it is not made
- * again. On conversation 1 of each chapter: a new chapter makes its own, enabled or paused as the seed says.
+ * again. On conversation 1 of each chapter: a new chapter makes its own, enabled or paused as the seed says. The kind
+ * keeps its first name: it holds the id and deletion of the automation it migrates.
  */
-export const AfterCompactionDoc = defineDoc<{ id?: string; deleted?: true }>({
+export const BuiltInDoc = defineDoc<{ id?: string; deleted?: true }>({
   kind: 'dream.after-compaction',
   checkpointWhen: () => false,
   // Version 1 read a seed from before this feature as "deleted": a deletion it recorded was never the user's.
@@ -54,15 +62,23 @@ export const AfterCompactionDoc = defineDoc<{ id?: string; deleted?: true }>({
   initial: () => ({}),
 })
 
-/** How long a compaction's dream waits for every other conversation to finish, and how often it looks. */
+/** How long a dream waits for every other conversation to finish, and how often it looks. */
 export const DREAM_WAIT_MS = 2 * 3600_000
 export const DREAM_LOOK_MS = 15_000
+/** How long a dream waits for @ultimate's handoff before it starts without one. */
+export const HANDOFF_WAIT_MS = 30 * 60_000
+
+/** What @ultimate is asked to write before a dream, on the built-in automation's fire or the user's Dream button. */
+export const HANDOFF_ASK = `Write your handoff now, while your context still holds everything: what you worked on, what is still open (branches, questions, to-dos) and how far each got, the decisions and why they were made, the user's corrections, the lessons, and what you would do next. Plain Markdown, at most 12,000 characters; record it with one codemode call, ultimate.action('dream', 'handoff', {text}). The dream reads it first, and a new chapter wakes up from it. Then end your turn with one line to the user: the dream starts by itself once nothing else works, after ${HANDOFF_WAIT_MS / 60_000} minutes without your handoff.`
 
 /** Default of the `dream.asleepAfter` setting: this many landed or applied changes make a dream worth a fresh chapter. */
 export const ASLEEP_AFTER = 5
 
-/** The most of @ultimate's compaction summary a new chapter's wake-up carries (about 3k tokens). */
-export const SUMMARY_CHARS = 12_000
+/**
+ * The most a handoff, or the compaction summary a dream without one falls back to, may carry into a new chapter's
+ * wake-up (about 3k tokens, beside the memory brief). A longer handoff is refused when recorded, never cut.
+ */
+export const HANDOFF_CHARS = 12_000
 
 /** `dream.asleepAfter`, project over user settings: a positive integer, else the default. */
 export async function asleepAfter(host: Pick<ExtensionHost, 'userHome' | 'projectSettings'>) {
@@ -88,7 +104,9 @@ export const changes = (found: Session) =>
 
 /**
  * Make sure this chapter has the built-in automation, unless the user deleted it. A new chapter makes it as its `seed`
- * carried it: paused stays paused, and one deleted before the switch is not made again.
+ * carried it: paused stays paused, and one deleted before the switch is not made again. The automation from before
+ * this feature ("Dream after compaction", on @ultimate's compaction) becomes this one in place: same id, enabled state,
+ * grant and subscribers.
  */
 export async function ensureAutomation(host: ExtensionHost) {
   // Every caller reads the chapter's own seed, so whichever runs first keeps its paused or deleted automation so.
@@ -97,39 +115,52 @@ export async function ensureAutomation(host: ExtensionHost) {
   if (seed?.gate) return
   if (!host.extensions().some((item) => item.name === 'automations' && item.enabled)) return
   const harness = host.harness()
-  const state = await harness.snapshot(AfterCompactionDoc, ROOT_CONVERSATION_ID, context)
+  const state = await harness.snapshot(BuiltInDoc, ROOT_CONVERSATION_ID, context)
   if (state?.deleted) return
   const remember = (change: { id?: string; deleted?: true }) =>
     harness.commit(async (tx) => {
-      Object.assign(await tx.doc(AfterCompactionDoc, ROOT_CONVERSATION_ID), change)
+      Object.assign(await tx.doc(BuiltInDoc, ROOT_CONVERSATION_ID), change)
     }, context)
   // Only a seed that says so carries a deletion; one from before this feature has no say.
-  if (!state?.id && seed?.afterCompaction === null) return remember({ deleted: true })
+  if (!state?.id && seed?.builtIn === null) return remember({ deleted: true })
   const signal = new AbortController().signal
   // Session-scoped ledger: its list action reads it, as the seed does.
   const list = (await host.invoke('automations', 'list', null, signal)) as Automation[]
-  // Gone from the list: the user deleted it, and that choice holds.
-  if (state?.id)
-    return list.some((item) => item.id === state.id) ? undefined : remember({ deleted: true })
+  const migrate = async (item: Automation) => {
+    if (isOld(item))
+      await host.invoke(
+        'automations',
+        'update',
+        { id: item.id, name: AUTOMATION_NAME, condition: CONDITION },
+        signal,
+      )
+  }
+  if (state?.id) {
+    const own = list.find((item) => item.id === state.id)
+    // Gone from the list: the user deleted it, and that choice holds.
+    if (!own) return remember({ deleted: true })
+    return migrate(own)
+  }
   const ultimate = (await harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
   if (ultimate === undefined) return
-  // A create whose receipt was lost is found by name and trigger, not made twice.
+  // A create (or migration) whose receipt was lost is found by name and trigger target, not made twice. Not by
+  // threshold or subscribers: the user may change them, and that must not make a second one.
+  const found = list.find(
+    (item) =>
+      !item.prompt &&
+      ((item.name === AUTOMATION_NAME && item.condition?.of === CONDITION.of) ||
+        (item.name === OLD_NAME && isOld(item))),
+  )
+  if (found) await migrate(found)
   const created =
-    list.find(
-      (item) =>
-        item.name === AUTOMATION_NAME &&
-        item.event?.name === TRIGGER.name &&
-        isDeepStrictEqual(item.event.where, TRIGGER.where) &&
-        // Not subscribers: the user may change them, and that must not make a second one.
-        !item.prompt,
-    ) ??
+    found ??
     ((await host.invoke(
       'automations',
       'create',
-      { name: AUTOMATION_NAME, event: TRIGGER, subscribers: [ultimate] },
+      { name: AUTOMATION_NAME, condition: CONDITION, subscribers: [ultimate] },
       signal,
     )) as Automation)
-  if (seed?.afterCompaction?.enabled === false && created.enabled)
+  if (seed?.builtIn?.enabled === false && created.enabled)
     await host.need(AutomationsApi).pause(created.id)
   await remember({ id: created.id })
 }
@@ -153,14 +184,14 @@ export async function compactionSummary(tx: Tx, id: ConversationId) {
       const inner = (/<summary>\n?([\s\S]*?)\n?<\/summary>/.exec(text)?.[1] ?? text)
         .split('<project_memory')[0]
         .trim()
-      return inner.length > SUMMARY_CHARS ? `${inner.slice(0, SUMMARY_CHARS)}\n…` : inner
+      return inner.length > HANDOFF_CHARS ? `${inner.slice(0, HANDOFF_CHARS)}\n…` : inner
     }
     cursor = page.next
   } while (cursor)
   return undefined
 }
 
-/** Why no dream may start for a compaction now: a session open, a sleep under way, or a chapter change running. */
+/** Why no dream may start now: a session open, a sleep under way, or a chapter change running. */
 function blocked(sessions: Session[], switching: boolean) {
   if (switching) return 'A chapter change is running'
   const open = sessions.find((item) => item.endedAt === undefined)
@@ -172,8 +203,10 @@ function blocked(sessions: Session[], switching: boolean) {
   return undefined
 }
 
-type WaitInput = { automation: string; name: string; deadline: number }
 type SettleInput = { session: number }
+
+/** What started a session besides the user or a grant: the built-in automation, and the handoff request. */
+export type Origin = { beforeCompaction?: BeforeCompaction; handoff?: Handoff }
 
 export function compactionDream(
   host: ExtensionHost,
@@ -181,7 +214,8 @@ export function compactionDream(
     Sessions: typeof import('./server.ts').Sessions
     /** Whether a chapter change holds the lock now. */
     switching: () => boolean
-    start: (tx: Tx, after: AfterCompaction) => Promise<{ session: number }>
+    /** Start a session for a handoff request, as `origin` says. */
+    start: (tx: Tx, origin: Origin) => Promise<{ session: number }>
     grantedSleep: (tx: Tx, by: GrantedBy, input: { session?: number }) => Promise<unknown>
   },
 ) {
@@ -199,27 +233,48 @@ export function compactionDream(
   }
 
   /**
-   * One look of wait `task`: `look` again while another top-level conversation works and time is left; `started` once
-   * the session started; `done` when no dream may start (its automation paused or deleted, a session open, a sleep or
-   * a chapter change) or the wait ran out, which leaves @ultimate a quiet note. Every check and the start commit
-   * together.
+   * One look of wait `task`: `look` again while the handoff is still due, or another top-level conversation works and
+   * time is left; `started` once the session started; `done` when no dream may start (another request replaced this
+   * one, its automation paused or deleted, a session open, a sleep or a chapter change) or the wait ran out, which
+   * leaves @ultimate a quiet note. Every check and the start commit together.
    */
-  async function look(input: WaitInput, task: number, now: number) {
+  async function look(task: number, now: number) {
     const next = await host.harness().commit(async (tx) => {
+      const doc = await tx.doc(deps.Sessions, ROOT_CONVERSATION_ID)
+      const waiting = doc.waiting
+      if (waiting?.task !== task) return 'done'
+      const stop = (result: 'done' | 'gave up') => {
+        delete doc.waiting
+        return result
+      }
       // Expired first: a host that wakes long after the deadline gives up instead of starting a stale dream.
-      if (now >= input.deadline) return 'gave up'
-      const automation = await enabled(tx, input.automation)
+      if (now >= waiting.at + DREAM_WAIT_MS) return stop('gave up')
+      const automation = waiting.automation && (await enabled(tx, waiting.automation.id))
       const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
-      const { sessions } = await tx.doc(deps.Sessions, ROOT_CONVERSATION_ID)
-      if (!automation || ultimate === undefined || blocked(sessions, deps.switching()))
-        return 'done'
+      if ((waiting.automation && !automation) || ultimate === undefined) return stop('done')
+      if (!waiting.handoff && now < waiting.at + HANDOFF_WAIT_MS) return 'look'
+      if (blocked(doc.sessions, deps.switching())) return stop('done')
       if (busyElsewhere(host.conversations(), ultimate).length) return 'look'
-      const handsOff = !!automation.grant?.actions.includes('dream')
+      const handsOff = !!automation && !!automation.grant?.actions.includes('dream')
+      const handoff: Handoff = waiting.handoff
+        ? { task, text: waiting.handoff.text, at: waiting.handoff.at }
+        : {
+            task,
+            missing: `no handoff within ${HANDOFF_WAIT_MS / 60_000} minutes of the request`,
+          }
+      delete doc.waiting
       await deps.start(tx, {
-        automation: input.automation,
-        name: input.name,
-        at: now,
-        ...(handsOff ? { handsOff } : {}),
+        handoff,
+        ...(automation
+          ? {
+              beforeCompaction: {
+                automation: automation.id,
+                name: automation.name,
+                at: now,
+                ...(handsOff ? { handsOff } : {}),
+              },
+            }
+          : {}),
       })
       return 'started'
     }, context)
@@ -232,21 +287,21 @@ export function compactionDream(
         .need(LineageApi)
         .leaveNote(
           ultimate,
-          `The dream after your compaction did not start: other conversations kept working for ${DREAM_WAIT_MS / 3600_000} hours. Nothing to do; the next compaction tries again, and the user can press Dream.`,
-          { requestId: `dream.after-compaction:${task}` },
+          `The dream after your handoff did not start: other conversations kept working for ${DREAM_WAIT_MS / 3600_000} hours. Nothing to do; the next time your context passes the threshold it tries again, and the user can press Dream.`,
+          { requestId: `dream.handoff-wait:${task}` },
         )
     return 'done'
   }
 
-  /** One fire's wait: a look every 15 seconds, for up to two hours. */
-  const Wait = defineTask<WaitInput, { phase: 'look' }, null>({
-    name: 'dream.after-compaction',
+  /** One request's wait: a look every 15 seconds, for the handoff and then for idle, up to two hours in all. */
+  const Wait = defineTask<{ at: number }, { phase: 'look' }, null>({
+    name: 'dream.handoff-wait',
     version: 1,
     initial: () => ({ phase: 'look' }),
     phases: {
       look: async (task, runtime, ctx) => {
         const now = runtime.now()
-        if ((await look(task.input, Number(task.id), now)) === 'look')
+        if ((await look(Number(task.id), now)) === 'look')
           return runtime.sleepUntil(now + DREAM_LOOK_MS, { phase: 'look' }, ctx)
         await runtime.commit(() => done, ctx)
       },
@@ -256,9 +311,49 @@ export function compactionDream(
   })
 
   /**
-   * Once a compaction's session settles: below `dream.asleepAfter` changes it stays in this chapter; at or above, a
-   * grant of `asleep` on its automation falls asleep through the granted Fall asleep (every gate), else the user is
-   * asked on the card. Records the outcome on the session and leaves a `dream.settled` entry in @ultimate's
+   * Inside `tx`: record a request for @ultimate's handoff, start its wait and ask conversation `ultimate` for it with
+   * an input. `automation` names the built-in automation whose fire asked, absent when the user pressed Dream. A fire
+   * also wakes @ultimate with its own input; whichever comes second joins the same run as a follow-up, so it is one
+   * turn. A passive write would not do: an idle @ultimate that answered the fire first would never read it. Refuses
+   * while a request waits or no dream may start.
+   */
+  async function request(
+    tx: Tx,
+    now: number,
+    ultimate: number,
+    automation?: Waiting['automation'],
+  ) {
+    const doc = await tx.doc(deps.Sessions, ROOT_CONVERSATION_ID)
+    if (doc.waiting) throw new Error("A dream already waits for @ultimate's handoff")
+    const why = blocked(doc.sessions, deps.switching())
+    if (why) throw new Error(why)
+    const task = Number(
+      await tx.createTask(
+        Wait,
+        { at: now },
+        {
+          conversationId: ROOT_CONVERSATION_ID,
+          ownership: { kind: 'conversation' },
+          background: true,
+        },
+      ),
+    )
+    const waiting: Waiting = { at: now, task, ...(automation ? { automation } : {}) }
+    doc.waiting = waiting
+    await deliver(host, tx, ultimate, {
+      type: 'input',
+      session: task,
+      kind: 'dream.handoff',
+      data: { task, ...(automation ? { automation } : {}) },
+      content: `${automation ? `Your context passed the threshold of automation ${automation.id} "${automation.name}": a dream follows.` : 'The user pressed Dream.'} ${HANDOFF_ASK}`,
+    })
+    return waiting
+  }
+
+  /**
+   * Once a built-in automation's session settles: below `dream.asleepAfter` changes it stays in this chapter; at or
+   * above, a grant of `asleep` on its automation falls asleep through the granted Fall asleep (every gate), else the
+   * user is asked on the card. Records the outcome on the session and leaves a `dream.settled` entry in @ultimate's
    * conversation, an input only when the user must be asked.
    */
   async function settle(session: number) {
@@ -270,11 +365,11 @@ export function compactionDream(
       const found = (await tx.doc(deps.Sessions, ROOT_CONVERSATION_ID)).sessions.find(
         (item) => item.id === session,
       )
-      const after = found?.afterCompaction
+      const before = found?.beforeCompaction
       const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
-      if (!found || !after || after.outcome || ultimate === undefined) return
+      if (!found || !before || before.outcome || ultimate === undefined) return
       // The grant is read here, with the sleep it allows: a revoke, pause or delete committed before counts.
-      const automation = await enabled(tx, after.automation)
+      const automation = await enabled(tx, before.automation)
       const granted = !!automation?.grant?.actions.includes('asleep')
       const count = changes(found)
       let result: 'stay' | 'ask' | 'asleep' =
@@ -291,7 +386,7 @@ export function compactionDream(
           result = 'ask'
           error = String(refused)
         }
-      after.outcome = {
+      before.outcome = {
         changes: count,
         threshold,
         result,
@@ -328,39 +423,22 @@ export function compactionDream(
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
 
-  /** A fire of the built-in automation starts one wait, unless one already waits or no dream may start now. */
-  async function fired(tx: Tx, id: string) {
-    if ((await tx.doc(AfterCompactionDoc, ROOT_CONVERSATION_ID)).id !== id) return
-    // Every task scan before the first write.
-    for (const status of ['pending', 'running', 'waiting', 'sleeping'] as const)
-      if (
-        (
-          await tx.scanTasks(
-            { conversationId: ROOT_CONVERSATION_ID, kind: Wait.definition.name, status },
-            1,
-          )
-        ).items.length
-      )
-        return
-    const { sessions } = await tx.doc(deps.Sessions, ROOT_CONVERSATION_ID)
-    if (blocked(sessions, deps.switching())) return
-    await tx.createTask(
-      Wait,
-      { automation: id, name: AUTOMATION_NAME, deadline: Date.now() + DREAM_WAIT_MS },
-      {
-        conversationId: ROOT_CONVERSATION_ID,
-        ownership: { kind: 'conversation' },
-        background: true,
-      },
-    )
+  /** A fire of the built-in automation asks for a handoff, unless a request already waits or no dream may start now. */
+  async function fired(tx: Tx, id: string, now: number) {
+    if ((await tx.doc(BuiltInDoc, ROOT_CONVERSATION_ID)).id !== id) return
+    const doc = await tx.doc(deps.Sessions, ROOT_CONVERSATION_ID)
+    const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
+    if (ultimate === undefined || doc.waiting || blocked(doc.sessions, deps.switching())) return
+    const automation = await host.want(AutomationsApi)?.read(tx, id)
+    await request(tx, now, ultimate, { id, name: automation?.name ?? AUTOMATION_NAME })
   }
 
-  /** Inside `tx`: once compaction session `found` has settled, start its check, once. */
+  /** Inside `tx`: once the built-in automation's session `found` has settled, start its check, once. */
   async function settled(tx: Tx, found: Session) {
-    const after = found.afterCompaction
-    if (!after || found.endedAt === undefined || !found.journal || after.settling !== undefined)
+    const before = found.beforeCompaction
+    if (!before || found.endedAt === undefined || !found.journal || before.settling !== undefined)
       return
-    after.settling = Number(
+    before.settling = Number(
       await tx.createTask(
         Settle,
         { session: found.id },
@@ -373,5 +451,5 @@ export function compactionDream(
     )
   }
 
-  return { Wait, Settle, fired, settled, look, settle }
+  return { Wait, Settle, fired, request, settled, look, settle }
 }
