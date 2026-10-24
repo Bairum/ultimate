@@ -428,6 +428,21 @@ it('never adopts a same-name automation that watches other compactions', async (
   expect((await f.record(id)).event?.where).toEqual({ conversation: '@ultimate' })
 })
 
+it('adopts its own automation after a lost receipt, even with changed subscribers and paused', async () => {
+  const f = await fixture()
+  const id = (await f.own())!
+  await f.action('unsubscribe', { id })
+  await f.action('pause', { id })
+  // The create committed but its receipt was lost.
+  await f.harness.commit(async (tx) => {
+    delete (await tx.doc(AfterCompactionDoc, ROOT_CONVERSATION_ID)).id
+  }, context)
+  await ensureAutomation(f.host)
+  expect(await f.own()).toBe(id)
+  expect(Object.keys((await f.harness.snapshot(Automations, context))!.automations)).toEqual([id])
+  expect((await f.record(id)).enabled).toBe(false)
+})
+
 it('keeps a chapter seed paused whichever check runs first', async () => {
   const f = await fixture()
   // A fresh chapter whose seed carried the automation paused, before any check made it.
