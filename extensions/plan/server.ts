@@ -181,7 +181,7 @@ export default (host: ExtensionHost) => {
       defineTool({
         name: 'plan',
         description:
-          'Maintain the durable epic/task ledger. create {title,body}; add {epic,title,role,description,deps?}; update {key,status?,title?,description?,body?,child?,verdict?} replaces only the fields given (description and body whole: show first to extend them); in codemode every action returns the object; note {key,text} adds a task note; show {key?} reads an epic, task, or the whole ledger. Epic bodies use Request, Selected approach, Intent, Scope (in/out), binary Acceptance criteria, Implementation, Verification, Risks. Task descriptions use Outcome, Scope, Non-goals, Files, Acceptance criteria with a verification command, Constraints. Epic statuses: planning, in_progress, done, blocked. Task statuses: backlog, todo, in_progress, in_review, done, blocked, canceled. child links a conversation number; deps are task keys. body is epic-only; verdict records evidence on either an epic or a task. Children read the root coordinator’s ledger with show; only that coordinator can edit it. Read full plans with show; the prompt contains only a compact ledger.',
+          'Maintain the durable epic/task ledger. The tool assigns keys: epics E1, E2; tasks E1.1, E1.2. Use only keys a call has returned: wait for create/add results before calls that reference them (epic, deps, key), never in the same parallel batch. create {title,body}; add {epic,title,role,description,deps?}; update {key,status?,title?,description?,body?,child?,verdict?} replaces only the fields given (description and body whole: show first to extend them); in codemode every action returns the object; note {key,text} notes a task only (E1.1, not E1; record on an epic with update verdict or body); show {key?} reads an epic, task, or the whole ledger. Epic bodies use Request, Selected approach, Intent, Scope (in/out), binary Acceptance criteria, Implementation, Verification, Risks. Task descriptions use Outcome, Scope, Non-goals, Files, Acceptance criteria with a verification command, Constraints. Epic statuses: planning, in_progress, done, blocked. Task statuses: backlog, todo, in_progress, in_review, done, blocked, canceled. child links a conversation number; deps are task keys. body is epic-only; verdict records evidence on either an epic or a task. Children read the root coordinator’s ledger with show; only that coordinator can edit it. Read full plans with show; the prompt contains only a compact ledger.',
         // A memoized receipt id records the result in the same transaction as the ledger change.
         replay: 'safe',
         parameters: Type.Object({
@@ -190,11 +190,21 @@ export default (host: ExtensionHost) => {
           ),
           title: Type.Optional(Type.String()),
           body: Type.Optional(Type.String()),
-          epic: Type.Optional(Type.String()),
+          epic: Type.Optional(
+            Type.String({ description: 'Epic key returned by create, e.g. E1.' }),
+          ),
           role: Type.Optional(Type.Union(['worker', 'reviewer'].map((v) => Type.Literal(v)))),
           description: Type.Optional(Type.String()),
-          deps: Type.Optional(Type.Array(Type.String())),
-          key: Type.Optional(Type.String()),
+          deps: Type.Optional(
+            Type.Array(Type.String(), {
+              description: 'Keys of tasks already added, e.g. ["E1.1"].',
+            }),
+          ),
+          key: Type.Optional(
+            Type.String({
+              description: 'A returned key: epic E1 or task E1.1; note takes a task key.',
+            }),
+          ),
           status: Type.Optional(Type.String()),
           child: Type.Optional(Type.Integer({ minimum: 1 })),
           verdict: Type.Optional(Type.String()),
