@@ -15,8 +15,11 @@ export type AutomationsService = {
 /** Optional automation service. */
 export const AutomationsApi = defineApi<AutomationsService>()('automations')
 export type DreamGrantService = {
-  /** Start a dream session exactly as the user's Dream button does, every refusal included, on a granted fire. */
-  start(by: GrantedBy): Promise<{ session: number }>
+  /**
+   * Start a dream session exactly as the user's Dream button does, every refusal included, on a granted fire; the
+   * `acting` conversation's own turn does not count as work in progress.
+   */
+  start(by: GrantedBy, acting: number): Promise<{ session: number }>
   /**
    * Fall asleep for `session` (default: the newest one with a filed journal) on a granted fire: it checks the session
    * now, waits until no conversation works, then runs every gate of the user's Fall asleep (seed, scratch preview, one

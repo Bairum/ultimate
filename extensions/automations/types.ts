@@ -32,6 +32,8 @@ export type Automation = {
     value?: number
   }
   recentFires?: number[]
+  /** What the user allowed this automation's woken agent to do for them on a fire; only the user sets it. */
+  grant?: Grant
   script?: {
     ask: string
     once: boolean
@@ -103,3 +105,19 @@ export function trimLog(text: string): string {
 
 /** Who acted for the user: automation `automation`, named `name`, under the user's grant, at `at`. */
 export type GrantedBy = { automation: string; name: string; at: number }
+/**
+ * What a granted fire may do without asking: `dream` starts a dream session, `compact` compacts a context, `asleep`
+ * falls asleep into a new chapter. Each is named on its own; `asleep` never follows from `dream`.
+ */
+export const GRANT_ACTIONS = ['dream', 'compact', 'asleep'] as const
+export type GrantAction = (typeof GRANT_ACTIONS)[number]
+/**
+ * The user's grant: the `actions` allowed, in `source` the user's words or where they set it, `at` when. `used` keeps
+ * the fire each action last acted on: one act per action and fire.
+ */
+export type Grant = {
+  actions: GrantAction[]
+  source: string
+  at: number
+  used?: Partial<Record<GrantAction, { fire: number; at: number; task?: number }>>
+}

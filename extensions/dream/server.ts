@@ -619,7 +619,7 @@ function idleWithin(host: ExtensionHost, ready: () => boolean) {
 
 export default function dream(host: ExtensionHost) {
   host.implement(DreamGrant, {
-    start: (by) => startDream(host, by),
+    start: (by, acting) => startDream(host, by, acting),
     asleep: (by, input) => grantedSleep(host, by, input),
   })
   host.onOpen(async () => {
