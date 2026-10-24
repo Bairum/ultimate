@@ -1,0 +1,220 @@
+import { fauxProvider, fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai/providers/faux'
+import { configure } from '@earendil-works/pi-durable'
+import type { ConversationId, Tx } from '@earendil-works/pi-durable'
+import type { JsonValue } from '@earendil-works/chord'
+import { afterEach, expect, it, vi } from 'vitest'
+import { context, prepareHarness } from '../server/harness.ts'
+import type { OpenHost } from '../server/harness.ts'
+import type { ExtensionHost } from '../server/extensions.ts'
+import type { ActionContext } from '../server/actions.ts'
+import { Metadata } from '../server/metadata.ts'
+import { defineEvent } from '../shared/events.ts'
+import type { SubagentsService } from '../extensions/subagents/api.ts'
+import type { DreamGrantService } from '../extensions/automations/api.ts'
+import { createChild } from '../extensions/subagents/children.ts'
+import automations, {
+  act,
+  actions,
+  Automations,
+  userActions,
+} from '../extensions/automations/server.ts'
+import type { Automation } from '../extensions/automations/types.ts'
+import { temp, eventHost, apis } from './helpers.ts'
+
+const closes: (() => Promise<void>)[] = []
+afterEach(async () => {
+  for (const close of closes.splice(0)) await close()
+  vi.useRealTimers()
+})
+
+async function fixture() {
+  const root = await temp('ultimate-grant-')
+  const prepared = await prepareHarness({
+    ultimateRoot: root,
+    userHome: root,
+    home: root,
+    faux: fauxProvider(),
+  })
+  let opened: OpenHost
+  const events = eventHost(() => opened.harness, 'automations')
+  const resources = new Map<string, unknown>()
+  let opener: () => Promise<void>
+  let closer: () => Promise<void>
+  const dream = {
+    start: vi.fn<DreamGrantService['start']>(async () => ({ session: 7 })),
+    asleep: vi.fn<DreamGrantService['asleep']>(async () => ({ session: 7 })),
+  }
+  const host = {
+    ...prepared,
+    ...events,
+    harness: () => opened.harness,
+    metadata: Metadata,
+    resource: (key: string, create: () => unknown) => {
+      if (!resources.has(key)) resources.set(key, create())
+      return resources.get(key)
+    },
+    onOpen: (fn: () => Promise<void>) => {
+      opener = fn
+    },
+    onRelease: () => {},
+    onClose: (fn: () => Promise<void>) => {
+      closer = fn
+    },
+    ...apis(
+      new Map<string, unknown>([
+        ['messages', { send: async () => ({}) }],
+        ['lineage', { rootOf: async () => undefined }],
+        ['automations.dream', dream],
+      ]),
+    ),
+    extensions: () => [{ name: 'subagents', enabled: true }],
+    projectSetup: async () => ({ decision: false }),
+    notice: (message: string) => {
+      throw new Error(message)
+    },
+  }
+  host.provided.set('subagents', {
+    standing: async (name: string) => (name === 'ultimate' ? ultimate : undefined),
+    createChild: (tx: Tx, options: Parameters<SubagentsService['createChild']>[1]) =>
+      createChild(host, tx, options),
+  })
+  prepared.registry.install(automations(host as unknown as ExtensionHost))
+  const answer = () => {
+    prepared.faux!.appendResponses([answer])
+    return fauxAssistantMessage([fauxText('OK')])
+  }
+  prepared.faux!.setResponses([answer])
+  opened = await prepared.open()
+  const [ultimate, stranger] = await opened.harness.commit(async (tx) => {
+    const ids: ConversationId[] = []
+    for (let i = 0; i < 2; i++) {
+      const child = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+      await configure(tx, child.id, {})
+      ids.push(child.id)
+    }
+    return ids
+  }, context)
+  await opener!()
+  await events.start()
+  closes.push(async () => {
+    await events.stop()
+    await closer!()
+    await opened.close()
+  })
+  const action = (name: keyof typeof actions, args: JsonValue = {}) =>
+    actions[name](args, { host, conversationId: ultimate } as unknown as ActionContext)
+  const record = async (id: string) =>
+    (await opened.harness.snapshot(Automations, context))!.automations[id]
+  /** A subscriber-only automation woken on @ultimate, fired once. */
+  const fired = async (grant?: string[]) => {
+    const a = (await action('create', {
+      name: 'Dream at 80%',
+      condition: { metric: 'context', of: '@ultimate', above: 80 },
+    })) as Automation
+    if (grant) await action('grant', { id: a.id, actions: grant, source: 'Daniel: "do it"' })
+    await action('run', { id: a.id })
+    return a.id
+  }
+  const acted = async () =>
+    (await host.eventLog.recent({ events: [defineEvent('automations.acted')] })).map(
+      (event) => event.data,
+    )
+  return {
+    host: host as unknown as ExtensionHost,
+    action,
+    record,
+    fired,
+    acted,
+    dream,
+    ultimate,
+    stranger,
+    harness: () => opened.harness,
+  }
+}
+
+it('keeps granting a user action, and validates what can be granted', async () => {
+  expect(userActions).toContain('grant')
+  const f = await fixture()
+  const id = await f.fired()
+  await expect(f.action('grant', { id, actions: ['switch'] })).rejects.toThrow('actions must be')
+  const granted = (await f.action('grant', {
+    id,
+    actions: ['asleep', 'dream'],
+    source: 'Daniel: "do it"',
+  })) as Automation
+  expect(granted.grant).toMatchObject({ actions: ['dream', 'asleep'], source: 'Daniel: "do it"' })
+  await f.action('grant', { id, actions: [] })
+  expect((await f.record(id)).grant).toBeUndefined()
+})
+
+it('refuses every action without a grant, and tells the agent to ask the user', async () => {
+  const f = await fixture()
+  const id = await f.fired()
+  for (const name of ['dream', 'compact', 'asleep'])
+    await expect(act(f.host, id, name, f.ultimate)).rejects.toThrow(`no grant for ${name}`)
+  expect(f.dream.start).not.toHaveBeenCalled()
+  expect(f.dream.asleep).not.toHaveBeenCalled()
+  expect(await f.acted()).toEqual([])
+})
+
+it('allows only what the grant names: a dream grant never falls asleep or compacts', async () => {
+  const f = await fixture()
+  const id = await f.fired(['dream'])
+  await expect(act(f.host, id, 'asleep', f.ultimate)).rejects.toThrow('no grant for asleep')
+  await expect(act(f.host, id, 'compact', f.ultimate)).rejects.toThrow('no grant for compact')
+  expect(f.dream.asleep).not.toHaveBeenCalled()
+  const result = await act(f.host, id, 'dream', f.ultimate, 11)
+  expect(result).toMatchObject({ action: 'dream', session: 7, by: { automation: id } })
+  expect(f.dream.start).toHaveBeenCalledWith(
+    expect.objectContaining({ automation: id, name: 'Dream at 80%' }),
+    f.ultimate,
+  )
+  // Once per fire: another call is refused; the same tool call replayed gets its claim back.
+  await expect(act(f.host, id, 'dream', f.ultimate, 12)).rejects.toThrow('already used')
+  await act(f.host, id, 'dream', f.ultimate, 11)
+  expect(await f.acted()).toHaveLength(1)
+  // The next fire may act again.
+  await f.action('run', { id })
+  await act(f.host, id, 'dream', f.ultimate, 13)
+  expect(await f.acted()).toHaveLength(2)
+})
+
+it('passes a granted Fall asleep to dream, which runs every gate', async () => {
+  const f = await fixture()
+  const id = await f.fired(['asleep'])
+  await expect(act(f.host, id, 'dream', f.ultimate)).rejects.toThrow('no grant for dream')
+  expect(await act(f.host, id, 'asleep', f.ultimate)).toMatchObject({ action: 'asleep' })
+  expect(f.dream.asleep).toHaveBeenCalledWith(
+    expect.objectContaining({ automation: id, name: 'Dream at 80%' }),
+    {},
+  )
+  expect(f.dream.start).not.toHaveBeenCalled()
+})
+
+it('refuses a conversation it does not wake, a paused automation and a stale fire', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  const f = await fixture()
+  const id = await f.fired(['dream'])
+  await expect(act(f.host, id, 'dream', f.stranger)).rejects.toThrow('is not woken by')
+  await f.action('pause', { id })
+  await expect(act(f.host, id, 'dream', f.ultimate)).rejects.toThrow('is paused')
+  await f.action('resume', { id })
+  vi.setSystemTime(Date.now() + 6 * 3600_000 + 1)
+  await expect(act(f.host, id, 'dream', f.ultimate)).rejects.toThrow('last six hours')
+  const never = (await f.action('create', {
+    name: 'Never fired',
+    event: { name: 'update.applied' },
+  })) as Automation
+  await f.action('grant', { id: never.id, actions: ['dream'] })
+  await expect(act(f.host, never.id, 'dream', f.ultimate)).rejects.toThrow('last six hours')
+  expect(f.dream.start).not.toHaveBeenCalled()
+})
+
+it('compacts the conversation a context trigger watches', async () => {
+  const f = await fixture()
+  const id = await f.fired(['compact'])
+  const result = (await act(f.host, id, 'compact', f.ultimate)) as { taskId: number }
+  expect(result).toMatchObject({ action: 'compact', conversation: f.ultimate })
+  const task = await f.harness().getTask(result.taskId as never, context)
+  expect(task).toMatchObject({ conversationId: f.ultimate })
+})

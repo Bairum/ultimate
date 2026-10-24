@@ -685,6 +685,14 @@ function backend(host: ExtensionHost) {
 function input(args: unknown, action: string): Args {
   return { ...(args as Omit<Args, 'action'>), action }
 }
+/** The `act` operation of the automation tool, for conversation `caller` in tool task `task`. */
+export const act = (
+  host: ExtensionHost,
+  id: string,
+  action: unknown,
+  caller: number | undefined,
+  task?: number,
+) => backend(host).act(id, action, caller, task)
 /** Only the user grants: no agent may give itself or another automation the right to act without asking. */
 export const userActions = ['grant']
 export const actions = {
