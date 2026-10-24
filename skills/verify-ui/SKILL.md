@@ -24,6 +24,10 @@ Never claim a UI change works without an image of it.
   included), `{until: {entry: 'pi.tool-result'}}` or `{until: {event: 'workspaces.landed', where: {…}}}` when that
   appears. A timeout says what was still busy. `conversation: <id>` targets another conversation. Click and fill only
   when the interaction itself is under test.
+- `where` matches only fields the event carries, and events never carry text: after a send, match
+  `{event: 'user.input', where: {conversation: <id>, kind: 'prompt'}}`, not the prompt. Each event's fields are in
+  `extensions/browser/README.md` and its `defineEvent`. Tool calls live inside `pi.assistant`; there is no
+  `pi.toolCall` entry.
 - Open a conversation with `?conversation=<id>`. Right-panel section titles are uppercased by CSS: find them with
   `textContent.startsWith('Skills')`, not by their shown text.
 - Seed real state with real prompts on a preview; do not inject entries.
