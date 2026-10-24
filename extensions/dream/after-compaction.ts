@@ -114,8 +114,8 @@ export async function ensureAutomation(host: ExtensionHost) {
         item.name === AUTOMATION_NAME &&
         item.event?.name === TRIGGER.name &&
         isDeepStrictEqual(item.event.where, TRIGGER.where) &&
-        !item.prompt &&
-        isDeepStrictEqual(item.subscribers, [ultimate]),
+        // Not subscribers: the user may change them, and that must not make a second one.
+        !item.prompt,
     ) ??
     ((await host.invoke(
       'automations',
