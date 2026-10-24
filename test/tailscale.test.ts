@@ -7,6 +7,7 @@ import type { ExtensionHost } from '../server/extensions.ts'
 import { createAccess } from '../server/request-security.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { createServer } from '../server/main.ts'
+import { projectHome } from '../server/project.ts'
 import { copyApis, linkDependencies, post, temp, until } from './helpers.ts'
 
 // The host's own macOS app is the default CLI's fallback: hide it, so "not installed" holds on a Mac with Tailscale too.
@@ -76,7 +77,12 @@ else if (args[0] === 'serve') {
     }
   }
   const live = new Set<string>()
-  async function instance(projectRoot = '/project/a', localPort = 4747, serverHome = '/homes/a') {
+  // Without `serverHome` it is the project's own server, on the project's default home.
+  async function instance(
+    projectRoot = '/project/a',
+    localPort = 4747,
+    serverHome = projectHome(projectRoot, home),
+  ) {
     const url = `http://127.0.0.1:${localPort}`
     live.add(url)
     const openers: (() => Promise<void>)[] = []
@@ -126,6 +132,7 @@ async function repo(home: string) {
   await copyApis(root)
   await mkdir(join(root, 'server'))
   await cp(resolve('server/lock.ts'), join(root, 'server/lock.ts'))
+  await cp(resolve('server/project.ts'), join(root, 'server/project.ts'))
   await linkDependencies(root)
   await writeFile(
     join(root, 'vite.config.ts'),
@@ -357,9 +364,8 @@ it('retries a failed start on request, one start at a time, and does nothing onc
   })
   expect(second).toEqual(first)
   expect((await f.invocations()).filter((args) => args.includes('--bg'))).toHaveLength(1)
-  const calls = (await f.invocations()).length
   expect(await retry()).toEqual(first)
-  expect(await f.invocations()).toHaveLength(calls)
+  expect((await f.invocations()).filter((args) => args.includes('--bg'))).toHaveLength(1)
 })
 it('treats a missing TAILSCALE_COMMAND as not installed, never falling back to another CLI', async () => {
   const f = await fixture()
@@ -432,26 +438,51 @@ it('keeps a live preview owner absent from the project supervisor list', async (
   expect((await app.status()).state).toBe('ready')
   expect((await f.invocations()).filter((args) => args.includes('--https=4748'))).toEqual([])
 })
-it('gives a preview of the same project its own port and frees it when the preview ends', async () => {
+// The rog outage: a scratch server of the live project, started on its own home without ULTIMATE_INSTANCE_OWNER,
+// took the project's registration and removed the live mapping when it stopped, while the live server said ready.
+it('keeps the live mapping through a scratch server of the same project, and Check again restores a lost one', async () => {
   const f = await fixture()
   const registry = async () =>
     JSON.parse(await readFile(join(f.home, '.ultimate/tailscale.json'), 'utf8')).ports
-  const app = await f.instance('/project/a', 4747)
-  expect((await app.status()).url).toBe('https://rog.example.ts.net:4747')
-  vi.stubEnv('ULTIMATE_INSTANCE_OWNER', String(process.pid))
-  const preview = await f.instance('/project/a', 4800, '/tmp/preview-home')
-  expect((await preview.status()).url).toBe('https://rog.example.ts.net:4800')
+  const proxy = async () =>
+    JSON.parse(await readFile(f.config, 'utf8')).serve.Web['rog.example.ts.net:4747']?.Handlers['/']
+      .Proxy
+  const live = await f.instance('/project/a', 4747)
+  // What a scratch started from an agent's shell inherits; only its home is its own.
+  vi.stubEnv('ULTIMATE_SUPERVISED', '1')
+  vi.stubEnv('ULTIMATE_PROJECT', '/project/a')
+  vi.stubEnv('ULTIMATE_PUBLIC_URL', 'http://127.0.0.1:4747')
+  const scratch = await f.instance('/project/a', 4799, '/tmp/scratch-home')
+  expect((await scratch.status()).url).toBe('https://rog.example.ts.net:4799')
   expect(await registry()).toMatchObject({
     '/project/a': { port: 4747 },
-    '/tmp/preview-home': { port: 4800, temporary: true },
+    '/tmp/scratch-home': { port: 4799, temporary: true },
   })
-  await preview.close()
+  await scratch.close()
   expect(Object.keys(await registry())).toEqual(['/project/a'])
-  expect((await app.status()).url).toBe('https://rog.example.ts.net:4747')
+  expect(await proxy()).toBe('http://127.0.0.1:4747')
+  expect((await f.invocations()).filter((args) => args.includes('--https=4747'))).toHaveLength(1)
+
+  // The state an earlier scratch left behind: the mapping gone, the registration owned by a dead process.
+  const config = JSON.parse(await readFile(f.config, 'utf8'))
+  delete config.serve.Web['rog.example.ts.net:4747']
+  delete config.serve.TCP['4747']
+  await writeFile(f.config, JSON.stringify(config))
+  await writeFile(
+    join(f.home, '.ultimate/tailscale.json'),
+    JSON.stringify({ ports: { '/project/a': { port: 4747, owner: '2147483647:scratch' } } }),
+  )
+  expect((await live.status()).state).toBe('ready')
+  const checked = (await actions.retry(null, { host: live.host } as Parameters<
+    typeof actions.retry
+  >[1])) as Status
+  expect(checked).toMatchObject({ state: 'ready', url: 'https://rog.example.ts.net:4747' })
+  expect(await proxy()).toBe('http://127.0.0.1:4747')
+  expect((await registry())['/project/a'].owner).toMatch(new RegExp(`^${process.pid}:`))
+  expect(live.access.origins()).toEqual(['https://rog.example.ts.net:4747'])
 })
 it('publishes a preview and frees its port when it ends', async () => {
   const f = await fixture()
-  vi.stubEnv('ULTIMATE_INSTANCE_OWNER', String(process.pid))
   const preview = await f.instance('/project/a', 4800, '/tmp/preview')
   expect(await preview.status()).toMatchObject({
     state: 'ready',
