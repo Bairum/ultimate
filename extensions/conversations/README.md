@@ -20,8 +20,8 @@ reads this extension's overview, titles and actions. `ui.tsx` declares the point
 conversation: `tokens`, the current model's `window`, their `percent`, and `estimated`. Answers measure prompt tokens
 (input plus cache reads and writes, not output); compaction and reset estimate the next request's system prompt,
 tools and new context until another answer. Model changes update the window. Unknown fields are absent. `at` is Unix
-milliseconds (the answer timestamp or when the estimate was made); `entry` identifies the source assistant or head
-entry. A fork starts at `{ at: 0 }`, without inheriting its parent's measurement.
+milliseconds (the answer/head message timestamp, or when the estimate was made if absent); `entry` identifies the
+source assistant or head entry. A fork starts at `{ at: 0 }`, without inheriting its parent's measurement.
 A watcher follows Pi's commits and writes the document in its own commit, serially per conversation, only when it
 changes. On open, background reconciliation scans bounded pages and recovers missing or stale source entries without
 blocking startup. The status line reads this same document, independent of which browser is open.

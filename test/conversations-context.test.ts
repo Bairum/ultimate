@@ -175,7 +175,7 @@ it('estimates the prompt, tools, summary and kept entries once after compaction;
     estimateMessageTokens(summary) +
     estimateMessageTokens(keptMessage)
   expect(await f.read()).toEqual({
-    ...contextUsage({ tokens: expected, window: 10000, estimated: true }, expect.any(Number)),
+    ...contextUsage({ tokens: expected, window: 10000, estimated: true }, summary.timestamp),
     entry: marker.id,
   })
   expect(expected).toBeLessThan(2000)
@@ -224,14 +224,17 @@ it('estimates a reset from the previous system baseline and the new handoff', as
         window: 10000,
         estimated: true,
       },
-      expect.any(Number),
+      current.head!.model![0].timestamp,
     ),
     entry: current.head!.id,
   })
+  const beforeReset = Date.now()
   await f.root.reset(undefined, context)
   const empty = await f.root.context(context)
   await until(async () => (await f.read())?.entry === empty.head!.id)
   expect((await f.read())?.estimated).toBe(true)
+  expect((await f.read())?.at).toBeGreaterThanOrEqual(beforeReset)
+  expect((await f.read())?.at).toBeLessThanOrEqual(Date.now())
 })
 
 it('updates the model window, clears unknown windows, and does not write for unrelated agent changes', async () => {

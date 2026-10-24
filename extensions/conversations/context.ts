@@ -70,7 +70,7 @@ export function contextBehavior(
         : source.message
           ? source.message.timestamp
           : source.stale
-            ? Date.now()
+            ? (view.head?.model?.[0]?.timestamp ?? Date.now())
             : 0
       const next = {
         ...contextUsage(
