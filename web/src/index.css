@@ -187,6 +187,7 @@
   /* Edge to edge (viewport-fit=cover): the app shell keeps out of the notch, rounded corners and home indicator. The
      open keyboard covers the home indicator, so typing drops the bottom inset instead of leaving a gap above it. */
   .safe-area {
+    height: 100dvh;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
       env(safe-area-inset-left);
   }
