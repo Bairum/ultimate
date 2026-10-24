@@ -23,23 +23,37 @@ function fakeWatcher() {
   return watcher
 }
 
-it('adds a path once, skips paths inside a watched folder, and adds a deleted path again', () => {
+it('adds a path once, skips paths inside a watched folder, and adds a deleted, unwatched or new path again', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ultimate-watch-once-'))
+  const extensions = join(root, 'extensions'),
+    a = join(root, 'a.ts'),
+    b = join(root, 'b.ts'),
+    web = join(extensions, 'x/web.tsx'),
+    later = join(root, 'later')
+  await mkdir(join(extensions, 'x'), { recursive: true })
+  for (const file of [a, b, web]) await writeFile(file, '')
   const watcher = fakeWatcher()
   watchOnce(watcher as never)
-  watcher.add(['/repo/extensions', '/elsewhere/a.ts'])
-  watcher.add('/elsewhere/a.ts')
-  watcher.add(['/repo/extensions/x/web.tsx', '/repo/extensions'])
-  watcher.add(['/elsewhere/b.ts', '/elsewhere/b.ts'])
-  expect(watcher.added).toEqual([['/repo/extensions', '/elsewhere/a.ts'], ['/elsewhere/b.ts']])
-  // Chokidar drops a deleted path's listeners; once it is back, adding it must reach chokidar.
-  watcher.emit('unlink', '/elsewhere/a.ts')
-  watcher.emit('unlinkDir', '/repo/extensions')
-  watcher.add(['/elsewhere/a.ts', '/repo/extensions/x/web.tsx', '/elsewhere/b.ts'])
-  expect(watcher.added.at(-1)).toEqual(['/elsewhere/a.ts', '/repo/extensions/x/web.tsx'])
-  watcher.unwatch('/elsewhere/b.ts')
-  watcher.add('/elsewhere/b.ts')
-  expect(watcher.unwatched).toEqual([['/elsewhere/b.ts']])
-  expect(watcher.added.at(-1)).toEqual(['/elsewhere/b.ts'])
+  watcher.add([extensions, a])
+  watcher.add(a)
+  watcher.add([web, extensions])
+  watcher.add([b, b])
+  expect(watcher.added).toEqual([[extensions, a], [b]])
+  // Without fsevents chokidar drops a deleted path's watcher; once it is back, adding it must reach chokidar.
+  watcher.emit('unlink', a)
+  watcher.emit('unlinkDir', extensions)
+  watcher.add([a, web, b])
+  expect(watcher.added.at(-1)).toEqual([a, web])
+  watcher.unwatch(b)
+  watcher.add(b)
+  expect(watcher.unwatched).toEqual([[b]])
+  expect(watcher.added.at(-1)).toEqual([b])
+  // A root added before it exists is added again when it appears (watch-roots.ts).
+  watcher.add(later)
+  await mkdir(later)
+  watcher.add(later)
+  watcher.add(later)
+  expect(watcher.added.slice(-2)).toEqual([[later], [later]])
 })
 
 it("reports a trust.json change only when this project's decision or its read error changed", async () => {

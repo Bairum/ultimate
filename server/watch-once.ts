@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import type { ViteDevServer } from 'vite-plus'
 
@@ -23,17 +24,19 @@ export function watchOnce(watcher: Watcher) {
   const add = watcher.add.bind(watcher)
   const unwatch = watcher.unwatch.bind(watcher)
   watcher.add = (paths) => {
-    const fresh = [...new Set([paths].flat().map((path) => resolve(path)))].filter(
-      (path) => !covered(path),
-    )
-    for (const path of fresh) added.add(path)
+    const fresh = [
+      ...new Set([paths].flat().map((path) => (path.startsWith('!') ? path : resolve(path)))),
+    ].filter((path) => path.startsWith('!') || !covered(path))
+    // A missing path is added again once it appears (watch-roots.ts): without fsevents chokidar only then watches it.
+    for (const path of fresh) if (!path.startsWith('!') && existsSync(path)) added.add(path)
     return fresh.length ? add(fresh) : (watcher as ReturnType<typeof add>)
   }
   watcher.unwatch = (paths) => {
     for (const path of [paths].flat()) forget(resolve(path))
     return unwatch(paths)
   }
-  // Chokidar drops the listeners of a deleted path, so a path that comes back must be added again.
+  // Without fsevents chokidar drops a deleted path's watcher, so a path that comes back must be added again; with
+  // fsevents that costs one extra listener per deletion.
   watcher.on('unlink', forget)
   watcher.on('unlinkDir', forget)
 }
