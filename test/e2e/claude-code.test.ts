@@ -176,6 +176,76 @@ if (process.argv.includes('status')) {
   }
 }, 60000)
 
+// The model sometimes names a tool without its MCP prefix (#371663 failed four times on a bare `bash`); the turn
+// resolves it to Pi's name instead of ending.
+it('continues a Claude Code turn whose model names a tool without its MCP prefix', async () => {
+  const home = await temp()
+  const cli = join(home, 'claude')
+  await writeFile(
+    cli,
+    `#!${process.execPath}
+import { createInterface } from 'node:readline'
+if (process.argv.includes('status')) {
+  console.log(JSON.stringify({ loggedIn: true, subscriptionType: 'max' }))
+} else {
+  const emit = (event) => console.log(JSON.stringify(event))
+  for await (const line of createInterface({ input: process.stdin })) {
+    const frame = JSON.parse(line)
+    if (frame.type !== 'user') continue
+    if (frame.shouldQuery === false) {
+      emit({ type: 'result', subtype: 'success', num_turns: 0 })
+      continue
+    }
+    const block = { type: 'tool_use', id: 'toolu_1', name: 'bash', input: {} }
+    emit({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: block } })
+    emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"command":"ls"}' } } })
+    emit({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 } })
+    const message = { id: 'msg_bare', role: 'assistant', content: [{ ...block, input: { command: 'ls' } }], stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 } }
+    emit({ type: 'assistant', message })
+    emit({ type: 'stream_event', event: { type: 'message_stop' } })
+    emit({ type: 'result', subtype: 'error_max_turns', is_error: true, usage: message.usage })
+  }
+}
+`,
+  )
+  await chmod(cli, 0o755)
+  const { createClaudeCodeProvider, streamClaudeCode } =
+    await import('@earendil-works/pi-claude-code/src/index.ts')
+  const model = createClaudeCodeProvider()
+    .getModels()
+    .find((candidate: { id: string }) => candidate.id === 'claude-sonnet-5')!
+  const bash = {
+    name: 'bash',
+    description: 'Run a command',
+    parameters: { type: 'object', properties: {} },
+  }
+  const stream = streamClaudeCode(
+    model,
+    normalizeContext({
+      messages: [
+        { role: 'system', content: 'You help.', toolsAdded: [bash], timestamp: 0 },
+        { role: 'user', content: 'List the files.', timestamp: 0 },
+      ],
+    }),
+    { env: { PI_CLAUDE_CODE_COMMAND: cli }, cacheRetention: 'none' },
+  )
+  const ended = []
+  for await (const event of stream)
+    if (event.type === 'toolcall_end') ended.push(event.toolCall.name)
+  const message = await stream.result()
+  expect(message.errorMessage).toBeUndefined()
+  expect(message.stopReason).toBe('toolUse')
+  expect(ended).toEqual(['bash'])
+  expect(message.content).toEqual([
+    { type: 'toolCall', id: 'toolu_1', name: 'bash', arguments: { command: 'ls' } },
+  ])
+  // The replay carrier offers the call back under the name the request offered.
+  const carrier = message.diagnostics?.find(
+    (diagnostic) => diagnostic.type === 'claude-code.native-assistant.v1',
+  )
+  expect(JSON.stringify(carrier)).toContain('"name":"mcp__pi__bash"')
+}, 60000)
+
 for (const lifecycle of ['reload', 'reopen', 'swap', 'cancel', 'permanent'] as const) {
   it(`preserves Claude Code requests across ${lifecycle}`, async () => {
     const home = await temp()
