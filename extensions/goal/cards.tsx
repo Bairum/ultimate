@@ -279,8 +279,9 @@ export function ReportCard({ entry }: { entry: EntryRecord }) {
             </p>
             <p className="font-mono text-[11px] text-muted-foreground">
               {formatTime(goal.startedAt)}–{formatTime(ended.at)} ·{' '}
-              {plural(goal.criteria.filter((item) => item.status === 'met').length, 'criterion')}{' '}
-              met of {goal.criteria.length} · {plural(goal.decisions.length, 'decision')}
+              {goal.criteria.length > 0 &&
+                `${goal.criteria.filter((item) => item.status === 'met').length} of ${goal.criteria.length} criteria met · `}
+              {plural(goal.decisions.length, 'decision')}
             </p>
           </div>
           {ended.summary && (
@@ -289,7 +290,7 @@ export function ReportCard({ entry }: { entry: EntryRecord }) {
             </p>
           )}
           <Words goal={goal} />
-          <Criteria goal={goal} />
+          {goal.criteria.length > 0 && <Criteria goal={goal} />}
           <Decisions goal={goal} />
         </>
       )}
