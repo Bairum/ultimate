@@ -113,6 +113,13 @@ it('answers a decisions card with letters, arrows and Enter', async () => {
   await page.keyboard.press('Shift+Enter')
   await page.keyboard.type('And soon.')
   await page.keyboard.press('Enter')
+  // The undo bar fills over the undo window by itself, without relying on a @starting-style transition.
+  const bar = card.locator('[data-countdown]')
+  await page.waitForTimeout(500)
+  const width = await bar.evaluate((node) => node.getBoundingClientRect().width)
+  const full = await bar.evaluate((node) => node.parentElement!.getBoundingClientRect().width)
+  expect(width).toBeGreaterThan(0)
+  expect(width).toBeLessThan(full * 0.8)
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.press('Enter')
   const answer = async () =>
