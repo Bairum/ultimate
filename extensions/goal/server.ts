@@ -19,6 +19,7 @@ import { implementAction } from '../../lib/actions.ts'
 import { imagesOf } from '../../lib/entries.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Standing } from '../subagents/api.ts'
+import { deliver, deliverTask } from './delivery.ts'
 import { EndAction, GoalDoc, ImagesAction, StartAction } from './refs.ts'
 import type { Criterion, Decision, Ending, Goal } from './refs.ts'
 
@@ -37,6 +38,9 @@ export const Goals = defineDoc<{ next: number; goals: Goal[] }>({
   initial: () => ({ next: 1, goals: [] }),
 })
 export const docs = [Goals]
+
+/** A plain copy: the document's overlay is a proxy that structuredClone refuses, and unusable after the commit. */
+const copy = (goal: Goal) => JSON.parse(JSON.stringify(goal)) as Goal
 
 const ultimateOf = async (tx: Tx) => (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
 
@@ -74,8 +78,7 @@ export async function end(tx: Tx, ending: Ending) {
   const goal = await openGoal(tx)
   if (!goal) throw new Error('No goal is open')
   goal.ended = ending
-  // A plain copy: the document's overlay is a proxy that structuredClone refuses, and unusable after the commit.
-  return JSON.parse(JSON.stringify(goal)) as Goal
+  return copy(goal)
 }
 
 const status = (criterion: Criterion) =>
@@ -195,39 +198,21 @@ const reportText = (goal: Goal) =>
     ? `The user ended hands-off goal ${goal.id}. From now on ask them as usual.`
     : `Hands-off goal ${goal.id} ended (${goal.ended?.outcome}); its report card is here for the user. From now on ask them as usual.`
 
-/** Write goal `goal`'s card of `kind` into @ultimate's conversation, once per goal. */
-async function card(host: ExtensionHost, kind: 'goal.started' | 'goal.report', goal: Goal) {
-  const harness = host.harness()
-  const ultimate = (await harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
-  const conversation =
-    ultimate === undefined ? undefined : await harness.conversation(ultimate, context)
-  if (!conversation) throw new Error('@ultimate has no conversation yet')
-  const requestId = `${kind}:${goal.id}`
-  const data = { goal: goal.id }
-  if (kind === 'goal.started')
-    await conversation.submit(
-      {
-        type: 'input',
-        requestId,
-        content: noteText(goal),
-        entry: { kind, data },
-        whenBusy: 'followUp',
-      },
-      context,
-    )
-  else
-    await conversation.submit(
-      {
-        type: 'write',
-        requestId,
-        entry: {
-          kind,
-          data,
-          model: [{ role: 'user', content: reportText(goal), timestamp: Date.now() }],
-        },
-      },
-      context,
-    )
+/**
+ * Goal `goal`'s card of `kind` for @ultimate, delivered by a task created in `tx`, the commit that changed the goal.
+ * The start card says only that the user started it: what @ultimate may do comes from the goal note, built from the
+ * goal as it is when the input runs, so a start still queued after the user ended the goal grants nothing.
+ */
+async function card(host: ExtensionHost, tx: Tx, kind: 'goal.started' | 'goal.report', goal: Goal) {
+  const to = await ultimateOf(tx)
+  if (to === undefined) throw new Error('@ultimate has no conversation yet')
+  await deliver(host, tx, {
+    to,
+    goal: goal.id,
+    kind,
+    content:
+      kind === 'goal.started' ? `The user started hands-off goal ${goal.id}.` : reportText(goal),
+  })
 }
 
 /** `name` of an action's arguments; the helpers above validate it. */
@@ -237,21 +222,20 @@ const field = (args: unknown, name: string) =>
 /** Starting and ending a goal is the user's grant; @ultimate only finishes one through its tool. */
 export const userActions = ['start', 'end']
 export const actions = {
-  start: implementAction(StartAction, async (args, { host }) => {
-    const goal = await host.harness().commit(async (tx) => {
-      if ((await ultimateOf(tx)) === undefined) throw new Error('@ultimate has no conversation yet')
-      return start(tx, field(args, 'text'), Date.now())
-    }, context)
-    await card(host, 'goal.started', goal)
-    return goal
-  }),
-  end: implementAction(EndAction, async (_args, { host }) => {
-    const goal = await host
-      .harness()
-      .commit((tx) => end(tx, { at: Date.now(), by: 'user', outcome: 'ended' }), context)
-    await card(host, 'goal.report', goal)
-    return goal
-  }),
+  start: implementAction(StartAction, (args, { host }) =>
+    host.harness().commit(async (tx) => {
+      const goal = await start(tx, field(args, 'text'), Date.now())
+      await card(host, tx, 'goal.started', goal)
+      return copy(goal)
+    }, context),
+  ),
+  end: implementAction(EndAction, (_args, { host }) =>
+    host.harness().commit(async (tx) => {
+      const goal = await end(tx, { at: Date.now(), by: 'user', outcome: 'ended' })
+      await card(host, tx, 'goal.report', goal)
+      return goal
+    }, context),
+  ),
   images: implementAction(ImagesAction, async (args, { host }) =>
     host.harness().commit(async (tx) => {
       const goal = (await tx.doc(Goals, ROOT_CONVERSATION_ID)).goals.find(
@@ -272,14 +256,13 @@ export const actions = {
 export default function goalExtension(host: ExtensionHost) {
   return defineExtension({
     name: 'goal',
+    tasks: [deliverTask(host)],
     hooks: [
       hook(GenerationTask, {
         // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched transactional beforeInput hook.
         // A per-run note while a goal is open, never a system-prompt section, keeps the prompt cached.
         beforeInput: async (input, { tx, conversationId }) => {
           if ((await ultimateOf(tx)) !== conversationId) return undefined
-          // The goal's own start card already carries the note.
-          if (input.kind === 'goal.started') return undefined
           const goal = await openGoal(tx)
           if (!goal) return undefined
           return {
@@ -325,9 +308,10 @@ export default function goalExtension(host: ExtensionHost) {
           const result = await api.commit(async (tx) => {
             if ((await ultimateOf(tx)) !== caller)
               throw new Error('Only @ultimate keeps the hands-off goal.')
-            return act(tx, caller, args, Date.now())
+            const acted = await act(tx, caller, args, Date.now())
+            if (acted.ended) await card(host, tx, 'goal.report', acted.ended)
+            return acted
           }, ctx)
-          if (result.ended) await card(host, 'goal.report', result.ended)
           return { output: [{ type: 'text', text: result.answer }] }
         },
       }),

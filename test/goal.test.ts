@@ -35,7 +35,12 @@ function fakeTx() {
     },
     { id: 10, conversationId: 9, model: [{ role: 'user', content: [screenshot] }] },
   ]
+  const tasks: { input: { kind: string; content: string; to: number } }[] = []
   return {
+    tasks,
+    createTask: async (_definition: unknown, input: never) => {
+      tasks.push({ input })
+    },
     doc: async (
       { definition: def }: { definition: { kind: string; initial: () => object } },
       id: number,
@@ -52,7 +57,7 @@ function fakeTx() {
     scanEntries: async ({ conversationId }: { conversationId: number }) => ({
       items: entries.filter((entry) => entry.conversationId === conversationId),
     }),
-  } as unknown as Tx
+  } as unknown as Tx & { tasks: typeof tasks }
 }
 
 it('keeps one goal open at a time and ends it once', async () => {
@@ -133,7 +138,6 @@ it("notes the open goal on @ultimate's runs only, and lets only @ultimate keep i
   expect(await before(ULTIMATE)).toBeUndefined()
   await start(tx, 'Make it fast', 0)
   expect(await before(9)).toBeUndefined()
-  expect(await before(ULTIMATE, 'goal.started')).toBeUndefined()
   const note = (await before(ULTIMATE))!.entries![0]
   expect(note.kind).toBe('goal.note')
   expect(note.model![0].content).toContain(
@@ -152,4 +156,36 @@ it("notes the open goal on @ultimate's runs only, and lets only @ultimate keep i
     output: [{ type: 'text', text: 'Goal 1 has 1 criteria.' }],
   })
   expect((await tx.doc(Goals, 1 as ConversationId)).goals[0].criteria).toHaveLength(1)
+
+  // Finishing ends the goal and creates the report's delivery in the same commit; the note stops.
+  await run(ULTIMATE, { action: 'finish', outcome: 'met', summary: 'Done' })
+  expect(tx.tasks.map((task) => task.input)).toEqual([
+    expect.objectContaining({ to: ULTIMATE, kind: 'goal.report', goal: 1 }),
+  ])
+  expect(await before(ULTIMATE)).toBeUndefined()
+})
+
+it('grants nothing through a start card still queued after the user ended its goal', async () => {
+  const tx = fakeTx()
+  const extension = goalExtension({ doc: () => undefined } as unknown as ExtensionHost)
+  const actions = await import('../extensions/goal/server.ts').then((module) => module.actions)
+  const host = { harness: () => ({ commit: (fn: (tx: Tx) => unknown) => fn(tx) }) }
+  await actions.start({ text: 'Make it fast' }, { host } as never)
+  await actions.end(null, { host } as never)
+  const [started, report] = tx.tasks.map((task) => task.input)
+  expect(started).toMatchObject({
+    kind: 'goal.started',
+    content: 'The user started hands-off goal 1.',
+  })
+  expect(report).toMatchObject({ kind: 'goal.report' })
+  expect(report.content).toContain('ask them as usual')
+  // The queued start runs now: no goal is open, so no note says to decide for the user.
+  const hooks = extension.hooks![0].handlers as GenerationHooks
+  expect(
+    await hooks.beforeInput(
+      { kind: 'goal.started' },
+      { tx, conversationId: ULTIMATE },
+      BACKGROUND_CONTEXT,
+    ),
+  ).toBeUndefined()
 })
