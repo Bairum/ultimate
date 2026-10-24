@@ -1,4 +1,4 @@
-import { readFile, realpath, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest'
 import { Type } from '@earendil-works/pi-ai'
@@ -15,6 +15,7 @@ import { createReadTool, createWriteTool, createEditTool } from '@earendil-works
 import hashline from '../extensions/hashline/server.ts'
 import {
   Provenance,
+  ConversationSnapshots,
   carriedSeenLines,
   clearTextCache,
   hash32,
@@ -128,6 +129,8 @@ test('wraps replace the edit schema and preserve sequential mutation execution',
   expect(edit.parameters).toMatchObject({ properties: { input: { type: 'string' } } })
   expect(edit.executionMode).toBe('sequential')
   expect(edit.description).toContain('Block * forms are unavailable')
+  expect(edit.description).toContain("Every body needs a header line ending in ':'")
+  expect(edit.description).toContain('[file#1A2B]\nPUT 2.=2:\n+replacement\nPUT >3:')
 })
 
 test('text read emits headers and numbered rows, clean details, offset/limit and continuation diagnostics', async () => {
@@ -298,6 +301,7 @@ test('restart rebuilds stale text from a full transcript read, not from a partia
 
 test('REM and MV use the environment; register CUT/paste survives text cache loss', async () => {
   const f = await fixture()
+  await call(f.conversation, 'read', { path: 'a.txt' })
   const cut = await call(f.conversation, 'edit', { input: patch(f.tag, 'CUT 2 @saved') })
   expect(cut.isError).toBe(false)
   clearTextCache()
@@ -320,12 +324,13 @@ test('REM and MV use the environment; register CUT/paste survives text cache los
 test('failed MV retains source provenance and does not create destination history', async () => {
   const f = await fixture()
   await call(f.conversation, 'read', { path: 'a.txt', limit: 1 })
-  const rename = vi
-    .spyOn(NodeExecutionEnv.prototype, 'renameFile')
-    .mockResolvedValue({ ok: false, error: new FileError('permission_denied', 'rename denied') })
+  const write = vi.spyOn(NodeExecutionEnv.prototype, 'writeFile').mockResolvedValue({
+    ok: false,
+    error: new FileError('permission_denied', 'destination write denied'),
+  })
   const result = await call(f.conversation, 'edit', { input: patch(f.tag, 'MV moved.txt') })
   expect(result.isError).toBe(true)
-  expect(rename).toHaveBeenCalledOnce()
+  expect(write).toHaveBeenCalledOnce()
   expect(await f.read()).toBe('one\ntwo\nthree\n')
   const state = await opened.harness.snapshot(Provenance, f.conversation.id, context)
   expect(state?.paths[f.path][0].seen).toEqual([[0, 1]])
@@ -546,6 +551,188 @@ test('bounded provenance-bearing results are exempt from downstream output offlo
   const rejected = await call(f.conversation, 'edit', { input: patch('FFFF', 'PUT 1.=1:\n+bad') })
   for (const result of [read, edit, grep, rejected])
     expect(result.details).toMatchObject({ offloadExempt: true })
+})
+
+for (const operation of ['REM', 'MV moved.txt', 'CUT 2 @saved\nMV moved.txt']) {
+  for (const mode of ['stale', 'invented'])
+    test(`${operation}: ${mode} tag cannot delete or move a file`, async () => {
+      const f = await fixture()
+      await call(f.conversation, 'read', { path: 'a.txt' })
+      const live = 'external\none\ntwo\nthree\n'
+      await writeFile(f.path, live)
+      const result = await call(f.conversation, 'edit', {
+        input: patch(mode === 'stale' ? f.tag : 'FFFF', operation),
+      })
+      expect(result.isError).toBe(true)
+      expect(result.details).toMatchObject({
+        hashline: { metrics: { rejectedReason: 'stale-tag' } },
+      })
+      expect(await f.read()).toBe(live)
+      await expect(readFile(join(f.cwd, 'moved.txt'))).rejects.toThrow('ENOENT')
+    })
+}
+
+test('MV rejects an existing destination and requires an explicit tagged REM first', async () => {
+  const f = await fixture()
+  const destination = join(f.cwd, 'moved.txt')
+  await writeFile(destination, 'keep destination\n')
+  await call(f.conversation, 'read', { path: 'a.txt' })
+  const result = await call(f.conversation, 'edit', {
+    input: patch(f.tag, 'CUT 2 @saved\nMV moved.txt'),
+  })
+  expect(result.isError).toBe(true)
+  expect(result.text).toContain('REM it first with its current tagged header')
+  expect(await f.read()).toBe('one\ntwo\nthree\n')
+  expect(await readFile(destination, 'utf8')).toBe('keep destination\n')
+})
+
+test('failed destination write after CUT leaves every source byte and named register untouched', async () => {
+  const f = await fixture()
+  await call(f.conversation, 'read', { path: 'a.txt' })
+  const write = vi.spyOn(NodeExecutionEnv.prototype, 'writeFile').mockResolvedValue({
+    ok: false,
+    error: new FileError('permission_denied', 'injected destination failure'),
+  })
+  const result = await call(f.conversation, 'edit', {
+    input: patch(f.tag, 'CUT 2 @saved\nMV moved.txt'),
+  })
+  expect(result.isError).toBe(true)
+  expect(result.text).toContain('injected destination failure')
+  expect(write.mock.calls.map((args) => args[0])).toEqual([join(f.cwd, 'moved.txt')])
+  expect(await f.read()).toBe('one\ntwo\nthree\n')
+  await expect(readFile(join(f.cwd, 'moved.txt'))).rejects.toThrow('ENOENT')
+  expect(
+    (await opened.harness.snapshot(Provenance, f.conversation.id, context))?.registers.named,
+  ).toEqual({})
+})
+
+test('recovered partial-read edit does not unlock undisplayed lines in an externally changed file', async () => {
+  const source = Array.from({ length: 900 }, (_, i) => `line${i + 1}\n`).join('')
+  const f = await fixture(source)
+  await call(f.conversation, 'read', { path: 'a.txt', limit: 10 })
+  const live = source.replace('line500\n', 'external500\n')
+  await writeFile(f.path, live)
+  const edit = await call(f.conversation, 'edit', { input: patch(f.tag, 'PUT 5.=5:\n+changed5') })
+  expect(edit.isError).toBe(false)
+  expect(await f.read()).toBe(live.replace('line5\n', 'changed5\n'))
+  const current = computeFileHash(await f.read())
+  const hidden = await call(f.conversation, 'edit', {
+    input: patch(current, 'PUT 800.=800:\n+wrong'),
+  })
+  expect(hidden.isError).toBe(true)
+  expect(hidden.text).toContain('anchors to lines 800')
+  expect(await f.read()).toContain('line800\n')
+  expect(carriedSeenLines('a\nb\n', 'a\nb\n', undefined)).toEqual([])
+  expect(carriedSeenLines('a\nb\n', 'a\nb\n', null)).toEqual([1, 2])
+})
+
+test('recovery carries numbers from the authored snapshot rather than a newer live version', async () => {
+  const source = Array.from({ length: 30 }, (_, i) => `line${i + 1}\n`).join('')
+  const f = await fixture(source)
+  await call(f.conversation, 'read', { path: 'a.txt', limit: 10 })
+  await call(f.conversation, 'write', { path: 'a.txt', content: `new prefix\n${source}` })
+  const edit = await call(f.conversation, 'edit', { input: patch(f.tag, 'PUT 5.=5:\n+changed5') })
+  expect(edit.isError).toBe(false)
+  const hidden = await call(f.conversation, 'edit', {
+    input: patch(computeFileHash(await f.read()), 'PUT 10.=10:\n+wrong number'),
+  })
+  expect(hidden.isError).toBe(true)
+  expect(await f.read()).toContain('line9\n')
+})
+
+test('an aged-out live tag is rejected despite its matching 16-bit hash', async () => {
+  const f = await fixture()
+  await call(f.conversation, 'read', { path: 'a.txt' })
+  for (let i = 0; i < 4; i++)
+    await call(f.conversation, 'write', { path: 'a.txt', content: `version${i}\n` })
+  const state = await opened.harness.snapshot(Provenance, f.conversation.id, context)
+  expect(state?.paths[f.path].some((version) => version.tag === f.tag)).toBe(false)
+  await writeFile(f.path, 'one\ntwo\nthree\n')
+  const result = await call(f.conversation, 'edit', { input: patch(f.tag, 'PUT 2.=2:\n+wrong') })
+  expect(result.isError).toBe(true)
+  expect(await f.read()).toBe('one\ntwo\nthree\n')
+})
+
+test('two retained versions sharing a tag cannot select a collider by recency', async () => {
+  const before = 'line one 263\nline two 4471\n',
+    collision = 'line one 410\nline two 6970\n'
+  const f = await fixture(before)
+  await call(f.conversation, 'read', { path: 'a.txt' })
+  await writeFile(f.path, collision)
+  await call(f.conversation, 'read', { path: 'a.txt' })
+  const state = await opened.harness.snapshot(Provenance, f.conversation.id, context)
+  expect(
+    new ConversationSnapshots(f.conversation.id, structuredClone(state!)).byHash(f.path, f.tag),
+  ).toBeNull()
+  const result = await call(f.conversation, 'edit', { input: patch(f.tag, 'PUT 1.=1:\n+wrong') })
+  expect(result.isError).toBe(true)
+  expect(await f.read()).toBe(collision)
+})
+
+test('basename path recovery cannot bypass the engine full-hash guard', async () => {
+  const before = 'line one 263\nline two 4471\n',
+    collision = 'line one 410\nline two 6970\n'
+  const f = await fixture()
+  await mkdir(join(f.cwd, 'nested'))
+  const target = join(f.cwd, 'nested/a.txt')
+  await writeFile(target, before)
+  await call(f.conversation, 'read', { path: 'nested/a.txt' })
+  await writeFile(target, collision)
+  const result = await call(f.conversation, 'edit', {
+    input: `[missing/a.txt#${computeFileHash(before)}]\nPUT 1.=1:\n+wrong`,
+  })
+  expect(result.isError).toBe(true)
+  expect(result.details).toMatchObject({ hashline: { metrics: { rejectedReason: 'stale-tag' } } })
+  expect(await readFile(target, 'utf8')).toBe(collision)
+})
+
+test('write read-back changes do not grant unrestricted seen provenance', async () => {
+  const f = await fixture()
+  vi.spyOn(NodeExecutionEnv.prototype, 'writeFile').mockImplementation(async (path) => {
+    await writeFile(path, 'formatter changed it\n')
+    return { ok: true, value: undefined }
+  })
+  const result = await call(f.conversation, 'write', { path: 'new.txt', content: 'written\n' })
+  expect(result.isError).toBe(false)
+  const state = await opened.harness.snapshot(Provenance, f.conversation.id, context)
+  expect(state?.paths[join(f.cwd, 'new.txt')][0].seen).toEqual([[0, 0]])
+  const edit = await call(f.conversation, 'edit', {
+    input: `[new.txt#${computeFileHash('formatter changed it\n')}]\nPUT 1.=1:\n+wrong`,
+  })
+  expect(edit.isError).toBe(true)
+  expect(await readFile(join(f.cwd, 'new.txt'), 'utf8')).toBe('formatter changed it\n')
+})
+
+test('a landed batch prefix never persists unrestricted engine-created coverage after a later write fails', async () => {
+  const source = Array.from({ length: 900 }, (_, i) => `line${i + 1}\n`).join('')
+  const f = await fixture(source)
+  await writeFile(join(f.cwd, 'b.txt'), 'other\n')
+  await call(f.conversation, 'read', { path: 'a.txt', limit: 10 })
+  await call(f.conversation, 'read', { path: 'b.txt' })
+  vi.spyOn(NodeExecutionEnv.prototype, 'writeFile').mockImplementation(async (path, content) => {
+    if (path.endsWith('/b.txt'))
+      return { ok: false, error: new FileError('permission_denied', 'later write denied') }
+    await writeFile(path, content)
+    return { ok: true, value: undefined }
+  })
+  const result = await call(f.conversation, 'edit', {
+    input: `${patch(f.tag, 'PUT 5.=5:\n+changed5')}\n[b.txt#${computeFileHash('other\n')}]\nPUT 1.=1:\n+new`,
+  })
+  expect(result.isError).toBe(true)
+  expect(await f.read()).toContain('changed5\n')
+  const state = await opened.harness.snapshot(Provenance, f.conversation.id, context)
+  expect(state?.paths[f.path][0].seen).toEqual([[0, 0]])
+  const hidden = await call(f.conversation, 'edit', {
+    input: patch(computeFileHash(await f.read()), 'PUT 800.=800:\n+wrong'),
+  })
+  expect(hidden.isError).toBe(true)
+  expect(await f.read()).toContain('line800\n')
+})
+
+test('provenance checkpoints on the 64th delta', () => {
+  const state = { paths: {}, registers: {} }
+  expect(Provenance.definition.checkpointWhen(state, [], { deltasSinceBase: 62 })).toBe(false)
+  expect(Provenance.definition.checkpointWhen(state, [], { deltasSinceBase: 63 })).toBe(true)
 })
 
 test('provenance forks as of history instead of inheriting later displayed rows', async () => {

@@ -19,7 +19,6 @@ import {
   Patch,
   Patcher,
   MismatchError,
-  anchoredContextLines,
   buildCompactDiffPreview,
   computeFileHash,
   formatHashlineHeader,
@@ -101,11 +100,26 @@ class EnvFilesystem extends Filesystem {
   override async delete(path: string): Promise<void> {
     value(await this.env.remove(this.ioPath(path), undefined, this.context))
   }
+  override async exists(path: string): Promise<boolean> {
+    const result = await this.env.fileInfo(this.ioPath(path), this.context)
+    if (result.ok) return true
+    if (result.error.code === 'not_found') return false
+    throw result.error
+  }
   override async move(from: string, to: string, text?: string): Promise<void> {
+    if (await this.exists(to))
+      throw new Error(
+        `MV destination already exists: ${to}. REM it first with its current tagged header.`,
+      )
     const target = this.ioPath(to)
     value(await this.env.createDir(dirname(target), { recursive: true }, this.context))
-    if (text !== undefined) await this.writeText(from, text)
-    value(await this.env.renameFile(this.ioPath(from), target, this.context))
+    if (text === undefined)
+      value(await this.env.renameFile(this.ioPath(from), target, this.context))
+    else {
+      // Never cut/edit the source before the new destination is persisted.
+      await this.writeText(to, text)
+      await this.delete(from)
+    }
   }
 }
 
@@ -190,6 +204,16 @@ async function restoreReads(
 export const editDescription = `Edit existing files using hashline patches. Copy [path#TAG] from the latest read, grep, write or edit result.
 Each section begins [path#TAG]. All numbers address the ORIGINAL tagged file; keep edits tight and touch only displayed lines.
 PUT N.=M: replaces a range. PUT <N: / PUT >N: insert before/after a line. PUT >$: appends.
+Every body needs a header line ending in ':' (PUT N.=M: / PUT <N: / PUT >N:).
+<example>
+\`\`\`
+[file#1A2B]
+PUT 2.=2:
++replacement
+PUT >3:
++inserted after original line 3
+\`\`\`
+</example>
 Body rows are final content: +TEXT, + for blank, ++ for a leading plus, +- for a leading minus. No minus/context rows.
 CUT N.=M @name deletes and captures; PUT <N @name or PUT N.=M @name pastes. Omit @name for the anonymous register.
 REM deletes the file; MV destination moves it after edits. Use write to create files.
@@ -221,7 +245,7 @@ function editTool(host: Pick<ExtensionHost, 'harness'>) {
         const fs = new EnvFilesystem(envFor(api), context)
         const isNested = await nested(api, context)
         await restoreReads(host, api, data.snapshots, context)
-        const prior = new Map<string, Seen | undefined>()
+        const prior = new Map<string, { text: string; seen: Seen } | undefined>()
         for (const section of patch.sections) {
           const path = await fs.key(section.path)
           const fileOp = section.parse().fileOp
@@ -229,34 +253,21 @@ function editTool(host: Pick<ExtensionHost, 'harness'>) {
           const read = await fs.env.readTextFile(path, context)
           if (read.ok) {
             const live = normalized(read.value)
-            const version = data.state.paths[path]?.find((item) => item.tag === section.fileHash)
-            // A short-tag collision must never enter the engine's content-tag fast path.
-            if (
-              version &&
-              computeFileHash(live) === section.fileHash &&
-              version.hash32 !== hash32(live)
-            ) {
-              const fileLines = live.split('\n'),
-                anchors = section.collectAnchorLines()
-              data.snapshots.record(path, live, [
-                0,
-                ...anchoredContextLines(anchors, fileLines.length),
-              ])
-              throw new MismatchError({
-                path: section.path,
-                expectedFileHash: section.fileHash,
-                actualFileHash: computeFileHash(live),
-                fileLines,
-                anchorLines: anchors,
-              })
-            }
             // Live matching tags need no cached text after restart, but durable seen lines still apply.
             const matching = data.state.paths[path]?.find(
               (item) => item.tag === computeFileHash(live) && item.hash32 === hash32(live),
             )
             if (matching) data.snapshots.restore(path, live)
-            prior.set(path, matching?.seen)
-            if (fileOp?.kind === 'move') prior.set(fs.canonicalPath(fileOp.dest), matching?.seen)
+            const authored = data.snapshots.byHash(path, section.fileHash ?? '')
+            const coverage =
+              matching && authored
+                ? {
+                    text: authored.text,
+                    seen: authored.seenLines === undefined ? null : ranges(authored.seenLines),
+                  }
+                : undefined
+            prior.set(path, coverage)
+            if (fileOp?.kind === 'move') prior.set(fs.canonicalPath(fileOp.dest), coverage)
           } else if (read.error.code !== 'not_found') throw read.error
         }
         const result = await new Patcher({
@@ -312,7 +323,8 @@ function editTool(host: Pick<ExtensionHost, 'harness'>) {
               }
           }
           if (section.op !== 'delete') {
-            const carried = carriedSeenLines(before, after, prior.get(section.canonicalPath))
+            const coverage = prior.get(section.canonicalPath)
+            const carried = coverage ? carriedSeenLines(coverage.text, after, coverage.seen) : []
             data.snapshots.setSeen(section.canonicalPath, after, [
               0,
               ...carried,
@@ -605,7 +617,7 @@ export default function hashline(host: Pick<ExtensionHost, 'harness'>) {
             data = await stateFor(api, context)
           const path = value(await env.canonicalPath(args.path, context))
           const text = normalized(value(await env.readTextFile(path, context)))
-          data.snapshots.setSeen(path, text, null)
+          data.snapshots.setSeen(path, text, text === normalized(args.content) ? null : [0])
           const tag = computeFileHash(text)
           await data.save()
           return {

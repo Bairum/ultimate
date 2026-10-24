@@ -1,9 +1,8 @@
 # Hashline engine provenance
 
-E1.2 adds host tools/cards documented in README.md. One additional engine fix:
-`patcher.ts` relocates snapshot history only after the filesystem move succeeds,
-so a failed MV cannot discard the source's provenance. Failed-MV coverage lives
-in `test/hashline-tools.test.ts`.
+E1.2 adds the default-off host tools, adapted edit prompt and cards documented
+in README.md. The engine and host safety changes, including the review follow-up,
+are listed below. Regression coverage lives in `test/hashline-*.test.ts`.
 
 Vendored from `@oh-my-pi/hashline@18.1.5`, `src/*.ts` (MIT), published by
 [oh-my-pi](https://github.com/can1357/oh-my-pi). The engine directory preserves
@@ -14,7 +13,8 @@ Fixtures are all 19 JSON files from oh-my-pi commit `0b5c27a`,
 `crates/pi-edit/tests/fixtures/hashline/`. Rust references below refer to that
 commit. Prompt/grammar reference: `crates/pi-edit/prompts/hashline.md` and
 `crates/pi-edit/grammars/hashline.lark` at the same commit. Neither prompt nor
-grammar is installed by this engine-only port.
+grammar is copied verbatim. The host edit description adapts the prompt, with
+concrete range/gap examples and without parser-backed block forms.
 
 ## Every local change
 
@@ -45,7 +45,7 @@ grammar is installed by this engine-only port.
   not a hash (no collision possibility).
 - `patcher.ts`, `messages.ts`: retained upstream's seen-line guard and inline
   reveal, added guarding of whole resolved replace/cut blocks and the Rust
-  no-snapshot wide-line refusal. Wide unseen rows require a full read rather than
+  wide-line refusal (unknown tags now fail earlier at tag resolution). Wide unseen rows require a full read rather than
   a truncated reveal. Mismatch context is recorded as seen (sentinel line 0 keeps
   an empty reveal restrictive); unknown-tag replies name other snapshot paths
   that issued the tag. Hashless sections use current-tag mismatch diagnostics.
@@ -65,6 +65,36 @@ grammar is installed by this engine-only port.
   and hash tests. Tests live under `test/` per Ultimate convention.
 - `package.json` / lockfile: `diff@9.0.0` is now direct, reusing the already
   resolved dependency rather than shipping native diff code.
+
+### Host tools and review follow-up
+
+- `server.ts`, `store.ts`, `web.tsx`, README and default-off registration add
+  wrapped read/write/edit, bounded rg search, durable provenance/registers,
+  transcript snapshot restoration and composed cards. Provenance checkpoints on
+  every 64th delta. Read/grep/edit results are offload-exempt.
+- The full 32-bit hash now lives in `engine/format.ts`. Engine tag resolution,
+  including basename path recovery, requires unique retained provenance. Both
+  snapshot stores' `byHash` refuse collisions instead of selecting by recency;
+  unknown/aged-out tags and live short-tag/full-hash collisions are mismatches.
+- REM and every MV require a live full-hash match; neither stale recovery nor
+  the head/tail shortcut authorizes destructive file operations.
+- MV refuses an existing destination with a tagged-REM instruction. Filesystem
+  adapters write edited content to the new destination before deleting the
+  source; failed destination writes leave the source unchanged. Node writes use
+  exclusive creation. Snapshot history relocates only after a successful move.
+- Seen-line carry uses the authored snapshot's numbers, only when a retained
+  live-matching version also exists. Missing provenance carries nothing;
+  explicit unrestricted (`seen: null`, verified write) is the only unrestricted
+  case. Engine-created host snapshots start restrictive, including any landed
+  prefix of a batch whose later write fails. Only actually emitted preview rows
+  are added. Write read-back grants
+  unrestricted provenance only when it equals the normalized authored content.
+- The edit description includes a fenced range replacement and gap insertion
+  example, and explicitly requires a colon-ending header before every body.
+- Intentional legacy fixture divergences: the two `patcher.json` no-snapshot
+  acceptance cases now assert mismatch/no write (listed by exact name in the
+  harness). The recovery scenario that previously selected the latest collider
+  now asserts refusal. The 541 low-level parse/apply call gate is unchanged.
 
 ## Executable call gate
 
@@ -147,13 +177,15 @@ is claimed by those synthetic tests.
   (`hashline_inspection_matches_streaming_matcher_cases`) is not an engine API.
   Its fixtures are retained for the tools task, not silently treated as passes.
 - Upstream top-level `skipped` metadata for coding-agent TypeScript rule-manager,
-  settings/URL/LSP integrations remains out of scope. No server/web facets,
-  extension registration, tool prompts, LSP, notebooks, or path policy are added.
+  settings/URL/LSP integrations remains out of scope. Server/web facets, default-off
+  registration and an adapted prompt are present; LSP, notebooks and path policy
+  are not added.
 
 The current Rust engine also has a newer shifted-seen-anchor rescue heuristic
 (`rescue_shifted_anchors` in `patcher.rs`) not represented by these parity calls.
 By agreement for E1.1, this port conservatively reveals/rejects those unseen
 anchors rather than claiming they were displayed. Consider this optimization
 only if the A/B shows excessive retries. Host post-edit-preview provenance carry/union
-(`session.rs::carried_seen_lines`) likewise belongs to the tools task. These
-limitations do not enable wrong-line writes, but can require an extra read.
+is implemented in `store.ts`/`server.ts`, with the review's stricter rule that
+missing live provenance never unlocks unseen lines. The deferred rescue optimization
+can require an extra read; it is not permission to guess at moved anchors.

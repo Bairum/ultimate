@@ -476,8 +476,7 @@ export class Recovery {
    */
   tryRecover(args: RecoveryArgs): RecoveryResult | null {
     const { path, currentText, fileHash, edits, clipboard } = args
-    // When retained texts collide on the 16-bit tag, use the latest one.
-    // Recovery still requires its anchors and context to map unambiguously.
+    // Unknown or colliding short tags have no unique recovery base.
     const snapshot = this.store.byHash(path, fileHash)
     if (!snapshot) return null
     const recoveryWarning =

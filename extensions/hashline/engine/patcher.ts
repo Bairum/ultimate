@@ -31,7 +31,7 @@ import {
   startClipboardBatch,
   validateClipboardSequence,
 } from './clipboard.ts'
-import { computeFileHash, formatHashlineHeader } from './format.ts'
+import { computeFileHash, computeFileHash32, formatHashlineHeader } from './format.ts'
 import type { Filesystem, WriteResult } from './fs.ts'
 import { isNotFound } from './fs.ts'
 import type { Patch, PatchSection } from './input.ts'
@@ -432,10 +432,6 @@ export class Patcher {
       throw new Error(`File not found: ${target.path}. Use the write tool to create new files.`)
     }
 
-    if (fileOp?.kind === 'move' && this.fs.canonicalPath(fileOp.dest) === canonicalPath) {
-      throw new Error(`MV destination is the same as ${target.path}.`)
-    }
-
     const { bom: bomFromText, text } = stripBom(read.rawContent)
     const bom = bomFromText || (await this.#readBinaryBom(target.path))
     const lineEnding = detectLineEnding(text)
@@ -445,24 +441,24 @@ export class Patcher {
     }
 
     const register = clipboard ?? {}
-    const applyResult =
-      fileOp?.kind === 'rem'
-        ? this.#applyWithRecovery({
-            section: target,
-            canonicalPath,
-            exists: read.exists,
-            normalized,
-            edits: [],
-            clipboard: register,
-          })
-        : this.#applyWithRecovery({
-            section: target,
-            canonicalPath,
-            exists: read.exists,
-            normalized,
-            edits: parsed.edits,
-            clipboard: register,
-          })
+    const applyResult = this.#applyWithRecovery({
+      section: target,
+      canonicalPath,
+      exists: read.exists,
+      normalized,
+      edits: fileOp?.kind === 'rem' ? [] : parsed.edits,
+      clipboard: register,
+      fileOp,
+    })
+
+    if (fileOp?.kind === 'move') {
+      if (this.fs.canonicalPath(fileOp.dest) === canonicalPath)
+        throw new Error(`MV destination is the same as ${target.path}.`)
+      if (await this.fs.exists(fileOp.dest))
+        throw new Error(
+          `MV destination already exists: ${fileOp.dest}. REM it first with its current tagged header.`,
+        )
+    }
 
     return new PreparedSection(
       target,
@@ -783,36 +779,48 @@ export class Patcher {
     normalized: string
     edits: readonly Edit[]
     clipboard: Clipboard
+    fileOp?: FileOp
   }): ApplyResult {
-    const { section, canonicalPath, exists, normalized, edits, clipboard } = args
+    const { section, canonicalPath, exists, normalized, edits, clipboard, fileOp } = args
     const expected = exists ? section.fileHash : undefined
-    // The 4-hex tag is content-derived: when the live text hashes to it,
-    // trust the match and apply directly. `storedSnapshotForTag` feeds the
-    // drift paths below (block resolution, anchor remapping); on a 16-bit
-    // tag collision it resolves to the most-recently recorded text.
+    // Resolve after path recovery. A short hash alone is never authority to
+    // edit, delete or move: the retained tag must be unique and match all 32 bits.
     const storedSnapshotForTag =
       expected === undefined ? null : this.snapshots.byHash(canonicalPath, expected)
-    const liveMatches = expected !== undefined && computeFileHash(normalized) === expected
-    const matchedSnapshot = liveMatches ? this.snapshots.byContent(canonicalPath, normalized) : null
+    const shortMatches = expected !== undefined && computeFileHash(normalized) === expected
+    const liveMatches =
+      shortMatches &&
+      storedSnapshotForTag !== null &&
+      computeFileHash32(storedSnapshotForTag.text) === computeFileHash32(normalized)
+    if (
+      expected === undefined ||
+      !storedSnapshotForTag ||
+      (shortMatches && !liveMatches) ||
+      (fileOp !== undefined && !liveMatches)
+    ) {
+      throw this.#mismatchError(
+        section,
+        canonicalPath,
+        normalized,
+        expected ?? '',
+        storedSnapshotForTag !== null,
+      )
+    }
+    const matchedSnapshot = liveMatches ? storedSnapshotForTag : null
 
     // Resolve `replace_block N:` edits to concrete ranges before recovery
     // runs. Block anchors are expressed against the snapshot the section tag
     // names, so resolve against that exact text:
-    //   - live content matches the tag (or there is no tag) → resolve against
+    //   - live content matches the retained full hash → resolve against
     //     the live, normalized content;
     //   - the file drifted → resolve against the tagged snapshot's text so the
     //     resulting ranges can be mapped to unchanged live lines below.
-    // When a block edit needs the tagged snapshot but it is unavailable, the
-    // range cannot be placed safely — reject with a MismatchError (re-read).
+    // Missing or ambiguous snapshots have already been rejected above.
     const blockResolutions: BlockResolution[] = []
     const resolveWarnings: string[] = []
     let resolved: readonly Edit[] = edits
     if (hasBlockEdit(edits)) {
-      const baseText =
-        expected === undefined || liveMatches ? normalized : storedSnapshotForTag?.text
-      if (baseText === undefined) {
-        throw this.#mismatchError(section, canonicalPath, normalized, expected ?? '', false)
-      }
+      const baseText = liveMatches ? normalized : storedSnapshotForTag.text
       resolved = resolveBlockEdits(edits, baseText, section.path, this.blockResolver, {
         onUnresolved: 'throw',
         onResolved: (resolution) => blockResolutions.push(resolution),
@@ -829,15 +837,14 @@ export class Patcher {
         ? result
         : { ...result, warnings: [...resolveWarnings, ...(result.warnings ?? [])] }
 
-    // No tag, or the tag still names the live content: an edit anchored at any
-    // line is safe to apply, and the resolved block spans line up with what
-    // the caller read, so echo them back. (A drifted file falls through to
+    // The retained full hash still names the live content, so resolved block
+    // spans and seen-line numbers line up with the caller's read; echo them back. (A drifted file falls through to
     // recovery below, where line numbers shift, so resolutions are dropped.)
-    if (expected === undefined || liveMatches) {
+    if (liveMatches) {
       // The line numbers in `edits` index the exact content the tag names.
       // Reject any anchor the read never displayed: editing lines the model
       // has not seen is the off-by-memory mistake that mangles files.
-      if (expected !== undefined && this.#enforceSeenLines) {
+      if (this.#enforceSeenLines) {
         this.#assertSeenLines(section, expected, matchedSnapshot, normalized, blockResolutions)
       }
       const result = applyEdits(normalized, resolved, { clipboard, path: canonicalPath })

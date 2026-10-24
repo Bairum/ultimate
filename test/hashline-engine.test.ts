@@ -14,6 +14,7 @@ import {
   NotFoundError,
   Patch,
   Patcher,
+  MismatchError,
   Recovery,
   resolveBlockEdits,
   setSyntaxProbe,
@@ -238,9 +239,24 @@ const patcherCases = JSON.parse(
     'utf8',
   ),
 ) as { cases: PatcherCase[] }
+const retainedTagOverrides = new Set([
+  'validates any anchor purely from the content hash, even with no recorded snapshot',
+  'normalizes lowercase section tags while parsing',
+])
 for (const entry of patcherCases.cases)
-  test(`patcher.json: ${entry.name}`, async () => {
+  test(`patcher.json: ${entry.name}${retainedTagOverrides.has(entry.name) ? ' [Ultimate requires retained tag]' : ''}`, async () => {
     const fs = new TestFilesystem(Object.entries(entry.files ?? {}))
+    // Ultimate deliberately tightens legacy no-snapshot acceptance: even a
+    // live short tag needs retained, unambiguous 32-bit provenance.
+    const expectation = retainedTagOverrides.has(entry.name)
+      ? {
+          error: 'not from this session',
+          writes: 0,
+          files: entry.files,
+          deleted: undefined,
+          textContains: undefined,
+        }
+      : entry.expect
     const snapshots = new InMemorySnapshotStore()
     const tags = new Map<string, string>()
     for (const snapshot of entry.snapshots ?? [])
@@ -264,7 +280,7 @@ for (const entry of patcherCases.cases)
     } catch (caught) {
       error = caught
     }
-    const expectedError = entry.expect.error
+    const expectedError = expectation.error
     const matches = expectedError
       ? error instanceof Error && error.message.includes(expectedError)
       : error === undefined
@@ -272,12 +288,32 @@ for (const entry of patcherCases.cases)
       matches: true,
       message: undefined,
     })
-    expect(fs.writes).toBe(entry.expect.writes)
-    for (const [file, text] of Object.entries(entry.expect.files ?? {}))
+    expect(fs.writes).toBe(expectation.writes)
+    for (const [file, text] of Object.entries(expectation.files ?? {}))
       expect(fs.get(file)).toBe(text)
-    for (const file of entry.expect.deleted ?? []) expect(fs.get(file)).toBeUndefined()
-    for (const text of entry.expect.textContains ?? []) expect(message).toContain(text)
+    for (const file of expectation.deleted ?? []) expect(fs.get(file)).toBeUndefined()
+    for (const text of expectation.textContains ?? []) expect(message).toContain(text)
   })
+
+test('Node filesystem moves neither overwrite destinations nor modify a source on failure', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'hashline-move-'))
+  const fs = new NodeFilesystem()
+  const source = path.join(dir, 'source'),
+    destination = path.join(dir, 'destination')
+  try {
+    await fs.writeText(source, 'original\n')
+    await fs.writeText(destination, 'keep\n')
+    await expect(fs.move(source, destination, 'after cut\n')).rejects.toThrow('REM it first')
+    expect(await fs.readText(source)).toBe('original\n')
+    expect(await fs.readText(destination)).toBe('keep\n')
+    await expect(
+      fs.move(source, path.join(destination, 'not-a-directory'), 'after cut\n'),
+    ).rejects.toThrow(/ENOTDIR|EEXIST/)
+    expect(await fs.readText(source)).toBe('original\n')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
 
 test('Node filesystem reads, creates parents, moves, removes, and distinguishes missing files', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'hashline-'))
@@ -313,6 +349,21 @@ function session(source = 'same\n', seen?: number[]) {
     apply: (body: string, hash = tag) => patcher.apply(Patch.parse(`[a.txt#${hash}]\n${body}`)),
   }
 }
+for (const operation of ['REM', 'MV moved.txt', 'CUT 2 @saved\nMV moved.txt']) {
+  for (const mode of ['stale', 'invented'])
+    test(`engine ${operation} rejects ${mode} tags before file operations`, async () => {
+      const s = session('one\ntwo\nthree\n')
+      const live = 'external\none\ntwo\nthree\n'
+      s.fs.set('a.txt', live)
+      await expect(s.apply(operation, mode === 'stale' ? s.tag : 'FFFF')).rejects.toBeInstanceOf(
+        MismatchError,
+      )
+      expect(s.fs.get('a.txt')).toBe(live)
+      expect(s.fs.get('moved.txt')).toBeUndefined()
+      expect(s.fs.writes).toBe(0)
+    })
+}
+
 const noopScenarios: (() => Promise<void>)[] = [
   async () => {
     const s = session()
@@ -332,6 +383,7 @@ const noopScenarios: (() => Promise<void>)[] = [
   async () => {
     const s = session()
     s.fs.set('b.txt', 'same\n')
+    s.snapshots.record('b.txt', 'same\n')
     for (const file of ['a.txt', 'b.txt'])
       for (let i = 0; i < 2; i++) {
         const result = await s.patcher.apply(Patch.parse(`[${file}#${s.tag}]\nPUT 1.=1:\n+same`))
@@ -517,7 +569,8 @@ const recoveryScenarios = [
     previous: 'line one 410\nline two 6970\n',
     current: 'line one 410\nline two 6970\nextra\n',
     input: 'PUT 1.=1:\n+B',
-    expected: 'B\nline two 6970\nextra\n',
+    // Ultimate refuses ambiguity instead of choosing a collider by recency.
+    expected: null,
     collision: true,
   },
   {
@@ -536,7 +589,7 @@ const recoveryScenarios = [
 for (const [i, entry] of fixtures
   .find((fixture) => fixture.name === 'parity_recovery_session_chain.json')!
   .cases.entries()) {
-  test(`parity_recovery_session_chain.json: ${entry.name}`, () => {
+  test(`parity_recovery_session_chain.json: ${entry.name}${recoveryScenarios[i].collision ? ' [Ultimate refuses ambiguous tags]' : ''}`, () => {
     const scenario = recoveryScenarios[i]
     const store = new InMemorySnapshotStore()
     if (scenario.collision) store.record('a.txt', 'line one 263\nline two 4471\n')
@@ -615,6 +668,7 @@ for (const [name, body] of [
   })
 
 test('format and streaming contracts from Rust parity harness', () => {
+  expect(Patch.parseSingle('[a.txt#f27c]\nPUT 1.=1:\n+new').fileHash).toBe('F27C')
   expect(detectLineEnding('a\r\nb\nc')).toBe('\r\n')
   expect(detectLineEnding('a\nb\r\nc')).toBe('\n')
   expect(splitAddressableFileLines('a\nb\n')).toEqual(['a', 'b'])
@@ -712,10 +766,13 @@ test('wide unseen lines require a full read and are not leaked into the error', 
   expect(s.snapshots.head('a.txt')?.seenLines).toEqual(new Set([1]))
 })
 
-test('without a retained snapshot, over-cap anchors reject but short ones still validate by tag', async () => {
+test('without retained provenance, even live short tags require a read', async () => {
   const s = session(`${'x'.repeat(600)}\nshort\n`)
   s.snapshots.clear()
-  await expect(s.apply('PUT 1.=1:\n+short')).rejects.toThrow('no retained read shows them in full')
+  await expect(s.apply('PUT 1.=1:\n+short')).rejects.toThrow('not from this session')
+  s.snapshots.clear()
+  await expect(s.apply('PUT 2.=2:\n+changed')).rejects.toThrow('not from this session')
+  s.snapshots.record('a.txt', `${'x'.repeat(600)}\nshort\n`, [2])
   expect((await s.apply('PUT 2.=2:\n+changed')).sections[0].after).toBe(
     `${'x'.repeat(600)}\nchanged\n`,
   )

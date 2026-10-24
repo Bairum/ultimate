@@ -72,9 +72,8 @@ export abstract class SnapshotStore {
   abstract head(path: string): Snapshot | null
 
   /**
-   * Recorded version for `path` whose tag equals `hash`, or `null`. When two
-   * distinct texts collide on the 16-bit tag, returns the most-recently
-   * recorded one.
+   * The unique retained version for `path` with this tag, or `null` when
+   * unknown or ambiguous. Never select a version by recency on a collision.
    */
   abstract byHash(path: string, hash: string): Snapshot | null
 
@@ -192,7 +191,8 @@ export class InMemorySnapshotStore extends SnapshotStore {
 
   byHash(path: string, hash: string): Snapshot | null {
     const history = this.#versions.get(path)
-    return history?.find((version) => version.hash === hash) ?? null
+    const matches = history?.filter((version) => version.hash === hash) ?? []
+    return matches.length === 1 ? matches[0] : null
   }
 
   byContent(path: string, fullText: string): Snapshot | null {
@@ -240,7 +240,7 @@ export class InMemorySnapshotStore extends SnapshotStore {
   }
 
   recordSeenLines(path: string, hash: string, lines: Iterable<number>): void {
-    const version = this.#versions.get(path)?.find((snapshot) => snapshot.hash === hash)
+    const version = this.byHash(path, hash)
     if (version) mergeSeenLines(version, lines)
   }
 

@@ -157,6 +157,10 @@ export class InMemoryFilesystem extends Filesystem {
   override async move(from: string, to: string, content?: string): Promise<void> {
     const existing = this.#files.get(from)
     if (existing === undefined) throw new NotFoundError(from)
+    if (this.#files.has(to))
+      throw new Error(
+        `MV destination already exists: ${to}. REM it first with its current tagged header.`,
+      )
     const finalContent = content ?? existing
     this.#files.set(to, finalContent)
     this.#files.delete(from)
@@ -227,8 +231,13 @@ export class NodeFilesystem extends Filesystem {
   }
 
   override async move(from: string, to: string, content?: string): Promise<void> {
+    if (await this.exists(to))
+      throw new Error(
+        `MV destination already exists: ${to}. REM it first with its current tagged header.`,
+      )
     if (content !== undefined) {
-      await this.writeText(to, content)
+      await fs.mkdir(pathModule.dirname(to), { recursive: true })
+      await fs.writeFile(to, content, { flag: 'wx' })
       await this.delete(from)
       return
     }
@@ -246,7 +255,7 @@ export class NodeFilesystem extends Filesystem {
 
   override async exists(path: string): Promise<boolean> {
     try {
-      await fs.access(path)
+      await fs.lstat(path)
       return true
     } catch (error) {
       if (isNotFound(error)) return false

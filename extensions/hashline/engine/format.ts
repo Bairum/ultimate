@@ -111,6 +111,11 @@ export const HL_FILE_HASH_EXAMPLES = ['1A2B', '3C4D', '9F3E'] as const
 function normalizeFileHashText(text: string): string {
   return text.replace(/[ \t\r]+(?=\n|$)/g, '')
 }
+/** Full normalized hash used to verify short tags without accepting collisions. */
+export function computeFileHash32(text: string): number {
+  return xxhash32(normalizeFileHashText(text))
+}
+
 /**
  * Compute the content-derived hash tag carried by a hashline section header.
  * The tag is a 4-hex fingerprint of the whole file's normalized text: any read
@@ -118,8 +123,7 @@ function normalizeFileHashText(text: string): string {
  * at any line validates whenever the live file still hashes to it.
  */
 export function computeFileHash(text: string): string {
-  const normalized = normalizeFileHashText(text)
-  const low16 = xxhash32(normalized) & 0xffff
+  const low16 = computeFileHash32(text) & 0xffff
   return low16.toString(16).padStart(HL_FILE_HASH_LENGTH, '0').toUpperCase()
 }
 

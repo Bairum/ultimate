@@ -1,6 +1,11 @@
 import { defineDoc } from '@earendil-works/pi-durable'
 import { diffLines } from 'diff'
-import { InMemorySnapshotStore, SnapshotStore, computeFileHash, xxhash32 } from './engine/index.ts'
+import {
+  InMemorySnapshotStore,
+  SnapshotStore,
+  computeFileHash,
+  computeFileHash32,
+} from './engine/index.ts'
 import type { Snapshot } from './engine/index.ts'
 
 export type Seen = [number, number][] | null
@@ -11,7 +16,7 @@ export type ProvenanceState = {
 }
 export const Provenance = defineDoc<ProvenanceState>({
   kind: 'hashline.provenance',
-  checkpointWhen: () => false,
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase + 1 >= 64,
   version: 1,
   scope: 'conversation',
   history: 'rewindable',
@@ -20,7 +25,7 @@ export const Provenance = defineDoc<ProvenanceState>({
 })
 
 /** Full 32-bit counterpart of the engine's whitespace-normalized short tag. */
-export const hash32 = (text: string) => xxhash32(text.replace(/[ \t\r]+(?=\n|$)/g, ''))
+export const hash32 = computeFileHash32
 export function ranges(lines: Iterable<number>): [number, number][] {
   const result: [number, number][] = []
   for (const line of [...new Set(lines)].toSorted((a, b) => a - b)) {
@@ -81,10 +86,8 @@ export class ConversationSnapshots extends SnapshotStore {
     return this.#snapshot(path, this.state.paths[path]?.[0])
   }
   byHash(path: string, tag: string): Snapshot | null {
-    return this.#snapshot(
-      path,
-      this.state.paths[path]?.find((version) => version.tag === tag),
-    )
+    const matches = this.state.paths[path]?.filter((version) => version.tag === tag) ?? []
+    return matches.length === 1 ? this.#snapshot(path, matches[0]) : null
   }
   byContent(path: string, text: string): Snapshot | null {
     return this.#snapshot(path, this.#version(path, text))
@@ -113,14 +116,17 @@ export class ConversationSnapshots extends SnapshotStore {
       ].slice(0, 4)
     } else
       this.state.paths[path] = [
-        existing ?? { tag, hash32: hash, seen: null },
+        // Engine commits are not proof of display. Only setSeen(..., null)
+        // after a verified write may grant unrestricted provenance.
+        existing ?? { tag, hash32: hash, seen: [[0, 0]] },
         ...history.filter((version) => version !== existing),
       ].slice(0, 4)
     return tag
   }
   recordSeenLines(path: string, tag: string, lines: Iterable<number>): void {
-    const version = this.state.paths[path]?.find((item) => item.tag === tag)
-    if (!version) return
+    const matches = this.state.paths[path]?.filter((item) => item.tag === tag) ?? []
+    if (matches.length !== 1) return
+    const version = matches[0]
     const snapshot = this.#snapshot(path, version)
     const seen = snapshot?.seenLines ?? expand(version.seen) ?? new Set<number>()
     for (const line of lines) seen.add(line)
@@ -172,7 +178,8 @@ export class ConversationSnapshots extends SnapshotStore {
 
 /** Carry only unchanged rows whose old and new line numbers are identical. */
 export function carriedSeenLines(before: string, after: string, prior: Seen | undefined): number[] {
-  const seen = prior === undefined ? undefined : expand(prior)
+  if (prior === undefined) return []
+  const seen = expand(prior)
   const result: number[] = []
   let oldLine = 1,
     newLine = 1
