@@ -1,90 +1,89 @@
 import { defineExtension } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { MAX_AUDIO_BYTES, StatusAction, TranscribeAction } from './refs.ts'
+import { readSecret } from '../../lib/secrets.ts'
+import { StatusAction, TranscribeAction } from './refs.ts'
 
-/** The provider whose login transcribes: the ChatGPT subscription that runs the Codex models. */
-const PROVIDER = 'openai-codex'
-const NO_LOGIN = 'Voice needs a ChatGPT login: ⌘K → Log in to a provider'
+const SECRET = 'OPENAI_API_KEY'
+const NO_KEY = `Voice needs an OpenAI API key: add ${SECRET} in ⌘K → Secrets`
 const TIMEOUT_MS = 65_000
+/** The largest recording taken, in bytes before base64: what fits the 12 MB action request. */
+export const MAX_AUDIO_BYTES = 8 * 1024 * 1024
 
-type VoiceHost = Pick<ExtensionHost, 'modelRuntime'>
+export const secrets = [
+  {
+    name: SECRET,
+    description: 'OpenAI API key for voice input in the composer (speech to text)',
+    url: 'https://platform.openai.com/api-keys',
+  },
+]
 
-/** The ChatGPT login's account, read from its access token's claims the way pi-ai's Codex provider does. */
-function accountId(token: string): string | undefined {
-  try {
-    const claims = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'))
-    const id: unknown = claims?.['https://api.openai.com/auth']?.chatgpt_account_id
-    return typeof id === 'string' && id ? id : undefined
-  } catch {
-    // Not a JWT: no account to send, which the caller reports as a missing login.
+type VoiceHost = Pick<ExtensionHost, 'userHome' | 'modelRuntime'>
+
+/** The OpenAI API key: the `OPENAI_API_KEY` secret, else an API key Pi's `openai` provider holds (not its OAuth login). */
+async function apiKey(host: VoiceHost, signal?: AbortSignal): Promise<string | undefined> {
+  const secret = await readSecret(host.userHome, SECRET)
+  if (secret) return secret
+  const runtime = host.modelRuntime
+  if (!runtime.getProviderAuthStatus('openai').configured || runtime.isUsingOAuth('openai'))
     return undefined
-  }
+  return (await runtime.getAuth('openai', { signal }))?.auth.apiKey
 }
 
 /**
- * ChatGPT's own transcription endpoint, as the ChatGPT apps and bb (getbb) call it. It is undocumented and may change;
- * this function is the one place that knows its URL, headers, form fields and answer.
+ * OpenAI's documented transcription endpoint; the one place that knows its URL, form fields and answer. The ChatGPT
+ * login's `chatgpt.com/backend-api/transcribe` is not an option: Cloudflare challenges every request from a server.
  */
-export async function chatgptTranscribe(
-  credentials: { token: string; account: string },
+export async function openaiTranscribe(
+  key: string,
   audio: Blob,
   signal: AbortSignal,
 ): Promise<{ status: number; text?: string; detail?: string }> {
   const form = new FormData()
   const extension = audio.type.includes('mp4') ? 'mp4' : audio.type.includes('ogg') ? 'ogg' : 'webm'
   form.set('file', audio, `recording.${extension}`)
-  form.set('model', 'gpt-transcribe')
-  const response = await fetch('https://chatgpt.com/backend-api/transcribe', {
+  form.set('model', 'gpt-4o-mini-transcribe')
+  form.set('response_format', 'json')
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${credentials.token}`,
-      'chatgpt-account-id': credentials.account,
-      originator: 'pi',
-      'User-Agent': 'ultimate',
-    },
+    headers: { Authorization: `Bearer ${key}` },
     body: form,
     signal,
   })
   const body = await response.text()
-  if (!response.ok) return { status: response.status, detail: body.slice(0, 300) }
+  let answer: { text?: unknown; error?: { message?: unknown } } | undefined
   try {
-    const text: unknown = JSON.parse(body)?.text
-    return typeof text === 'string'
-      ? { status: response.status, text }
-      : { status: 502, detail: 'no text in the answer' }
+    answer = JSON.parse(body)
   } catch {
-    // An HTML or truncated page instead of JSON: the endpoint changed or a proxy answered.
-    return { status: 502, detail: 'the answer was not JSON' }
+    // An HTML or truncated page instead of JSON: a proxy or an outage answered.
+    answer = undefined
   }
-}
-
-/** The access token and account of Pi's `openai-codex` login, refreshed by Pi when needed; never logged or returned. */
-async function credentials(host: VoiceHost, signal: AbortSignal) {
-  if (!host.modelRuntime.getProviderAuthStatus(PROVIDER).configured) throw new Error(NO_LOGIN)
-  const token = (await host.modelRuntime.getAuth(PROVIDER, { signal }))?.auth.apiKey
-  const account = token && accountId(token)
-  if (!token || !account) throw new Error(NO_LOGIN)
-  return { token, account }
+  if (!response.ok) {
+    const message = answer?.error?.message
+    return { status: response.status, detail: typeof message === 'string' ? message : undefined }
+  }
+  return typeof answer?.text === 'string'
+    ? { status: response.status, text: answer.text }
+    : { status: 502, detail: 'no text in the answer' }
 }
 
 /** What the composer shows for a failed transcription, by the endpoint's HTTP status. */
 function failure(status: number, detail: string | undefined) {
-  if (status === 401 || status === 403)
-    return 'ChatGPT rejected the login: log in again with ⌘K → Log in to a provider'
+  if (status === 401) return `OpenAI rejected the API key: check ${SECRET} in ⌘K → Secrets`
   if (status === 413) return 'The recording is too large to transcribe'
-  if (status === 429) return 'ChatGPT is rate-limiting transcription: try again in a minute'
+  if (status === 429)
+    return `OpenAI is rate-limiting transcription${detail ? ` (${detail})` : ''}: try again in a minute`
   return `Transcription failed (HTTP ${status})${detail ? `: ${detail}` : ''}`
 }
 
 export default defineExtension({ name: 'voice' })
 
 export const actions = {
-  /** `{ available }`, or `{ available: false, reason }` without an `openai-codex` login. */
-  status: implementAction(StatusAction, (_args, { host }) =>
-    host.modelRuntime.getProviderAuthStatus(PROVIDER).configured
+  /** `{ available }`, or `{ available: false, reason }` without an OpenAI API key. */
+  status: implementAction(StatusAction, async (_args, { host, signal }) =>
+    (await apiKey(host, signal))
       ? { available: true as const }
-      : { available: false as const, reason: NO_LOGIN },
+      : { available: false as const, reason: NO_KEY },
   ),
   /** `{ audio, mimeType }`: base64 audio as the browser recorded it (`audio/mp4` on iOS, `audio/webm` elsewhere). */
   transcribe: implementAction(TranscribeAction, async (args, { host, signal }) => {
@@ -93,15 +92,18 @@ export const actions = {
       throw new Error('Expected { audio: base64, mimeType }')
     const bytes = Buffer.from(audio, 'base64')
     if (bytes.byteLength > MAX_AUDIO_BYTES) throw new Error(failure(413, undefined))
-    const login = await credentials(host, signal)
-    const answer = await chatgptTranscribe(
-      login,
+    const key = await apiKey(host, signal)
+    if (!key) throw new Error(NO_KEY)
+    const answer = await openaiTranscribe(
+      key,
       new Blob([bytes], { type: mimeType }),
       AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]),
     ).catch((error: unknown) => {
       if (error instanceof Error && error.name === 'TimeoutError')
         throw new Error('Transcription timed out: try a shorter recording')
-      throw new Error(`Transcription failed: ${error instanceof Error ? error.message : error}`)
+      throw new Error(
+        `Transcription failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
     })
     if (answer.text === undefined) throw new Error(failure(answer.status, answer.detail))
     return { text: answer.text.trim() }

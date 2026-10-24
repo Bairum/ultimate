@@ -218,6 +218,28 @@ export function fillComposer(id: number, text: string) {
   if (draft.key) localStorage.setItem(draft.key, text)
 }
 
+/**
+ * Insert `text` into conversation `id`'s draft at its editor's cursor (or at the end without one), with a space on
+ * each side where the neighbouring text needs one, as typing it would. The composer keeps focus as it was.
+ */
+export function insertIntoComposer(id: number, text: string) {
+  const draft = getDraft(id)
+  const current = draft.get().text
+  const editor = document.querySelector<HTMLTextAreaElement>(`textarea[data-conversation="${id}"]`)
+  const start = editor?.selectionStart ?? current.length
+  const end = editor?.selectionEnd ?? current.length
+  const before = current.slice(0, start)
+  const after = current.slice(end)
+  const inserted = `${before && !/\s$/.test(before) ? ' ' : ''}${text}${after && !/^\s/.test(after) ? ' ' : ''}`
+  const next = before + inserted + after
+  draft.set({ text: next, revision: draft.get().revision + 1 })
+  if (draft.key) localStorage.setItem(draft.key, next)
+  // The cursor follows the inserted text once React has rendered the new value.
+  requestAnimationFrame(() =>
+    editor?.setSelectionRange(start + inserted.length, start + inserted.length),
+  )
+}
+
 function clearDraft(
   draft: ReturnType<typeof createDraft>,
   snapshot: { text: string; revision: number },
@@ -353,6 +375,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
           readOnly={loading || sending}
           onPaste={(event) => void paste(event)}
           id={scoped === undefined ? 'composer-input' : `composer-input-${scoped}`}
+          data-conversation={id}
           onChange={(event) => update(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder={
@@ -382,6 +405,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
                   </span>
                 ) : null)}
             </span>
+            {!target && <Slot name="composer.actions" variant="inline" />}
             {busy && (
               <PromptInputSubmit
                 mode="stop"

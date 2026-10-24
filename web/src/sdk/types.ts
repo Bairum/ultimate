@@ -16,6 +16,7 @@ export type SlotName =
   | 'statusline.right'
   | 'composer.toolbar'
   | 'composer.status'
+  | 'composer.actions'
   | 'conversation.overlay'
   | 'transcript.start'
   | 'overlay'
