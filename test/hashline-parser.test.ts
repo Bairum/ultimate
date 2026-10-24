@@ -1,10 +1,12 @@
-import { beforeAll, expect, test } from 'vitest'
+import { beforeAll, expect, test, vi } from 'vitest'
 import {
   prepareSyntax,
+  MAX_SYNTAX_BYTES,
+  contentEndLine,
   treeSitterBlockResolver as resolve,
   treeSitterProbe as probe,
 } from '../extensions/hashline/parser.ts'
-import { resolveBlockEdits, parsePatch } from '../extensions/hashline/engine/index.ts'
+import { applyEdits, resolveBlockEdits, parsePatch } from '../extensions/hashline/engine/index.ts'
 
 const coldText = 'function f() {\n}\n'
 const coldParse = probe.parsesCleanly('a.ts', coldText)
@@ -103,6 +105,91 @@ test('boundaries expose only the opposite endpoint outside the visible range', (
   expect(probe.enclosingBoundaries(lines, 'x.ts', 4, 4)).toEqual([1])
   expect(probe.enclosingBoundaries(lines, 'x.ts', 2, 3)).toEqual([])
   expect(probe.enclosingBoundaries(lines, 'x.ts', 1, 4)).toEqual([])
+})
+
+test.each([
+  ['Intro paragraph.\n\nSecond paragraph with notes.\n\n- keep me\n\n# Heading\nbody\n', 1],
+  ['First paragraph\ncontinues here.\n\nSecond paragraph\n\n# Heading\nbody\n', 2],
+  ['- first\n- second\n\nAnother paragraph\n\n# Heading\nbody\n', 2],
+  ['```ts\nconst x = 1\n```\n\nAnother paragraph\n\n# Heading\nbody\n', 3],
+] as const)('leading Markdown content resolves only its own span: %s', (text, end) => {
+  expect(resolve({ path: 'x.md', text, line: 1 })).toEqual({ start: 1, end })
+})
+
+test('a leading one-line Markdown paragraph cannot escape single-line refusal', () => {
+  const text = 'Intro paragraph.\n\nSecond paragraph with notes.\n\n- keep me\n\n# Heading\nbody\n'
+  expect(() => resolveBlockEdits(parsePatch('CUT 1*').edits, text, 'x.md', resolve)).toThrow(
+    'single-line block',
+  )
+})
+
+test('over-cap UTF-8 source supplies no evidence', () => {
+  const suffix = '\nfunction f() {\n}\n'
+  const boundary = `//${'x'.repeat(MAX_SYNTAX_BYTES - 2 - suffix.length)}${suffix}`
+  expect(Buffer.byteLength(boundary)).toBe(MAX_SYNTAX_BYTES)
+  expect(probe.parsesCleanly('x.ts', boundary)).toBe(true)
+  const text = `// ${'é'.repeat(MAX_SYNTAX_BYTES / 2)}\nfunction f() {\n}\n`
+  expect(text.length).toBeLessThan(MAX_SYNTAX_BYTES)
+  expect(Buffer.byteLength(text)).toBeGreaterThan(MAX_SYNTAX_BYTES)
+  expect(probe.parsesCleanly('x.ts', text)).toBe(false)
+  expect(probe.nodeChain(text.split('\n'), 'x.ts', 2)).toEqual([])
+  expect(probe.enclosingBoundaries(text.split('\n'), 'x.ts', 2, 2)).toEqual([])
+  expect(resolve({ path: 'x.ts', text, line: 2 })).toBeNull()
+})
+
+test.each([
+  [{ row: 0, column: 0 }, 1],
+  [{ row: 1, column: 0 }, 1],
+  [{ row: 1, column: 1 }, 2],
+])('content end line follows Rust for %j', (endPosition, expected) => {
+  expect(contentEndLine({ endPosition })).toBe(expected)
+})
+
+test.each(['runtime', 'grammar'] as const)(
+  'a failed %s load provides no evidence and retries',
+  async (failure) => {
+    vi.resetModules()
+    const runtime = await import('web-tree-sitter')
+    const spy =
+      failure === 'runtime'
+        ? vi
+            .spyOn(runtime.Parser, 'init')
+            .mockRejectedValueOnce(new Error('forced runtime load failure'))
+        : vi
+            .spyOn(runtime.Language, 'load')
+            .mockRejectedValueOnce(new Error('forced grammar load failure'))
+    try {
+      const fresh = await import('../extensions/hashline/parser.ts')
+      const text = 'function f() {\n}\n'
+      await fresh.prepareSyntax(['x.ts'])
+      expect(fresh.treeSitterProbe.parsesCleanly('x.ts', text)).toBe(false)
+      expect(fresh.treeSitterBlockResolver({ path: 'x.ts', text, line: 1 })).toBeNull()
+      await fresh.prepareSyntax(['x.ts'])
+      expect(fresh.treeSitterProbe.parsesCleanly('x.ts', text)).toBe(true)
+      expect(fresh.treeSitterBlockResolver({ path: 'x.ts', text, line: 1 })).toEqual({
+        start: 1,
+        end: 2,
+      })
+    } finally {
+      spy.mockRestore()
+    }
+  },
+)
+
+const jsonList = '{\n  "a": [\n    "x",\n    "y"\n  ]\n}\n'
+test.each(['+    "z",', '+    "z",  \n+'])('names a parse-proved trailing comma: %s', (body) => {
+  expect(() =>
+    applyEdits(jsonList, parsePatch(`PUT 4.=4:\n${body}`).edits, { path: 'x.json' }),
+  ).toThrow('ends with a comma that does not parse in place')
+})
+
+test.each([
+  ['{\n  "a": [\n    "x"\n  ],\n  "b": 1\n}\n', '  "c": 2,'],
+  [jsonList, '    "z",\u00a0'],
+])('keeps placement guidance when dropping a comma does not parse', (text, row) => {
+  expect(() =>
+    applyEdits(text, parsePatch(`PUT 4.=4:\n+${row}`).edits, { path: 'x.json' }),
+  ).toThrow('body indentation does not establish')
 })
 
 test('unknown languages and absent paths provide no syntax evidence', async () => {

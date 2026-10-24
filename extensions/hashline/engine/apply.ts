@@ -15,6 +15,7 @@ import {
   afterInsertOpenerEscapeWarning,
   ambiguousBoundaryEchoMessage,
   ambiguousBoundaryPlacementMessage,
+  trailingCommaReplacementMessage,
   blockInsertLandingShiftWarning,
   boundaryVariantRepairWarning,
   editBrokeParseWarning,
@@ -493,9 +494,10 @@ interface GroupVariant {
   readonly dropped: number
 }
 
+type Undecided = 'placement' | 'trailingComma' | undefined
 interface GroupVariants {
   readonly variants: GroupVariant[]
-  readonly ambiguous: boolean
+  readonly ambiguous: Undecided
 }
 
 const INDENT_TAB_WIDTH = 4
@@ -627,6 +629,27 @@ function edgeEvidence(
   return { first, last, leadingStructure }
 }
 
+/** Remove only the final comma, preserving any trailing whitespace. */
+function parsesWithoutTrailingComma(
+  replacement: readonly AppliedEdit[],
+  fileLines: readonly string[],
+  path: string,
+): boolean {
+  const last = replacement.findLastIndex(
+    (edit) => edit.kind === 'insert' && hasNonWhitespace(edit.text),
+  )
+  const edit = replacement[last]
+  if (edit?.kind !== 'insert') return false
+  const trimmed = edit.text.trimEnd()
+  if (!trimmed.endsWith(',')) return false
+  const trial = [...replacement]
+  trial[last] = {
+    ...edit,
+    text: edit.text.slice(0, trimmed.length - 1) + edit.text.slice(trimmed.length),
+  }
+  return parsesCleanly(path, materializeEdits(fileLines, trial).text)
+}
+
 /**
  * Retention is limited to the selected range's first and effective-last rows.
  * On a valid baseline, deleting the row must break syntax; every candidate
@@ -641,12 +664,12 @@ function buildKeepPlans(
   path: string,
   baselineParses: boolean,
   replacement: readonly AppliedEdit[],
-): { plans: KeepPlan[]; ambiguous: boolean } {
+): { plans: KeepPlan[]; ambiguous: Undecided } {
   const leadingPayload = payloadEdge(payload, 'leading')
   const trailingPayload = payloadEdge(payload, 'trailing')
   const plans: KeepPlan[] = [{ kept: 0 }]
   if (leadingPayload === undefined || trailingPayload === undefined)
-    return { plans, ambiguous: false }
+    return { plans, ambiguous: undefined }
 
   const first = fileLines[group.startLine - 1] ?? ''
   const last = fileLines[trailingLine - 1] ?? ''
@@ -654,7 +677,7 @@ function buildKeepPlans(
   const trailingIndent = indentColumns(trailingPayload)
   const firstIndent = indentColumns(first)
   const lastIndent = indentColumns(last)
-  let ambiguous = false
+  let ambiguous: Undecided
 
   if (group.startLine === trailingLine) {
     const previous = nearestContentLine(fileLines, group.startLine - 2, -1)
@@ -664,7 +687,11 @@ function buildKeepPlans(
     } else if (baselineParses && evidence.first && trailingIndent === firstIndent) {
       // A same-shape replacement that parses alone is not made ambiguous by
       // an unrelated broken hunk elsewhere in the batch (upstream Rust guard).
-      ambiguous = !parsesCleanly(path, materializeEdits(fileLines, replacement).text)
+      if (!parsesCleanly(path, materializeEdits(fileLines, replacement).text)) {
+        ambiguous = parsesWithoutTrailingComma(replacement, fileLines, path)
+          ? 'trailingComma'
+          : 'placement'
+      }
     }
     return { plans, ambiguous }
   }
@@ -710,7 +737,7 @@ function buildKeepPlans(
     firstIndent < indentColumns(beforeFirst) &&
     payloadLeadingIndent > firstIndent
   ) {
-    ambiguous = true
+    ambiguous = 'placement'
   }
   return { plans, ambiguous }
 }
@@ -737,7 +764,7 @@ function buildGroupVariants(
   const leadingDrops = dropJ > 0 ? [0, dropJ] : [0]
   const trailingDrops = dropK > 0 ? [0, dropK] : [0]
   const variants: GroupVariant[] = []
-  let ambiguous = false
+  let ambiguous: Undecided
 
   for (const leadingDrop of leadingDrops) {
     for (const trailingDrop of trailingDrops) {
@@ -841,13 +868,18 @@ function repairBoundaryVariants(
   if (path === undefined) return undefined
 
   const groups: { group: ReplacementGroup; variants: GroupVariant[] }[] = []
-  let ambiguousGroup: ReplacementGroup | undefined
+  let ambiguousMessage: string | undefined
   let i = 0
   while (i < edits.length) {
     const group = findReplacementGroup(edits, i)
     if (group) {
       const built = buildGroupVariants(group, edits, fileLines, path, baselineParses)
-      if (built.ambiguous && ambiguousGroup === undefined) ambiguousGroup = group
+      if (built.ambiguous && ambiguousMessage === undefined) {
+        ambiguousMessage =
+          built.ambiguous === 'trailingComma'
+            ? trailingCommaReplacementMessage(group.startLine, group.endLine)
+            : ambiguousBoundaryPlacementMessage(group.startLine, group.endLine)
+      }
       if (built.variants.length > 0) groups.push({ group, variants: built.variants })
       i = group.deleteIndices[group.deleteIndices.length - 1] + 1
     } else {
@@ -855,11 +887,7 @@ function repairBoundaryVariants(
     }
   }
   if (groups.length === 0) {
-    if (ambiguousGroup) {
-      throw new Error(
-        ambiguousBoundaryPlacementMessage(ambiguousGroup.startLine, ambiguousGroup.endLine),
-      )
-    }
+    if (ambiguousMessage) throw new Error(ambiguousMessage)
     return undefined
   }
 
@@ -900,20 +928,12 @@ function repairBoundaryVariants(
       continue
     }
     if (text !== bestText) {
-      if (ambiguousGroup) {
-        throw new Error(
-          ambiguousBoundaryPlacementMessage(ambiguousGroup.startLine, ambiguousGroup.endLine),
-        )
-      }
+      if (ambiguousMessage) throw new Error(ambiguousMessage)
       return undefined
     }
   }
   if (bestCombo === undefined) {
-    if (ambiguousGroup) {
-      throw new Error(
-        ambiguousBoundaryPlacementMessage(ambiguousGroup.startLine, ambiguousGroup.endLine),
-      )
-    }
+    if (ambiguousMessage) throw new Error(ambiguousMessage)
     return undefined
   }
 

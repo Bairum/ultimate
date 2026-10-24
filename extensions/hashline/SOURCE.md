@@ -35,6 +35,8 @@ concrete range/gap examples and parser-backed block forms.
   the published TS engine: test a same-shape boundary replacement alone before
   declaring placement ambiguous, and veto an outward landing shift when it
   breaks an otherwise parseable batch. These close five formerly skipped calls.
+  Review follow-up ports Rust's separate parse-proved trailing-comma diagnostic
+  rather than misreporting that refusal as ambiguous boundary placement.
 - `syntax.ts`: removed native calls and their hash-keyed caches; a host-settable
   `SyntaxProbe` supplies node chains, enclosing boundaries, and parse evidence.
   Default is no evidence (`[]`, `[]`, `false`). Probe errors propagate.
@@ -74,11 +76,17 @@ concrete range/gap examples and parser-backed block forms.
   native grammar install scripts and a 120.9 MB all-language package.
 - `parser.ts`: lazy runtime/grammar initialization before edits; concurrent loads
   deduplicate per language, parsers persist, and the last tree per language is
-  released/replaced on source changes. Ports `block_range_at`, `node_chain_at`,
+  released/replaced on source changes. Failed runtime/grammar loads leave no
+  evidence and retry on the next edit, without blocking concrete edits. Source
+  over 1 MiB in UTF-8 bytes supplies no evidence. Ports `block_range_at`, `node_chain_at`,
   `collect_boundaries`, and the statement-sequence guard from pi-ast `block.rs`.
   Unknown languages provide no evidence. The resolver checks subtree errors;
   boundary queries require a clean whole-file parse. Node coordinates are
-  1-indexed inclusive content lines, not the trailing newline's next row.
+  1-indexed inclusive content lines, not the trailing newline's next row; a
+  zero-width row-zero node still ends on line 1. Review follow-up stops Markdown
+  `section` climbing unless its child is a heading, so a leading paragraph,
+  list or fence cannot swallow the rest of the preamble. List spans omit
+  trailing blank lines.
 - `server.ts`: prepares only the edited languages, injects the resolver, advertises
   block forms and echoes resolved spans in bounded edit output. Existing diff
   cards and diagnostics are unchanged.

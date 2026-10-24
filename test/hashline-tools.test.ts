@@ -132,6 +132,42 @@ async function call(conversation: Conversation, name: string, args: JsonObject) 
 }
 const patch = (tag: string, body: string) => `[a.txt#${tag}]\n${body}`
 
+test('failed grammar loads preserve concrete edits, refuse blocks and retry on the next edit', async () => {
+  const runtime = await import('web-tree-sitter')
+  const load = vi
+    .spyOn(runtime.Language, 'load')
+    .mockRejectedValueOnce(new Error('forced grammar failure'))
+    .mockRejectedValueOnce(new Error('forced grammar failure'))
+  const f = await fixture('div {\n  color: red;\n}\n', 'style.css')
+  await call(f.conversation, 'read', { path: 'style.css' })
+  const concrete = await call(f.conversation, 'edit', {
+    input: `[style.css#${f.tag}]\nPUT 2.=2:\n+  color: blue;`,
+  })
+  expect(concrete.isError).toBe(false)
+  const changed = 'div {\n  color: blue;\n}\n'
+  expect(await f.read()).toBe(changed)
+  const input = `[style.css#${computeFileHash(changed)}]\nPUT 1*:\n+span {\n+  color: green;\n+}`
+  const block = await call(f.conversation, 'edit', { input })
+  expect(block.isError).toBe(true)
+  expect(block.text).toContain('could not resolve a syntactic block')
+  expect(await f.read()).toBe(changed)
+  const retry = await call(f.conversation, 'edit', { input })
+  expect(retry.isError).toBe(false)
+  expect(await f.read()).toBe('span {\n  color: green;\n}\n')
+  expect(load).toHaveBeenCalledTimes(3)
+})
+
+test('a leading Markdown paragraph cannot cut the remaining preamble', async () => {
+  const source =
+    'Intro paragraph.\n\nSecond paragraph with notes.\n\n- keep me\n\n# Heading\nbody\n'
+  const f = await fixture(source, 'intro.md')
+  await call(f.conversation, 'read', { path: 'intro.md' })
+  const result = await call(f.conversation, 'edit', { input: `[intro.md#${f.tag}]\nCUT 1*` })
+  expect(result.isError).toBe(true)
+  expect(result.text).toContain('single-line block')
+  expect(await f.read()).toBe(source)
+})
+
 test('wraps replace the edit schema and preserve sequential mutation execution', async () => {
   const f = await fixture()
   const agent = await f.conversation.agent(context)

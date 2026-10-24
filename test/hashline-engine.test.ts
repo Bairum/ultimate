@@ -29,7 +29,13 @@ import {
 } from '../extensions/hashline/engine/index.ts'
 
 beforeAll(async () => {
-  await prepareSyntax(['a.ts', 'a.tsx', 'a.js', 'a.py', 'a.rs', 'a.go', 'a.lua'])
+  await prepareSyntax(
+    fixtures.flatMap((fixture) =>
+      fixture.cases.flatMap((entry) =>
+        (entry.apply ?? []).flatMap((call) => (call.path ? [call.path] : [])),
+      ),
+    ),
+  )
 })
 
 interface Call {

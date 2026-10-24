@@ -40,6 +40,7 @@ function language(file: string | undefined): string | undefined {
 const parsers = new Map<string, Parser>()
 const loading = new Map<string, Promise<void>>()
 let runtime: Promise<typeof import('web-tree-sitter')> | undefined
+export const MAX_SYNTAX_BYTES = 1024 * 1024
 
 /** Await before calling the engine. Unknown languages intentionally supply no evidence. */
 export async function prepareSyntax(paths: readonly string[]): Promise<void> {
@@ -50,22 +51,30 @@ export async function prepareSyntax(paths: readonly string[]): Promise<void> {
       let pending = loading.get(lang)
       if (!pending) {
         pending = (async () => {
-          const { Parser, Language } = await (runtime ??= import('web-tree-sitter').then(
-            async (module) => {
+          const { Parser, Language } = await (runtime ??= import('web-tree-sitter')
+            .then(async (module) => {
               await module.Parser.init()
               return module
-            },
-          ))
+            })
+            .catch((error: unknown) => {
+              runtime = undefined
+              throw error
+            }))
           let wasm: string
           if (['markdown', 'elisp', 'json', 'yaml', 'lua'].includes(lang)) {
             wasm = fileURLToPath(new URL(`./grammars/tree-sitter-${lang}.wasm`, import.meta.url))
           } else {
             wasm = require.resolve(`@vscode/tree-sitter-wasm/wasm/tree-sitter-${lang}.wasm`)
           }
+          const grammar = await Language.load(wasm)
           const parser = new Parser()
-          parser.setLanguage(await Language.load(wasm))
+          parser.setLanguage(grammar)
           parsers.set(lang, parser)
-        })()
+        })().catch(() => {
+          // Syntax is optional evidence: failed loads must not block concrete
+          // edits. Leave the parser unset and allow the next edit to retry.
+          loading.delete(lang)
+        })
         loading.set(lang, pending)
       }
       await pending
@@ -77,6 +86,7 @@ export async function prepareSyntax(paths: readonly string[]): Promise<void> {
 /** Keep only the last tree per language; release WASM memory when its source changes. */
 const trees = new Map<string, { text: string; tree: Tree }>()
 function parse(file: string | undefined, text: string): Tree | undefined {
+  if (Buffer.byteLength(text, 'utf8') > MAX_SYNTAX_BYTES) return undefined
   const lang = language(file)
   const parser = lang && parsers.get(lang)
   if (!lang || !parser) return undefined
@@ -88,8 +98,9 @@ function parse(file: string | undefined, text: string): Tree | undefined {
   if (tree) trees.set(lang, { text, tree })
   return tree ?? undefined
 }
-function endLine(node: Node): number {
-  return node.endPosition.row + (node.endPosition.column === 0 ? 0 : 1)
+export function contentEndLine(node: Pick<Node, 'endPosition'>): number {
+  const { row, column } = node.endPosition
+  return row + (column === 0 && row > 0 ? 0 : 1)
 }
 function leafAt(tree: Tree, text: string, line: number): Node | null {
   const row = text.split('\n')[line - 1]
@@ -110,7 +121,7 @@ export const treeSitterProbe: SyntaxProbe = {
         chain.push({
           kind: node.type,
           startLine: node.startPosition.row + 1,
-          endLine: endLine(node),
+          endLine: contentEndLine(node),
         })
       }
     }
@@ -124,7 +135,7 @@ export const treeSitterProbe: SyntaxProbe = {
     const visit = (node: Node) => {
       if (node.startPosition.row + 1 > end || node.endPosition.row + 1 < start) return
       const first = node.startPosition.row + 1,
-        last = endLine(node)
+        last = contentEndLine(node)
       if (node.isNamed && node.parent && last > first) {
         if (visible(first) && !visible(last)) result.add(last)
         else if (visible(last) && !visible(first)) result.add(first)
@@ -173,10 +184,18 @@ export const treeSitterBlockResolver: BlockResolver = ({ path: file, text, line 
     node.parent &&
     node.parent.id !== tree.rootNode.id &&
     node.parent.startPosition.row === line - 1 &&
-    !statementSequence(node.parent, node)
+    !statementSequence(node.parent, node) &&
+    (node.parent.type !== 'section' ||
+      node.type === 'atx_heading' ||
+      node.type === 'setext_heading')
   ) {
     node = node.parent
   }
   if (node.id === tree.rootNode.id || node.hasError) return null
-  return { start: node.startPosition.row + 1, end: endLine(node) }
+  let end = contentEndLine(node)
+  if (node.type === 'list') {
+    const lines = text.split('\n')
+    while (end > line && !lines[end - 1]?.trim()) end--
+  }
+  return { start: node.startPosition.row + 1, end }
 }

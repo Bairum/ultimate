@@ -319,6 +319,16 @@ export function ambiguousBoundaryEchoMessage(
   )
 }
 
+/** A one-row replacement parses only after its final comma is removed. */
+export function trailingCommaReplacementMessage(startLine: number, endLine: number): string {
+  return (
+    `\`PUT ${startLine}${HL_RANGE_SEP}${endLine}:\` rejected: the body's last non-blank row ends ` +
+    `with a comma that does not parse in place (e.g. a trailing comma before a closing \`]\` or \`}\`); ` +
+    `without that comma this replacement parses. Drop the comma, or include the rows ` +
+    `that should follow it in the same body.`
+  )
+}
+
 /**
  * A syntax-essential selected edge can be retained on either side of the
  * payload, but indentation does not establish which placement was intended.
