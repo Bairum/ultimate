@@ -1,6 +1,6 @@
 import type { JsonObject } from '@earendil-works/pi-durable'
-import { copyFile, lstat, mkdir, readdir, rm } from 'node:fs/promises'
-import { isAbsolute, join } from 'node:path'
+import { copyFile, lstat, mkdir, readdir, readlink, realpath, rm } from 'node:fs/promises'
+import { isAbsolute, join, relative as relativePath, resolve } from 'node:path'
 import { exec } from '../../lib/exec.ts'
 import { git } from '../../lib/git.ts'
 
@@ -35,23 +35,37 @@ export function backend(mode: CloneMode, platform = process.platform): 'apfs' | 
  * refusal under sparse checkout or split index, and the fallback to a plain checkout.
  */
 export async function populate(source: string, path: string, mode: CloneMode) {
+  const common = await realpath(await gitPath(source, '--common'))
+  const guard = async () => {
+    const top = await git(path, 'rev-parse', '--show-toplevel')
+    if (
+      (await realpath(top)) !== (await realpath(path)) ||
+      (await realpath(await gitPath(path, '--common'))) !== common
+    )
+      throw new Error(`Unsafe worktree repository: ${path}`)
+  }
+  await guard()
   await clear(path)
+  let reason: string | undefined
   const kind = backend(mode)
   if (kind) {
     try {
       await clone(source, path, kind)
-      await git(path, 'reset', '--hard', '--quiet', 'HEAD')
-      // The second -f also drops untracked nested repositories.
-      await git(path, 'clean', '-ffdq')
-      return kind
     } catch (error) {
       if (mode !== 'auto') throw error
-      console.warn(`Worktree clone failed, checking out instead: ${(error as Error).message}`)
+      reason = (error as Error).message
+      await guard()
       await clear(path)
     }
   }
+  await guard()
   await git(path, 'reset', '--hard', '--quiet', 'HEAD')
-  return 'git' as const
+  if (kind && !reason) {
+    // The second -f also drops untracked nested repositories.
+    await guard()
+    await git(path, 'clean', '-ffdq')
+  }
+  return { backend: reason ? ('git' as const) : (kind ?? ('git' as const)), reason }
 }
 
 /** Empty the worktree at `path` but its `.git` file, index included. */
@@ -65,20 +79,30 @@ async function clone(source: string, path: string, kind: 'apfs' | 'reflink') {
   for (const key of ['core.sparseCheckout', 'core.splitIndex'])
     if ((await git(source, 'config', '--bool', key).catch(() => 'false')) === 'true')
       throw new Error(`Cannot clone a checkout with ${key} enabled`)
-  // `git submodule status` lists each submodule's path; their `.git` files point into the source's module store,
-  // which two checkouts must not share, so they stay out of the clone.
-  const submodules = (await git(source, 'submodule', 'status').catch(() => ''))
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => line.trim().split(/\s+/)[1])
-  // A directory holding a submodule deeper down is entered rather than cloned whole, so only the submodule stays out.
+  // Gitlinks stay out: their .git files point into the source's module store.
+  const submodules = (await git(source, 'ls-files', '-s', '-z'))
+    .split('\0')
+    .filter((entry) => entry.startsWith('160000 '))
+    .map((entry) => entry.slice(entry.indexOf('\t') + 1))
+  // Walk directories to exclude nested submodules and source-pointing absolute symlinks.
   const copy = async (relative: string) => {
     await mkdir(join(path, relative), { recursive: true })
     for (const entry of await readdir(join(source, relative))) {
       const name = join(relative, entry)
       if (name === '.git' || submodules.includes(name)) continue
       const stat = await lstat(join(source, name))
-      if (stat.isDirectory() && submodules.some((module) => module.startsWith(`${name}/`))) {
+      if (stat.isSymbolicLink()) {
+        const target = await readlink(join(source, name))
+        const inside = relativePath(resolve(source), resolve(target))
+        if (
+          isAbsolute(target) &&
+          inside !== '..' &&
+          !inside.startsWith('../') &&
+          !isAbsolute(inside)
+        )
+          continue
+      }
+      if (stat.isDirectory()) {
         await copy(name)
         continue
       }
@@ -103,6 +127,10 @@ async function clone(source: string, path: string, kind: 'apfs' | 'reflink') {
 }
 
 async function gitPath(checkout: string, name: string) {
-  const path = await git(checkout, 'rev-parse', '--git-path', name)
+  const path = await git(
+    checkout,
+    'rev-parse',
+    ...(name === '--common' ? ['--git-common-dir'] : ['--git-path', name]),
+  )
   return isAbsolute(path) ? path : join(checkout, path)
 }

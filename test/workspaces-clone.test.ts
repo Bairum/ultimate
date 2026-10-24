@@ -1,11 +1,13 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { backend, cloneMode, populate } from '../extensions/workspaces/clone.ts'
 import { git } from '../lib/git.ts'
+import * as gitModule from '../lib/git.ts'
 import { removeTemps, temp } from './helpers.ts'
 
 afterEach(removeTemps)
+afterEach(() => vi.restoreAllMocks())
 
 /** A source checkout with a commit, then a dirty tracked file, an untracked file and an ignored directory. */
 async function source() {
@@ -28,6 +30,33 @@ async function source() {
   return { src, path }
 }
 
+it('refuses a missing git file without touching the enclosing source', async () => {
+  const { src, path } = await source()
+  const nested = join(src, 'nested')
+  await git(src, 'worktree', 'move', path, nested)
+  await rm(join(nested, '.git'))
+  await writeFile(join(nested, 'keep'), 'safe\n')
+  await expect(populate(src, nested, 'auto')).rejects.toThrow(/Unsafe worktree repository/)
+  expect(await readFile(join(src, 'untracked'), 'utf8')).toBe('stray\n')
+  expect(await readFile(join(nested, 'keep'), 'utf8')).toBe('safe\n')
+  expect(await readFile(join(src, 'tracked'), 'utf8')).toBe('dirty\n')
+})
+
+it('falls back visibly on a failed gitlink listing, but explicit backends throw', async () => {
+  const { src, path } = await source()
+  const original = gitModule.git
+  vi.spyOn(gitModule, 'git').mockImplementation((cwd, ...args) => {
+    if (args[0] === 'ls-files') return Promise.reject(new Error('listing failed'))
+    return original(cwd, ...args)
+  })
+  await expect(populate(src, path, 'auto')).resolves.toEqual({
+    backend: 'git',
+    reason: 'listing failed',
+  })
+  expect(await readFile(join(path, 'tracked'), 'utf8')).toBe('committed\n')
+  await expect(populate(src, path, 'apfs')).rejects.toThrow('listing failed')
+})
+
 it('reads the setting and picks the platform backend', () => {
   expect(cloneMode({})).toBe('auto')
   expect(cloneMode({ isolates: { worktree: { clone: 'git' } } })).toBe('git')
@@ -39,8 +68,9 @@ it('reads the setting and picks the platform backend', () => {
 })
 
 it('clones the checkout at the branch commit with ignored files, without uncommitted changes', async () => {
-  const { path } = await source()
-  const used = await populate(join(path, '..', 'src'), path, 'auto')
+  const { src, path } = await source()
+  await symlink(join(src, 'tracked'), join(src, 'deps', 'source-link'))
+  const { backend: used } = await populate(join(path, '..', 'src'), path, 'auto')
   expect(await readFile(join(path, 'tracked'), 'utf8')).toBe('committed\n')
   expect(await git(path, 'status', '--porcelain')).toBe('')
   expect(await git(path, 'branch', '--show-current')).toBe('feature')
@@ -52,6 +82,9 @@ it('clones the checkout at the branch commit with ignored files, without uncommi
     () => null,
   )
   expect(deps).toBe(used === 'git' ? null : 'installed\n')
+  expect(used === 'git' ? [] : await readdir(join(path, 'deps'))).toEqual(
+    used === 'git' ? [] : ['lib'],
+  )
 })
 
 it('leaves a nested submodule out of the clone but keeps ignored files beside it', async () => {
@@ -64,15 +97,24 @@ it('leaves a nested submodule out of the clone but keeps ignored files beside it
   await mkdir(src)
   await git(src, 'init', '--quiet')
   await writeFile(join(src, '.gitignore'), 'build/\n')
-  await git(src, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', lib, 'libs/sub')
+  await git(
+    src,
+    '-c',
+    'protocol.file.allow=always',
+    'submodule',
+    'add',
+    '--quiet',
+    lib,
+    'libs/sub module',
+  )
   await git(src, 'add', '.')
   await git(src, '-c', 'user.name=T', '-c', 'user.email=t@e', 'commit', '--quiet', '-m', 'first')
   await mkdir(join(src, 'libs', 'build'))
   await writeFile(join(src, 'libs', 'build', 'out'), 'built\n')
   const path = join(dir, 'wt')
   await git(src, 'worktree', 'add', '--quiet', '--no-checkout', '-b', 'feature', path, 'HEAD')
-  const used = await populate(src, path, 'auto')
-  expect(await readdir(join(path, 'libs', 'sub'))).toEqual([])
+  const { backend: used } = await populate(src, path, 'auto')
+  expect(await readdir(join(path, 'libs', 'sub module'))).toEqual([])
   const built = await readFile(join(path, 'libs', 'build', 'out'), 'utf8').catch(
     // A plain checkout has no ignored files.
     () => null,
@@ -84,7 +126,7 @@ it('leaves a nested submodule out of the clone but keeps ignored files beside it
 it('checks out plainly with the git mode, starting over on a half-filled checkout', async () => {
   const { src, path } = await source()
   await writeFile(join(path, 'leftover'), 'from a crash\n')
-  expect(await populate(src, path, 'git')).toBe('git')
+  expect((await populate(src, path, 'git')).backend).toBe('git')
   expect((await readdir(path)).toSorted()).toEqual(['.git', '.gitignore', 'tracked'])
   expect(await git(path, 'status', '--porcelain')).toBe('')
 })

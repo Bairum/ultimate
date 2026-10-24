@@ -363,7 +363,11 @@ export function workspaces(host: Host) {
           created = true
           // A crash mid-clone leaves the registered checkout half filled; populate starts over by clearing it.
           if (!(await runtime.memo<boolean>('populated', context))) {
-            await populate(workspace.source, workspace.path, mode)
+            const result = await populate(workspace.source, workspace.path, mode)
+            if (result.reason)
+              host.notice(
+                `Worktree ${workspace.path} used ${result.backend} checkout: ${result.reason}`,
+              )
             await runtime.memo('populated', true, context)
           }
           await setup(workspace.source, workspace.path, settings, runtime.signal)
