@@ -28,6 +28,14 @@ it('opens setup help in the standing conversation without a message', async () =
     expect(
       (await server.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context))?.messages ?? [],
     ).toEqual([])
+    // The walkthrough replays every time, never deduplicated like onboarding.start.
+    for (let run = 0; run < 2; run++) {
+      const walkthrough = await post(server, '/api/extensions/onboarding/actions/walkthrough', {})
+      expect(walkthrough.data.result.id).toBe(id)
+      await server.harness.waitForIdle(context)
+    }
+    const after = JSON.stringify((await conversation.context(context)).messages)
+    expect(after.match(/Walkthrough started: run how-ultimate-works/g)).toHaveLength(2)
     const invalid = await post(server, '/api/extensions/onboarding/actions/help', {
       args: { card: 'arbitrary' },
     })

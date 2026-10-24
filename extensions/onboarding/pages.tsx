@@ -135,6 +135,11 @@ export function FirstRun({
               <span className="mt-1 block truncate font-mono text-xs text-muted-foreground">
                 {model?.id ?? 'No model chosen yet'}
               </span>
+              <span className="mt-1 block text-xs text-muted-foreground">
+                {model && model.contextWindow < 1_000_000
+                  ? `${Math.round(model.contextWindow / 1000)}k context. @ultimate works best with 1M+.`
+                  : '1M+ context recommended for @ultimate.'}
+              </span>
             </span>
             {action('model.pick', model?.available ? 'Change' : 'Choose')}
           </li>

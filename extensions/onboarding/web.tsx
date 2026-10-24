@@ -23,7 +23,7 @@ import { EmptyRoot } from '../lineage/ui.tsx'
 import { Familiarize } from './survey.tsx'
 import { ExtensionsPanel } from './panel.tsx'
 import { gitDialog, projectDialog } from './parts.tsx'
-import { ChooseAction, HelpAction, StartAction, StatusAction } from './refs.ts'
+import { ChooseAction, HelpAction, StartAction, StatusAction, WalkthroughAction } from './refs.ts'
 
 function useIsolation() {
   const workspaces = useExtensions().some((extension) => extension.name === 'workspaces')
@@ -223,6 +223,11 @@ export default defineWebExtension({
         </section>
       )
     },
+    'walkthrough.start': () => (
+      <section className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+        <span className="font-mono">Walkthrough started</span>
+      </section>
+    ),
   },
   slots: {
     overlay: [Onboarding],
@@ -246,6 +251,15 @@ export default defineWebExtension({
       id: 'onboarding.extensions',
       title: 'Extensions…',
       run: (context) => context.openPanel('extensions'),
+    },
+    {
+      id: 'onboarding.walkthrough',
+      title: 'Walk me through Ultimate',
+      run: async (context) => {
+        const { id } = await api.action(WalkthroughAction)
+        context.switchConversation(id)
+        context.showSurface('agent')
+      },
     },
   ],
 })
