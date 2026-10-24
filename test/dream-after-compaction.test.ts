@@ -463,9 +463,22 @@ it('keeps a chapter seed paused whichever check runs first', async () => {
     const doc = await tx.doc(AfterCompactionDoc, ROOT_CONVERSATION_ID)
     delete doc.id
   }, context)
-  await writeJson(`${f.host.chapter.dir}/seed.json`, {})
+  await writeJson(`${f.host.chapter.dir}/seed.json`, { afterCompaction: null })
   await ensureAutomation(f.host)
   expect((await f.harness.snapshot(Automations, context))!.automations).toEqual({})
+})
+
+it('makes it in a chapter whose seed predates the feature', async () => {
+  const f = await fixture()
+  await f.action('delete', { id: (await f.own())! })
+  await f.harness.commit(async (tx) => {
+    const doc = await tx.doc(AfterCompactionDoc, ROOT_CONVERSATION_ID)
+    delete doc.id
+    delete doc.deleted
+  }, context)
+  await writeJson(`${f.host.chapter.dir}/seed.json`, { session: 1 })
+  await ensureAutomation(f.host)
+  expect((await f.record((await f.own())!)).enabled).toBe(true)
 })
 
 it('asks the user when the asleep grant is refused', async () => {

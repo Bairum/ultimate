@@ -42,7 +42,12 @@ const TRIGGER = { name: 'conversations.compacted', where: { conversation: '@ulti
 export const AfterCompactionDoc = defineDoc<{ id?: string; deleted?: true }>({
   kind: 'dream.after-compaction',
   checkpointWhen: () => false,
-  version: 1,
+  // Version 1 read a seed from before this feature as "deleted": a deletion it recorded was never the user's.
+  version: 2,
+  migrate: (value) => {
+    const { id } = value as { id?: string }
+    return id === undefined ? {} : { id }
+  },
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
@@ -98,7 +103,8 @@ export async function ensureAutomation(host: ExtensionHost) {
     harness.commit(async (tx) => {
       Object.assign(await tx.doc(AfterCompactionDoc, ROOT_CONVERSATION_ID), change)
     }, context)
-  if (!state?.id && seed && !seed.afterCompaction) return remember({ deleted: true })
+  // Only a seed that says so carries a deletion; one from before this feature has no say.
+  if (!state?.id && seed?.afterCompaction === null) return remember({ deleted: true })
   const signal = new AbortController().signal
   // Session-scoped ledger: its list action reads it, as the seed does.
   const list = (await host.invoke('automations', 'list', null, signal)) as Automation[]
