@@ -60,6 +60,7 @@
     "lib/ago.ts",
     "lib/compare.ts",
     "lib/context-usage.ts",
+    "lib/entries.ts",
     "extensions/subagents/message-types.ts",
     "test/web"
   ]

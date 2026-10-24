@@ -10,7 +10,8 @@ entry with images (a pasted input or a tool result such as a screenshot, searchi
 that entry. The reference resolves when the message is admitted (at most
 `maxImages`, each at most `maxImageBytes`; unknown entries or entries without images are refused); the log records
 `images: { entry, count }`, and delivery attaches that entry's images to the recipient's input, so a replay attaches
-the same ones. `branch` takes the same `images` for its first message. Messages to the user carry none.
+the same ones. `branch` takes the same `images` for its first message. @ultimate's messages to the user carry them
+too: its bubble shows that entry's images as thumbnails that open full size.
 Address a conversation
 as `#123` or `123`, a standing agent as `@name`, or the project's existing lander as `@lander`.
 Only the `ultimate` resident's standing conversation may message `user`; other senders must send @ultimate a one-way update to relay.
