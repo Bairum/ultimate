@@ -47,6 +47,13 @@ it('counts only answers that read or wrote the current model’s cache', () => {
   ).toBe(false)
 })
 
+it('sends only while not paused and within the hour, checked right before the request', () => {
+  expect(keepWarm.open(false, now - LEAD, now)).toBe(true)
+  expect(keepWarm.open(true, now - LEAD, now)).toBe(false)
+  expect(keepWarm.open(undefined, now - LEAD, now)).toBe(true)
+  expect(keepWarm.open(false, now - TTL, now)).toBe(false)
+})
+
 it('leaves the switch to the user', () => {
   expect(keepWarm.userActions).toEqual(['set'])
 })

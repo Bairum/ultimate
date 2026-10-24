@@ -96,14 +96,25 @@ async function activity(host: ExtensionHost, doc: WarmDocState, now: number) {
   }
 }
 
-/** Whether a ping may go out now: on, not paused, @ultimate idle and the cache still within its hour. */
-async function clear(host: ExtensionHost, id: ConversationId, lastRequest: number) {
-  if (host.want(PauseApi)?.paused() || (await read(host)).off) return false
-  if ((await host.harness().snapshot(LiveDoc, id, context))?.run) return false
-  return Date.now() - lastRequest < TTL
+/** Not paused (also by a rate limit) and the cache still within its hour; synchronous, so nothing slips in after it. */
+export const open = (paused: boolean | undefined, lastRequest: number, now: number) =>
+  !paused && now - lastRequest < TTL
+
+/**
+ * In one commit: record the attempt as interrupted, only while it is still on, @ultimate has no run and no other
+ * attempt was recorded since the tick read `previous`. A crash mid-request then counts as a failure, never a retry.
+ */
+async function claim(host: ExtensionHost, id: ConversationId, attempt: Ping, previous?: number) {
+  return host.harness().commit(async (tx) => {
+    const doc = await tx.doc(State, ROOT_CONVERSATION_ID)
+    if (doc.off || doc.last?.at !== previous || (await tx.doc(LiveDoc, id)).run) return false
+    doc.last = attempt
+    doc.pings = (doc.pings ?? 0) + 1
+    return true
+  }, context)
 }
 
-/** Store `last` (a new attempt counts), with the response's usage on @ultimate when there is one, in one commit. */
+/** Store the attempt's outcome, with the response's usage on @ultimate when there is one, in one commit. */
 async function record(
   host: ExtensionHost,
   id: ConversationId,
@@ -111,9 +122,7 @@ async function record(
   answer?: AssistantMessage,
 ) {
   await host.harness().commit(async (tx) => {
-    const doc = await tx.doc(State, ROOT_CONVERSATION_ID)
-    if (doc.last?.at !== last.at) doc.pings = (doc.pings ?? 0) + 1
-    doc.last = last
+    ;(await tx.doc(State, ROOT_CONVERSATION_ID)).last = last
     if (answer)
       await host.need(ConversationsApi).accountResponse(tx, id, {
         provider: answer.provider,
@@ -133,8 +142,9 @@ async function record(
  */
 async function ping(
   host: ExtensionHost,
-  found: { id: ConversationId; model: string; lastRequest: number },
+  found: { id: ConversationId; model: string; lastRequest: number; previous?: number },
 ) {
+  const paused = () => host.want(PauseApi)?.paused()
   const { id } = found
   const conversation = (await host.harness().conversation(id, context))!
   const agent = await conversation.agent(context)
@@ -147,9 +157,15 @@ async function ping(
     messages = [{ role: 'user', content: identity, timestamp: 0 }, ...messages]
   const at = Date.now()
   messages.push({ role: 'user', content: QUESTION, timestamp: at })
-  // Preparing awaited: a pause, a new run or the switch may have come in meanwhile.
-  if (!(await clear(host, id, found.lastRequest))) return
-  await record(host, id, { at, model: found.model, error: 'interrupted' })
+  // Preparing awaited: a pause, a new run or the switch may have come in meanwhile. The claim checks the switch and the
+  // run in its commit; pause and the hour are checked again after it, with nothing awaited before the request starts.
+  if (!open(paused(), found.lastRequest, Date.now())) return
+  if (!(await claim(host, id, { at, model: found.model, error: 'interrupted' }, found.previous)))
+    return
+  if (!open(paused(), found.lastRequest, Date.now())) {
+    await record(host, id, { at, model: found.model, error: 'skipped: paused or expired' })
+    return
+  }
   let answer: AssistantMessage
   try {
     // No sessionId: a one-shot Claude Code process, so @ultimate's own warm process never sees this turn.
@@ -191,7 +207,7 @@ async function tick(host: ExtensionHost) {
   const now = Date.now()
   const found = await activity(host, doc, now)
   if (!found?.lastRequest || !due({ now, ...found })) return
-  await ping(host, { ...found, lastRequest: found.lastRequest })
+  await ping(host, { ...found, lastRequest: found.lastRequest, previous: doc.last?.at })
 }
 
 async function state(host: ExtensionHost): Promise<WarmState> {
