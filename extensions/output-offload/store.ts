@@ -21,6 +21,51 @@ export function formatBytes(bytes: number) {
   return `${Math.ceil(bytes / 1024).toLocaleString('en-US')} KB`
 }
 
+/** Pi reports spills through structured output on success and diagnostics even when execution throws. */
+export function spillPath(call: ToolHookCall, result: ToolExecutionResult): string | undefined {
+  if (call.name !== 'bash') return undefined
+  const structured = result.structuredOutput
+  if (
+    structured &&
+    typeof structured === 'object' &&
+    !Array.isArray(structured) &&
+    typeof structured.fullOutputPath === 'string'
+  )
+    return structured.fullOutputPath
+  const diagnostic = result.diagnostics?.find(
+    (item) => item.code === 'full_output' && item.message.startsWith('Full output: '),
+  )
+  return diagnostic?.message.slice('Full output: '.length)
+}
+
+export function outputText(result: ToolExecutionResult): string {
+  return (result.output ?? [])
+    .flatMap((part) => (part.type === 'text' ? [part.text] : []))
+    .join('\n')
+}
+
+/** Limit both individual lines and each section, without splitting UTF-8 characters. */
+function excerptRows(rows: { text: string; index: number }[], budget: number) {
+  const kept: { text: string; index: number; sourceBytes: number }[] = []
+  let used = 0
+  for (const row of rows) {
+    const points = Array.from(row.text)
+    const text =
+      points.length > 500
+        ? `${points.slice(0, 500).join('')}…[+${points.length - 500} chars]`
+        : row.text
+    const bytes = Buffer.byteLength(text) + 1
+    if (used + bytes > budget) break
+    used += bytes
+    kept.push({
+      text,
+      index: row.index,
+      sourceBytes: Buffer.byteLength(points.slice(0, 500).join('')),
+    })
+  }
+  return kept
+}
+
 export async function offload(
   home: string,
   conversation: number,
@@ -33,13 +78,8 @@ export async function offload(
     result.details && typeof result.details === 'object' && !Array.isArray(result.details)
       ? result.details
       : {}
-  const text = (result.output ?? [])
-    .flatMap((part) => (part.type === 'text' ? [part.text] : []))
-    .join('\n')
-  const spill =
-    call.name === 'bash' && typeof details.fullOutputPath === 'string'
-      ? details.fullOutputPath
-      : undefined
+  const text = outputText(result)
+  const spill = spillPath(call, result)
   if (!spill && Buffer.byteLength(text) <= options.thresholdBytes) return undefined
   try {
     const full = spill ? await readFile(spill, 'utf8') : text
@@ -53,19 +93,34 @@ export async function offload(
     const id = call.id.replace(/[^a-zA-Z0-9_-]/g, '_')
     if (!id) throw new Error('Empty tool call id')
     const path = join(folder, `${id}.txt`)
-    await writeFile(path, full, { mode: 0o600 })
-    const head = rows.slice(0, 60)
-    const tail = rows.slice(Math.max(60, lines - 60))
+    const indexed = rows.map((row, index) => ({ text: row, index }))
+    const head = excerptRows(indexed.slice(0, 60), 8000)
+    const tail = excerptRows(
+      indexed.slice(Math.max(head.length, lines - 60)).toReversed(),
+      8000,
+    ).toReversed()
+    const matches = excerptRows(
+      indexed.filter((row) => /error|fail|panic|warn/i.test(row.text)).slice(0, 20),
+      4000,
+    )
     const hidden = lines - head.length - tail.length
-    const matches = rows
-      .flatMap((row, index) => (/error|fail|panic|warn/i.test(row) ? [`${index + 1}: ${row}`] : []))
-      .slice(0, 20)
+    const shown = new Map([...head, ...tail, ...matches].map((row) => [row.index, row.sourceBytes]))
+    const omittedBytes = Math.max(
+      0,
+      bytes - [...shown.values()].reduce((sum, size) => sum + size, 0),
+    )
+    // Bash retains the tail if the harness bounds the result again; keep the durable path last.
+    const marker = `… ${hidden.toLocaleString('en-US')} lines and ${omittedBytes.toLocaleString('en-US')} bytes not shown (${formatBytes(bytes)} total). Full output: ${path}. Use read with offset/limit or grep on that file.`
     const excerpt = [
-      ...head,
-      `… ${hidden.toLocaleString('en-US')} lines (${formatBytes(bytes)}) not shown. Full output: ${path}. Use read with offset/limit or grep on that file.`,
-      ...tail,
-      ...(matches.length ? ['Matching lines:', ...matches] : []),
+      ...head.map((row) => row.text),
+      ...tail.map((row) => row.text),
+      ...(matches.length
+        ? ['Matching lines:', ...matches.map((row) => `${row.index + 1}: ${row.text}`)]
+        : []),
+      marker,
     ].join('\n')
+    if (Buffer.byteLength(excerpt) >= bytes) return undefined
+    await writeFile(path, full, { mode: 0o600 })
     return {
       ...result,
       output: [
@@ -73,6 +128,7 @@ export async function offload(
         ...(result.output ?? []).filter((part) => part.type !== 'text'),
       ],
       details: { ...details, offload: { path, bytes, lines } },
+      diagnostics: result.diagnostics?.filter((item) => item.code !== 'full_output'),
     }
   } catch (error) {
     return {
@@ -125,15 +181,21 @@ export async function pruneOutputs(home: string, now = Date.now()) {
   for (const folder of folders) {
     if (!folder.isDirectory()) continue
     const dir = join(root, folder.name)
-    for (const file of await readdir(dir, { withFileTypes: true })) {
+    const files = await readdir(dir, { withFileTypes: true })
+    let left = files.length
+    for (const file of files) {
       if (!file.isFile()) continue
       const path = join(dir, file.name)
       const info = await stat(path).catch((error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return undefined // Another cleanup removed it.
         throw error
       })
-      if (info && now - info.mtimeMs > keepMs) await rm(path, { force: true })
+      if (info && now - info.mtimeMs > keepMs) {
+        await rm(path, { force: true })
+        left--
+      }
     }
+    if (left !== 0) continue
     await rmdir(dir).catch((error: NodeJS.ErrnoException) => {
       // Fresh output may have arrived, or another cleanup removed the folder.
       if (error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT') throw error

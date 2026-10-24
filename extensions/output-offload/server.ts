@@ -3,9 +3,10 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { OpenAction } from './refs.ts'
-import { defaults, offload, openOutput, pruneOutputs } from './store.ts'
+import { defaults, offload, openOutput, outputText, pruneOutputs, spillPath } from './store.ts'
 import type { Options } from './store.ts'
 
+export const reloadOnSettings = true
 export const userActions = ['open']
 export const actions = {
   open: implementAction(OpenAction, async (args, { host }) => {
@@ -44,14 +45,26 @@ export default function outputOffload(host: ExtensionHost) {
     }
     return selected
   }
+  // Settings reload reinstalls the facet. Cache one validated snapshot per installation, not per result.
+  let configured: Promise<Options> | undefined
+  function configuration() {
+    configured ??= options().catch((error) => {
+      host.notice(`Invalid output-offload settings; using defaults: ${String(error)}`)
+      return defaults
+    })
+    return configured
+  }
   return defineExtension({
     name: 'output-offload',
     hooks: [
       hook(ToolTask, {
         afterTool: async (call, result, api) => {
           if (call.parent || call.name === 'read') return undefined
+          // One byte is the minimum valid threshold; a setting may lower the 16 KB default.
+          if (!spillPath(call, result) && Buffer.byteLength(outputText(result)) <= 1)
+            return undefined
           try {
-            return await offload(host.home, api.conversationId, call, result, await options())
+            return await offload(host.home, api.conversationId, call, result, await configuration())
           } catch (error) {
             return {
               ...result,

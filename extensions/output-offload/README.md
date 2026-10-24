@@ -3,13 +3,16 @@ Offloads large tool outputs to durable project files before they enter model con
 Enable with `extensions.enable: ["output-offload"]`. It is off by default. No system prompt section is added.
 
 Model-issued results over 16 KB are stored in `<project data dir>/outputs/<conversationId>/<sanitized-callId>.txt`.
-For bash, Pi's `details.fullOutputPath` spill is the source when present, so the durable file includes text Pi already truncated.
-The stored result contains the first 60 lines, an omitted-line count and full-file path, the last 60 lines,
-and up to 20 numbered lines matching `error|fail|panic|warn` (case insensitive). Images, error state, diagnostics
+For bash, Pi's `structuredOutput.fullOutputPath` or its `full_output` diagnostic supplies the spill path (including
+execution failures), so the durable file includes text Pi already truncated. After copying, the redundant temporary-file diagnostic is removed.
+The stored result contains up to the first 60 lines, the last 60 lines, and up to 20 numbered lines matching
+`error|fail|panic|warn` (case insensitive), followed by an omitted-line/byte count and full-file path. Images, error state, diagnostics
 and existing details are preserved; `details.offload` records `{ path, bytes, lines }`.
 Use `read` with offset/limit or `grep`/`rg` on that file to drill in. Reads, nested codemode calls and excluded tools
 are untouched. A write or spill-read failure preserves the original output and adds a warning diagnostic.
-Very long individual lines can still make the specified excerpt large; Pi's normal result limits still apply.
+Each kept line is capped at 500 characters with an omitted-character note. Head and tail each have an 8,000-byte
+budget; matches have a 4,000-byte budget. The path marker is last so it survives bash's tail retention. Results are
+only offloaded when the excerpt is smaller than the full text.
 
 ## Settings
 
@@ -24,8 +27,10 @@ User settings and trusted project settings accept (project overrides user per fi
 }
 ```
 
-`thresholdBytes` must be a positive integer; `exclude` is an array of exact tool names. Settings are read for each
-model-issued call; invalid settings fail open with a diagnostic.
+`thresholdBytes` must be a positive integer; `exclude` is an array of exact tool names. Settings are read on each
+installation's first nontrivial model-issued call and cached until the host's settings reload reinstalls the extension.
+Empty and one-byte results skip settings entirely. Invalid settings produce one host notice per installation and
+fall back to defaults, not per-result diagnostics.
 
 ## UI and retention
 

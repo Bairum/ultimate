@@ -73,14 +73,14 @@ it('leaves small, read, nested and excluded tool results untouched, including er
 
 it('uses bytes for the configurable threshold and caps matching lines at 20', async () => {
   const home = await temp()
-  const output = [{ type: 'text' as const, text: '警告 warn\n'.repeat(150) }]
+  const output = [{ type: 'text' as const, text: '警告 warn\n'.repeat(1500) }]
   expect(
-    await offload(home, 1, call, { output }, { thresholdBytes: 5000, exclude: [] }),
+    await offload(home, 1, call, { output }, { thresholdBytes: 50000, exclude: [] }),
   ).toBeUndefined()
   const shortened = await offload(home, 1, call, { output }, { thresholdBytes: 1000, exclude: [] })
   const text = shortened?.output?.[0]
   if (text?.type !== 'text') throw new Error('Missing excerpt')
-  expect(text.text.split('Matching lines:\n')[1].split('\n')).toHaveLength(20)
+  expect(text.text.split('Matching lines:\n')[1].split('\n').slice(0, -1)).toHaveLength(20)
 })
 
 it('keeps original output and adds a diagnostic on disk failure or missing spill', async () => {
@@ -88,7 +88,7 @@ it('keeps original output and adds a diagnostic on disk failure or missing spill
   await writeFile(join(home, 'outputs'), 'not a directory')
   for (const original of [
     result,
-    { ...result, details: { fullOutputPath: join(home, 'missing') } },
+    { ...result, structuredOutput: { fullOutputPath: join(home, 'missing') } },
   ]) {
     const failed = await offload(home, 1, call, original)
     expect(failed?.output).toBe(original.output)
@@ -135,4 +135,50 @@ it('prunes files older than 30 days and empty conversation directories, keeping 
   await expect(readFile(old, 'utf8')).rejects.toThrow('ENOENT')
   await expect(readFile(join(home, 'outputs/1'))).rejects.toThrow('ENOENT')
   expect(await readFile(recent, 'utf8')).toBe('recent')
+})
+
+it('bounds long multibyte lines and keeps the durable marker last', async () => {
+  const home = await temp()
+  const longLines = Array.from({ length: 8 }, (_, i) => `warn ${i}: ${'警'.repeat(20000)}`).join(
+    '\n',
+  )
+  const shortened = await offload(home, 1, call, { output: [{ type: 'text', text: longLines }] })
+  const text = shortened?.output?.[0]
+  if (text?.type !== 'text') throw new Error('Missing excerpt')
+  expect(Buffer.byteLength(text.text)).toBeLessThan(22000)
+  expect(text.text).toContain('chars]')
+  expect(text.text).toContain('bytes not shown')
+  expect(text.text.split('\n').at(-1)).toContain('Full output: ')
+  expect(await readFile(join(home, 'outputs/1/call_unsafe.txt'), 'utf8')).toBe(longLines)
+})
+
+it('does not offload when the marker and excerpt would grow the original', async () => {
+  const home = await temp()
+  expect(
+    await offload(
+      home,
+      1,
+      call,
+      { output: [{ type: 'text', text: 'small' }] },
+      { thresholdBytes: 1, exclude: [] },
+    ),
+  ).toBeUndefined()
+})
+
+it('prefers the structured spill path and removes only the redundant full_output diagnostic after copying', async () => {
+  const home = await temp()
+  const spill = join(home, 'spill')
+  await writeFile(spill, full)
+  const shortened = await offload(home, 1, call, {
+    output: [{ type: 'text', text: 'retained tail' }],
+    structuredOutput: { fullOutputPath: spill },
+    diagnostics: [
+      { code: 'full_output', severity: 'info', message: 'Full output: /missing/spill' },
+      { code: 'exit_code', severity: 'error', message: 'Command exited with code 1' },
+    ],
+  })
+  expect(await readFile(join(home, 'outputs/1/call_unsafe.txt'), 'utf8')).toBe(full)
+  expect(shortened?.diagnostics).toEqual([
+    { code: 'exit_code', severity: 'error', message: 'Command exited with code 1' },
+  ])
 })
