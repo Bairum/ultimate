@@ -217,8 +217,9 @@ export function SessionJournal({
           <Collapsible className="group/folded border-t border-border/60">
             <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-1 px-4 py-2 font-mono text-[11px] text-muted-foreground hover:text-foreground">
               <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/folded:rotate-90 motion-reduce:transition-none" />
-              The journal and its {session.proposals.length} proposal
-              {session.proposals.length === 1 ? '' : 's'}
+              {session.proposals.length === 0
+                ? 'The journal'
+                : `The journal and its ${session.proposals.length} proposal${session.proposals.length === 1 ? '' : 's'}`}
             </CollapsibleTrigger>
             <CollapsibleContent>
               <Learned lines={journal.learned} />

@@ -25,6 +25,7 @@ import { MorningCard } from './morning.tsx'
 import { DreamDialog, dreamDialog } from './modal.tsx'
 import { DreamStatus, JournalDialog } from './pinned.tsx'
 import { DreamDoc } from './refs.ts'
+import { DreamSection } from './sidebar.tsx'
 
 /** Above this share of its context window, a compacted @ultimate has lived long enough to be worth a dream. */
 const FULL = 0.5
@@ -133,7 +134,10 @@ export default defineWebExtension({
     'dream.settled': SettledCard,
   },
   slots: {
-    'sidebar.top': [{ component: OlderChapterBanner, order: -30 }],
+    'sidebar.top': [
+      { component: OlderChapterBanner, order: -30 },
+      { component: DreamSection, order: -25 },
+    ],
     'statusline.right': [
       { component: DreamStatus, order: -10, phone: true },
       TimeToDream,
