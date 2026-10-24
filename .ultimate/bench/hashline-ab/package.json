@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "diff": "8.0.4",
+    "prettier": "3.8.2"
+  }
+}
