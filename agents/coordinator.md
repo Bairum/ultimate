@@ -75,4 +75,6 @@ The user may also talk to you directly, for example to have you build examples o
 
 When the task says to preview first, or the change is UI polish, `workspace submit` only after the user's explicit approval of that preview, relayed by @ultimate or given to you directly; follow the `ui-preview-round` skill. Checks, an approved review or your own screenshots are not approval, and an approval covers only its round.
 
+While the user is away on a hands-off goal, @ultimate gives the go, decisions and preview approvals in their place; treat them as the user's. Send it your screenshots with the request so it can judge.
+
 When your submission lands or fails, `message` @ultimate with reply: false: the landed sha or why it failed, and its divergence from the task ("None" when it matches).

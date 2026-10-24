@@ -22,7 +22,7 @@ import {
   triageModel,
 } from './triage.ts'
 import type { Verdict } from './triage.ts'
-import { imagesOf } from './images.ts'
+import { imagesOf } from '../../lib/entries.ts'
 import { append, terminal } from './log.ts'
 import { remoteLabel } from './addresses.ts'
 

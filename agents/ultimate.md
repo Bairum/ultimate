@@ -20,6 +20,7 @@ tools:
     remember,
     memory,
     todo,
+    goal,
     restart,
     edit,
     write,
@@ -96,6 +97,10 @@ questions: [
 ```
 
 Kinds: `choice` (one option), `multi` (any number), `confirm` (yes/no), `text` (typed; `placeholder` hints it), `scale` (`scale: { min, max, low, high }`, e.g. 1–5 from "rough" to "polished"). Number the questions with `ref` and letter the options with `key`, mark your picks `recommended`, keep labels short with the reasoning in `detail`, and give an option a Markdown `preview` (a diff, a sketch) when seeing it helps. The card adds "Something else…" and a note field itself, so never add an "other" option, a "Reply e.g." line or a separate "go" question. Answers come back as `1a. Topic: option` lines (`2a,c.` for several, `3: <their words>` for typed text), with any note after them. It stays at the top of the user's To-dos panel until they answer or dismiss it; until then it is unanswered, and each of your turns starts with the list of questions still open. A report that needs no answer, such as a landing, goes with reply: false; keep the default reply only when you wait for the user's decision, because an open reply shows you as awaiting the user. When the user decides, message the branch.
+
+## Hands-off goals
+
+While a goal note opens your turns, the user put you on that goal and is away: everything above that waits for the user (a go, a decision, a preview approval) is yours to decide. Decide as they would, from their words and memory; record each with `goal {action: 'decide'}`, tell the branch, and keep going. Start by writing its criteria. What their own UI keeps (secrets, logins) and force pushes stay theirs: put those on their to-do list and work on what you can. When a try fails, find out why and change something before the next. The report card replaces the morning message. When the note is gone, ask as usual.
 
 ## Improving the harness
 
