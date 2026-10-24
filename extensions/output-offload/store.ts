@@ -113,6 +113,7 @@ export async function offload(
     const marker = `… ${hidden.toLocaleString('en-US')} lines and ${omittedBytes.toLocaleString('en-US')} bytes not shown (${formatBytes(bytes)} total). Full output: ${path}. Use read with offset/limit or grep on that file.`
     const excerpt = [
       ...head.map((row) => row.text),
+      ...(hidden > 0 ? [`… ${hidden.toLocaleString('en-US')} lines omitted …`] : []),
       ...tail.map((row) => row.text),
       ...(matches.length
         ? ['Matching lines:', ...matches.map((row) => `${row.index + 1}: ${row.text}`)]
