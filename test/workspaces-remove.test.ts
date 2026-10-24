@@ -50,6 +50,8 @@ it('removes a worktree whose submodule commit already reached its remote after t
   await commit(sub, 'pushed later')
   await git(sub, 'push', '--quiet', 'origin', 'HEAD:refs/heads/later')
   await git(sub, 'update-ref', '-d', 'refs/remotes/origin/later')
+  await git(worktree, 'add', 'lib')
+  await commit(worktree, 'bump submodule')
   await removeWorktree(source, worktree)
   expect(existsSync(worktree)).toBe(false)
 })
@@ -76,6 +78,20 @@ it('keeps a worktree whose own checkout has uncommitted changes', async () => {
   await writeFile(join(worktree, 'notes.md'), 'draft\n')
   await expect(removeWorktree(source, worktree)).rejects.toThrow('it has uncommitted changes')
   expect(existsSync(join(worktree, 'notes.md'))).toBe(true)
+})
+
+it('keeps a worktree whose submodule pointer change is staged, its commit pushed', async () => {
+  await commit(sub, 'pushed')
+  await git(sub, 'push', '--quiet', 'origin', 'HEAD:refs/heads/pushed')
+  await git(worktree, 'add', 'lib')
+  await expect(removeWorktree(source, worktree)).rejects.toThrow('it has uncommitted changes')
+  expect(existsSync(join(sub, '.git'))).toBe(true)
+})
+
+it('keeps a worktree whose submodule commit survives only in its reflog', async () => {
+  await commit(sub, 'reset away')
+  await git(sub, 'reset', '--quiet', '--hard', 'HEAD~1')
+  await expect(removeWorktree(source, worktree)).rejects.toThrow('lib has 1 commit on no remote')
 })
 
 it('keeps a worktree whose deinitialised submodule repository still holds unique commits', async () => {

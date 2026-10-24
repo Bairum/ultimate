@@ -13,44 +13,61 @@ import { git } from '../../lib/git.ts'
  */
 export async function removeWorktree(source: string, path: string) {
   try {
-    await git(source, 'worktree', 'remove', path)
+    // English messages: the refusal below is recognised by its text.
+    await exec('git', ['worktree', 'remove', path], {
+      cwd: source,
+      timeout: 30000,
+      env: { ...process.env, LC_ALL: 'C' },
+    })
     return
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes('containing submodules')) throw error
   }
   const work = await submoduleWork(path)
   if (work) throw new Error(`Kept ${path} for its submodules: ${work}`)
-  // --force also skips Git's own check of the checkout; repeat it, as plain removal would have refused.
-  if (await git(path, 'status', '--porcelain', '--ignore-submodules=all'))
+  // --force also skips Git's own check of the checkout; repeat it, as plain removal would have refused. `dirty` still
+  // shows a moved submodule pointer, staged or not; changes inside the submodules were checked above.
+  if (await git(path, 'status', '--porcelain', '--ignore-submodules=dirty'))
     throw new Error(`Kept ${path}: it has uncommitted changes`)
   await git(source, 'worktree', 'remove', '--force', path)
 }
 
-/** Why removing the submodules of the checkout at `path` would lose work, or '' when nothing would be lost. */
+/**
+ * Why removing the submodules of the checkout at `path` would lose work, or '' when nothing would be lost. Commits
+ * count as safe once a remote-tracking ref reaches them; the slow part, counting and fetching, runs before the
+ * changes are read, so those are read last, just before removal.
+ */
 export async function submoduleWork(path: string) {
   const reasons: string[] = []
   const repos = new Map<string, string>()
-  const populated = await git(
-    path,
-    'submodule',
-    'foreach',
-    '--quiet',
-    '--recursive',
-    'echo "$displaypath"',
+  const add = async (repo: string, name: string) => {
+    const real = await realpath(repo)
+    if (!repos.has(real)) repos.set(real, name)
+  }
+  const populated = (
+    await git(path, 'submodule', 'foreach', '--quiet', '--recursive', 'echo "$displaypath"')
   )
-  for (const name of populated.split('\n').filter(Boolean)) {
-    const dir = join(path, name)
-    const changed = (await git(dir, 'status', '--porcelain')).split('\n').filter(Boolean).length
-    if (changed)
-      reasons.push(`${name} has ${changed} uncommitted change${changed === 1 ? '' : 's'}`)
-    repos.set(await realpath(await git(dir, 'rev-parse', '--absolute-git-dir')), name)
+    .split('\n')
+    .filter(Boolean)
+  for (const name of populated) {
+    const gitdir = await git(join(path, name), 'rev-parse', '--absolute-git-dir')
+    await add(gitdir, name)
+    // A submodule with its own .git directory keeps its deinitialised submodules there.
+    for (const repo of await moduleRepos(join(gitdir, 'modules')))
+      await add(repo, join(name, relative(join(gitdir, 'modules'), repo)))
   }
   const modules = join(await git(path, 'rev-parse', '--absolute-git-dir'), 'modules')
-  for (const repo of await moduleRepos(modules))
-    if (!repos.has(await realpath(repo))) repos.set(await realpath(repo), relative(modules, repo))
+  for (const repo of await moduleRepos(modules)) await add(repo, relative(modules, repo))
   for (const [repo, name] of repos) {
     const count = await unique(repo)
     if (count) reasons.push(`${name} has ${count} commit${count === 1 ? '' : 's'} on no remote`)
+  }
+  for (const name of populated) {
+    const changed = (await git(join(path, name), 'status', '--porcelain'))
+      .split('\n')
+      .filter(Boolean).length
+    if (changed)
+      reasons.push(`${name} has ${changed} uncommitted change${changed === 1 ? '' : 's'}`)
   }
   return reasons.join('; ')
 }
@@ -75,7 +92,7 @@ async function moduleRepos(dir: string): Promise<string[]> {
   return repos
 }
 
-/** Commits of the repository at `gitdir` (its HEAD, branches, tags and stash) that no remote-tracking ref reaches. */
+/** Commits of the repository at `gitdir` (its HEAD, branches, tags, stash and reflogs) that no remote-tracking ref reaches. */
 async function unique(gitdir: string) {
   const count = async () =>
     Number(
@@ -86,10 +103,13 @@ async function unique(gitdir: string) {
         '--count',
         'HEAD',
         '--all',
+        '--reflog',
         '--not',
         '--remotes',
       ),
     )
+  // A tracking ref whose remote branch was since deleted still counts: fetching each repository on every removal
+  // to find out would cost more than the case is worth.
   if (!(await count())) return 0
   // Tracking refs go stale once a submodule's remote moves on; refresh them before counting again.
   await exec('git', [`--git-dir=${gitdir}`, 'fetch', '--all', '--no-tags', '--quiet'], {
