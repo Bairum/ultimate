@@ -9,6 +9,8 @@ export default defineConfig({
   lint: {
     plugins: ['typescript', 'unicorn', 'import', 'promise', 'vitest'],
     jsPlugins: ['./lint/ultimate.ts'],
+    // Fork-only benchmark tooling with its own dependencies, tsconfig and tests.
+    ignorePatterns: ['.ultimate/bench/**'],
     categories: { correctness: 'error', suspicious: 'error' },
     rules: {
       'import/no-cycle': 'error',
