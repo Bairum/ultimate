@@ -134,6 +134,7 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   messageActions: [arrayOf(isComponent), 'an array of message action components'],
   messageDetails: [arrayOf(isComponent), 'an array of message detail components'],
   answerLabels: [arrayOf(isComponent), 'an array of answer label components'],
+  userBubble: [arrayOf(isComponent), 'an array of user bubble components'],
   compact: [
     fields({
       when: isFunction,
@@ -548,7 +549,7 @@ export function linkRenderers(
 /** Message contributions, preserving discovery order and each facet's array order. */
 export function messageItems(
   records: readonly ExtensionRecord[],
-  contribution: 'messageActions' | 'messageDetails' | 'answerLabels',
+  contribution: 'messageActions' | 'messageDetails' | 'answerLabels' | 'userBubble',
 ) {
   return records.flatMap(({ name, extension, version }) =>
     (extension?.[contribution] ?? []).map((component, index) => ({

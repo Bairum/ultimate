@@ -239,6 +239,7 @@ function Details({ extension }: { extension: ExtensionInfo }) {
     ...(web?.messageActions?.length ? ['message actions'] : []),
     ...(web?.messageDetails?.length ? ['message details'] : []),
     ...(web?.answerLabels?.length ? ['answer labels'] : []),
+    ...(web?.userBubble?.length ? ['user bubble'] : []),
   ]
   // Each labelled list, shown only when it has something; the empty ones share one dim line.
   const lists: [string, readonly string[]][] = [

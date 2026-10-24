@@ -298,6 +298,8 @@ export interface WebExtension {
   messageDetails?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Inline labels after the Final answer heading on stored assistant messages. */
   answerLabels?: readonly ComponentType<{ entry: EntryRecord }>[]
+  /** Overlays on the user's bubble, rendered after it inside a positioned box exactly its size (`absolute inset-0`). */
+  userBubble?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Shows matching conversations in compact mode; the visible tools of every matching facet combine. */
   compact?: CompactContribution
   /** The empty state's wording and the composer's placeholder for matching conversations. */

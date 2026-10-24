@@ -1407,6 +1407,13 @@ export default function lineageExtension(host: ExtensionHost) {
     leaveNote: (to, text, source) => leaveNote(host, to, text, source),
     remember: (root, ops, ctx, now) =>
       host.harness().commit((tx) => applyMemoryOps(tx, root, ops, now), ctx),
+    memoriesOf: async (id, ctx) => {
+      const roots = await rootsOf(host, ctx)
+      const root = (await rootOf(host, id, ctx)) ?? (roots.length === 1 ? roots[0] : undefined)
+      if (root === undefined) return undefined
+      const doc = await host.harness().snapshot(Memory, root, ctx)
+      return { root, memories: doc?.memories ?? {} }
+    },
   })
   // What summaries need to know of a conversation's tree, through conversations' extension point.
   host.implement(Trees, {
