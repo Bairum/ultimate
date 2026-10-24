@@ -57,6 +57,18 @@ it('falls back visibly on a failed gitlink listing, but explicit backends throw'
   await expect(populate(src, path, 'apfs')).rejects.toThrow('listing failed')
 })
 
+it('refreshes the copied index before resetting, so unchanged cloned files are not rewritten', async () => {
+  const { src, path } = await source()
+  const calls: string[] = []
+  const original = gitModule.git
+  vi.spyOn(gitModule, 'git').mockImplementation((cwd, ...args) => {
+    if (cwd === path && (args[0] === 'update-index' || args[0] === 'reset')) calls.push(args[0])
+    return original(cwd, ...args)
+  })
+  const { backend: used } = await populate(src, path, 'auto')
+  expect(calls).toEqual(used === 'git' ? ['reset'] : ['update-index', 'reset'])
+})
+
 it('reads the setting and picks the platform backend', () => {
   expect(cloneMode({})).toBe('auto')
   expect(cloneMode({ isolates: { worktree: { clone: 'git' } } })).toBe('git')

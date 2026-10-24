@@ -56,6 +56,10 @@ export async function populate(source: string, path: string, mode: CloneMode) {
     }
   }
   await guard()
+  // The copied index holds the source's inodes and ctimes; without a refresh reset rewrites every tracked file and
+  // the clone shares no blocks. A refresh reports changed files with a non-zero exit, which is expected here.
+  if (kind && !reason)
+    await git(path, 'update-index', '-q', '--refresh').catch(() => 'changed files are expected')
   await git(path, 'reset', '--hard', '--quiet', 'HEAD')
   if (kind && !reason) {
     // The second -f also drops untracked nested repositories.
