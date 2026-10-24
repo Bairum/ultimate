@@ -3,7 +3,6 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { backend, cloneMode, populate } from '../extensions/workspaces/clone.ts'
 import { git } from '../lib/git.ts'
-import { removeWorktree } from '../extensions/workspaces/remove.ts'
 import * as gitModule from '../lib/git.ts'
 import { removeTemps, temp } from './helpers.ts'
 
@@ -49,6 +48,26 @@ it('refuses a git file that points at the source repository itself', async () =>
   await expect(populate(src, path, 'auto')).rejects.toThrow(/Unsafe worktree repository/)
   expect(await readFile(join(src, 'tracked'), 'utf8')).toBe('dirty\n')
   expect(await git(src, 'diff', '--name-only')).toBe('tracked')
+})
+
+it('refuses a path that is a symlink to another worktree of the repository', async () => {
+  const { src, path } = await source()
+  const sibling = join(path, '..', 'sibling')
+  await git(src, 'worktree', 'add', '--quiet', '-b', 'sibling', sibling)
+  await writeFile(join(sibling, 'work'), 'unsaved\n')
+  await git(src, 'worktree', 'remove', '--force', path)
+  await symlink(sibling, path)
+  await expect(populate(src, path, 'auto')).rejects.toThrow(/Unsafe worktree repository/)
+  expect(await readFile(join(sibling, 'work'), 'utf8')).toBe('unsaved\n')
+})
+
+it('refuses a linked source as its own target', async () => {
+  const { src, path } = await source()
+  await git(path, 'checkout', '--quiet', 'feature')
+  await writeFile(join(path, 'work'), 'unsaved\n')
+  await expect(populate(path, path, 'auto')).rejects.toThrow(/Unsafe worktree repository/)
+  expect(await readFile(join(path, 'work'), 'utf8')).toBe('unsaved\n')
+  expect(await readFile(join(src, 'untracked'), 'utf8')).toBe('stray\n')
 })
 
 it('clones a repository whose file list exceeds 1 MiB', async () => {
@@ -111,7 +130,8 @@ it('rolls back a failed copy with no index and can retry the same path and branc
   await expect(populate(src, path, backend('auto') ?? 'apfs')).rejects.toThrow('copy failed')
   expect(await readFile(join(path, 'partial'), 'utf8')).toContain('copied')
   await expect(git(src, 'worktree', 'remove', path)).rejects.toThrow(/modified or untracked files/)
-  await removeWorktree(src, path, { discardCreated: true })
+  // The preparation rollback in workspaces.ts.
+  await git(src, 'worktree', 'remove', '--force', path)
   await git(src, 'branch', '-D', 'feature')
   expect(await git(src, 'worktree', 'list')).not.toContain(path)
   expect(await git(src, 'branch', '--list', 'feature')).toBe('')

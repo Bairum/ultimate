@@ -47,13 +47,22 @@ export function backend(mode: CloneMode, platform = process.platform): 'apfs' | 
 export async function populate(source: string, path: string, mode: CloneMode) {
   const common = await commonDir(source)
   const guard = async () => {
+    const real = await realpath(path)
     const top = await git(path, 'rev-parse', '--show-toplevel')
     // A linked worktree has its own git dir inside the common one; a `.git` pointing at the common dir is the source.
     const own = await realpath(await git(path, 'rev-parse', '--absolute-git-dir'))
+    // Its admin dir names the checkout it belongs to: a symlink to another worktree, or the source itself when that
+    // is a linked worktree, points back elsewhere. A missing or dangling gitdir file fails the check, so read errors
+    // become ''.
+    const back = (await readFile(join(own, 'gitdir'), 'utf8').catch(() => '')).trim()
     if (
-      (await realpath(top)) !== (await realpath(path)) ||
+      (await lstat(path)).isSymbolicLink() ||
+      real === (await realpath(source)) ||
+      (await realpath(top)) !== real ||
       (await commonDir(path)) !== common ||
-      own === common
+      own === common ||
+      !back ||
+      (await realpath(resolve(own, back)).catch(() => '')) !== join(real, '.git')
     )
       throw new Error(`Unsafe worktree repository: ${path}`)
   }

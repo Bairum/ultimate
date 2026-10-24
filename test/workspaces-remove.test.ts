@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
+import { rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { beforeEach, expect, it } from 'vitest'
 import { git } from '../lib/git.ts'
@@ -11,10 +11,10 @@ const commit = (cwd: string, message: string) =>
   git(cwd, ...identity, 'commit', '--quiet', '--allow-empty', '-m', message)
 const file = ['-c', 'protocol.file.allow=always']
 
-let source: string, worktree: string, sub: string
+let source: string, worktree: string, sub: string, library: string
 beforeEach(async () => {
   const root = await temp('ultimate-remove-')
-  const library = join(root, 'library')
+  library = join(root, 'library')
   source = join(root, 'source')
   worktree = join(root, 'worktree')
   await git(root, 'init', '--quiet', '-b', 'main', library)
@@ -72,6 +72,51 @@ it('keeps a worktree whose submodule has uncommitted changes', async () => {
     'for its submodules: lib has 1 uncommitted change',
   )
   expect(existsSync(join(sub, 'notes.md'))).toBe(true)
+})
+
+it('keeps untracked files that status.showUntrackedFiles hides', async () => {
+  await git(sub, 'config', 'status.showUntrackedFiles', 'no')
+  await git(worktree, 'config', 'status.showUntrackedFiles', 'no')
+  await writeFile(join(sub, 'notes.md'), 'draft\n')
+  await expect(removeWorktree(source, worktree)).rejects.toThrow('lib has 1 uncommitted change')
+  await rm(join(sub, 'notes.md'))
+  await writeFile(join(worktree, 'notes.md'), 'draft\n')
+  await expect(removeWorktree(source, worktree)).rejects.toThrow('it has uncommitted changes')
+  expect(existsSync(join(worktree, 'notes.md'))).toBe(true)
+})
+
+it('keeps a submodule commit whose remote branch was deleted since it was fetched', async () => {
+  await commit(sub, 'pushed, then the branch was deleted')
+  await git(sub, 'push', '--quiet', 'origin', 'HEAD:refs/heads/closed')
+  await git(sub, 'fetch', '--quiet', 'origin')
+  await git(library, 'branch', '-D', 'closed')
+  await expect(removeWorktree(source, worktree)).rejects.toThrow('lib has 1 commit on no remote')
+})
+
+it('keeps a worktree whose submodule remote cannot be reached, even with its commits on tracking refs', async () => {
+  await git(sub, 'remote', 'set-url', 'origin', join(library, '..', 'gone'))
+  await expect(removeWorktree(source, worktree)).rejects.toThrow(
+    'lib could not reach its remote to confirm its commits',
+  )
+  expect(existsSync(join(sub, '.git'))).toBe(true)
+})
+
+it('keeps a worktree whose detached HEAD has commits on no branch', async () => {
+  await git(worktree, 'checkout', '--quiet', '--detach')
+  await commit(worktree, 'detached')
+  await expect(removeWorktree(source, worktree)).rejects.toThrow(
+    'its HEAD has 1 commit on no branch',
+  )
+  expect(existsSync(worktree)).toBe(true)
+})
+
+it('refuses a missing checkout, keeping its submodule repositories', async () => {
+  await commit(sub, 'only here')
+  const modules = join(await git(worktree, 'rev-parse', '--absolute-git-dir'), 'modules')
+  await rm(worktree, { recursive: true })
+  await expect(removeWorktree(source, worktree)).rejects.toThrow('it is not a checkout')
+  expect(existsSync(join(modules, 'lib'))).toBe(true)
+  expect(await git(source, 'worktree', 'list')).toContain(worktree)
 })
 
 it('keeps a worktree whose own checkout has uncommitted changes', async () => {

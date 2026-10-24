@@ -10,23 +10,29 @@ import { git } from '../../lib/git.ts'
  * changes or commits found on no remote, this forces the removal. `git submodule deinit` is no alternative: Git still
  * refuses while the module repositories exist, and deinit in a worktree unsets the submodules in the configuration it
  * shares with the main checkout.
+ *
+ * Before either removal the checkout must be there and its HEAD on a branch, tag or remote: Git removes a missing
+ * checkout's admin dir, submodule repositories included, unchecked, and a detached HEAD's commits with it.
  */
-export async function removeWorktree(
-  source: string,
-  path: string,
-  options: { discardCreated?: boolean } = {},
-) {
-  // Only preparation rollback may discard a checkout it just created: a partial copy has no index and looks dirty,
-  // but holds no work of its own. The caller must verify that the registered path and branch are the ones it created.
-  if (options.discardCreated) {
-    await git(source, 'worktree', 'remove', '--force', path)
-    return
-  }
+export async function removeWorktree(source: string, path: string) {
+  // A missing or broken checkout fails the comparison, so its errors become ''.
+  const top = await git(path, 'rev-parse', '--show-toplevel').then(realpath, () => '')
+  if (!top || top !== (await realpath(path).catch(() => '')))
+    throw new Error(`Kept ${path}: it is not a checkout`)
+  const detached = Number(
+    await git(path, 'rev-list', '--count', 'HEAD', '--not', '--branches', '--tags', '--remotes'),
+  )
+  if (detached)
+    throw new Error(
+      `Kept ${path}: its HEAD has ${detached} commit${detached === 1 ? '' : 's'} on no branch`,
+    )
+  // Cloned checkouts carry ignored trees such as node_modules: deleting them takes longer than git()'s default.
+  const timeout = 600_000
   try {
     // English messages: the refusal below is recognised by its text.
     await exec('git', ['worktree', 'remove', path], {
       cwd: source,
-      timeout: 30000,
+      timeout,
       env: { ...process.env, LC_ALL: 'C' },
     })
     return
@@ -37,9 +43,12 @@ export async function removeWorktree(
   if (work) throw new Error(`Kept ${path} for its submodules: ${work}`)
   // --force also skips Git's own check of the checkout; repeat it, as plain removal would have refused. `dirty` still
   // shows a moved submodule pointer, staged or not; changes inside the submodules were checked above.
-  if (await git(path, 'status', '--porcelain', '--ignore-submodules=dirty'))
+  // Untracked files are listed whatever status.showUntrackedFiles says.
+  if (
+    await git(path, 'status', '--porcelain', '--untracked-files=all', '--ignore-submodules=dirty')
+  )
     throw new Error(`Kept ${path}: it has uncommitted changes`)
-  await git(source, 'worktree', 'remove', '--force', path)
+  await git({ cwd: source, timeout }, 'worktree', 'remove', '--force', path)
 }
 
 /**
@@ -68,12 +77,11 @@ export async function submoduleWork(path: string) {
   }
   const modules = join(await git(path, 'rev-parse', '--absolute-git-dir'), 'modules')
   for (const repo of await moduleRepos(modules)) await add(repo, relative(modules, repo))
-  for (const [repo, name] of repos) {
-    const count = await unique(repo)
-    if (count) reasons.push(`${name} has ${count} commit${count === 1 ? '' : 's'} on no remote`)
-  }
+  const found = await Promise.all([...repos.keys()].map(unique))
+  for (const [index, name] of [...repos.values()].entries())
+    if (found[index]) reasons.push(`${name} ${found[index]}`)
   for (const name of populated) {
-    const changed = (await git(join(path, name), 'status', '--porcelain'))
+    const changed = (await git(join(path, name), 'status', '--porcelain', '--untracked-files=all'))
       .split('\n')
       .filter(Boolean).length
     if (changed)
@@ -102,33 +110,34 @@ async function moduleRepos(dir: string): Promise<string[]> {
   return repos
 }
 
-/** Commits of the repository at `gitdir` (its HEAD, branches, tags, stash and reflogs) that no remote-tracking ref reaches. */
+/**
+ * Why the repository at `gitdir` holds work found nowhere else, or '': commits of its HEAD, branches, tags, stash and
+ * reflogs that no remote-tracking ref reaches, or a remote that cannot be reached to confirm them.
+ */
 async function unique(gitdir: string) {
-  const count = async () =>
-    Number(
-      await git(
-        gitdir,
-        `--git-dir=${gitdir}`,
-        'rev-list',
-        '--count',
-        'HEAD',
-        '--all',
-        '--reflog',
-        '--not',
-        '--remotes',
-      ),
-    )
-  // A tracking ref whose remote branch was since deleted still counts: fetching each repository on every removal
-  // to find out would cost more than the case is worth.
-  if (!(await count())) return 0
-  // Tracking refs go stale once a submodule's remote moves on; refresh them before counting again.
-  await exec('git', [`--git-dir=${gitdir}`, 'fetch', '--all', '--no-tags', '--quiet'], {
-    cwd: gitdir,
-    timeout: 30000,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-  }).catch(
-    // An unreachable remote only leaves the tracking refs as they were; the commits then count as unique.
-    () => undefined,
+  // Tracking refs go stale: a remote branch moves on, or is deleted with the only other copy of its commits. Refresh
+  // and prune them first; without a reachable remote they prove nothing.
+  const fetched = await exec(
+    'git',
+    [`--git-dir=${gitdir}`, 'fetch', '--all', '--prune', '--no-tags', '--quiet'],
+    { cwd: gitdir, timeout: 30000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } },
+  ).then(
+    () => true,
+    () => false,
   )
-  return count()
+  const count = Number(
+    await git(
+      gitdir,
+      `--git-dir=${gitdir}`,
+      'rev-list',
+      '--count',
+      'HEAD',
+      '--all',
+      '--reflog',
+      '--not',
+      '--remotes',
+    ),
+  )
+  if (count) return `has ${count} commit${count === 1 ? '' : 's'} on no remote`
+  return fetched ? '' : 'could not reach its remote to confirm its commits'
 }

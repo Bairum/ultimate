@@ -95,8 +95,10 @@ async function changes(
 ): Promise<KeptWork> {
   return {
     id,
-    uncommitted: (await git(workspace.path, 'status', '--porcelain')).split('\n').filter(Boolean)
-      .length,
+    // Untracked files count whatever status.showUntrackedFiles says.
+    uncommitted: (await git(workspace.path, 'status', '--porcelain', '--untracked-files=all'))
+      .split('\n')
+      .filter(Boolean).length,
     unlanded: Number(
       await git(
         workspace.path,
@@ -319,6 +321,7 @@ export function workspaces(host: Host) {
       prepare: async (task, runtime, context) => {
         const workspace = (await get(task.input.id, context))!
         let created = false
+        let populated = false
         try {
           const settings = await host.projectSettings()
           const mode = cloneMode(settings)
@@ -372,13 +375,15 @@ export function workspaces(host: Host) {
           })
           created = true
           // A crash mid-clone leaves the registered checkout half filled; populate starts over by clearing it.
-          if (!(await runtime.memo<boolean>('populated', context))) {
+          populated = (await runtime.memo<boolean>('populated', context)) ?? false
+          if (!populated) {
             const result = await populate(workspace.source, workspace.path, mode)
             if (result.reason)
               host.notice(
                 `Worktree ${workspace.path} used ${result.backend} checkout: ${result.reason}`,
               )
             await runtime.memo('populated', true, context)
+            populated = true
           }
           await setup(workspace.source, workspace.path, settings, runtime.signal)
           await runtime.commit(async (tx) => {
@@ -399,9 +404,15 @@ export function workspaces(host: Host) {
               )
             if (created) {
               if (registered)
-                await removeWorktree(workspace.source, workspace.path, {
-                  discardCreated: true,
-                }).catch(
+                // A half-filled copy has no index and looks dirty but holds nothing of its own, so it is forced;
+                // once populated, Git's refusal keeps a failed setup's dirty output.
+                await git(
+                  workspace.source,
+                  'worktree',
+                  'remove',
+                  ...(populated ? [] : ['--force']),
+                  workspace.path,
+                ).catch(
                   // Best-effort rollback: the preparation error is recorded below and must not be replaced.
                   () => undefined,
                 )
@@ -555,6 +566,7 @@ export function workspaces(host: Host) {
         )
         if (merged) await git(workspace.source, 'branch', '-D', workspace.branch)
       }
+      // A removal refused earlier, for example for submodule work, left its reason on the record.
       await host.harness().commit(async (tx) => {
         const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)]
         saved.state = 'removed'
