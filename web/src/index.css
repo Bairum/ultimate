@@ -191,16 +191,6 @@
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
       env(safe-area-inset-left);
   }
-  /* Installed on iOS with a translucent status bar, the page is drawn from the screen's top but its viewport stops
-     the status bar's height short of the bottom (measured: viewport 844, screen 912, top inset 68), leaving an empty
-     band there; the shell reaches past it to the screen's bottom. */
-  @media (display-mode: standalone) {
-    @supports (-webkit-touch-callout: none) {
-      .safe-area {
-        height: calc(100dvh + env(safe-area-inset-top));
-      }
-    }
-  }
   .safe-area:has(textarea:focus, input:focus, [contenteditable]:focus) {
     padding-bottom: 0;
   }

@@ -200,7 +200,7 @@ function Overlay({
       />
       <aside
         className={cn(
-          'absolute inset-y-0 flex w-[85%] max-w-[26rem] flex-col shadow-2xl shadow-black/40 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          'absolute inset-y-0 flex w-[85%] max-w-[26rem] flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-2xl shadow-black/40 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
           side === 'left' ? 'left-0 border-r' : 'right-0 border-l',
           !open && (side === 'left' ? '-translate-x-full' : 'translate-x-full'),
           drag !== undefined && 'transition-none',
