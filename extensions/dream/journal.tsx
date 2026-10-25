@@ -79,7 +79,10 @@ export function StartedCard({ entry }: { entry: EntryRecord }) {
           className="border-b border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground"
           data-dream-before-compaction={session.beforeCompaction.automation}
         >
-          Started as my context filled up · automation {session.beforeCompaction.automation}
+          {session.beforeCompaction.pause !== undefined
+            ? `Started while you were away ${awayFor(session.beforeCompaction.pause)}`
+            : 'Started as my context filled up'}{' '}
+          · automation {session.beforeCompaction.automation}
           {session.beforeCompaction.handsOff && ' · I decide the proposals under your grant'}
         </p>
       )}
@@ -113,6 +116,7 @@ export function SettledCard({ entry }: { entry: EntryRecord }) {
   const { session: id } = entry.data as SessionEntry
   const session = useSession(id)
   const outcome = session?.beforeCompaction?.outcome
+  const pause = session?.beforeCompaction?.pause
   // Only the newest session falls asleep, as on the journal card.
   const newest = useDocOf(1, DreamDoc)?.sessions.at(-1)?.id === id
   return (
@@ -137,12 +141,22 @@ export function SettledCard({ entry }: { entry: EntryRecord }) {
                 ? 'Staying in this chapter'
                 : outcome.result === 'asleep'
                   ? 'Worth a fresh chapter: falling asleep under your grant'
-                  : 'Worth a fresh chapter'}
+                  : pause !== undefined
+                    ? 'A good moment for a fresh chapter'
+                    : 'Worth a fresh chapter'}
             </p>
-            <p className="font-mono text-[11px] text-muted-foreground">
-              {outcome.changes} change{outcome.changes === 1 ? '' : 's'} landed or applied · a fresh
-              chapter takes {outcome.threshold}
-            </p>
+            {pause !== undefined ? (
+              <p className="font-mono text-[11px] text-muted-foreground" data-dream-pause={pause}>
+                Dreamed while you were away {awayFor(pause)} · {outcome.changes} change
+                {outcome.changes === 1 ? '' : 's'} landed or applied · a fresh chapter starts lean
+                before new work reads the full context again
+              </p>
+            ) : (
+              <p className="font-mono text-[11px] text-muted-foreground">
+                {outcome.changes} change{outcome.changes === 1 ? '' : 's'} landed or applied · a
+                fresh chapter takes {outcome.threshold}
+              </p>
+            )}
             {outcome.error && (
               <p className="text-[12px] text-muted-foreground">
                 <span className="text-warning">The grant could not fall asleep:</span>{' '}
@@ -158,6 +172,9 @@ export function SettledCard({ entry }: { entry: EntryRecord }) {
     </Card>
   )
 }
+
+/** How long the user was away, in whole hours: `9 h`. */
+const awayFor = (ms: number) => `${Math.max(1, Math.round(ms / 3600_000))} h`
 
 /** Above this many characters the journal folds behind "Read the journal". */
 const FOLD = 600
@@ -292,7 +309,9 @@ export function HandoffCard({ entry }: { entry: EntryRecord }) {
         <MoonIcon className="size-3.5 text-brand" />
         <span className="text-foreground">Handoff before dreaming</span>
         <span>
-          {automation ? `my context filled up · automation ${automation.id}` : 'you pressed Dream'}
+          {automation
+            ? `${automation.pause !== undefined ? `you were away ${awayFor(automation.pause)}` : 'my context filled up'} · automation ${automation.id}`
+            : 'you pressed Dream'}
         </span>
       </header>
       <p

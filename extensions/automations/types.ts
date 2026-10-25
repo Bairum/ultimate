@@ -34,6 +34,10 @@ export type Automation = {
     cooldownMs: number
     armed: boolean
     value?: number
+    /** Fire only once the user gave `of` no input for this long (ms): a pause, checked every minute. */
+    idleFor?: number
+    /** The user's latest input to `of` (ms), kept while `idleFor` is set; the pause counts from creation before one. */
+    inputAt?: number
   }
   recentFires?: number[]
   /** What the user allowed this automation's woken agent to do for them on a fire; only the user sets it. */
@@ -73,7 +77,14 @@ export type CreateArgs = {
   schedule?: string | Schedule
   ask?: string
   event?: { name: string; where?: Record<string, string | number | boolean> }
-  condition?: { metric: 'context'; of: string; above: number; cooldownMs?: number }
+  condition?: {
+    metric: 'context'
+    of: string
+    above: number
+    cooldownMs?: number
+    /** 0 removes it. */
+    idleFor?: number
+  }
   once?: boolean
   secrets?: string[]
   prompt?: string

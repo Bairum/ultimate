@@ -10,7 +10,7 @@ import type { Todo } from '../todos/refs.ts'
 import { Roots } from '../lineage/api.ts'
 import { Messages } from '../messages/api.ts'
 import type { Automation } from '../automations/types.ts'
-import { BuiltInDoc, compactionSummary } from './before-compaction.ts'
+import { BuiltInDoc, compactionSummary, PauseDoc } from './before-compaction.ts'
 import { deliver } from './delivery.ts'
 import type { Session } from './refs.ts'
 import type { Seed } from './types.ts'
@@ -74,9 +74,11 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
     const todos = (await document<{ items: Todo[] }>(host, tx, 'todos')).items
       .filter((item) => item.done === undefined)
       .map(({ text, owner }) => ({ text, owner }))
-    // The built-in dream trigger is dream's own: the new chapter makes it again, as it was here.
+    // The built-in dream triggers are dream's own: the new chapter makes them again, as they were here.
     const own = (await tx.doc(BuiltInDoc, ROOT_CONVERSATION_ID)).id
     const builtIn = automations.find((item) => item.id === own)
+    const ownPause = (await tx.doc(PauseDoc, ROOT_CONVERSATION_ID)).id
+    const builtInPause = automations.find((item) => item.id === ownPause)
     // A dream that asked for a handoff continues what @ultimate was doing: its handoff, else (it timed out) its latest
     // compaction summary.
     const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
@@ -88,7 +90,10 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
     const triggers = automations
       .filter(
         (item) =>
-          item.id !== own && item.enabled && (item.schedule || item.event || item.condition),
+          item.id !== own &&
+          item.id !== ownPause &&
+          item.enabled &&
+          (item.schedule || item.event || item.condition),
       )
       .map((item) => {
         const { name, prompt, agent, model, thinking } = item
@@ -111,6 +116,7 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
                   of: item.condition.of,
                   above: item.condition.above,
                   cooldownMs: item.condition.cooldownMs,
+                  ...(item.condition.idleFor ? { idleFor: item.condition.idleFor } : {}),
                 },
               }
             : {}),
@@ -155,6 +161,7 @@ export async function buildSeed(host: ExtensionHost, session: number): Promise<S
           scripts: watchers.length,
         },
         builtIn: builtIn ? { enabled: builtIn.enabled } : null,
+        builtInPause: builtInPause ? { enabled: builtInPause.enabled } : null,
         ...(ultimate !== undefined && (handoff ?? summary)
           ? {
               continues: {

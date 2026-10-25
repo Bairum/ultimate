@@ -50,6 +50,7 @@ import { applySeed, buildSeed, SeedState, writeSeed } from './seed.ts'
 import { gate } from './gate.ts'
 import {
   BuiltInDoc,
+  PauseDoc,
   compactionDream,
   ensureAutomation,
   HANDOFF_CHARS,
@@ -78,7 +79,7 @@ export const Sessions = defineDoc<{ next: number; sessions: Session[]; waiting?:
   fork: 'initial',
   initial: () => ({ next: 1, sessions: [] }),
 })
-export const docs = [Sessions, SeedState, BuiltInDoc]
+export const docs = [Sessions, SeedState, BuiltInDoc, PauseDoc]
 export const userActions = ['start', 'end', 'asleep', 'switch']
 
 const LEARNED_LINES = 3

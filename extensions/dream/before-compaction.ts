@@ -36,6 +36,18 @@ import { busyElsewhere } from './types.ts'
 export const AUTOMATION_NAME = 'Dream before compaction'
 /** Its trigger as dream first makes it; the user may change the threshold. */
 export const CONDITION = { metric: 'context' as const, of: '@ultimate', above: 70 }
+/**
+ * The second built-in: after a long pause with @ultimate half full, dream while the user is away. At 8 hours keep-warm
+ * has just renewed the prompt cache, so the handoff reads it instead of rewriting it, and the user comes back to a
+ * settled dream that offers a fresh chapter.
+ */
+export const PAUSE_NAME = 'Dream after a pause'
+export const PAUSE_CONDITION = {
+  metric: 'context' as const,
+  of: '@ultimate',
+  above: 50,
+  idleFor: 8 * 3600_000,
+}
 /** The automation before this feature: dream migrates it in place to the condition above. */
 const OLD_NAME = 'Dream after compaction'
 const OLD_EVENT = { name: 'conversations.compacted', where: { conversation: '@ultimate' } }
@@ -61,6 +73,34 @@ export const BuiltInDoc = defineDoc<{ id?: string; deleted?: true }>({
   fork: 'initial',
   initial: () => ({}),
 })
+
+/** The pause built-in's id and deletion, as `BuiltInDoc` keeps the first one's. */
+export const PauseDoc = defineDoc<{ id?: string; deleted?: true }>({
+  kind: 'dream.after-pause',
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
+
+/** One built-in automation: where its id is kept, how it is made, and its state in a chapter's seed. */
+type BuiltIn = {
+  doc: typeof BuiltInDoc
+  name: string
+  condition: typeof CONDITION | typeof PAUSE_CONDITION
+  seed: (seed: Seed | undefined) => Seed['builtIn']
+}
+const BUILT_INS: BuiltIn[] = [
+  { doc: BuiltInDoc, name: AUTOMATION_NAME, condition: CONDITION, seed: (seed) => seed?.builtIn },
+  {
+    doc: PauseDoc,
+    name: PAUSE_NAME,
+    condition: PAUSE_CONDITION,
+    seed: (seed) => seed?.builtInPause,
+  },
+]
 
 /** How long a dream waits for every other conversation to finish, and how often it looks. */
 export const DREAM_WAIT_MS = 2 * 3600_000
@@ -98,15 +138,18 @@ export async function asleepAfter(host: Pick<ExtensionHost, 'userHome' | 'projec
   return ASLEEP_AFTER
 }
 
+/** A pause in whole hours, as the prompts say it: `9 h`. */
+export const hoursOf = (ms: number) => `${Math.round(ms / 3600_000)} h`
+
 /** What a settled session changed: the proposals that landed or were applied. */
 export const changes = (found: Session) =>
   found.proposals.filter((item) => item.status === 'landed' || item.status === 'applied').length
 
 /**
- * Make sure this chapter has the built-in automation, unless the user deleted it. A new chapter makes it as its `seed`
- * carried it: paused stays paused, and one deleted before the switch is not made again. The automation from before
- * this feature ("Dream after compaction", on @ultimate's compaction) becomes this one in place: same id, enabled state,
- * grant and subscribers.
+ * Make sure this chapter has both built-in automations, unless the user deleted one. A new chapter makes each as its
+ * `seed` carried it: paused stays paused, and one deleted before the switch is not made again. The automation from
+ * before this feature ("Dream after compaction", on @ultimate's compaction) becomes the first one in place: same id,
+ * enabled state, grant and subscribers.
  */
 export async function ensureAutomation(host: ExtensionHost) {
   // Every caller reads the chapter's own seed, so whichever runs first keeps its paused or deleted automation so.
@@ -114,20 +157,26 @@ export async function ensureAutomation(host: ExtensionHost) {
   // A gate's preview checks the seed against the real project; it makes nothing that could fire.
   if (seed?.gate) return
   if (!host.extensions().some((item) => item.name === 'automations' && item.enabled)) return
+  for (const builtIn of BUILT_INS) await ensureOne(host, builtIn, seed)
+}
+
+async function ensureOne(host: ExtensionHost, builtIn: BuiltIn, seed: Seed | undefined) {
+  const { doc, name, condition } = builtIn
+  const carried = builtIn.seed(seed)
   const harness = host.harness()
-  const state = await harness.snapshot(BuiltInDoc, ROOT_CONVERSATION_ID, context)
+  const state = await harness.snapshot(doc, ROOT_CONVERSATION_ID, context)
   if (state?.deleted) return
   const remember = (change: { id?: string; deleted?: true }) =>
     harness.commit(async (tx) => {
-      Object.assign(await tx.doc(BuiltInDoc, ROOT_CONVERSATION_ID), change)
+      Object.assign(await tx.doc(doc, ROOT_CONVERSATION_ID), change)
     }, context)
   // Only a seed that says so carries a deletion; one from before this feature has no say.
-  if (!state?.id && seed?.builtIn === null) return remember({ deleted: true })
+  if (!state?.id && carried === null) return remember({ deleted: true })
   const signal = new AbortController().signal
   // Session-scoped ledger: its list action reads it, as the seed does.
   const list = (await host.invoke('automations', 'list', null, signal)) as Automation[]
   const migrate = async (item: Automation) => {
-    if (isOld(item))
+    if (doc === BuiltInDoc && isOld(item))
       await host.invoke(
         'automations',
         'update',
@@ -149,8 +198,8 @@ export async function ensureAutomation(host: ExtensionHost) {
   const found = list.find(
     (item) =>
       !item.prompt &&
-      ((item.name === AUTOMATION_NAME && item.condition?.of === CONDITION.of) ||
-        (item.name === OLD_NAME && isOld(item))),
+      ((item.name === name && item.condition?.of === condition.of) ||
+        (doc === BuiltInDoc && item.name === OLD_NAME && isOld(item))),
   )
   if (found) await migrate(found)
   const created =
@@ -158,10 +207,10 @@ export async function ensureAutomation(host: ExtensionHost) {
     ((await host.invoke(
       'automations',
       'create',
-      { name: AUTOMATION_NAME, condition: CONDITION, subscribers: [ultimate] },
+      { name, condition, subscribers: [ultimate] },
       signal,
     )) as Automation)
-  if (seed?.builtIn?.enabled === false && created.enabled)
+  if (carried?.enabled === false && created.enabled)
     await host.need(AutomationsApi).pause(created.id)
   await remember({ id: created.id })
 }
@@ -261,6 +310,7 @@ export function compactionDream(
       if (blocked(doc.sessions, deps.switching())) return stop('done')
       if (busyElsewhere(host.conversations(), ultimate).length) return 'look'
       const handsOff = !!automation && !!automation.grant?.actions.includes('dream')
+      const pause = waiting.automation?.pause
       const handoff: Handoff = waiting.handoff
         ? { task, text: waiting.handoff.text, at: waiting.handoff.at }
         : {
@@ -277,6 +327,7 @@ export function compactionDream(
                 name: automation.name,
                 at: now,
                 ...(handsOff ? { handsOff } : {}),
+                ...(pause !== undefined ? { pause } : {}),
               },
             }
           : {}),
@@ -375,7 +426,7 @@ export function compactionDream(
       session: task,
       kind: 'dream.handoff',
       data: { task, ...(automation ? { automation } : {}) },
-      content: `${automation ? `Your context passed the threshold of automation ${automation.id} "${automation.name}": a dream follows.` : 'The user pressed Dream.'} ${HANDOFF_ASK}`,
+      content: `${automation ? `Your context passed the threshold of automation ${automation.id} "${automation.name}"${automation.pause !== undefined ? ` while the user has been away ${hoursOf(automation.pause)}` : ''}: a dream follows.` : 'The user pressed Dream.'} ${HANDOFF_ASK}`,
     })
     return waiting
   }
@@ -383,7 +434,8 @@ export function compactionDream(
   /**
    * Once a built-in automation's session settles: below `dream.asleepAfter` changes it stays in this chapter; at or
    * above, a grant of `asleep` on its automation falls asleep through the granted Fall asleep (every gate), else the
-   * user is asked on the card. Records the outcome on the session and leaves a `dream.settled` entry in @ultimate's
+   * user is asked on the card. A dream after a pause always asks: the fresh chapter is its point, whatever changed.
+   * Its outcome carries the pause. Records the outcome on the session and leaves a `dream.settled` entry in @ultimate's
    * conversation, an input only when the user must be asked.
    */
   async function settle(session: number) {
@@ -402,8 +454,9 @@ export function compactionDream(
       const automation = await enabled(tx, before.automation)
       const granted = !!automation?.grant?.actions.includes('asleep')
       const count = changes(found)
+      const pause = before.pause
       let result: 'stay' | 'ask' | 'asleep' =
-        count < threshold ? 'stay' : granted ? 'asleep' : 'ask'
+        pause !== undefined ? 'ask' : count < threshold ? 'stay' : granted ? 'asleep' : 'ask'
       let error: string | undefined
       if (result === 'asleep')
         try {
@@ -423,7 +476,10 @@ export function compactionDream(
         ...(error ? { error } : {}),
         at: Date.now(),
       }
-      const words = `${count} change${count === 1 ? '' : 's'} landed or applied; a fresh chapter takes ${threshold}`
+      const words =
+        pause !== undefined
+          ? `${count} change${count === 1 ? '' : 's'} landed or applied; it ran while the user was away ${hoursOf(pause)}, so a fresh chapter is worth it now, before new work reads the full context again`
+          : `${count} change${count === 1 ? '' : 's'} landed or applied; a fresh chapter takes ${threshold}`
       await deliver(host, tx, ultimate, {
         type: result === 'ask' ? 'input' : 'write',
         session: found.id,
@@ -453,14 +509,27 @@ export function compactionDream(
       runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
   })
 
-  /** A fire of the built-in automation asks for a handoff, unless a request already waits or no dream may start now. */
+  /**
+   * A fire of a built-in automation asks for a handoff, unless a request already waits or no dream may start now. The
+   * pause one records how long the user has been away.
+   */
   async function fired(tx: Tx, id: string, now: number) {
-    if ((await tx.doc(BuiltInDoc, ROOT_CONVERSATION_ID)).id !== id) return
+    let builtIn: BuiltIn | undefined
+    for (const item of BUILT_INS)
+      if ((await tx.doc(item.doc, ROOT_CONVERSATION_ID)).id === id) builtIn = item
+    if (!builtIn) return
     const doc = await tx.doc(deps.Sessions, ROOT_CONVERSATION_ID)
     const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
     if (ultimate === undefined || doc.waiting || blocked(doc.sessions, deps.switching())) return
     const automation = await host.want(AutomationsApi)?.read(tx, id)
-    await request(tx, now, ultimate, { id, name: automation?.name ?? AUTOMATION_NAME })
+    const condition = automation?.condition
+    await request(tx, now, ultimate, {
+      id,
+      name: automation?.name ?? builtIn.name,
+      ...(builtIn.doc === PauseDoc && condition
+        ? { pause: now - (condition.inputAt ?? automation.createdAt) }
+        : {}),
+    })
   }
 
   /** Inside `tx`: once the built-in automation's session `found` has settled, start its check, once. */

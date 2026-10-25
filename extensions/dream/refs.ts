@@ -80,7 +80,8 @@ export type Waiting = {
   at: number
   task: number
   gaveUp?: true
-  automation?: { id: string; name: string }
+  /** `pause`: how long the user had been away (ms) when "Dream after a pause" fired. */
+  automation?: { id: string; name: string; pause?: number }
   handoff?: { text: string; at: number }
 }
 
@@ -90,13 +91,14 @@ export type Waiting = {
  * `settling` is the task that checks the settled session; `outcome` records whether it was worth a fresh chapter:
  * `changes` (landed and applied proposals) against `threshold`; `stay` in this chapter, `ask` the user to Fall asleep,
  * or `asleep` under the automation's grant (`error` when that grant's Fall asleep was refused, and the user is asked
- * instead).
+ * instead). `pause` (ms) when "Dream after a pause" started it: the user was away that long, and it always asks.
  */
 export type BeforeCompaction = {
   automation: string
   name: string
   at: number
   handsOff?: boolean
+  pause?: number
   settling?: number
   outcome?: {
     changes: number
@@ -115,7 +117,7 @@ export const DreamDoc = docRef<{ next: number; sessions: Session[]; waiting?: Wa
 /** `dream.started`, `dream.journal` and `dream.settled` entries in @ultimate's conversation name their session. */
 export type SessionEntry = { session: number }
 /** A `dream.handoff` entry asks @ultimate for its handoff: `task` is the request's wait. */
-export type HandoffEntry = { task: number; automation?: { id: string; name: string } }
+export type HandoffEntry = { task: number; automation?: Waiting['automation'] }
 
 /**
  * No arguments → `{ task }`: ask @ultimate for its handoff; the dream starts once it is recorded (or after 30 minutes)

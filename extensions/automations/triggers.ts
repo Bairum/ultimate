@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { defineEvent } from '../../shared/events.ts'
+import { defineEvent, UserInputEvent } from '../../shared/events.ts'
 import type { EventRecord } from '../../shared/events.ts'
 import { ContextUsageDoc } from '../conversations/api.ts'
 import type { ContextUsage } from '../conversations/api.ts'
@@ -73,9 +73,19 @@ export function describeTrigger(a: Automation): string {
             .join(', ')}`
         : ''
     }`
-  if (a.condition) return `when ${a.condition.of} context ≥ ${a.condition.above}%`
+  if (a.condition)
+    return `when ${a.condition.of} context ≥ ${a.condition.above}%${a.condition.idleFor ? ` after ${hours(a.condition.idleFor)} without the user's input` : ''}`
   return a.script!.state
 }
+
+/** A pause as people say it: `8h`, `90m`, `1.5h`. */
+export const hours = (ms: number) =>
+  ms % 3600_000 === 0 || ms >= 10 * 3600_000
+    ? `${Math.round((ms / 3600_000) * 10) / 10}h`
+    : `${Math.round(ms / 60_000)}m`
+
+/** How often idle conditions are looked at: a pause is crossed by time passing, not by a measurement. */
+export const IDLE_TICK = 60_000
 
 function summary(event: EventRecord): string {
   const data = event.data as Record<string, unknown>
@@ -111,9 +121,11 @@ export function triggers(
     condition.value = usage.percent
     if (usage.percent < condition.above - 10) condition.armed = true
     const now = Date.now()
+    const paused = condition.idleFor ? now - (condition.inputAt ?? a.createdAt) : undefined
     if (
       usage.percent >= condition.above &&
       condition.armed &&
+      (paused === undefined || paused >= condition.idleFor!) &&
       (a.lastFireAt === undefined || now - a.lastFireAt >= condition.cooldownMs)
     ) {
       const count = (n: number) =>
@@ -122,7 +134,7 @@ export function triggers(
         tx,
         a,
         now,
-        `${condition.of} context ${Math.round(usage.percent)}%${usage.tokens !== undefined && usage.window !== undefined ? ` (${count(usage.tokens)}/${count(usage.window)})` : ''}`,
+        `${condition.of} context ${Math.round(usage.percent)}%${usage.tokens !== undefined && usage.window !== undefined ? ` (${count(usage.tokens)}/${count(usage.window)})` : ''}${paused === undefined ? '' : ` after ${hours(paused)} without the user's input`}`,
       )
       condition.armed = false
     }
@@ -132,13 +144,14 @@ export function triggers(
   let closed = false
   /**
    * Evaluate every enabled context condition: on the measurements one commit published (`changed`, by conversation),
-   * or on each conversation's current one. Each commit's measurements are evaluated in commit order, so a drop below
-   * the re-arm line followed by a crossing is seen as both, however far evaluation lags.
+   * or on each conversation's current one; with `idle`, only those that wait for a pause. Each commit's measurements
+   * are evaluated in commit order, so a drop below the re-arm line followed by a crossing is seen as both, however far
+   * evaluation lags.
    */
-  async function check(changed?: Map<number, ContextUsage>) {
+  async function check(changed?: Map<number, ContextUsage>, idle = false) {
     const state = await host.harness().snapshot(Automations, BACKGROUND_CONTEXT)
     for (const a of Object.values(state?.automations ?? {})) {
-      if (closed || !a.enabled || !a.condition) continue
+      if (closed || !a.enabled || !a.condition || (idle && !a.condition.idleFor)) continue
       const target = await resolve(a.condition.of)
       if (!target || (changed && !changed.has(target))) continue
       await host.harness().commit(async (tx) => {
@@ -173,7 +186,33 @@ export function triggers(
     }
     return false
   }
+  /** One minute's look at the conditions that wait for a pause: time alone may have crossed it. */
+  const idleTick = () => {
+    queue = queue
+      .then(() => check(undefined, true))
+      .catch((error: unknown) => {
+        host.notice(`Automation idle trigger: ${String(error)}`)
+      })
+    return queue
+  }
   function install() {
+    // A pause counts from the user's latest input to the conversation a condition watches.
+    host.react(
+      'user-input',
+      [UserInputEvent],
+      async (tx, { data, at }) => {
+        const state = await tx.doc(Automations)
+        for (const a of Object.values(state.automations)) {
+          if (!a.condition?.idleFor) continue
+          const of = a.condition.of
+          const target = STANDING.test(of)
+            ? (await tx.doc(Standing, ROOT_CONVERSATION_ID))[of.slice(1)]
+            : Number(of.slice(1))
+          if (target === data.conversation) a.condition.inputAt = Date.parse(at)
+        }
+      },
+      { from: 'now' },
+    )
     // Tokens name public events without loading other extensions' runtime refs.
     host.react(
       'events',
@@ -228,12 +267,17 @@ export function triggers(
           })
     })
     await check()
+    clearInterval(timer)
+    timer = setInterval(idleTick, IDLE_TICK)
   }
+  let timer: ReturnType<typeof setInterval> | undefined
   async function close() {
     closed = true
     stop?.()
     stop = undefined
+    clearInterval(timer)
+    timer = undefined
     await queue
   }
-  return { resolve, evaluate, install, open, close }
+  return { resolve, evaluate, install, open, close, idleTick }
 }

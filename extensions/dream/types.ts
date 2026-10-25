@@ -49,6 +49,8 @@ export type Seed = {
    * deleted it. Absent in seeds from before it existed: the new chapter makes it.
    */
   builtIn?: { enabled: boolean } | null
+  /** The built-in "Dream after a pause" automation, likewise. */
+  builtInPause?: { enabled: boolean } | null
   /**
    * What @ultimate was doing in conversation `conversation` of the chapter it left, so the new chapter continues it:
    * the handoff it wrote for the dream, else its latest compaction summary (capped at 12,000 characters).
