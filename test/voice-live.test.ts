@@ -380,15 +380,28 @@ it('briefs each session, waits for the brief before the first line, and lets onl
   try {
     await f.startSession()
     const before = opened
-    const heard = f.action('heard', { text: 'what was that about' })
-    // The line waits for the held brief: it does not reach Voice's conversation, so Voice has not run on it.
-    for (let tick = 0; tick < 200 && opened === before; tick++)
-      await new Promise((resolve) => setImmediate(resolve))
-    expect(opened).toBe(before)
-    expect((await f.entries(f.voice)).filter((e) => e.kind === 'voice.heard')).toHaveLength(1)
-    gate.resolve()
-    await heard
+    const snapshot = f.server.harness.snapshot.bind(f.server.harness)
+    const receiving = Promise.withResolvers<void>()
+    const snapshotSpy = vi
+      .spyOn(f.server.harness, 'snapshot')
+      .mockImplementation(async (...args) => {
+        const value = await snapshot(...args)
+        if (args[0].definition.kind === Standing.definition.kind) receiving.resolve()
+        return value
+      })
+    try {
+      const heard = f.action('heard', { text: 'what was that about' })
+      await receiving.promise
+      // The heard action has read its recipient but the held brief keeps the line out of Voice's conversation.
+      expect((await f.entries(f.voice)).filter((e) => e.kind === 'voice.heard')).toHaveLength(1)
+      expect(opened).toBe(before)
+      gate.resolve()
+      await heard
+    } finally {
+      snapshotSpy.mockRestore()
+    }
   } finally {
+    gate.resolve()
     spy.mockRestore()
   }
   const all = await f.entries(f.voice)
