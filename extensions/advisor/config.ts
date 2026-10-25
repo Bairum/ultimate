@@ -120,12 +120,9 @@ export function roleDefaults(role: Role): RoleProfile {
   }
   if (role === 'ultimate')
     Object.assign(base, { advisors: ['promises'], at: ['answer', 'idle'], continueOn: 'never' })
-  if (role === 'coordinator')
-    Object.assign(base, {
-      advisors: ['process', 'verification'],
-      at: ['answer', 'rounds', 'signals'],
-      gate: 'jev',
-    })
+  // The offline trial found the Jev gate no better than chance (precision 0.43–0.48 against a 0.37 base rate), so
+  // coordinators default to final answers and deterministic signals, ungated; `rounds` and `gate` stay opt-in.
+  if (role === 'coordinator') Object.assign(base, { at: ['answer', 'signals'] })
   if (role === 'worker' || role === 'designer') base.advisors = ['scope', 'verification']
   if (role === 'watcher') Object.assign(base, { advisors: ['process'], at: ['signals'] })
   if (role === 'computer-operator') Object.assign(base, { advisors: ['monitor'], delivery: 'card' })

@@ -42,20 +42,20 @@ Use a model available in your configured providers; the model above is an exampl
 
 Enabled-role defaults:
 
-| Role                                | Advisors              | Review points           | Special defaults                                      |
-| ----------------------------------- | --------------------- | ----------------------- | ----------------------------------------------------- |
-| ultimate                            | promises              | answer, idle            | Never holds, continues or steers                      |
-| coordinator                         | process, verification | answer, rounds, signals | Jev gate, every 5                                     |
-| worker, designer                    | scope, verification   | answer                  |                                                       |
-| scout, reviewer, dream-pass, lander | verification          | answer                  |                                                       |
-| watcher                             | process               | signals                 |                                                       |
-| computer-operator                   | monitor               | answer                  | Card only by default; monitoring, never safety advice |
+| Role                                | Advisors            | Review points   | Special defaults                                      |
+| ----------------------------------- | ------------------- | --------------- | ----------------------------------------------------- |
+| ultimate                            | promises            | answer, idle    | Never holds, continues or steers                      |
+| coordinator                         | verification        | answer, signals | Ungated; `rounds` and the Jev gate are opt-in         |
+| worker, designer                    | scope, verification | answer          |                                                       |
+| scout, reviewer, dream-pass, lander | verification        | answer          |                                                       |
+| watcher                             | process             | signals         |                                                       |
+| computer-operator                   | monitor             | answer          | Card only by default; monitoring, never safety advice |
 
 ## Rubrics and output
 
 Rubrics resolve from this extension's `rubrics/`, then `~/.ultimate/advisors/`, then trusted `<project>/.ultimate/advisors/`. Files are `<name>.md`, at most 20 KB. Built-ins cover verification, scope, process, promises and computer monitoring. Silence is preferred; evidence must cite transcript entries or file lines actually read. Advice is deduplicated against this conversation's last 24 hours, with higher severity still eligible.
 
-The model returns JSON notes (`severity`, `note` ≤500 characters, `evidence` nonempty ≤300). Only @ultimate can update the promise/question ledger (`add`, `resolve`). @ultimate receives passive model notes only when an unanswered question or overdue promise is open; everything else is a card. The user can resolve/dismiss notes or give thumbs feedback.
+The model returns JSON notes (`severity`, `note`, nonempty `evidence`); longer notes are clipped to 500 characters and evidence to 300. Only @ultimate can update the promise/question ledger (`add`, `resolve`). @ultimate receives passive model notes only when an unanswered question or overdue promise is open; everything else is a card. The user can resolve/dismiss notes or give thumbs feedback.
 
 Deterministic signals name repeated identical tool calls, three consecutive tool errors, force-push/hard-reset/destructive deletion commands, writes outside the checkout, completion claims immediately after a failed check, and runs over 40 tool rounds. Cleanup targets confined to descendants of `/tmp`, `$TMPDIR` or the OS temp directory are excluded; mixed, non-temp or uncertain targets still signal. Signals request a review, not a safety decision.
 

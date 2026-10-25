@@ -96,18 +96,24 @@ export function parseNotes(
   let regular = 0
   for (const n of (value as { notes: unknown[] }).notes) {
     if (!n || typeof n !== 'object') continue
-    const v = n as ReviewNote
+    const raw = n as ReviewNote
     if (
-      Object.keys(v).some((k) => !['severity', 'note', 'evidence'].includes(k)) ||
-      !SEVERITIES.includes(v.severity) ||
-      typeof v.note !== 'string' ||
-      !v.note.trim() ||
-      v.note.length > 500 ||
-      typeof v.evidence !== 'string' ||
-      !v.evidence.trim() ||
-      v.evidence.length > 300
+      Object.keys(raw).some((k) => !['severity', 'note', 'evidence'].includes(k)) ||
+      !SEVERITIES.includes(raw.severity) ||
+      typeof raw.note !== 'string' ||
+      !raw.note.trim() ||
+      typeof raw.evidence !== 'string' ||
+      !raw.evidence.trim()
     )
       continue
+    // The offline trial lost 4 of 54 substantive notes to the length limits; clip instead of dropping them.
+    const clip = (text: string, size: number) =>
+      text.length > size ? `${text.slice(0, size - 1)}…` : text
+    const v = {
+      severity: raw.severity,
+      note: clip(raw.note, 500),
+      evidence: clip(raw.evidence, 300),
+    }
     if (
       previous.some(
         (p) =>
