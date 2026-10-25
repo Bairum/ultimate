@@ -7,9 +7,10 @@ import {
   rm,
   rmdir,
   stat,
+  utimes,
   writeFile,
 } from 'node:fs/promises'
-import { join, resolve, sep } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import type { ToolExecutionResult, ToolHookCall } from '@earendil-works/pi-durable'
 
 export const keepMs = 30 * 24 * 60 * 60 * 1000
@@ -17,17 +18,26 @@ export const maxOpenBytes = 4 * 1024 * 1024
 export type Options = { thresholdBytes: number; exclude: readonly string[] }
 export const defaults: Options = { thresholdBytes: 16 * 1024, exclude: [] }
 
-/** Preserve existing full output, including bash text saved before request masking. */
-export async function saveOutput(home: string, conversation: number, callId: string, text: string) {
-  const folder = join(home, 'outputs', String(conversation))
-  await mkdir(folder, { recursive: true })
+export function outputPath(home: string, conversation: number, callId: string) {
   const id = callId.replace(/[^a-zA-Z0-9_-]/g, '_')
   if (!id) throw new Error('Empty tool call id')
-  const path = join(folder, `${id}.txt`)
-  await writeFile(path, text, { mode: 0o600, flag: 'wx' }).catch((error: NodeJS.ErrnoException) => {
-    // A retry or earlier offload already saved the full text at this stable path.
-    if (error.code !== 'EEXIST') throw error
-  })
+  return join(home, 'outputs', String(conversation), `${id}.txt`)
+}
+
+/**
+ * Save a call's full text once. A file already there is the full output offload saved at ingestion (bash text Pi had
+ * already truncated included), so it is kept, and touched so retention counts from this newer reference.
+ */
+export async function saveOutput(home: string, conversation: number, callId: string, text: string) {
+  const path = outputPath(home, conversation, callId)
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, text, { mode: 0o600, flag: 'wx' }).catch(
+    async (error: NodeJS.ErrnoException) => {
+      if (error.code !== 'EEXIST') throw error
+      const now = new Date()
+      await utimes(path, now, now)
+    },
+  )
   return path
 }
 export function formatBytes(bytes: number) {
@@ -103,7 +113,7 @@ export async function offload(
     const rows = full.split('\n')
     if (rows.at(-1) === '') rows.pop()
     const lines = rows.length
-    const path = await saveOutput(home, conversation, call.id, full)
+    const path = outputPath(home, conversation, call.id)
     const indexed = rows.map((row, index) => ({ text: row, index }))
     const head = excerptRows(indexed.slice(0, 60), 1900)
     const tail = excerptRows(
@@ -132,6 +142,8 @@ export async function offload(
       marker,
     ].join('\n')
     if (Buffer.byteLength(excerpt) >= bytes || Buffer.byteLength(excerpt) > 8192) return undefined
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, full, { mode: 0o600 })
     return {
       ...result,
       output: [

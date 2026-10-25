@@ -14,7 +14,6 @@ import {
   safe,
   text,
   suffixPositions,
-  placeholder,
 } from './rewrite.ts'
 
 export const docs = [Ledger]
@@ -69,22 +68,32 @@ export default function contextHygiene(
               model.contextWindow > 0 &&
               maskSuffix[0] > thresholds.pressureRatio * model.contextWindow
             ) {
+              // One pass over the request: a result is maskable only when its call is present and its id unique.
+              const calls = new Set<string>()
+              const results = new Map<string, number>()
+              for (const message of messages) {
+                if (message.role === 'assistant')
+                  for (const part of message.content)
+                    if (part.type === 'toolCall') calls.add(part.id)
+                if (message.role === 'toolResult')
+                  results.set(message.toolCallId, (results.get(message.toolCallId) ?? 0) + 1)
+              }
               const old = messages.flatMap((message, index) => {
                 if (
                   message.role !== 'toolResult' ||
-                  !safe(message) ||
                   !message.toolCallId ||
+                  maskSuffix[index + 1] < thresholds.maskProtectTokens ||
                   previous?.decisions[message.toolCallId] ||
                   found[message.toolCallId] ||
-                  maskSuffix[index + 1] < thresholds.maskProtectTokens ||
-                  messages.filter(
-                    (m) => m.role === 'toolResult' && m.toolCallId === message.toolCallId,
-                  ).length !== 1 ||
-                  !Number.isFinite(suffixPositions(messages, message.toolCallId))
+                  !safe(message)
                 )
                   return []
                 const tokens = estimateTextTokens(text(message))
-                return tokens >= thresholds.maskMinTokens ? [{ message, tokens }] : []
+                return tokens >= thresholds.maskMinTokens &&
+                  results.get(message.toolCallId) === 1 &&
+                  calls.has(message.toolCallId)
+                  ? [{ message, tokens }]
+                  : []
               })
               if (
                 old.length &&
@@ -101,6 +110,7 @@ export default function contextHygiene(
                         message.toolCallId,
                         text(message),
                       )
+                      // `tokens` is the output's size, as the placeholder tells the model.
                       masked[message.toolCallId] = {
                         reason: 'masked',
                         path,
@@ -108,11 +118,6 @@ export default function contextHygiene(
                         state: 'applied',
                         at: now,
                       }
-                      const decision = masked[message.toolCallId]
-                      decision.tokens = Math.max(
-                        0,
-                        tokens - estimateTextTokens(placeholder(decision)),
-                      )
                     } catch (error) {
                       // A failed save must leave this result recoverable in the request itself.
                       host.notice(`Context hygiene masking skipped: ${String(error)}`)
@@ -176,9 +181,10 @@ export default function contextHygiene(
                   lastAssistant,
                   newContext,
                   suffixTokens: suffix[pending[0].index + 1],
+                  // Anthropic, directly or through Claude Code; the earliest pending result has the longest suffix.
                   suffixPositions:
-                    model?.api === 'anthropic-messages'
-                      ? Math.max(...pending.map(({ id }) => suffixPositions(current, id)))
+                    model?.api === 'anthropic-messages' || model?.api === 'claude-code-stream-json'
+                      ? suffixPositions(current, pending[0].id)
                       : undefined,
                   savings: pending.reduce((sum, item) => sum + item.decision.tokens, 0),
                   requestTokens: suffix[0],

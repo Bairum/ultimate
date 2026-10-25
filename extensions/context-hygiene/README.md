@@ -14,7 +14,7 @@ Settings under `contextHygiene` in machine/project `.ultimate/settings.json` (tr
 
 | Key                 | Default |
 | ------------------- | ------- |
-| `cacheTtlMs`        | 300000  |
+| `cacheTtlMs`        | 3600000 |
 | `protectTokens`     | 16000   |
 | `suffixTokens`      | 8000    |
 | `suffixSavings`     | 2000    |

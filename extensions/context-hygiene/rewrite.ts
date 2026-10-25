@@ -4,7 +4,8 @@ import { estimateMessageTokens, estimateTextTokens } from '@earendil-works/pi-ai
 import type { Decision, GateInput, LedgerState, Thresholds } from './api.ts'
 
 export const defaults: Thresholds = {
-  cacheTtlMs: 300_000,
+  // The harness asks for Anthropic's one-hour cache (server/harness.ts), so a shorter gap is still warm.
+  cacheTtlMs: 3_600_000,
   protectTokens: 16_000,
   suffixTokens: 8_000,
   suffixSavings: 2_000,

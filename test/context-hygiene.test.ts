@@ -91,8 +91,8 @@ it('never considers errors or images, but discovers recent redundant results', (
 })
 it('opens only for cold cache, new context, cheap suffix or pressure with sufficient savings', () => {
   const input = {
-    now: 1_000_000,
-    lastAssistant: 999_999,
+    now: 10_000_000,
+    lastAssistant: 9_999_999,
     newContext: false,
     suffixTokens: 20000,
     savings: 3000,
@@ -101,6 +101,8 @@ it('opens only for cold cache, new context, cheap suffix or pressure with suffic
   }
   expect(gateOpen(input, defaults)).toBe(false)
   expect(gateOpen({ ...input, lastAssistant: 1 }, defaults)).toBe(true)
+  // A 30-minute gap is inside the one-hour cache: still warm.
+  expect(gateOpen({ ...input, lastAssistant: input.now - 30 * 60_000 }, defaults)).toBe(false)
   expect(gateOpen({ ...input, newContext: true }, defaults)).toBe(true)
   expect(gateOpen({ ...input, suffixTokens: 8000 }, defaults)).toBe(true)
   expect(gateOpen({ ...input, suffixTokens: 8000, savings: 1999 }, defaults)).toBe(false)

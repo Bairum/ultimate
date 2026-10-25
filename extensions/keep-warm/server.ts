@@ -84,39 +84,49 @@ async function answeredAt(
 }
 
 /** Snapshot the eligibility signals; claim rechecks them transactionally before sending. */
-async function target(host: ExtensionHost, id: ConversationId) {
+async function target(
+  host: ExtensionHost,
+  id: ConversationId,
+  standing: boolean,
+  definition: string | undefined,
+  queued: ReadonlySet<ConversationId>,
+) {
   const harness = host.harness()
-  const children = await harness.snapshot(Subagents, id, context)
+  const running = (await harness.snapshot(LiveDoc, id, context))?.run !== undefined
   let child = false
-  for (const agent of Object.values(children?.agents ?? {})) {
-    if ((await harness.snapshot(LiveDoc, agent.conversationId, context))?.run !== undefined) {
-      child = true
-      break
-    }
-  }
-  const index = await harness.snapshot(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID, context)
-  return {
-    standing: (await ultimateOf(host)) === id,
-    // Branches record the coordinator in metadata; configured children use Profile (as fast does).
-    definition:
-      (await harness.snapshot(Profile, id, context))?.definition ??
-      (await harness.snapshot(host.metadata, id, context))?.label,
-    running: (await harness.snapshot(LiveDoc, id, context))?.run !== undefined,
-    child,
-    submission: index?.queue.some((entry) => entry.conversationId === id) ?? false,
-  }
+  if (!standing && !running && !queued.has(id))
+    for (const agent of Object.values(
+      (await harness.snapshot(Subagents, id, context))?.agents ?? {},
+    ))
+      if ((await harness.snapshot(LiveDoc, agent.conversationId, context))?.run !== undefined) {
+        child = true
+        break
+      }
+  return { standing, definition, running, child, submission: queued.has(id) }
 }
 
+/**
+ * Current targets: @ultimate and the coordinators waiting on a child or the lander. Cheap signals first; the model
+ * and the history paging only for a target that can be pinged, so the minute's scan stays small and the chip lists
+ * only conversations that are warmed now.
+ */
 async function activity(host: ExtensionHost, doc: WarmDocState, now: number) {
   const found = []
+  const harness = host.harness()
   const ultimate = await ultimateOf(host)
+  const index = await harness.snapshot(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID, context)
+  const queued = new Set(
+    (index?.queue ?? []).map((entry) => entry.conversationId as ConversationId),
+  )
   for (const summary of host.conversations()) {
     const id = summary.id as ConversationId
-    const definition =
-      (await host.harness().snapshot(Profile, id, context))?.definition ?? summary.label
-    if (id !== ultimate && definition !== 'coordinator') continue
-    const signals = await target(host, id)
-    const conversation = await host.harness().conversation(id, context)
+    const standing = id === ultimate
+    // Branches record the coordinator in metadata; configured children use Profile (as fast does).
+    const definition = (await harness.snapshot(Profile, id, context))?.definition ?? summary.label
+    if (!standing && definition !== 'coordinator') continue
+    const signals = await target(host, id, standing, definition, queued)
+    if (!standing && (signals.running || (!signals.child && !signals.submission))) continue
+    const conversation = await harness.conversation(id, context)
     if (!conversation) continue
     const model = (await conversation.agent(context)).model
     if (!model || !providers.includes(model.provider)) continue
@@ -130,7 +140,7 @@ async function activity(host: ExtensionHost, doc: WarmDocState, now: number) {
     found.push({
       ...signals,
       id,
-      title: signals.standing ? '@ultimate' : summary.title || `#${id}`,
+      title: standing ? '@ultimate' : summary.title || `#${id}`,
       provider: model.provider,
       model: model.modelId,
       lastRequest: Math.max(answered ?? 0, pinged) || undefined,
