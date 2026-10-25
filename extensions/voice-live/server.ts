@@ -4,24 +4,19 @@ import {
   defineDoc,
   defineExtension,
   defineTask,
+  defineTool,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, Cursor, Tx } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor, ToolTaskInput, Tx } from '@earendil-works/pi-durable'
+import { Type } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { readSecret } from '../../lib/secrets.ts'
-import { ConversationsApi } from '../conversations/api.ts'
-import type { ResponseReceipt } from '../conversations/summary.ts'
-import type { SummaryModel } from '../conversations/summary-model.ts'
 import { Messages, MessagesApi } from '../messages/api.ts'
 import type { Question } from '../messages/api.ts'
-import { Standing } from '../subagents/api.ts'
-import { EndAction, LogAction, SayAction, StartAction, StatusAction, VoiceDoc } from './refs.ts'
-
-/** Ask "Should I pass this to Ultimate: …?" before forwarding. Daniel chose off: "Passing that on" and forward. */
-export const CONFIRM = false
-import type { VoiceLine, VoiceSession, VoiceState } from './refs.ts'
-import { speakable } from './speech.ts'
+import { Standing, SubagentsApi } from '../subagents/api.ts'
+import { EndAction, HeardAction, LogAction, StartAction, StatusAction } from './refs.ts'
+import type { VoiceLine, VoiceSession } from './refs.ts'
 
 const SECRET = 'OPENAI_API_KEY'
 const NO_KEY = `Live voice needs an OpenAI API key: add ${SECRET} in ⌘K → Secrets`
@@ -43,56 +38,34 @@ async function apiKey(host: ExtensionHost, signal: AbortSignal) {
   return (await runtime.getAuth('openai', { signal }))?.auth.apiKey
 }
 
-/**
- * GPT-Live's prompt: it talks with Daniel itself and passes on real requests, asking first when `confirm`. The relay
- * decides what was passed on (see relay.ts); this only shapes how GPT-Live talks.
- */
-export function liveInstructions(confirm: boolean) {
-  return `You are the voice in Daniel's ear for Ultimate, a coding agent working on his software projects. You talk with Daniel; Ultimate does the work. Speak in Daniel's language, briefly and naturally.
-
-You handle yourself, without Ultimate: greetings, "can you hear me", "are you there", small talk, questions about this voice connection, and "what is Ultimate doing" or "still working?" (answer from the progress notes you were given, or say it is still working). Never invent what Ultimate found or did.
-
-Everything about his code, projects, branches, tests or any work is a request for Ultimate. If it is unclear, ask one short question to get it clear.${
-    confirm
-      ? ` Then ask exactly: "Should I pass this to Ultimate: <the request in one short sentence, in his words>?" and wait. Only after he says yes, pass it on.`
-      : ` Then say "Passing that on" and pass it on.`
-  }
+/** GPT-Live is only the audio interface; the standing Voice agent decides and answers. */
+export function liveInstructions() {
+  return `Listen to Daniel. Speak exactly the commentary you receive, in Daniel's language, without adding content. Never answer questions about his work yourself or announce a handoff on your own.
 
 Backchannel policy
-Use minimal backchannels.
+Give only short, natural backchannels while listening. Commentary supplies all substantive answers.
 
 Interruption policy
 Stop speaking and listen when Daniel interrupts.
 
 Delegation policy
-Backend tools:
-- Ultimate: does all work on Daniel's projects and answers questions about them. Its answers arrive as commentary.
-Generate <|SpawnThinking|> when:
-- ${confirm ? 'Daniel has just said yes to passing a request on.' : 'Daniel has made a clear request for Ultimate.'}
-Do not generate <|SpawnThinking|> when:
-- Daniel greets you, checks the connection, makes small talk or asks what Ultimate is doing.
-- The request is still unclear${confirm ? ', or he has not said yes yet' : ''}.
-Do not guess the result while waiting. If Daniel asks while Ultimate works, say it is still on it.
-When commentary arrives, say it plainly without adding content.`
+Do not generate <|SpawnThinking|>: always. Do not delegate. The Voice agent receives every finished line and handles requests. Thinking notes are quiet context, not words to read aloud.`
 }
 
-export const Voice = defineDoc<VoiceState>({
-  kind: VoiceDoc.kind,
+const Forwarded = defineDoc<{ scheduled: boolean }>({
+  kind: 'voice-live.forwarded',
   checkpointWhen: () => false,
   version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({}),
+  scope: 'task',
+  initial: () => ({ scheduled: false }),
 })
-export const docs = [Voice]
-export const userActions = ['status', 'start', 'say', 'log', 'end']
+export const userActions = ['status', 'start', 'heard', 'log', 'end']
 const terminal = { status: 'terminal', outcome: { status: 'completed', result: null } } as const
 
 async function voiceId(host: ExtensionHost) {
-  const voice = await host.harness().snapshot(Voice, ROOT_CONVERSATION_ID, context)
-  if (!voice?.conversation) throw new Error('Start live voice first')
-  return voice.conversation as ConversationId
+  const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context)
+  if (!standing?.voice) throw new Error('Start live voice first')
+  return standing.voice
 }
 
 async function lines(tx: Tx, id: ConversationId, limit: number) {
@@ -144,30 +117,42 @@ function questionsText(questions: Question[]) {
     .join('\n\n')
 }
 
-const danielLine = (input: { text: string; delegation?: string }): VoiceLine => ({
+const danielLine = (input: { text: string }): VoiceLine => ({
   role: 'daniel',
   text: input.text,
   forwarded: true,
-  ...(input.delegation ? { delegation: input.delegation } : {}),
 })
 
+/** A stable input request id makes answer delivery safe if the task resumes after submitting it. */
+async function answerVoice(host: ExtensionHost, voice: number, line: number, text: string) {
+  const conversation = (await host.harness().conversation(voice as ConversationId, context))!
+  await conversation.submit(
+    {
+      type: 'input',
+      requestId: `voice:answer:${line}`,
+      whenBusy: 'steer',
+      entry: { kind: 'voice.answer', data: { text, re: line } },
+      content: `@ultimate answered (to forwarded line ${line}):\n${text}`,
+    },
+    context,
+  )
+}
+
 export function answerTask(host: ExtensionHost) {
-  const summaries = host.need(ConversationsApi)
   return defineTask<
     {
       voice: number
       main: number
-      /** Names Daniel's line: the task and `say` write it once under `voice:line:<request>`. */
+      /** Names Daniel's forwarded line, written once under `voice:line:<request>`. */
       request: string
       text: string
-      delegation?: string
       firstMessage: number
     },
     { phase: 'answer' },
     null
   >({
     name: 'voice-live.answer',
-    version: 1,
+    version: 2,
     initial: () => ({ phase: 'answer' }),
     phases: {
       answer: async (task, runtime, ctx) => {
@@ -271,8 +256,9 @@ export function answerTask(host: ExtensionHost) {
                   : 'Ultimate did not answer that.',
               re: line,
             },
-            `voice:answer:${line}`,
+            `voice:notice:${line}`,
           )
+          await answerVoice(host, input.voice, line, 'Ultimate did not answer that request.')
           await runtime.commit(
             () => ({
               status: 'terminal',
@@ -324,49 +310,8 @@ export function answerTask(host: ExtensionHost) {
             ? `${sent.text}${sent.questions?.length ? `\n\nQuestions:\n${questionsText(sent.questions)}` : ''}`
             : plain
         }, ctx)
-        let text = await runtime.memo<string>('speech', ctx)
-        if (text === undefined) {
-          text = await speakable(source, async (prompt, content) => {
-            let model = await runtime.memo<SummaryModel | false>('model', ctx)
-            if (model === undefined)
-              model = await runtime.memo('model', (await summaries.summaryModel()) ?? false, ctx)
-            if (!model) return undefined
-            const response = await summaries.askSummaryModel(
-              runtime.models,
-              prompt,
-              content,
-              runtime.signal,
-              {
-                model,
-                response: await runtime.memo<ResponseReceipt>('response', ctx),
-                save: (answer) => runtime.memo('response', answer, ctx),
-              },
-            )
-            if (!['stop', 'length'].includes(response.stopReason))
-              throw new Error(`Speech rewrite failed: ${response.stopReason}`)
-            return response.text
-          })
-          text = await runtime.memo('speech', text, ctx)
-        }
-        await write(
-          host,
-          input.voice as ConversationId,
-          'voice.line',
-          {
-            role: 'ultimate',
-            text,
-            speech: true,
-            re: line,
-            source: { conversation: main, entry: settled.answer },
-            ...(input.delegation ? { delegation: input.delegation } : {}),
-          },
-          `voice:answer:${line}`,
-        )
-        const response = await runtime.memo<ResponseReceipt>('response', ctx)
-        await runtime.commit(async (tx) => {
-          await summaries.accountResponse(tx, input.voice as ConversationId, response)
-          return terminal
-        }, ctx)
+        await answerVoice(host, input.voice, line, source || 'Ultimate finished without an answer.')
+        await runtime.commit(() => terminal, ctx)
       },
     },
     abort: (_task, runtime, ctx) =>
@@ -385,37 +330,28 @@ export const actions = {
     if (typeof sdp !== 'string' || !sdp.trim()) throw new Error('Expected an SDP offer')
     const key = await apiKey(host, signal)
     if (!key) throw new Error(NO_KEY)
-    const id = await host.harness().commit(async (tx) => {
-      const state = await tx.doc(Voice, ROOT_CONVERSATION_ID)
-      if (state.conversation) return state.conversation as ConversationId
-      const conversation = await tx.createConversation({ ownership: { kind: 'ownerless' } })
-      Object.assign(await tx.doc(host.metadata, conversation.id), {
-        title: 'Voice',
-        label: 'voice',
-      })
-      await host.need(ConversationsApi).setAutomaticSummaries(tx, conversation.id, false)
-      state.conversation = conversation.id
-      return conversation.id
-    }, context)
+    const id = await host.need(SubagentsApi).standing('voice', context)
     const recent = await host.harness().commit((tx) => lines(tx, id, 10), context)
     // Bound both messages and input size, leaving room below the 8,192-token session seed cap.
-    const input = recent.map((line) => ({
-      type: 'message',
-      role: line.role === 'daniel' ? 'user' : 'assistant',
-      content: [
-        {
-          type: line.role === 'daniel' ? 'input_text' : 'output_text',
-          text: line.text.slice(0, 200),
-        },
-      ],
-    }))
+    const input = recent
+      .filter((line) => line.role !== 'note')
+      .map((line) => ({
+        type: 'message',
+        role: line.role === 'daniel' ? 'user' : 'assistant',
+        content: [
+          {
+            type: line.role === 'daniel' ? 'input_text' : 'output_text',
+            text: line.text.slice(0, 200),
+          },
+        ],
+      }))
     const response = await fetch('https://api.openai.com/v1/live/sessions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session: {
           model: 'gpt-live-1',
-          instructions: liveInstructions(CONFIRM),
+          instructions: liveInstructions(),
           audio: { output: { voice: 'marin' } },
           delegation: { type: 'client' },
           ...(input.length ? { input } : {}),
@@ -440,53 +376,26 @@ export const actions = {
     )
     return { sdp: answer.transport.sdp, conversation: id }
   }),
-  say: implementAction(SayAction, async (args, { host }) => {
-    const { text: raw, delegation } =
-      args && typeof args === 'object' && !Array.isArray(args) ? args : {}
-    if (
-      typeof raw !== 'string' ||
-      !raw.trim() ||
-      (delegation !== undefined && typeof delegation !== 'string')
-    )
-      throw new Error('Expected text and an optional delegation id')
-    const text = raw.trim()
+  heard: implementAction(HeardAction, async (args, { host }) => {
+    const text = args && typeof args === 'object' && !Array.isArray(args) ? args.text : undefined
+    if (typeof text !== 'string' || !text.trim()) throw new Error('Expected text')
     const id = await voiceId(host)
-    const main = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
-    if (!main) throw new Error('@ultimate is not available')
-    // The task exists before the line: a crash after this commit still writes and relays it.
-    const input = {
-      voice: id,
-      main,
-      request: crypto.randomUUID(),
-      text,
-      ...(delegation ? { delegation } : {}),
-    }
-    await host.harness().commit(async (tx) => {
-      const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
-      await tx.createTask(
-        answerTask(host),
-        { ...input, firstMessage: log.next },
-        { conversationId: id, ownership: { kind: 'conversation' }, background: true },
-      )
-    }, context)
-    host.harness().resume()
-    const line = await write(
-      host,
-      id,
-      'voice.line',
-      danielLine(input),
-      `voice:line:${input.request}`,
+    const conversation = (await host.harness().conversation(id, context))!
+    await conversation.submit(
+      {
+        type: 'input',
+        whenBusy: 'steer',
+        entry: { kind: 'voice.heard', data: { text: text.trim() } },
+        content: `Daniel, by voice (live transcript, may contain mistakes):\n${text.trim()}`,
+      },
+      context,
     )
-    return { line }
+    return {}
   }),
   log: implementAction(LogAction, async (args, { host }) => {
     const { role, text } = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
-    if (
-      (role !== 'daniel' && role !== 'live' && role !== 'notice') ||
-      typeof text !== 'string' ||
-      !text.trim()
-    )
-      throw new Error('Expected a daniel, live or notice role and text')
+    if ((role !== 'live' && role !== 'notice') || typeof text !== 'string' || !text.trim())
+      throw new Error('Expected a live or notice role and text')
     const line = await write(
       host,
       await voiceId(host),
@@ -521,5 +430,135 @@ export const actions = {
 
 export default (host: ExtensionHost) => {
   host.need(MessagesApi)
-  return defineExtension({ name: 'voice-live', tasks: [answerTask(host)] })
+  host.need(SubagentsApi)
+  return defineExtension({
+    name: 'voice-live',
+    tasks: [answerTask(host)],
+    tools: [
+      defineTool({
+        name: 'voice_say',
+        deferred: true,
+        description:
+          'Speak text to Daniel through GPT-Live. Use for your answer, clarification or brief acknowledgement.',
+        parameters: Type.Object({ text: Type.String({ minLength: 1 }) }),
+        // The tool task's request id writes the spoken line once; correlation is memoized.
+        replay: 'safe',
+        async execute({ text }, api, ctx) {
+          if (api.conversationId !== (await voiceId(host))) throw new Error('Only Voice speaks')
+          // Locate the input this tool round saw, not a later queued/steering input. No model-supplied correlation id.
+          const task = await api.getTask(api.taskId, ctx)
+          const input = task?.input as ToolTaskInput
+          const re =
+            (await api.memo('re', ctx)) ??
+            (await api.memo(
+              're',
+              await api.commit(async (tx) => {
+                let cursor: Cursor | undefined
+                do {
+                  const page = await tx.scanEntries(
+                    {
+                      conversationId: api.conversationId,
+                      ...(input.kind === 'model' ? { maxEntryId: input.assistant } : {}),
+                      order: 'descending',
+                    },
+                    100,
+                    cursor,
+                  )
+                  for (const entry of page.items) {
+                    if (entry.kind === 'voice.answer') return (entry.data as { re: number }).re
+                    if (entry.kind === 'voice.heard') return false
+                  }
+                  cursor = page.next
+                } while (cursor)
+                return false
+              }, ctx),
+              ctx,
+            ))
+          await write(
+            host,
+            api.conversationId,
+            'voice.line',
+            {
+              role: 'ultimate',
+              text,
+              speech: true,
+              ...(typeof re === 'number' ? { re } : {}),
+            },
+            `voice:say:${api.taskId}`,
+          )
+          return { output: [{ type: 'text', text: 'Spoken.' }], control: { terminate: true } }
+        },
+      }),
+      defineTool({
+        name: 'voice_ask_ultimate',
+        deferred: true,
+        description:
+          'Pass a clear, self-contained request in Daniel’s words to @ultimate. Its answer returns as input; do not wait here.',
+        parameters: Type.Object({ request: Type.String({ minLength: 1 }) }),
+        // A transactional receipt schedules once; the forwarded line has a stable write request id.
+        replay: 'safe',
+        async execute({ request }, api, ctx) {
+          if (api.conversationId !== (await voiceId(host)))
+            throw new Error('Only Voice forwards requests')
+          const main = (await api.snapshot(Standing, ROOT_CONVERSATION_ID, ctx))?.ultimate
+          if (!main) throw new Error('@ultimate is not available')
+          const input = {
+            voice: api.conversationId,
+            main,
+            request: String(api.taskId),
+            text: request,
+          }
+          // Record and create atomically: a crash after scheduling never creates a second answer task.
+          await api.commit(async (tx) => {
+            const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
+            const receipt = await tx.doc(Forwarded, api.taskId)
+            if (receipt.scheduled) return
+            await tx.createTask(
+              answerTask(host),
+              { ...input, firstMessage: log.next },
+              {
+                conversationId: api.conversationId,
+                ownership: { kind: 'conversation' },
+                background: true,
+              },
+            )
+            receipt.scheduled = true
+          }, ctx)
+          host.harness().resume()
+          await write(
+            host,
+            api.conversationId,
+            'voice.line',
+            danielLine(input),
+            `voice:line:${input.request}`,
+          )
+          return {
+            output: [
+              { type: 'text', text: 'Passed to @ultimate. Its answer will arrive as input.' },
+            ],
+          }
+        },
+      }),
+      defineTool({
+        name: 'voice_note',
+        deferred: true,
+        description: 'Give GPT-Live quiet context, without speaking it.',
+        parameters: Type.Object({ text: Type.String({ minLength: 1 }) }),
+        // The tool task's stable request id writes the context note once.
+        replay: 'safe',
+        async execute({ text }, api) {
+          if (api.conversationId !== (await voiceId(host)))
+            throw new Error('Only Voice sends thinking notes')
+          await write(
+            host,
+            api.conversationId,
+            'voice.line',
+            { role: 'note', text },
+            `voice:note:${api.taskId}`,
+          )
+          return { output: [{ type: 'text', text: 'Noted.' }], control: { terminate: true } }
+        },
+      }),
+    ],
+  })
 }

@@ -1,27 +1,31 @@
-import { writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type { ConversationId, JsonObject } from '@earendil-works/pi-durable'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
-import { Metadata } from '../server/metadata.ts'
 import { Messages } from '../extensions/messages/api.ts'
+import { Standing } from '../extensions/subagents/api.ts'
 import { Summaries, setAutomaticSummaries } from '../extensions/conversations/summary.ts'
-import { CONFIRM, Voice, liveInstructions } from '../extensions/voice-live/server.ts'
+import { liveInstructions } from '../extensions/voice-live/server.ts'
 import type { VoiceLine } from '../extensions/voice-live/refs.ts'
-import { SPEECH_PROMPT, speakable } from '../extensions/voice-live/speech.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
-import { fauxServer, post, sourceCopy, temp, until } from './helpers.ts'
+import { fauxServer, held, post, sourceCopy, temp, until } from './helpers.ts'
 
 let ultimateRoot: string
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 beforeAll(async () => {
   ultimateRoot = await sourceCopy(await temp())
+  const path = join(ultimateRoot, 'agents/voice.md')
+  await writeFile(
+    path,
+    (await readFile(path, 'utf8')).replace('openai-codex/gpt-6-luna', 'faux/faux-1'),
+  )
   await writeFile(
     join(ultimateRoot, '.ultimate/settings.json'),
-    JSON.stringify({ summaryModel: 'faux/faux-1' }),
+    JSON.stringify({ summaryModel: 'unavailable/test' }),
   )
 })
 afterAll(async () => {
@@ -55,61 +59,59 @@ async function fixture() {
         )
       : originalFetch(url, init),
   )
-  let start: { sdp: string; conversation: number }
+  let voice: ConversationId
   try {
     const result = await post(server, '/api/extensions/voice-live/actions/start', {
       args: { sdp: 'fake-offer' },
     })
     expect([result.status, result.data.error]).toEqual([200, undefined])
-    start = result.data.result
-    expect(start.sdp).toBe('fake-answer')
-    const [url, request] = fetch.mock.calls.find(
+    voice = result.data.result.conversation
+    const [, request] = fetch.mock.calls.find(
       ([target]) => target === 'https://api.openai.com/v1/live/sessions',
     )!
-    expect(url).toBe('https://api.openai.com/v1/live/sessions')
-    expect(JSON.parse(request!.body as string)).toEqual({
-      session: {
-        model: 'gpt-live-1',
-        instructions: liveInstructions(CONFIRM),
-        audio: { output: { voice: 'marin' } },
-        delegation: { type: 'client' },
-      },
-      transport: { type: 'webrtc', sdp: 'fake-offer' },
-    })
+    expect(JSON.parse(request!.body as string).session.instructions).toBe(liveInstructions())
   } finally {
     fetch.mockRestore()
   }
-  const voice = start.conversation as ConversationId
-  const rewrites: string[] = []
+  const answers: string[] = []
   let answer = 'The tests pass.'
-  const route: FauxResponseFactory = (transcript) => {
+  const call = (name: string, args: JsonObject) =>
+    fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: 'toolUse' })
+  const route: FauxResponseFactory = (...args) => {
+    const [transcript] = args
     server.host.faux!.appendResponses([route])
     const system = JSON.stringify(transcript.messages.filter((m) => m.role === 'system'))
-    if (system.includes(SPEECH_PROMPT.slice(0, 80))) {
-      rewrites.push(JSON.stringify(transcript.messages))
-      return fauxAssistantMessage('The fix is ready. Details are on screen.')
+    const last = transcript.messages.findLast((m) => m.role !== 'system')!
+    const text = typeof last.content === 'string' ? last.content : JSON.stringify(last.content)
+    if (system.includes('You are the voice in Daniel')) {
+      if (last.role === 'toolResult') return call('voice_say', { text: 'Passing that on.' })
+      if (text.startsWith('@ultimate answered')) {
+        answers.push(text)
+        return call('voice_say', { text: 'The spoken answer. Details are on screen.' })
+      }
+      if (text.includes('can you hear me'))
+        return call('voice_say', { text: 'Yes, I can hear you.' })
+      return call('voice_ask_ultimate', {
+        request: text.includes('small fix') ? 'Use the small fix.' : 'Please check the tests.',
+      })
     }
     if (answer === 'QUESTION')
-      return fauxAssistantMessage(
-        [
-          fauxToolCall('message', {
-            to: 'user',
-            text: 'Which approach?',
-            questions: [
-              {
-                ref: '1',
-                text: 'Approach?',
-                kind: 'choice',
-                options: [
-                  { key: 'a', label: 'Small fix' },
-                  { key: 'b', label: 'Rewrite' },
-                ],
-              },
+      return call('message', {
+        to: 'user',
+        text: 'Which approach?',
+        questions: [
+          {
+            ref: '1',
+            text: 'Approach?',
+            kind: 'choice',
+            options: [
+              { key: 'a', label: 'Small fix' },
+              { key: 'b', label: 'Rewrite' },
             ],
-          }),
+          },
         ],
-        { stopReason: 'toolUse' },
-      )
+      })
+    if (answer === 'HOLD') return held(...args)
     return fauxAssistantMessage(answer)
   }
   server.host.faux!.setResponses([route])
@@ -123,109 +125,117 @@ async function fixture() {
       async (tx) => (await tx.scanEntries({ conversationId: id, order: 'ascending' }, 1000)).items,
       context,
     )
-  const spoken = async () =>
-    (await entries(voice)).filter(
-      (e) => e.kind === 'voice.line' && (e.data as VoiceLine).role === 'ultimate',
+  const waitAnswer = async (count: number) => {
+    await until(
+      async () =>
+        (await entries(voice)).filter(
+          (e) => e.kind === 'voice.line' && (e.data as VoiceLine).re !== undefined,
+        ).length === count,
     )
-  const waitSpoken = async (count: number) => {
-    await until(async () => (await spoken()).length === count)
-    return (await spoken()).at(-1)!
+    return (await entries(voice))
+      .filter((e) => e.kind === 'voice.line' && (e.data as VoiceLine).re !== undefined)
+      .at(-1)!
   }
   return {
     server,
     main,
     voice,
-    rewrites,
     action,
     entries,
-    waitSpoken,
+    answers,
+    waitAnswer,
     setAnswer: (text: string) => {
       answer = text
     },
   }
 }
 
-it('starts an ownerless passive log, submits custom utterances, and speaks short answers verbatim', async () => {
+it('delivers a stopped-input notice and agent input with distinct request ids', async () => {
   const f = await fixture()
-  expect(
-    (await f.server.harness.snapshot(Voice, ROOT_CONVERSATION_ID, context))?.conversation,
-  ).toBe(f.voice)
-  const info = await f.server.harness.commit(
-    async (tx) => ({
-      conversation: await tx.conversation(f.voice),
-      metadata: { ...(await tx.doc(Metadata, f.voice)) },
-    }),
-    context,
+  f.setAnswer('HOLD')
+  await f.action('heard', { text: 'check tests' })
+  await until(async () => (await f.entries(f.main)).some((e) => e.kind === 'voice.utterance'))
+  await (await f.server.harness.conversation(f.main, context))!.abort(context)
+  await until(() => f.answers.length > 0)
+  expect(f.answers[0]).toContain('Ultimate did not answer that request.')
+  const lines = (await f.entries(f.voice)).filter((e) => e.kind === 'voice.line')
+  const forwarded = lines.find((e) => (e.data as VoiceLine).forwarded)!
+  expect(lines.find((e) => (e.data as VoiceLine).role === 'notice')?.data).toMatchObject({
+    role: 'notice',
+    re: forwarded.id,
+    text: 'Ultimate was stopped before it answered.',
+  })
+})
+
+it('answers a connection check itself in the standing Voice conversation, with only its three tools', async () => {
+  const f = await fixture()
+  expect((await f.server.harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.voice).toBe(
+    f.voice,
   )
-  expect(info.conversation).toBeDefined()
-  expect(info.conversation?.owner).toBeUndefined()
-  expect(info.metadata).toMatchObject({ title: 'Voice', label: 'voice' })
-  expect((await f.server.harness.snapshot(Summaries, f.voice, context))?.automatic).toBe(false)
-  expect((await f.entries(f.voice)).find((e) => e.kind === 'voice.session')?.data).toMatchObject({
-    phase: 'started',
-  })
-  const { line } = await f.action('say', { text: 'Please check the tests', delegation: 'd1' })
-  const spoken = await f.waitSpoken(1)
-  const utterance = (await f.entries(f.main)).find((e) => e.kind === 'voice.utterance')!
-  expect(utterance.data).toEqual({ text: 'Please check the tests', line })
-  expect(utterance.model).toMatchObject([
-    {
-      role: 'user',
-      content: 'Daniel, by voice (live transcript, may contain mistakes):\nPlease check the tests',
-    },
+  const agent = await (await f.server.harness.conversation(f.voice, context))!.agent(context)
+  expect(agent.tools.map((t) => t.name).toSorted()).toEqual([
+    'voice_ask_ultimate',
+    'voice_note',
+    'voice_say',
   ])
-  expect((await f.entries(f.voice)).find((e) => e.id === line)?.data).toEqual({
+  expect((await f.server.harness.snapshot(Summaries, f.voice, context))?.automatic).toBe(false)
+  await f.action('heard', { text: 'can you hear me' })
+  await until(async () => (await f.entries(f.voice)).some((e) => e.kind === 'voice.line'))
+  await (await f.server.harness.conversation(f.voice, context))!.waitForIdle(context)
+  const lines = (await f.entries(f.voice)).filter((e) => e.kind === 'voice.line')
+  expect(lines.map((e) => e.data)).toEqual([
+    { role: 'ultimate', text: 'Yes, I can hear you.', speech: true },
+  ])
+  expect((await f.entries(f.voice)).find((e) => e.kind === 'voice.heard')?.data).toEqual({
+    text: 'can you hear me',
+  })
+  expect((await f.entries(f.main)).filter((e) => e.kind === 'voice.utterance')).toHaveLength(0)
+})
+
+it('forwards the cleaned request and feeds the actual answer back to Voice to speak, linked to its forwarded line', async () => {
+  const f = await fixture()
+  await f.action('heard', { text: 'Um please, can you check the tests for me' })
+  const spoken = await f.waitAnswer(1)
+  const forwarded = (await f.entries(f.voice)).find(
+    (e) => e.kind === 'voice.line' && (e.data as VoiceLine).forwarded,
+  )!
+  expect(forwarded.data).toEqual({
     role: 'daniel',
-    text: 'Please check the tests',
-    delegation: 'd1',
     forwarded: true,
+    text: 'Please check the tests.',
   })
-  // Small talk stays in Voice: logged, never an input to @ultimate.
-  await f.action('log', { role: 'daniel', text: 'Can you hear me?' })
-  await f.action('log', { role: 'live', text: 'Yes, loud and clear.' })
-  expect((await f.entries(f.main)).filter((e) => e.kind === 'voice.utterance')).toHaveLength(1)
-  expect(spoken.data).toMatchObject({
+  expect((await f.entries(f.main)).find((e) => e.kind === 'voice.utterance')?.data).toEqual({
+    text: 'Please check the tests.',
+    line: forwarded.id,
+  })
+  expect(f.answers).toEqual([
+    `@ultimate answered (to forwarded line ${forwarded.id}):\nThe tests pass.`,
+  ])
+  expect(spoken.data).toEqual({
     role: 'ultimate',
-    text: 'The tests pass.',
+    text: 'The spoken answer. Details are on screen.',
     speech: true,
-    delegation: 'd1',
-    source: { conversation: f.main },
+    re: forwarded.id,
   })
-  expect(f.rewrites).toEqual([])
-  expect((await f.entries(f.voice)).every((e) => !e.model?.length)).toBe(true)
   await f.action('end', { seconds: 23 })
   expect((await f.entries(f.voice)).at(-1)?.data).toMatchObject({ phase: 'ended', seconds: 23 })
 })
 
-it('rewrites a Markdown answer through the configured faux summary model', async () => {
-  const f = await fixture()
-  f.setAnswer('**Fixed** the issue in `extensions/voice-live/server.ts`.\n\nRun `pnpm check`.')
-  await f.action('say', { text: 'Please fix the issue' })
-  expect((await f.waitSpoken(1)).data).toMatchObject({
-    text: 'The fix is ready. Details are on screen.',
-    speech: true,
-  })
-  expect(f.rewrites).toHaveLength(1)
-  expect(f.rewrites[0]).toContain('pnpm check')
-})
-
-it('speaks a tool-terminated question and answers the open question by voice, without a new utterance input', async () => {
+it('speaks a tool-terminated question and answers it through Messages, without a new utterance', async () => {
   const f = await fixture()
   f.setAnswer('QUESTION')
-  await f.action('say', { text: 'Please propose an approach' })
-  await f.waitSpoken(1)
+  await f.action('heard', { text: 'Please propose an approach' })
+  await f.waitAnswer(1)
   const log = (await f.server.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context))!
   const question = log.messages.findLast((m) => m.from === f.main && m.to === 'user')!
   expect(question.state).toBe('delivered')
-  expect(f.rewrites[0]).toContain('Which approach?')
-  expect(f.rewrites[0]).toContain('a: Small fix')
-  expect(f.rewrites[0]).toContain('b: Rewrite')
+  expect(f.answers[0]).toContain('Which approach?')
+  expect(f.answers[0]).toContain('a: Small fix')
+  expect(f.answers[0]).toContain('b: Rewrite')
   f.setAnswer('I will use the small fix.')
-  await f.action('say', { text: 'The small fix please' })
-  expect((await f.waitSpoken(2)).data).toMatchObject({
-    text: 'I will use the small fix.',
-    source: { conversation: f.main },
-  })
+  await f.action('heard', { text: 'The small fix please' })
+  await f.waitAnswer(2)
+  expect(f.answers[1]).toContain('I will use the small fix.')
   expect(
     (await f.server.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context))?.messages.find(
       (m) => m.id === question.id,
@@ -233,13 +243,4 @@ it('speaks a tool-terminated question and answers the open question by voice, wi
   ).toBe('answered')
   expect((await f.entries(f.main)).filter((e) => e.kind === 'voice.utterance')).toHaveLength(1)
   expect((await f.entries(f.main)).some((e) => e.kind === 'board.message')).toBe(true)
-})
-
-it('strips structured content when no summary model is available', async () => {
-  expect(
-    await speakable('**Done**. See `src/main.ts` and https://example.com.', async () => undefined),
-  ).toContain('Details are on screen.')
-  expect(
-    await speakable('**Done**. See `src/main.ts` and https://example.com.', async () => undefined),
-  ).not.toMatch(/[`*]|https|src\//)
 })

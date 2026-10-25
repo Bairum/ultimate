@@ -32,8 +32,6 @@ export type VoiceMode = {
 
 let mode: VoiceMode = { phase: 'off', muted: false, front: false }
 let session: LiveSession | undefined
-/** Delegations of this session's own utterances: an answer to an older session's speaks without one. */
-let delegations = new Set<string>()
 /** Answers to speak once the session starting now is live. */
 let queued: string[] = []
 let cancelled = false
@@ -135,7 +133,7 @@ function tick() {
     asked = now
     nudged = true
     try {
-      session.speak('Still on it.', null)
+      session.speak('Still on it.')
     } catch (error) {
       set({ problem: describe(error) })
     }
@@ -173,11 +171,6 @@ export async function open(speech?: string): Promise<void> {
       action: <A, R>(ref: ActionRef<A, R>, args: A) =>
         api.action(ref as ActionRef<null, R>, args as null),
       onEvent,
-      onLine: ({ delegation }) => {
-        if (delegation) delegations.add(delegation)
-        asked = Date.now()
-        nudged = false
-      },
       onError: (error) => set({ problem: describe(error) }),
     })
   } catch (error) {
@@ -192,25 +185,41 @@ export async function open(speech?: string): Promise<void> {
     })
   }
   session = started
-  delegations = new Set()
   if (cancelled) return release('off')
   ticker = setInterval(tick, 1000)
   set({ phase: 'live', since: Date.now() })
   try {
     if (mode.muted) started.mute()
-    for (const text of queued) started.speak(text, null)
+    for (const text of queued) started.speak(text)
   } catch (error) {
     set({ problem: describe(error) })
   }
   queued = []
 }
 
+/** Driven by open forwarded lines, not an acknowledgement or small-talk say. */
+export function working(pending: boolean) {
+  if (pending && asked === undefined) {
+    asked = Date.now()
+    nudged = false
+  } else if (!pending) asked = undefined
+}
+
+/** Quiet context is only useful to the current live session. */
+export function note(text: string) {
+  if (!session) return
+  try {
+    session.send({ type: 'session.thinking.append', event_id: crypto.randomUUID(), content: text })
+  } catch (error) {
+    set({ problem: describe(error) })
+  }
+}
+
 /** An answer to speak: now while live, after the start in flight, or by waking a paused session. */
-export function hear(text: string, delegation?: string) {
-  asked = undefined
+export function hear(text: string) {
   if (mode.phase === 'live' && session) {
     try {
-      session.speak(text, delegation && delegations.has(delegation) ? delegation : null)
+      session.speak(text)
     } catch (error) {
       set({ problem: describe(error) })
     }

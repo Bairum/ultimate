@@ -1,6 +1,6 @@
 /** Browser WebRTC lifecycle, independent of React and the shell. Never holds an API key. */
 import type { ActionRef } from '../../shared/extension-api.ts'
-import { EndAction, LogAction, SayAction, StartAction } from './refs.ts'
+import { EndAction, HeardAction, LogAction, StartAction } from './refs.ts'
 import { Relay } from './relay.ts'
 import type { LiveEvent, RelayOut } from './relay.ts'
 
@@ -8,8 +8,6 @@ export type LiveOptions = {
   /** Pass the shell's api.action (or a typed wrapper). */
   action: <A, R>(ref: ActionRef<A, R>, args: A) => Promise<R>
   onEvent: (event: LiveEvent) => void
-  /** A request was forwarded to @ultimate; line is its durable voice.line entry id. */
-  onLine?: (line: { line: number; text: string; delegation?: string }) => void
   onError: (error: Error) => void
 }
 export type LiveSession = {
@@ -19,7 +17,7 @@ export type LiveSession = {
   send: (event: Record<string, unknown>) => void
   mute: () => void
   unmute: () => void
-  speak: (text: string, delegationId: string | null) => void
+  speak: (text: string) => void
   /** Send session.close, await session.closed, record EndAction and release all media resources. */
   close: () => Promise<void>
 }
@@ -66,33 +64,14 @@ export async function startLive(options: LiveOptions): Promise<LiveSession> {
   }
   const accept = (outs: RelayOut[]) => {
     for (const out of outs) {
-      // In order: Daniel's yes is logged before the request it confirms is forwarded.
+      // Preserve the order of finished lines.
       pending = pending
         .then(async () => {
           if ('log' in out) {
             await options.action(LogAction, out.log)
             return
           }
-          if ('notSent' in out) {
-            await options.action(LogAction, { role: 'notice', text: out.notSent })
-            // GPT-Live said it passed something on: it corrects itself out loud.
-            send({
-              type: 'session.instructions.append',
-              event_id: crypto.randomUUID(),
-              delegation_id: null,
-              content: `Nothing was passed to Ultimate. Tell Daniel briefly that nothing was sent, and ask what he wants passed on.`,
-            })
-            return
-          }
-          const result = await options.action(SayAction, {
-            text: out.forward,
-            ...(out.delegation ? { delegation: out.delegation } : {}),
-          })
-          options.onLine?.({
-            line: result.line,
-            text: out.forward,
-            ...(out.delegation ? { delegation: out.delegation } : {}),
-          })
+          await options.action(HeardAction, { text: out.heard })
         })
         .catch((error: unknown) => {
           options.onError(errorOf(error))
@@ -200,12 +179,12 @@ export async function startLive(options: LiveOptions): Promise<LiveSession> {
         })
         send({ type: 'session.input_audio.unmute' })
       },
-      speak: (text, delegationId) => {
+      speak: (text) => {
         relay.spoke()
         send({
           type: 'session.commentary.append',
           event_id: crypto.randomUUID(),
-          delegation_id: delegationId,
+          delegation_id: null,
           content: text,
         })
       },

@@ -37,13 +37,13 @@ import {
   UserText,
   UserView,
 } from '@/sdk'
-import type { UltimateActions } from '@/sdk'
+import type { EntryRenderer, UltimateActions } from '@/sdk'
 import { SideChatsDoc, useSideChatFront } from '../side-chat/ui.tsx'
 import { UnderUltimate, Unlisted } from '../sidebar/ui.tsx'
 import { openAgentSource, StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import * as live from './live.tsx'
 import type { VoiceMode } from './live.tsx'
-import { StatusAction, VoiceDoc } from './refs.ts'
+import { StatusAction } from './refs.ts'
 import type { VoiceLine, VoiceSession, VoiceUtterance } from './refs.ts'
 
 const KEYS = 'alt+v'
@@ -51,7 +51,7 @@ const useMode = () => useSyncExternalStore(live.subscribe, live.voiceMode)
 /** @ultimate's conversation and the Voice conversation, once start created it. */
 function useIds() {
   const main = useDocOf(1, StandingDoc)?.ultimate
-  const voice = useDocOf(1, VoiceDoc)?.conversation
+  const voice = useDocOf(1, StandingDoc)?.voice
   return { main, voice }
 }
 
@@ -326,6 +326,16 @@ function SpeakNew({ voice }: { voice: number }) {
   useEffect(() => {
     if (loading) return
     const last = entries.at(-1)?.id ?? 0
+    const lines = entries.filter((e) => e.kind === 'voice.line')
+    live.working(
+      lines.some((entry) => {
+        const line = entry.data as unknown as VoiceLine
+        return (
+          line.forwarded &&
+          !lines.some((reply) => (reply.data as unknown as VoiceLine).re === entry.id)
+        )
+      }),
+    )
     if (seen.current === undefined) {
       seen.current = last
       return
@@ -333,9 +343,8 @@ function SpeakNew({ voice }: { voice: number }) {
     for (const entry of entries) {
       if (entry.id <= seen.current || entry.kind !== 'voice.line') continue
       const line = entry.data as unknown as VoiceLine
-      if (line.role === 'ultimate' && line.speech) live.hear(line.text, line.delegation)
-      // @ultimate did not answer a forwarded request: say so, never leave Daniel waiting in silence.
-      else if (line.role === 'notice' && line.re !== undefined) live.hear(line.text)
+      if (line.role === 'ultimate' && line.speech) live.hear(line.text)
+      else if (line.role === 'note') live.note(line.text)
     }
     seen.current = Math.max(seen.current, last)
   }, [entries, loading])
@@ -668,6 +677,7 @@ function LineRow({ entry }: { entry: EntryRecord }) {
   const line = entry.data as unknown as VoiceLine
   const actions = useUltimate()
   const mode = useMode()
+  if (line.role === 'note') return null
   if (line.role === 'daniel')
     return (
       <Message
@@ -822,6 +832,29 @@ function UtteranceRow({ entry }: { entry: EntryRecord }) {
   )
 }
 
+/** Daniel's actual heard input, distinct from the cleaned request Voice passes on. */
+function HeardRow({ entry }: { entry: EntryRecord }) {
+  const { text } = entry.data as { text: string }
+  return (
+    <Message className="mt-3 first:mt-0" data-voice-line="daniel" from="user">
+      <MessageContent>
+        <UserText text={text} />
+      </MessageContent>
+    </Message>
+  )
+}
+
+/** Normal agent bookkeeping stays out of the spoken transcript; speech already has its own line. */
+const AgentRow: EntryRenderer = ({ core }) => {
+  const id = useConversation((conversation) => conversation.id)
+  const { voice } = useIds()
+  return id === voice ? (
+    <div className="text-xs text-muted-foreground opacity-60">{core}</div>
+  ) : (
+    core
+  )
+}
+
 export default defineWebExtension({
   slots: {
     'composer.actions': [StartButton],
@@ -831,7 +864,15 @@ export default defineWebExtension({
   },
   composer: VoiceDock,
   provides: [provide(UnderUltimate, useVoiceRow), provide(Unlisted, useVoiceIds)],
-  entries: { 'voice.line': LineRow, 'voice.session': SessionRow, 'voice.utterance': UtteranceRow },
+  tools: { voice_say: () => null, voice_ask_ultimate: () => null, voice_note: () => null },
+  entries: {
+    'voice.line': LineRow,
+    'voice.heard': HeardRow,
+    'voice.answer': () => null,
+    'pi.assistant': AgentRow,
+    'voice.session': SessionRow,
+    'voice.utterance': UtteranceRow,
+  },
   commands: [
     {
       id: 'voice-live.start',

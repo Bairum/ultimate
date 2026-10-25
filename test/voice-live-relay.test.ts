@@ -1,63 +1,45 @@
 import { expect, it } from 'vitest'
-import { HANDOFF_MS, QUIET_MS, Relay } from '../extensions/voice-live/relay.ts'
+import { QUIET_MS, Relay } from '../extensions/voice-live/relay.ts'
 import type { LiveEvent } from '../extensions/voice-live/relay.ts'
 
 const said = (delta: string): LiveEvent => ({ type: 'session.input_transcript.delta', delta })
 const spoken = (delta: string): LiveEvent => ({ type: 'session.output_transcript.delta', delta })
-const delegated = (id: string): LiveEvent => ({
-  type: 'session.delegation.created',
-  delegation: { id, target: 'client' },
-})
 
-it('keeps small talk in Voice and forwards a request on delegation', () => {
+it('joins fragments into finished lines after 1.2 seconds quiet, regardless of delegation', () => {
   const relay = new Relay(0)
-  relay.event(said('Can you hear me?'), 10)
-  expect(relay.event(spoken('Yep, I can hear you.'), 500)).toEqual([
-    { log: { role: 'daniel', text: 'Can you hear me?' } },
-  ])
-  expect(relay.tick(500 + QUIET_MS)).toEqual([
-    { log: { role: 'live', text: 'Yep, I can hear you.' } },
-  ])
-  relay.event(said('Land the side chat branch'), 3000)
-  expect(relay.event(delegated('d1'), 3500)).toEqual([
-    { log: { role: 'daniel', text: 'Land the side chat branch' } },
-    { forward: 'Land the side chat branch', delegation: 'd1' },
-  ])
+  expect(relay.event(said(' Can you '), 10)).toEqual([])
+  expect(relay.event(said('hear me? '), 500)).toEqual([])
+  expect(relay.tick(500 + QUIET_MS - 1)).toEqual([])
+  expect(relay.tick(500 + QUIET_MS)).toEqual([{ heard: 'Can you hear me?' }])
+  expect(
+    relay.event(
+      { type: 'session.delegation.created', delegation: { id: 'ignored', target: 'client' } },
+      1800,
+    ),
+  ).toEqual([])
+  expect(relay.event(spoken('Yep.'), 2000)).toEqual([])
+  expect(relay.tick(2000 + QUIET_MS)).toEqual([{ log: { role: 'live', text: 'Yep.' } }])
+  expect(relay.tick(9000)).toEqual([])
 })
 
-// Daniel's round-2 test: GPT-Live clarified, said "Okay, asking Ultimate now." and never delegated; nothing was sent.
-it('forwards the exchange itself when GPT-Live announces a handoff it never delegates', () => {
-  const relay = new Relay(0)
-  relay.event(said('Can you ask Ultimate to check which conversations are ongoing'), 10)
-  relay.event(spoken('Do you mean which conversations are going on in Ultimate?'), 2000)
-  relay.event(said('Yes'), 4000)
-  relay.event(spoken('Okay, asking Ultimate now.'), 5000)
-  expect(relay.tick(5000 + QUIET_MS)).toEqual([
-    { log: { role: 'live', text: 'Okay, asking Ultimate now.' } },
-  ])
-  expect(relay.tick(5000 + QUIET_MS + HANDOFF_MS)).toEqual([
-    {
-      forward:
-        'Daniel: Can you ask Ultimate to check which conversations are ongoing\nVoice: Do you mean which conversations are going on in Ultimate?\nDaniel: Yes',
-    },
-  ])
-  // A late delegation for the same handoff forwards nothing twice, and says nothing.
-  expect(relay.event(delegated('late'), 20_000)).toEqual([])
-})
-
-it('reports a handoff with nothing to pass on instead of staying silent', () => {
-  const relay = new Relay(0)
-  relay.event(spoken('Passing that on.'), 100)
-  relay.tick(100 + QUIET_MS)
-  expect(relay.tick(100 + QUIET_MS + HANDOFF_MS)).toEqual([
-    { notSent: 'There was no request to pass on.' },
-  ])
-})
-
-it('does not log Ultimate answers being read out as GPT-Live lines; any speech resets idle', () => {
+it('ignores output while speaking commentary, but still receives Daniel’s next line', () => {
   const relay = new Relay(0)
   relay.spoke()
   relay.event(spoken('The tests pass.'), 100)
   expect(relay.tick(100 + QUIET_MS)).toEqual([])
-  expect(relay.idleFor(600)).toBe(500)
+  relay.event(said('Thanks'), 1500)
+  expect(relay.tick(1500 + QUIET_MS)).toEqual([{ heard: 'Thanks' }])
+  relay.event(spoken('You’re welcome.'), 3000)
+  expect(relay.tick(3000 + QUIET_MS)).toEqual([{ log: { role: 'live', text: 'You’re welcome.' } }])
+})
+
+it('tracks idle from either speaker’s activity, not delegation or clock ticks', () => {
+  const relay = new Relay(0)
+  expect(relay.idleFor(500)).toBe(500)
+  relay.event(said('Hello'), 600)
+  expect(relay.idleFor(1000)).toBe(400)
+  relay.spoke()
+  relay.event(spoken('Hello.'), 1100)
+  relay.tick(5000)
+  expect(relay.idleFor(5000)).toBe(3900)
 })
