@@ -126,16 +126,22 @@ function questionsText(questions: Question[]) {
     .join('\n\n')
 }
 
+const danielLine = (input: { text: string; delegation?: string }): VoiceLine => ({
+  role: 'daniel',
+  text: input.text,
+  ...(input.delegation ? { delegation: input.delegation } : {}),
+})
+
 export function answerTask(host: ExtensionHost) {
   const summaries = host.need(ConversationsApi)
   return defineTask<
     {
       voice: number
       main: number
-      line: number
+      /** Names Daniel's line: the task and `say` write it once under `voice:line:<request>`. */
+      request: string
       text: string
       delegation?: string
-      question?: number
       firstMessage: number
     },
     { phase: 'answer' },
@@ -149,13 +155,48 @@ export function answerTask(host: ExtensionHost) {
         const input = task.input
         const main = input.main as ConversationId
         const recipient = (await host.harness().conversation(main, ctx))!
-        let receipt
-        if (input.question !== undefined) {
-          // If a crash followed answer(), recover its reply instead of answering the question twice.
+        const line = await write(
+          host,
+          input.voice as ConversationId,
+          'voice.line',
+          danielLine(input),
+          `voice:line:${input.request}`,
+        )
+        // The open question this utterance answers, chosen once: after our own answer it is no longer open.
+        let question = await runtime.memo<number | false>('question', ctx)
+        if (question === undefined) {
           const log = await runtime.snapshot(Messages, ROOT_CONVERSATION_ID, ctx)
-          const previous = log?.messages.find((m) => m.from === 'user' && m.re === input.question)
-          const reply =
-            previous?.id ?? (await host.need(MessagesApi).answer(input.question, input.text, ctx))
+          const open = log?.messages.findLast(
+            (m) => m.from === main && m.to === 'user' && m.reply && m.state === 'delivered',
+          )
+          question = await runtime.memo('question', open?.id ?? false, ctx)
+        }
+        let receipt
+        // A crash after answer() finds this utterance's own reply by its text, never another answer to the question.
+        const log = await runtime.snapshot(Messages, ROOT_CONVERSATION_ID, ctx)
+        const previous =
+          question === false
+            ? undefined
+            : log?.messages.find(
+                (m) => m.from === 'user' && m.re === question && m.text === input.text,
+              )
+        const reply =
+          question === false
+            ? undefined
+            : (previous?.id ??
+              (await host
+                .need(MessagesApi)
+                .answer(question, input.text, ctx)
+                .catch((error: unknown) => {
+                  // Answered meanwhile (its card, another utterance): this utterance goes in as plain voice input.
+                  if (
+                    error instanceof Error &&
+                    error.message === 'These questions are no longer open'
+                  )
+                    return undefined
+                  throw error
+                })))
+        if (reply !== undefined) {
           const watch = (await runtime.watchDoc(Messages, ROOT_CONVERSATION_ID, ctx))!
           const placed = Promise.withResolvers<void>()
           const inspect = (value: typeof watch.value) => {
@@ -188,9 +229,9 @@ export function answerTask(host: ExtensionHost) {
           receipt = await recipient.submit(
             {
               type: 'input',
-              requestId: `voice:${input.line}`,
+              requestId: `voice:${line}`,
               whenBusy: 'steer',
-              entry: { kind: 'voice.utterance', data: { text: input.text, line: input.line } },
+              entry: { kind: 'voice.utterance', data: { text: input.text, line } },
               content: `Daniel, by voice (live transcript, may contain mistakes):\n${input.text}`,
             },
             ctx,
@@ -284,7 +325,7 @@ export function answerTask(host: ExtensionHost) {
             source: { conversation: main, entry: settled.answer },
             ...(input.delegation ? { delegation: input.delegation } : {}),
           },
-          `voice:answer:${input.line}`,
+          `voice:answer:${line}`,
         )
         const response = await runtime.memo<ResponseReceipt>('response', ctx)
         await runtime.commit(async (tx) => {
@@ -377,33 +418,30 @@ export const actions = {
     const id = await voiceId(host)
     const main = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
     if (!main) throw new Error('@ultimate is not available')
-    const line = await write(
-      host,
-      id,
-      'voice.line',
-      { role: 'daniel', text, ...(delegation ? { delegation } : {}) },
-      `voice:line:${crypto.randomUUID()}`,
-    )
+    // The task exists before the line: a crash after this commit still writes and relays it.
+    const input = {
+      voice: id,
+      main,
+      request: crypto.randomUUID(),
+      text,
+      ...(delegation ? { delegation } : {}),
+    }
     await host.harness().commit(async (tx) => {
       const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
-      const question = log.messages.findLast(
-        (m) => m.from === main && m.to === 'user' && m.reply && m.state === 'delivered',
-      )
       await tx.createTask(
         answerTask(host),
-        {
-          voice: id,
-          main,
-          line,
-          text,
-          firstMessage: log.next,
-          ...(delegation ? { delegation } : {}),
-          ...(question ? { question: question.id } : {}),
-        },
+        { ...input, firstMessage: log.next },
         { conversationId: id, ownership: { kind: 'conversation' }, background: true },
       )
     }, context)
     host.harness().resume()
+    const line = await write(
+      host,
+      id,
+      'voice.line',
+      danielLine(input),
+      `voice:line:${input.request}`,
+    )
     return { line }
   }),
   end: implementAction(EndAction, async (args, { host }) => {
