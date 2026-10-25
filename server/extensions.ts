@@ -1,4 +1,5 @@
 import { PairingRequired } from './request-security.ts'
+import type { HttpCaller } from './request-security.ts'
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { compareExtensions, discoverExtensions } from './discovery.ts'
@@ -277,25 +278,29 @@ export async function loadExtensions(
   let open = false
   const cleanups = new Set<() => Promise<void>>()
   const resources = new Map<string, unknown>()
+  /**
+   * `by` is the HTTP caller's class (server/api.ts always passes it), or `agent` for the in-process agent path, which
+   * checks its own limits. Omitted, it is a trusted in-process caller such as a test.
+   */
   async function invoke(
     name: string,
     action: string,
     args: JsonValue,
     signal: AbortSignal,
     conversationId?: number,
-    caller = 'ui',
+    by: HttpCaller | 'agent' = { user: true, host: true },
     device?: Device,
-    httpCaller?: import('./request-security.ts').HttpCaller,
   ) {
     const table = actions.get(name)
     const fn = table && Object.hasOwn(table, action) ? table[action] : undefined
     if (!fn) throw new Error(`Unknown extension action: ${name}/${action}`)
     if (
-      httpCaller &&
-      ((userActions.get(name)?.includes(action) && !httpCaller.user) ||
-        (hostActions.get(name)?.includes(action) && !httpCaller.host))
+      by !== 'agent' &&
+      ((userActions.get(name)?.includes(action) && !by.user) ||
+        (hostActions.get(name)?.includes(action) && !by.host))
     )
       throw new PairingRequired()
+    const caller = by === 'agent' ? 'agent' : 'ui'
     if (
       conversationId !== undefined &&
       (!Number.isSafeInteger(conversationId) || conversationId < 1)

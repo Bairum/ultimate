@@ -114,7 +114,12 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       allowedHosts: true,
       hmr: { server: hmr },
       fs: {
-        allow: [ultimateRoot, projectRoot, resolvePath(options.userHome ?? homedir(), '.ultimate')],
+        // Only user extensions from ~/.ultimate: its root holds secrets.json and user-key.
+        allow: [
+          ultimateRoot,
+          projectRoot,
+          resolvePath(options.userHome ?? homedir(), '.ultimate/extensions'),
+        ],
       },
     },
     appType: 'spa',

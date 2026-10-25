@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { constants } from 'node:fs'
-import { mkdir, open } from 'node:fs/promises'
+import { link, mkdir, open, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { IncomingHttpHeaders, IncomingMessage } from 'node:http'
@@ -146,16 +146,22 @@ export async function userCookie(userHome: string) {
   const directory = join(userHome, '.ultimate')
   await mkdir(directory, { recursive: true })
   const path = join(directory, 'user-key')
-  let file
+  // Written whole to a private temp file, then linked into place: a reader never sees a partial key,
+  // and EEXIST means another host created it first.
+  const temp = join(directory, `user-key.${process.pid}.${randomBytes(6).toString('hex')}`)
+  let file = await open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600)
   try {
-    file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600)
-    try {
-      await file.writeFile(randomBytes(32))
-    } finally {
-      await file.close()
-    }
+    await file.writeFile(randomBytes(32))
+    await file.sync()
+  } finally {
+    await file.close()
+  }
+  try {
+    await link(temp, path)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+  } finally {
+    await unlink(temp)
   }
   file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
   try {

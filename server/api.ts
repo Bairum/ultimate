@@ -147,9 +147,8 @@ async function runAction(
       args,
       controller.signal,
       id,
-      'ui',
-      deviceOf(request.headers),
       caller,
+      deviceOf(request.headers),
     )
     reply(response, 200, { result })
   } catch (error) {
@@ -176,7 +175,12 @@ export async function createApi(
 ) {
   const { harness, root } = opened
   let cookie: Promise<string> | undefined
-  const credential = () => (cookie ??= userCookie(host.userHome))
+  // A failed read (unsafe permissions) is retried on the next request instead of failing every request until restart.
+  const credential = () =>
+    (cookie ??= userCookie(host.userHome).catch((error: unknown) => {
+      cookie = undefined
+      throw error
+    }))
   const pairing = pairingCodes(options.opener)
   const streams = new Set<() => Promise<void>>()
   const graph = await harness.taskGraph(context)

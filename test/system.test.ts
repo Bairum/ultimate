@@ -623,7 +623,15 @@ export const actions = {
   // Navigation: a change of surface or conversation is one event with the browser's device; a repeat is none.
   const device = { device: 'desktop firefox', login: 'me@example.com' }
   const navigate = (args: JsonValue) =>
-    server.extensions.invoke('system', 'navigated', args, signal, 1, 'ui', device)
+    server.extensions.invoke(
+      'system',
+      'navigated',
+      args,
+      signal,
+      1,
+      { user: true, host: true },
+      device,
+    )
   expect(await navigate({ surface: 'agent', conversation: 7 })).toEqual({ recorded: true })
   expect(await navigate({ surface: 'agent', conversation: 7 })).toEqual({ recorded: false })
   expect(await navigate({ surface: 'system' })).toEqual({ recorded: true })
