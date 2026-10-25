@@ -105,6 +105,22 @@ const refusals: Record<string, string> = {
   timeout: 'wait timed out',
   teaching: 'you are teaching: the agent only watches',
   teaching_elsewhere: 'another conversation is teaching in this app',
+  scope_required: 'say whether the lesson is the project’s or yours',
+  resave_required: 'lesson must be saved again first',
+  consequential_not_taught: 'pre-approval names a step the lesson never taught',
+  unsupported_until_secrets: 'lesson types a secret: not supported yet',
+  practice_budget: 'lesson too long to practice',
+  expect_required: 'a step has no expected result',
+  intent_required: 'needs your request in your words',
+  param_required: 'needs a value for the lesson',
+  param_provenance: 'value did not come from you',
+  review_required: 'reopened lesson not saved yet',
+  practice_checks_required: 'not every step was checked',
+  practice_mismatch: 'practice stopped at a mismatch',
+  practice_task_changed: 'a different task is running',
+  mismatch: 'screen did not match the lesson',
+  no_practice: 'no practice run started',
+  invalid_step: 'no such step in the lesson',
 }
 export const refusalText = (code: string) =>
   refusals[code] ?? (code.startsWith('task_') ? `task ${code.slice(5).replace('_', ' ')}` : code)
@@ -117,6 +133,20 @@ export const fixes: Record<string, string> = {
     'This conversation is recording a lesson, so the agent may not act. Stop or finish the recording first.',
   teaching_elsewhere:
     'Another conversation is recording a lesson in this app or window. This agent cannot act there until that recording stops.',
+  scope_required:
+    'A lesson with this name exists in this project, in your personal skills, or both. Tell the agent which one to practice.',
+  resave_required:
+    'The saved lesson is from an older version or its files changed. Reopen it, approve the steps again and save.',
+  consequential_not_taught:
+    'Only labels of consequential steps the lesson actually taught can be pre-approved. The agent must ask again with the taught labels.',
+  unsupported_until_secrets:
+    'The lesson types a secret value. That needs the secrets support that is not built yet; it never types it as plain text.',
+  practice_budget: 'Practice runs at most 100 steps. Split the lesson into shorter ones.',
+  expect_required:
+    'Reopen the lesson and add what should appear or go away after each step, then save again.',
+  review_required: 'Finish reviewing the reopened lesson and save it before practicing.',
+  practice_mismatch:
+    'A step did not match its lesson, so this run cannot finish as done. Reopen the lesson to fix it, then practice again.',
 }
 
 /** The marker every piece of screen text carries: it is shown as plain text and never acted on. */
@@ -292,7 +322,10 @@ export const toneClass: Record<Tone, string> = {
   bad: 'text-error',
 }
 export const toneOf = (status?: string): Tone =>
-  !status || ['ok', 'delivered', 'done', 'active', 'satisfied', 'completed'].includes(status)
+  !status ||
+  ['ok', 'delivered', 'done', 'active', 'satisfied', 'completed', 'ready', 'review'].includes(
+    status,
+  )
     ? 'good'
     : ['escalated', 'unknown', 'incomplete', 'stopped', 'awaiting_confirmation'].includes(status) ||
         status.endsWith('_required') ||

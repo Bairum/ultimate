@@ -199,7 +199,8 @@ function Expected({ frame, segment }: { frame?: FrameMeta; segment: Segment }) {
         <ImageOffIcon className="size-3 shrink-0 text-muted-foreground/60" />
         {frame ? (
           <span>
-            screen at {offset(segment, frame.at)}
+            {/* A reopened lesson keeps no recording timeline: its frames are the saved evidence. */}
+            {segment.source ? 'saved screen' : `screen at ${offset(segment, frame.at)}`}
             {!frame.file && <span className="text-muted-foreground/60"> · image not kept</span>}
           </span>
         ) : (
@@ -845,6 +846,14 @@ export function TeachReview({ teach, conversation }: { teach: Teach; conversatio
       tone={unreviewed ? 'warning' : 'brand'}
     >
       <div className="space-y-1 border-b border-border/60 px-3 py-2 text-[12px] leading-relaxed text-muted-foreground">
+        {segment.source && (
+          <p className="font-mono text-[11.5px]" data-teach-reopened>
+            <span className="text-brand">
+              Reopened from {segment.source.scope}/{segment.source.name}
+            </span>
+            <span> · every step needs your approval again</span>
+          </p>
+        )}
         <p>
           <span className="text-foreground">
             Saved, this becomes instructions an agent follows.
@@ -858,7 +867,7 @@ export function TeachReview({ teach, conversation }: { teach: Teach; conversatio
           {risky > 0 && (
             <span className="text-warning">
               {' '}
-              · {risky} consequential: the agent asks before each
+              · {risky} consequential: each asks first unless you pre-approve it for a run
             </span>
           )}
         </p>
@@ -918,10 +927,12 @@ function SaveBar({
   onRefused: () => void
 }) {
   const system = useSystem()
-  const [scope, setScope] = useState<'project' | 'personal'>('project')
-  const [name, setName] = useState(() => kebab(segment.title))
+  // A reopened lesson saves back where it came from by default: same scope and name, replacing it explicitly.
+  const source = segment.source
+  const [scope, setScope] = useState<'project' | 'personal'>(source?.scope ?? 'project')
+  const [name, setName] = useState(() => source?.name ?? kebab(segment.title))
   const [overwrite, setOverwrite] = useState(false)
-  const [exists, setExists] = useState(false)
+  const [exists, setExists] = useState(!!source)
   const [refusal, setRefusal] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [discarding, setDiscarding] = useState(false)
