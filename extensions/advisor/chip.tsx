@@ -1,5 +1,5 @@
 import { ScanEyeIcon } from 'lucide-react'
-import { cn, useUltimate } from '@/sdk'
+import { cn, useNow, useUltimate } from '@/sdk'
 import type { Severity } from './refs.ts'
 import { openAdvisorPanel, openNotes, tones, useAdvisorState } from './parts.tsx'
 
@@ -7,11 +7,13 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 /**
  * The status-line chip for open advice across the project: concerns and blockers in their tone, open nits only as a
- * muted count. It's hidden while nothing is open, which includes every role being off.
+ * muted count. Snoozed and archived notes don't count, so clearing the panel empties it; it's hidden while nothing
+ * counts, which includes every role being off.
  */
 export function Chip() {
   const shell = useUltimate()
-  const open = openNotes(useAdvisorState())
+  // A minute is fine-grained enough for a snooze to wake.
+  const open = openNotes(useAdvisorState(), useNow(60_000))
   const count = (severity: Severity) => open.filter((note) => note.severity === severity).length
   const blockers = count('blocker')
   const concerns = count('concern')
