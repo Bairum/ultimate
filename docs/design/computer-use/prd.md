@@ -127,13 +127,15 @@ One user (the owner of this machine) and the agents working for them:
   up to a cap).
 - F22. A `computer-operator` agent definition: a vision model, only the computer tools plus `read`, and a prompt on
   verify-after-act. Coordinators delegate desktop work to it, so screenshots stay out of the coordinator's context.
-- F23. Jev (via `classify`) answers the risk gate (F12) and, in a later phase, closed-candidate next-element
-  choices.
+- F23. **Goal mode (Jev-first):** `computer_act {goal}` runs routine sub-goals with TypeSafe Jev (via `classify`)
+  choosing among extension-built AX candidates. It verifies every step and the goal (`done_when`), and escalates to
+  the planner with a reason code below the confidence thresholds, on risk, on no effect, on refusals or at the end
+  of its budget. Jev also answers the risk check in explicit mode (F12).
 
 ## Non-functional requirements
 
-- N1. **Latency:** Driver round-trip for an AX action ≤300 ms (p50) on the host, and an observe with a window
-  screenshot ≤600 ms. The model call dominates; everything else stays out of the way.
+- N1. **Latency:** AX tree observe ≤200 ms and an AX action ≤700 ms (p50) on the host (spike: ≈125 ms and
+  ≈600 ms). A Jev goal step ≤1.2 s end to end. Stop lands within one step (≤1 s).
 - N2. **Tokens:** median ≤3k input tokens added per step (tree plus at most one image). Retained screenshots are
   capped (default: the last 3 images per conversation), pruned in batches so the prompt cache prefix stays stable
   (memory `anthropic-cache-checkpoints`).
@@ -163,3 +165,6 @@ more like them), run once per model with the user's OK:
 | Stop latency (button to Driver idle)                                           | ≤1 s                                         |
 | Median added tokens per step                                                   | ≤3k                                          |
 | Median steps per task                                                          | ≤12                                          |
+| Steps taken by Jev in goal mode, on the form and settings tasks                | ≥60%                                         |
+| Jev-picked steps that fail verification                                        | ≤5%                                          |
+| Frontier-model tokens per task vs explicit mode only, same tasks               | −50% or better                               |
