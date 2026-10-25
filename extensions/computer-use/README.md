@@ -45,6 +45,8 @@ One lazy MCP stdio connection is shared per host. The daemon holds a display-awa
 
 `computer-operator` is the bounded native-app subagent: these four tools plus `read`, without bash or web access. Its brief must include the user's verbatim intent, allowed apps and desired evidence. Every tool result ends with a redacted task anchor; each input while active gets a `computer.note`, never a changing system prompt.
 
+Every tool result also carries `details` for cards (`ComputerDetails` in `refs.ts`), without changing `output` or `structuredOutput`. `details.task` is the structured task footer or null. `details.act` contains mode, per-step outcomes and effective labels (never input payloads), escalation reason, redacted Jev decisions and verification verdict. `details.observe` contains app/window/snapshot/capture metadata, explicitly untrusted title/tree text, truncation and the zero-based image block index in `output`. Task/apps results and read-only listings expose a structured `details.summary`. Details redact task parameters and current action/goal values; cards must not parse model text or the anchor line.
+
 ## Actions and document
 
 All actions return the conversation's session unless noted. Only `state` is available to agents; authority-changing actions are `userActions` reserved for the UI.

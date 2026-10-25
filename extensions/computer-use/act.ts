@@ -12,7 +12,17 @@ import { path } from './parse-observation.ts'
 import { ObservationUnavailable } from './tool-helpers.ts'
 import { runGoal } from './jev.ts'
 import type { Candidate } from './jev.ts'
-import type { Driver, Goal, Observation, Predicate, Step, StepOutcome, Verdict } from './types.ts'
+import type {
+  Driver,
+  Element,
+  Goal,
+  Observation,
+  Predicate,
+  Step,
+  StepOutcome,
+  Verdict,
+} from './types.ts'
+import type { ActStepDetails } from './refs.ts'
 import { readSession, updateSession, isStopped, hasConfirmation } from './session.ts'
 import type { Active } from './runtime.ts'
 import { observeWindow, observedOutput } from './observe.ts'
@@ -162,6 +172,18 @@ export async function act(
       ),
     ].filter(Boolean)
     const redact = redactor(values)
+    const uiSteps: ActStepDetails[] = []
+    const describe = (action: Step, outcome: StepOutcome, target?: Element) => {
+      uiSteps.push({
+        kind: action.kind,
+        status: outcome.status,
+        ...(outcome.status === 'refused'
+          ? { code: redact(outcome.code), message: redact(outcome.message) }
+          : {}),
+        ...(outcome.status === 'failed' ? { message: redact(outcome.message) } : {}),
+        ...(target ? { role: redact(target.role), label: redact(target.label ?? '') } : {}),
+      })
+    }
     let count = 0
     let observation = runtimeState.observations.get(cacheKey(conversation, args.app))
     const initialObservation = observation
@@ -518,7 +540,10 @@ export async function act(
         observe,
         act: async (c) => {
           await Promise.all(decisions)
-          return step(candidateStep(c))
+          const action = candidateStep(c)
+          const delivered = await step(action)
+          describe(action, delivered, { ...c.element, label: c.label })
+          return delivered
         },
         verify,
         ask: host.want(ClassifyApi)
@@ -595,9 +620,32 @@ export async function act(
         ...('observation' in outcome ? { observation: undefined } : {}),
       })
       const view = observation ? await observedOutput(observation) : undefined
+      const uiDecisions = (await readSession(host, conversation)).journal.flatMap((j) =>
+        j.call === call && j.decision ? [j.decision] : [],
+      )
       return {
         ...summary,
         output: [...summary.output, ...(view?.output ?? [])],
+        details: {
+          task: null,
+          act: {
+            mode: 'goal',
+            steps: uiSteps,
+            decisions: uiDecisions,
+            ...(outcome.status === 'done' ? { verdict: outcome.verdict } : {}),
+            ...(outcome.status === 'escalated' ? { escalationReason: outcome.reason } : {}),
+          },
+          ...(view?.details.observe
+            ? {
+                observe: {
+                  ...view.details.observe,
+                  ...(view.details.observe.imageIndex === undefined
+                    ? {}
+                    : { imageIndex: view.details.observe.imageIndex + summary.output.length }),
+                },
+              }
+            : {}),
+        },
         structuredOutput: json({
           ...outcome,
           ...('observation' in outcome
@@ -609,9 +657,13 @@ export async function act(
     const outcomes: StepOutcome[] = []
     let halted = false
     for (const action of args.actions!) {
+      const target =
+        stepTarget(action, observation!) ??
+        (initialObservation ? stepTarget(action, initialObservation) : undefined)
       const outcome: StepOutcome =
         halted || active.stopped ? { status: 'not_run' } : await step(action)
       outcomes.push(outcome)
+      describe(action, outcome, target)
       halted ||= outcome.status !== 'delivered'
     }
     const verdict = await verify(args.expect ?? [])
@@ -627,8 +679,19 @@ export async function act(
       verdict,
     }
     const view = await observedOutput(observation!)
+    const rendered = result(summary)
     return {
-      output: [...result(summary).output, ...view.output],
+      output: [...rendered.output, ...view.output],
+      details: {
+        task: null,
+        act: { mode: 'explicit', steps: uiSteps, decisions: [], verdict },
+        observe: {
+          ...view.details.observe,
+          ...(view.details.observe.imageIndex === undefined
+            ? {}
+            : { imageIndex: view.details.observe.imageIndex + rendered.output.length }),
+        },
+      },
       structuredOutput: json({ ...summary, observation: { ...observation, image: undefined } }),
     }
   } finally {

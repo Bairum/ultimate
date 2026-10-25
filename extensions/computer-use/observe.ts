@@ -13,6 +13,7 @@ import * as task from './task.ts'
 import { untrusted } from './content.ts'
 import { readSession, isStopped } from './session.ts'
 import { allGrants, resolveIdentity, readConsent, listApps } from './gates.ts'
+import type { ComputerDetails } from './refs.ts'
 
 export async function windowFor(
   driver: Driver,
@@ -117,7 +118,31 @@ export async function observedOutput(observation: Observation, maxDimension = 15
     })
     if (resized) content.push({ type: 'image', data: resized.data, mimeType: resized.mimeType })
   }
-  return { output: content, structuredOutput: json({ ...metadata, tree }) }
+  const observed: ComputerDetails['observe'] = {
+    app: observation.app,
+    window: observation.windowId,
+    title: { text: observation.title, untrusted: true },
+    snapshot: observation.snapshot,
+    ...(observation.capture
+      ? {
+          capture: {
+            width: observation.capture.width,
+            height: observation.capture.height,
+            scale: observation.capture.scale,
+          },
+        }
+      : {}),
+    truncated: observation.truncated,
+    tree: { text: tree, untrusted: true },
+    ...(content.some((block) => block.type === 'image')
+      ? { imageIndex: content.findIndex((block) => block.type === 'image') }
+      : {}),
+  }
+  return {
+    output: content,
+    structuredOutput: json({ ...metadata, tree }),
+    details: { task: null, observe: observed },
+  }
 }
 export function observeTool(host: ExtensionHost) {
   return defineTool({

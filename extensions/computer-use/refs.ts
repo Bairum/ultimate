@@ -2,6 +2,8 @@
 import { actionRef, docRef } from '../../shared/extension-api.ts'
 import type { JevDecision, TaskState } from './types.ts'
 import type { Grant } from './types.ts'
+import type { JsonValue } from '@earendil-works/chord'
+import type { Step, StepOutcome, Verdict } from './types.ts'
 
 export type Session = {
   task?: TaskState
@@ -34,6 +36,48 @@ export type Session = {
   lastObservedAt: number
   takeovers: { app: string; at: number }[]
   budget: { steps: number; startedAt: number }
+}
+
+/** Structured card data. Screen strings stay explicitly untrusted; payload values are redacted. */
+export type UntrustedText = { text: string; untrusted: true }
+export type ActStepDetails = {
+  kind: Step['kind']
+  status: StepOutcome['status']
+  code?: string
+  message?: string
+  role?: string
+  label?: string
+}
+export type ComputerDetails = {
+  task: {
+    id: string
+    status: TaskState['status']
+    subgoal: { id: string; text: string } | null
+    subgoals: number
+    criteria: { met: number; total: number }
+    steps: { used: number; limit: number }
+    lastCheck?: string
+  } | null
+  status?: string
+  message?: string
+  summary?: JsonValue
+  act?: {
+    mode: 'explicit' | 'goal'
+    steps: ActStepDetails[]
+    escalationReason?: string
+    decisions: (Omit<JevDecision, 'chose'> & { chose?: string })[]
+    verdict?: Verdict
+  }
+  observe?: {
+    app: string
+    window: number
+    title: UntrustedText
+    snapshot: string
+    capture?: { width: number; height: number; scale: number }
+    truncated: boolean
+    tree: UntrustedText
+    imageIndex?: number
+  }
 }
 /** Per-conversation state; conversation 1 also stores project grants. Journal keeps the latest 200 entries. */
 export const SessionDoc = docRef<Session>('computer.session')

@@ -8,6 +8,7 @@ import { runtime } from './runtime.ts'
 import { observeTool } from './observe.ts'
 import { actTool, appsTool } from './act.ts'
 import { taskToolDefinition } from './task-tool.ts'
+import { withDetails } from './details.ts'
 
 import * as task from './task.ts'
 
@@ -57,12 +58,14 @@ export default function computerUse(host: ExtensionHost) {
           ...registered,
           execute: async (args, api, ctx) => {
             const refusal = await operatorOnly(host, api)
-            if (refusal) return refusal
+            if (refusal)
+              return withDetails(host, api.conversationId, registered.name, args, refusal)
             const abort = new AbortController()
             const state = runtime(host)
             state.calls.set(abort, api.conversationId)
             try {
-              return await execute(args, api, withAbortSignal(abort.signal, ctx))
+              const value = await execute(args, api, withAbortSignal(abort.signal, ctx))
+              return await withDetails(host, api.conversationId, registered.name, args, value)
             } finally {
               state.calls.delete(abort)
             }

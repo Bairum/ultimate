@@ -17,6 +17,14 @@ import { resolve } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
 
 import { Profile } from '../extensions/subagents/api.ts'
+import type { ComputerDetails } from '../extensions/computer-use/refs.ts'
+import { withDetails } from '../extensions/computer-use/details.ts'
+import { resizeImage } from '@earendil-works/pi-coding-agent'
+
+vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@earendil-works/pi-coding-agent')>()
+  return { ...actual, resizeImage: vi.fn<typeof actual.resizeImage>(actual.resizeImage) }
+})
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
   for (const close of cleanup.splice(0).toReversed()) await close()
@@ -354,22 +362,20 @@ it('runs a routine goal through fake classify and journals Jev decisions', async
     tool === 'verify_state'
       ? { ok: true, text: 'satisfied', structured: { status: 'satisfied' }, images: [] }
       : call(tool, args, signal)
-  const output = await act(
-    f.host,
-    f.driver,
-    f.root.id,
-    'goal',
-    {
-      app: 'Calculator',
-      window: 456,
-      goal: {
-        text: 'Press 6',
-        done_when: [{ element: { selector: { role: 'AXStaticText' }, value_equals: '6' } }],
-      },
+  const output = await f.invoke('computer_act', {
+    app: 'Calculator',
+    window: 456,
+    goal: {
+      text: 'Press 6',
+      done_when: [{ element: { selector: { role: 'AXStaticText' }, value_equals: '6' } }],
     },
-    new AbortController().signal,
-  )
+  })
   expect(data(output).status).toBe('done')
+  expect((output.details as ComputerDetails).act).toMatchObject({
+    mode: 'goal',
+    steps: [{ kind: 'click', status: 'delivered', label: '6' }],
+    decisions: expect.any(Array),
+  })
   expect(f.fake.display).toBe('6')
   expect((await readSession(f.host, f.root.id)).journal.some((j) => j.kind === 'jev')).toBe(true)
 })
@@ -796,6 +802,12 @@ it('creates the same one-shot confirmation for goal mode and explicit clicks', a
     goal: { text: 'Press Send' },
   })
   expect(data(output).status).toBe('escalated')
+  expect((output.details as ComputerDetails).act).toMatchObject({
+    mode: 'goal',
+    escalationReason: 'consequential',
+    steps: [],
+    decisions: expect.any(Array),
+  })
   const key = (await readSession(f.host, f.root.id)).pending[0].key!
   const view = await f.observe()
   expect(data(await f.run([{ kind: 'click', element: `${view.snapshot}:7` }])).status).toBe(
@@ -1009,4 +1021,132 @@ it('masks sensitive-field confirmation payloads rather than persisting typed pas
   const state = await readSession(f.host, f.root.id)
   expect(state.pending[0].payload).toBe(`••• (${text.length} chars)`)
   expect(JSON.stringify(state)).not.toContain('private-password')
+})
+
+it('returns structured act and observe details with task progress, untrusted screen text and image indices, but no parameter values or typed text', async () => {
+  const f = await fixture()
+  // Exercise image placement independently of the optional native image decoder.
+  const resized = {
+    data: 'aGVsbG8=',
+    mimeType: 'image/png',
+    originalWidth: 800,
+    originalHeight: 200,
+    width: 800,
+    height: 200,
+    wasResized: false,
+  }
+  vi.mocked(resizeImage).mockResolvedValueOnce(resized).mockResolvedValueOnce(resized)
+  const email = 'bob@x.com'
+  const typed = 'private typed text'
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.task!.spec.scope.params = { Email: email }
+    doc.task!.subgoals[0].text = `Fill ${email}`
+  })
+  const call = f.driver.call.bind(f.driver)
+  f.driver.call = async (tool, args, signal) => {
+    const reply = await call(tool, args, signal)
+    if (tool === 'get_window_state') {
+      reply.structured!.window_title = `Draft ${email}`
+      reply.structured!.tree_markdown = `Email ${email}: ${f.fake.display}`
+      const elements = reply.structured!.elements as unknown as {
+        element_index: number
+        role: string
+        label: string
+        identifier: string
+        help: string
+      }[]
+      Object.assign(
+        elements.find((e) => e.element_index === 1)!,
+        { role: 'AXTextField', label: '', identifier: 'emailField', help: `Address ${email}` },
+      )
+      reply.images = [
+        {
+          mimeType: 'image/png',
+          data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5XcAAAAASUVORK5CYII=',
+        },
+      ]
+    }
+    return reply
+  }
+  await f.grant()
+  const observed = await f.invoke('computer_observe', {
+    app: 'Calculator',
+    window: 456,
+    screenshot: 'always',
+  })
+  const view = observed.structuredOutput as unknown as Observation
+  const details = observed.details as ComputerDetails
+  expect(details.task).toMatchObject({
+    id: 'T1',
+    status: 'active',
+    subgoal: { id: 'S1', text: 'Fill [param]' },
+    criteria: { met: 0, total: 1 },
+    steps: { used: 0, limit: 60 },
+  })
+  expect(details.observe).toMatchObject({
+    app: 'Calculator',
+    window: 456,
+    title: { text: 'Draft [param]', untrusted: true },
+    snapshot: view.snapshot,
+    capture: { width: 800, height: 200, scale: 2 },
+    truncated: false,
+    imageIndex: 1,
+  })
+  expect(observed.output![details.observe!.imageIndex!].type).toBe('image')
+  expect(JSON.stringify(details)).not.toContain(email)
+  expect(JSON.stringify(observed.output)).toContain(email)
+  const acted = await f.invoke('computer_act', {
+    app: 'Calculator',
+    window: 456,
+    actions: [{ kind: 'type', element: `${view.snapshot}:1`, text: typed }],
+  })
+  const actedDetails = acted.details as ComputerDetails
+  expect(actedDetails.act).toEqual({
+    mode: 'explicit',
+    steps: [
+      {
+        kind: 'type',
+        status: 'delivered',
+        role: 'AXTextField',
+        label: 'email Field Address [param]',
+      },
+    ],
+    decisions: [],
+    verdict: 'unknown',
+  })
+  expect(actedDetails.task!.steps.used).toBe(1)
+  expect(actedDetails.observe!.imageIndex).toBe(2)
+  expect(acted.output![actedDetails.observe!.imageIndex!].type).toBe('image')
+  expect(JSON.stringify(actedDetails)).not.toContain(email)
+  expect(JSON.stringify(actedDetails)).not.toContain(typed)
+  expect(JSON.stringify(acted.output)).toContain(typed)
+})
+
+it('adds details to apps, task and refusal results without changing either model output or structuredOutput', async () => {
+  const f = await fixture()
+  for (const [name, args] of [
+    ['computer_apps', {}],
+    ['computer_task', { action: 'status' }],
+  ] as const) {
+    const result = await f.invoke(name, args)
+    expect((result.details as ComputerDetails).task?.id).toBe('T1')
+    expect((result.details as ComputerDetails).summary).toBeDefined()
+  }
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.task!.spec.scope.params = { Email: 'bob@x.com' }
+  })
+  const original = {
+    output: [{ type: 'text' as const, text: 'Keep bob@x.com unchanged for the model' }],
+    structuredOutput: { status: 'test', message: 'bob@x.com' },
+  }
+  const result = await withDetails(f.host, f.root.id, 'computer_apps', {}, original)
+  expect(result.output).toBe(original.output)
+  expect(result.structuredOutput).toBe(original.structuredOutput)
+  expect(JSON.stringify(result.details)).not.toContain('bob@x.com')
+  await f.harness.commit(async (tx) => {
+    ;(await tx.doc(Profile, f.root.id)).definition = 'worker'
+  }, context)
+  const refused = await f.invoke('computer_observe', {})
+  expect((refused.details as ComputerDetails).status).toBe('operator_required')
+  expect((refused.details as ComputerDetails).task?.id).toBe('T1')
 })
