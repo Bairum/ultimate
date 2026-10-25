@@ -24,6 +24,7 @@ import {
   ReleaseAction,
   TakeoverAction,
 } from './refs.ts'
+import { predicate } from './shared.tsx'
 import type { Pending, Session } from './shared.tsx'
 
 /** One button that calls a user-only action, spinning while it runs; a failure shows under the card. */
@@ -104,9 +105,19 @@ function Frame({
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex min-w-0 gap-2 leading-[1.6]">
-      <span className="w-14 shrink-0 text-muted-foreground">{label}</span>
-      <span className="min-w-0 break-words text-foreground">{children}</span>
+      <span className="w-16 shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 flex-1 break-words text-foreground">{children}</span>
     </div>
+  )
+}
+
+/** Text read off the screen: plain text with the same marker as the accessibility tree. */
+function Screen({ children }: { children: string }) {
+  return (
+    <>
+      “{children}”
+      <span className="ml-1.5 text-[10.5px] text-muted-foreground/60">screen text, untrusted</span>
+    </>
   )
 }
 
@@ -154,6 +165,8 @@ function Consent({ request, conversation }: { request: Pending; conversation: nu
 
 function Confirm({ request, conversation }: { request: Pending; conversation: number }) {
   const [error, setError] = useState<string>()
+  // Pixel steps name their point; the server adds x,y to their pending requests.
+  const point = request as Pending & { x?: number; y?: number }
   return (
     <Frame
       buttons={
@@ -173,22 +186,33 @@ function Confirm({ request, conversation }: { request: Pending; conversation: nu
       title="risky step"
     >
       <Fact label="app">{request.app}</Fact>
-      {request.window !== undefined && <Fact label="window">“{request.window}”</Fact>}
+      {request.window !== undefined && (
+        <Fact label="window">
+          <Screen>{request.window}</Screen>
+        </Fact>
+      )}
       {request.label !== undefined && (
-        <Fact label="control">{request.label || '(unlabelled)'}</Fact>
+        <Fact label="control">
+          {request.label ? <Screen>{request.label}</Screen> : '(unlabelled)'}
+        </Fact>
+      )}
+      {typeof point.x === 'number' && typeof point.y === 'number' && (
+        <Fact label="point">
+          {point.x}, {point.y}
+        </Fact>
       )}
       {request.payload ? (
         <Fact label="sends">
-          <span className="rounded-sm bg-terminal px-1.5 py-0.5 whitespace-pre-wrap">
+          <pre className="max-h-40 overflow-auto rounded-sm bg-terminal px-2 py-1.5 text-[11.5px] leading-[1.5] break-words whitespace-pre-wrap">
             {request.payload}
+          </pre>
+          <span className="text-[10.5px] text-muted-foreground/70">
+            {request.payload.length} characters
           </span>
-          {request.payload.length >= 200 && (
-            <span className="text-muted-foreground"> · first 200 characters</span>
-          )}
         </Fact>
       ) : null}
       <p className="text-[11px] text-muted-foreground">
-        Confirming allows this one step, once. A repeat asks again.
+        Confirming allows this one step, once, within 5 minutes. A repeat or a later try asks again.
       </p>
     </Frame>
   )
@@ -264,16 +288,42 @@ function TaskConfirm({
   )
 }
 
+type Criterion = NonNullable<Session['task']>['spec']['criteria'][number]
+const checkText = (check: Criterion['check']) =>
+  check === 'evidence' ? 'judged from evidence' : check.map(predicate).join(' · ')
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
+/** What a list gains: the items of `after` not in `before`. */
+const added = (before: readonly string[] = [], after?: readonly string[]) =>
+  after?.filter((item) => !before.includes(item)) ?? []
+
+/**
+ * A replan that weakens the task or widens its scope, diffed whole: every criterion dropped, added or changed (text
+ * and check, before → after; a switch to "judged from evidence" in warning colour), and every app, action and risky
+ * label it adds to the scope. Nothing that weakens or widens may hide.
+ */
 function Change({ session, conversation }: { session: Session; conversation: number }) {
   const [error, setError] = useState<string>()
   const task = session.task
   const change = task?.pendingChange
-  const kept = new Set(change?.criteria?.map((c) => `${c.id}\n${c.text}`) ?? [])
-  const dropped = change?.criteria
-    ? (task?.spec.criteria.filter((c) => !kept.has(`${c.id}\n${c.text}`)) ?? [])
+  const old = task?.spec.criteria ?? []
+  const next = change?.criteria
+  const dropped = next ? old.filter((c) => !next.some((n) => n.id === c.id)) : []
+  const fresh = next?.filter((c) => !old.some((o) => o.id === c.id)) ?? []
+  const changed = next
+    ? next.flatMap((c) => {
+        const before = old.find((o) => o.id === c.id)
+        return before && !same(before, c) ? [{ before, after: c }] : []
+      })
     : []
-  const before = new Set(task?.spec.scope.apps ?? [])
-  const added = change?.scope?.apps.filter((app) => !before.has(app)) ?? []
+  const scope = change?.scope
+  const widen = scope
+    ? {
+        apps: added(task?.spec.scope.apps, scope.apps),
+        actions: added(task?.spec.scope.actions, scope.actions),
+        risky: added(task?.spec.scope.consequential, scope.consequential),
+      }
+    : { apps: [], actions: [], risky: [] }
   return (
     <Frame
       buttons={
@@ -284,7 +334,7 @@ function Change({ session, conversation }: { session: Session; conversation: num
       error={error}
       icon={<ListChecksIcon className="size-3.5 text-warning" />}
       kind="change"
-      title="weaker task"
+      title="weaker task or wider scope"
     >
       {change && <p className="font-sans text-[13px] leading-snug">{change.reason}</p>}
       {dropped.map((criterion) => (
@@ -294,16 +344,56 @@ function Change({ session, conversation }: { session: Session; conversation: num
           </span>
         </Fact>
       ))}
-      {change?.criteria
-        ?.filter((c) => !task?.spec.criteria.some((old) => old.id === c.id && old.text === c.text))
-        .map((criterion) => (
-          <Fact key={criterion.id} label="now">
-            {criterion.text}
-          </Fact>
-        ))}
-      {added.length > 0 && (
-        <Fact label="adds">
-          <span className="text-warning">{added.join(', ')}</span>
+      {changed.map(({ before, after }) => (
+        <Fact key={after.id} label="changes">
+          <span className="block">
+            {before.text === after.text ? (
+              after.text
+            ) : (
+              <>
+                <span className="text-diff-del line-through decoration-diff-del/40">
+                  {before.text}
+                </span>{' '}
+                → {after.text}
+              </>
+            )}
+          </span>
+          {!same(before.check, after.check) && (
+            <span className="block text-[11px]">
+              <span className="text-muted-foreground">{checkText(before.check)}</span> →{' '}
+              <span className={after.check === 'evidence' ? 'text-warning' : undefined}>
+                {checkText(after.check)}
+              </span>
+            </span>
+          )}
+        </Fact>
+      ))}
+      {fresh.map((criterion) => (
+        <Fact key={criterion.id} label="adds">
+          {criterion.text}
+          <span
+            className={cn(
+              'block text-[11px]',
+              criterion.check === 'evidence' ? 'text-warning' : 'text-muted-foreground',
+            )}
+          >
+            {checkText(criterion.check)}
+          </span>
+        </Fact>
+      ))}
+      {widen.apps.length > 0 && (
+        <Fact label="+apps">
+          <span className="text-warning">{widen.apps.join(', ')}</span>
+        </Fact>
+      )}
+      {widen.actions.length > 0 && (
+        <Fact label="+actions">
+          <span className="text-warning">{widen.actions.join(' ')}</span>
+        </Fact>
+      )}
+      {widen.risky.length > 0 && (
+        <Fact label="+risky">
+          <span className="text-warning">{widen.risky.join(', ')}</span>
         </Fact>
       )}
       <p className="text-[11px] text-muted-foreground">

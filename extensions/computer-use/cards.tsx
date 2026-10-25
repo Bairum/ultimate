@@ -1,7 +1,7 @@
 /**
  * Transcript cards of the computer tools: what the agent looked at (observe), what it did to which window and how
- * each step came out (act, explicit or Jev goal mode), and the launches (apps). A request raised by a call renders
- * under it, so the user answers where they read why.
+ * each step came out (act, explicit or Jev goal mode), and the launches (apps). Each reads the result's structured
+ * `details` (`ComputerDetails`); a request raised by a call renders under it, so the user answers where they read why.
  */
 import { CircleStopIcon, LoaderCircleIcon } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -21,35 +21,42 @@ import { api, cn, errorMessage, useDocOf, useToolDuration, useTranscript } from 
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import { Answered, Requests, Takeover } from './requests.tsx'
 import { SessionDoc, StopAction } from './refs.ts'
+import type { ActStepDetails } from './refs.ts'
 import {
-  AnchorLine,
+  asks,
+  detailsOf,
   escalations,
   headerState,
   liveSteps,
   Mark,
-  parseResult,
   refusalText,
   predicate,
+  summaryOf,
+  TaskLine,
   toneClass,
   toneOf,
+  useNewestWaiting,
   useSession,
+  waitingOf,
 } from './shared.tsx'
-import type { Journal, Outcome, Session, Tone, Window } from './shared.tsx'
+import type { ComputerDetails, Outcome, Session, Tone } from './shared.tsx'
 
 type Image = ToolCallView['images'][number]
 type Step = Record<string, unknown> & { kind?: string }
+type Observed = NonNullable<ComputerDetails['observe']>
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 /** A string or number argument as text; anything else (a partial streaming value) as nothing. */
 const scalar = (value: unknown) =>
   typeof value === 'string' || typeof value === 'number' ? String(value) : ''
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`
-/** Refusals that wait on the user: amber, and the request card below says the rest. */
-const asks = ['consent_required', 'confirm_required', 'user_active']
 
-/** `click 7`, `type 5 chars`, `key ⌘S`, `menu File › Save`: one step, as the user reads it. */
-function describe(step: Step, target?: Journal) {
-  const label = target?.label || (target?.role ? target.role.replace(/^AX/, '') : undefined)
+/**
+ * `“6”`, `“Email” ← 5 chars`, `⌘+S`, `File › Save`: one step as the user reads it. The control comes from the
+ * step's details (redacted on the server); typed text only ever shows as its length.
+ */
+function describe(step: Step, done?: ActStepDetails) {
+  const label = done?.label || (done?.role ? done.role.replace(/^AX/, '') : undefined)
   const element = label ? `“${label}”` : text(step.element) ? `element ${text(step.element)}` : ''
   switch (step.kind) {
     case 'type':
@@ -71,8 +78,15 @@ function describe(step: Step, target?: Journal) {
   }
 }
 
-/** Results of earlier and later observes of the same app in this transcript: the before and after pictures. */
-function useShots(call: ToolCallView, app: string) {
+/** The window image a result carries, by the content index its details name. */
+function imageAt(call: ToolCallView, observe?: Observed): Image | undefined {
+  const block =
+    observe?.imageIndex === undefined ? undefined : call.result?.content[observe.imageIndex]
+  return block?.type === 'image' ? block : undefined
+}
+
+/** The picture of the same app from the nearest earlier observe or act in this transcript: the before shot. */
+function useBefore(call: ToolCallView, app: string) {
   const entries = useTranscript()
   return useMemo(() => {
     const results = entries.flatMap((entry: EntryRecord) => {
@@ -80,20 +94,13 @@ function useShots(call: ToolCallView, app: string) {
       return entry.kind === 'pi.tool-result' && message?.role === 'toolResult' ? [message] : []
     })
     const index = results.findIndex((message) => message.toolCallId === call.id)
-    if (index < 0) return {}
-    const imageOf = (message: (typeof results)[number]) =>
-      message.toolName === 'computer_observe' &&
-      message.content.some(
-        (block) => block.type === 'text' && block.text.includes(`"app":"${app}"`),
-      )
-        ? message.content.find((block) => block.type === 'image')
-        : undefined
-    const before = results.slice(0, index).findLast((message) => imageOf(message))
-    const after = results.slice(index + 1).find((message) => imageOf(message))
-    return {
-      before: before && imageOf(before),
-      after: after && imageOf(after),
+    for (const message of results.slice(0, Math.max(0, index)).toReversed()) {
+      const observe = (message.details as ComputerDetails | undefined)?.observe
+      if (observe?.app !== app || observe.imageIndex === undefined) continue
+      const block = message.content[observe.imageIndex]
+      if (block?.type === 'image') return block
     }
+    return undefined
   }, [entries, call.id, app])
 }
 
@@ -101,20 +108,16 @@ function Shots({ before, after }: { before?: Image; after?: Image }) {
   if (!before && !after) return null
   return (
     <ToolSection className="flex flex-wrap gap-3">
-      {[
-        ['before', before],
-        ['after', after],
-      ].map(([label, image]) =>
+      {(
+        [
+          ['before', before],
+          ['after', after],
+        ] as const
+      ).map(([label, image]) =>
         image ? (
-          <figure className="space-y-1" key={label as string}>
-            <ToolImage
-              alt={`${label as string} this call`}
-              className="max-w-56"
-              image={image as Image}
-            />
-            <figcaption className="text-[10.5px] text-muted-foreground/80">
-              {label as string}
-            </figcaption>
+          <figure className="space-y-1" key={label}>
+            <ToolImage alt={`${label} this call`} className="max-w-56" image={image} />
+            <figcaption className="text-[10.5px] text-muted-foreground/80">{label}</figcaption>
           </figure>
         ) : null,
       )}
@@ -122,20 +125,25 @@ function Shots({ before, after }: { before?: Image; after?: Image }) {
   )
 }
 
-/** The observed window: thumbnail, title, capture and a folded accessibility tree. */
-function WindowView({ window, image }: { window: Window; image?: Image }) {
-  const lines = window.tree?.split('\n').filter(Boolean) ?? []
+/**
+ * The observed window: thumbnail, title, capture size and a folded accessibility tree. Title and tree are screen
+ * text, marked untrusted by the server: shown as plain text, never as Markdown or links.
+ */
+function WindowView({ observe, image }: { observe: Observed; image?: Image }) {
+  const tree = observe.tree.text
+  const lines = tree.split('\n').filter(Boolean)
+  const title = observe.title.text
   return (
     <>
       <ToolSection className="flex gap-3">
-        {image && <ToolImage alt={window.title ?? 'Window'} className="shrink-0" image={image} />}
+        {image && <ToolImage alt={title || 'Window'} className="shrink-0" image={image} />}
         <div className="flex min-w-0 flex-col gap-0.5 text-[11.5px]">
-          <span className="truncate text-foreground/90" title={window.title}>
-            {window.title ? `“${window.title}”` : 'untitled window'}
+          <span className="truncate text-foreground/90" title={title}>
+            {title ? `“${title}”` : 'untitled window'}
           </span>
           <span className="text-muted-foreground/80">
-            {window.app}
-            {window.capture && ` · ${window.capture.width}×${window.capture.height}`}
+            {observe.app}
+            {observe.capture && ` · ${observe.capture.width}×${observe.capture.height}`}
             {!image && ' · tree only'}
           </span>
         </div>
@@ -145,12 +153,12 @@ function WindowView({ window, image }: { window: Window; image?: Image }) {
           <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[11px] text-muted-foreground hover:text-foreground">
             <span className="transition-transform group-data-[state=open]/tree:rotate-90">›</span>
             Accessibility tree · {plural(lines.length, 'line')}
-            {window.truncated && <span className="text-warning">truncated</span>}
+            {observe.truncated && <span className="text-warning">truncated</span>}
             <span className="ml-auto text-muted-foreground/60">screen text, untrusted</span>
           </CollapsibleTrigger>
           <CollapsibleContent>
             <pre className="mx-2.5 mb-2 max-h-72 overflow-auto rounded-sm bg-terminal px-2.5 py-2 text-[11px] leading-[1.5] whitespace-pre text-foreground/80">
-              {window.tree}
+              {tree}
             </pre>
           </CollapsibleContent>
         </Collapsible>
@@ -192,11 +200,10 @@ function StopButton({ conversation }: { conversation?: number }) {
 /** A refusal or failure as one line: what it means in words, the code for reference. */
 function Problem({ code, message }: { code: string; message?: string }) {
   const waits = asks.includes(code)
-  const tone = waits || ['unknown', 'observe_first', 'checkpoint_due'].includes(code)
   return (
     <ToolSection>
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-        <span className={tone ? 'text-warning' : 'text-error'}>{refusalText(code)}</span>
+        <span className={toneClass[toneOf(code)]}>{refusalText(code)}</span>
         <span className="text-muted-foreground/60">{code}</span>
       </div>
       {message && !waits && <p className="break-words text-muted-foreground">{message}</p>}
@@ -205,45 +212,47 @@ function Problem({ code, message }: { code: string; message?: string }) {
 }
 
 /**
- * The request this call raised, while it waits; once answered, what the user decided. A request belongs to the call
- * whose run recorded it, so an older card never repeats a newer request.
+ * What this call waits on the user for, while it waits; once answered, what the user decided. A confirmation is pinned
+ * to its task (`pending[].task`), consent to its app, and either shows only under the newest waiting card of that
+ * task, never repeated on older ones.
  */
 function Raised({
   call,
-  status,
+  details,
   app,
   session,
   conversation,
 }: {
   call: ToolCallView
-  status?: string
+  details?: ComputerDetails
   app: string
   session?: Session
   conversation?: number
 }) {
   const project = useDocOf(1, SessionDoc)
-  if (!session || conversation === undefined || !status) return null
-  const from = call.startedAt ?? 0
-  const until = (call.endedAt ?? Date.now()) + 1000
-  const mine = (request: Session['pending'][number]) =>
-    request.at >= from &&
-    request.at <= until &&
-    (request.kind === 'consent' || request.kind === 'confirm')
-  if (status === 'user_active') {
+  const code = waitingOf(details) ?? (details?.status === 'denied' ? 'denied' : undefined)
+  const task = details?.task?.id
+  const newest = useNewestWaiting(call, task)
+  if (!session || conversation === undefined || !code) return null
+  if (code === 'user_active') {
     const granted = session.takeovers.some((t) => t.app.toLowerCase() === app.toLowerCase())
-    return (
+    return newest || granted ? (
       <ToolSection>
         <Takeover app={app} conversation={conversation} granted={granted} />
       </ToolSection>
-    )
+    ) : null
   }
-  if (session.pending.some(mine))
+  const mine = (request: Session['pending'][number]) =>
+    request.kind === 'confirm'
+      ? request.task === task
+      : request.kind === 'consent' && request.app.toLowerCase() === app.toLowerCase()
+  if (newest && session.pending.some(mine))
     return (
       <ToolSection>
         <Requests conversation={conversation} only={mine} session={session} />
       </ToolSection>
     )
-  if (status === 'consent_required' || status === 'denied')
+  if (code === 'consent_required' || code === 'denied')
     return (
       <ToolSection>
         <Answered
@@ -269,24 +278,26 @@ function Verdict({ status }: { status?: string }) {
 
 export function Observe({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
-  const parsed = parseResult(call)
+  const details = detailsOf(call)
+  const observe = details?.observe
   const app = text(call.args.app)
   const listing = call.args.window === undefined
-  const structured = (parsed.summary.structured ?? {}) as Record<string, unknown>
+  const summary = summaryOf(details)
   const items = (
-    Array.isArray(structured.apps)
-      ? structured.apps
-      : Array.isArray(structured.windows)
-        ? structured.windows
+    Array.isArray(summary.apps)
+      ? summary.apps
+      : Array.isArray(summary.windows)
+        ? summary.windows
         : []
   ) as Record<string, unknown>[]
-  const failed = parsed.status && !['ok'].includes(parsed.status) && !parsed.window && !listing
+  const status = details?.status
+  const failed = !!status && status !== 'ok' && !observe && !listing
   return (
     <Tool>
       <ToolHeader
         meta={
           <>
-            {failed && <Verdict status={parsed.status} />}
+            {failed && <Verdict status={status} />}
             {call.args.zoom !== undefined && <span>zoom</span>}
             {call.args.evidence === true && <span className="text-brand">evidence</span>}
             {listing && items.length > 0 && (
@@ -296,13 +307,13 @@ export function Observe({ call }: { call: ToolCallView }) {
           </>
         }
         name="observe"
-        state={headerState(call.status, failed ? toneOf(parsed.status) : 'good')}
+        state={headerState(call.status, failed ? toneOf(status) : 'good')}
         title={
           listing
             ? app
               ? `${app} · windows`
               : 'running apps'
-            : `${app}${parsed.window?.title ? ` · “${parsed.window.title}”` : call.args.window !== undefined ? ` · ${scalar(call.args.window)}` : ''}`
+            : `${app}${observe?.title.text ? ` · “${observe.title.text}”` : call.args.window !== undefined ? ` · ${scalar(call.args.window)}` : ''}`
         }
       />
       <ToolContent>
@@ -311,7 +322,7 @@ export function Observe({ call }: { call: ToolCallView }) {
             <Shimmer className="text-[12px]">reading the window…</Shimmer>
           </ToolSection>
         )}
-        {parsed.window && <WindowView image={call.images[0]} window={parsed.window} />}
+        {observe && <WindowView image={imageAt(call, observe)} observe={observe} />}
         {listing && items.length > 0 && (
           <ToolSection>
             <ul className="columns-2 gap-4 text-[11.5px] leading-[1.7] max-sm:columns-1">
@@ -326,87 +337,60 @@ export function Observe({ call }: { call: ToolCallView }) {
             </ul>
           </ToolSection>
         )}
-        {failed && <Problem code={parsed.status!} message={parsed.message} />}
-        {parsed.status === 'setup' && typeof parsed.summary.install === 'string' && (
-          <ToolOutput output={parsed.summary.install} />
+        {failed && <Problem code={status} message={details?.message} />}
+        {status === 'setup' && typeof summary.install === 'string' && (
+          <ToolOutput output={summary.install} />
         )}
         {call.status === 'error' && <ToolOutput isError output={call.output} />}
         <ToolDiagnostics diagnostics={call.diagnostics} />
       </ToolContent>
-      <AnchorLine anchor={parsed.anchor} />
+      <TaskLine details={details} />
     </Tool>
   )
-}
-
-type StepOutcome = { status: Outcome; code?: string; message?: string; text?: string }
-type Decision = {
-  step: number
-  candidates: number
-  top: { id: string; label: string; p: number }[]
-  done: number
-  risk: number
-  chose?: string
-  outcome: string
-}
-
-/** Pair each step with its journal entry (role and label of the control it hit), in dispatch order. */
-function targets(steps: Step[], journal: Journal[]) {
-  const queue = [...journal]
-  return steps.map((step) => {
-    const at = queue.findIndex((entry) => entry.kind === step.kind)
-    return at < 0 ? undefined : queue.splice(0, at + 1).at(-1)
-  })
 }
 
 function Steps({
   call,
   steps,
-  outcomes,
-  journal,
+  done,
 }: {
   call: ToolCallView
   steps: Step[]
-  outcomes: StepOutcome[]
-  journal: Journal[]
+  done: readonly ActStepDetails[]
 }) {
   const live = liveSteps(call.output)
-  const hit = targets(steps, journal)
   return (
     <ToolSection label="Steps">
       {steps.map((step, index) => {
-        const outcome = outcomes[index]
+        const outcome = done[index]
         const state: Outcome = outcome
           ? outcome.status
           : call.status === 'running'
             ? ((live.get(index + 1) === 'sending' ? 'running' : (live.get(index + 1) as Outcome)) ??
               'not_run')
             : 'not_run'
+        const waits = !!outcome?.code && asks.includes(outcome.code)
         return (
           <div
             className="flex min-w-0 items-start gap-2 leading-[1.7]"
             data-computer-step={state}
             key={index}
           >
-            <Mark outcome={outcome?.code && asks.includes(outcome.code) ? 'waiting' : state} />
-            <span className="w-16 shrink-0 text-foreground/90">
+            <Mark outcome={waits ? 'waiting' : state} />
+            <span className="w-20 shrink-0 whitespace-nowrap text-foreground/90">
               {(step.kind ?? '?').replace('_', ' ')}
             </span>
             <span className="min-w-0 flex-1">
               <span
                 className="block truncate text-muted-foreground"
-                title={describe(step, hit[index])}
+                title={describe(step, outcome)}
               >
-                {describe(step, hit[index])}
+                {describe(step, outcome)}
               </span>
               {(state === 'refused' || state === 'failed') && (
-                <span
-                  className={cn(
-                    'block break-words',
-                    outcome?.code && asks.includes(outcome.code) ? 'text-warning' : 'text-error',
-                  )}
-                >
+                <span className={cn('block break-words', waits ? 'text-warning' : 'text-error')}>
                   {outcome?.code ? refusalText(outcome.code) : ''}
-                  {outcome?.message && !(outcome.code && asks.includes(outcome.code))
+                  {outcome?.message && !waits
                     ? `${outcome.code ? ' · ' : ''}${outcome.message}`
                     : ''}
                 </span>
@@ -448,6 +432,7 @@ function Expect({ predicates, verdict }: { predicates: unknown[]; verdict?: stri
   )
 }
 
+type Decision = NonNullable<ComputerDetails['act']>['decisions'][number]
 const decisionTone: Record<string, string> = {
   verified: 'text-success',
   done: 'text-success',
@@ -458,7 +443,9 @@ const decisionTone: Record<string, string> = {
 }
 
 /** Jev's decisions: what it picked, how sure it was, whether it worked. Alternatives on hover. */
-function Decisions({ decisions }: { decisions: Decision[] }) {
+function Decisions({ decisions: all }: { decisions: readonly Decision[] }) {
+  // Jev journals one entry per outcome of a step (acted, then verified): show each step once, with its last outcome.
+  const decisions = all.filter((d, index) => all[index + 1]?.step !== d.step)
   if (!decisions.length) return null
   return (
     <ToolSection label="Jev decisions">
@@ -511,57 +498,60 @@ function Decisions({ decisions }: { decisions: Decision[] }) {
   )
 }
 
+/** One tone for a finished act, shared by the header icon and the summary on the right. */
+function actTone(details: ComputerDetails | undefined, expected: boolean): Tone {
+  const act = details?.act
+  const steps = act?.steps ?? []
+  if (act?.mode === 'goal')
+    return details?.status === 'done'
+      ? 'good'
+      : details?.status === 'escalated'
+        ? 'wait'
+        : toneOf(details?.status)
+  if (waitingOf(details)) return 'wait'
+  if (!steps.some((s) => s.status === 'delivered')) return toneOf(details?.status)
+  if (steps.some((s) => s.status === 'refused' || s.status === 'failed')) return 'bad'
+  if (steps.some((s) => s.status !== 'delivered')) return 'wait'
+  return !expected || act?.verdict === 'satisfied' ? 'good' : 'wait'
+}
+
 export function Act({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   const { id, session } = useSession()
-  const parsed = parseResult(call)
+  const details = detailsOf(call)
+  const act = details?.act
   const app = text(call.args.app)
   const goal = call.args.goal as
     | { text?: string; params?: Record<string, string>; done_when?: unknown[] }
     | undefined
   const steps = (Array.isArray(call.args.actions) ? call.args.actions : []) as Step[]
-  const outcomes = (
-    Array.isArray(parsed.summary.outcomes) ? parsed.summary.outcomes : []
-  ) as StepOutcome[]
-  const decisions = (
-    Array.isArray(parsed.summary.decisions) ? parsed.summary.decisions : []
-  ) as Decision[]
-  const journal = session?.journal.filter((entry) => entry.call === call.id) ?? []
-  // While running, decisions arrive through the journal before the result has them.
-  const shownDecisions = decisions.length
-    ? decisions
-    : journal.flatMap((entry) => (entry.decision ? [entry.decision as Decision] : []))
-  const shots = useShots(call, app)
-  const delivered = outcomes.filter((o) => o.status === 'delivered').length
-  const status = parsed.status
-  const reason = typeof parsed.summary.reason === 'string' ? parsed.summary.reason : undefined
-  const window = parsed.window
-  const background = call.args.foreground !== true
-  const refusedBeforeStart = status && !outcomes.length && !goal ? status : undefined
-  const waiting = outcomes.find((o) => o.code && asks.includes(o.code))?.code
+  const done = act?.steps ?? []
+  // While a goal runs its decisions are only in the session journal; the result carries them once done.
+  const decisions =
+    act?.decisions ??
+    session?.journal.flatMap((entry) =>
+      entry.call === call.id && entry.decision ? [entry.decision] : [],
+    ) ??
+    []
+  const before = useBefore(call, app)
+  const after = imageAt(call, details?.observe)
+  const delivered = done.filter((s) => s.status === 'delivered').length
+  const status = details?.status
   const expected = Array.isArray(call.args.expect) && call.args.expect.length > 0
-  const verified = !expected || text(parsed.summary.verdict) === 'satisfied'
-  // One tone for the whole call: the header icon and the summary on the right agree.
-  const tone: Tone = goal
-    ? status === 'done'
-      ? 'good'
-      : status === 'escalated'
-        ? 'wait'
-        : toneOf(status)
-    : outcomes.length
-      ? outcomes.some((o) => o.status === 'refused' || o.status === 'failed') && !waiting
-        ? 'bad'
-        : waiting || outcomes.some((o) => o.status !== 'delivered') || !verified
-          ? 'wait'
-          : 'good'
-      : toneOf(status)
+  const waiting = waitingOf(details)
+  // Nothing was sent: the whole call was turned down before its first step (no task, consent, stopped…).
+  const turnedDown =
+    !goal && details && !done.some((s) => s.status === 'delivered' || s.status === 'unknown')
+      ? (done.find((s) => s.code)?.code ?? status)
+      : undefined
+  const tone = actTone(details, expected)
   return (
     <Tool defaultOpen>
       <ToolHeader
         action={call.status === 'running' ? <StopButton conversation={id} /> : undefined}
         meta={
           <>
-            {goal ? (
+            {!details ? null : goal ? (
               status === 'escalated' ? (
                 <span className="text-warning">escalated</span>
               ) : (
@@ -569,16 +559,16 @@ export function Act({ call }: { call: ToolCallView }) {
               )
             ) : waiting ? (
               <span className="text-warning">{refusalText(waiting)}</span>
-            ) : outcomes.some((o) => o.status === 'unknown') ? (
+            ) : done.some((s) => s.status === 'unknown') ? (
               <span className="text-warning">outcome unknown</span>
-            ) : outcomes.length ? (
-              <span className={tone === 'good' ? 'text-success' : toneClass[tone]}>
+            ) : delivered > 0 ? (
+              <span className={toneClass[tone]}>
                 {delivered}/{steps.length} delivered
               </span>
             ) : (
-              <Verdict status={status} />
+              <Verdict status={turnedDown} />
             )}
-            {!background && <span className="text-warning">foreground</span>}
+            {call.args.foreground === true && <span className="text-warning">foreground</span>}
             {duration && <span>{duration}</span>}
           </>
         }
@@ -587,62 +577,57 @@ export function Act({ call }: { call: ToolCallView }) {
         title={
           goal
             ? `${app} · ${text(goal.text)}`
-            : `${app}${window?.title ? ` · “${window.title}”` : ''}`
+            : `${app}${details?.observe?.title.text ? ` · “${details.observe.title.text}”` : ''}`
         }
       />
       <ToolContent>
         {goal?.params && Object.keys(goal.params).length > 0 && (
           <ToolSection className="text-muted-foreground">
-            {Object.entries(goal.params)
-              .map(([key, value]) => `${key} = ${value}`)
-              .join(' · ')}
+            {Object.keys(goal.params).join(' · ')}
+            <span className="text-muted-foreground/60"> · values hidden</span>
           </ToolSection>
         )}
-        {!goal && steps.length > 0 && !refusedBeforeStart && (
-          <Steps call={call} journal={journal} outcomes={outcomes} steps={steps} />
+        {!goal && steps.length > 0 && (!turnedDown || waiting) && (
+          <Steps call={call} done={done} steps={steps} />
         )}
-        {goal && <Decisions decisions={shownDecisions} />}
-        {goal && status === 'escalated' && reason && (
+        {goal && <Decisions decisions={decisions} />}
+        {goal && status === 'escalated' && act?.escalationReason && (
           <ToolSection>
-            <p className="text-warning">{escalations[reason] ?? reason}</p>
-            {typeof parsed.summary.detail === 'string' && parsed.summary.detail && (
-              <p className="break-words text-muted-foreground">{parsed.summary.detail}</p>
+            <p className="text-warning">
+              {escalations[act.escalationReason] ?? act.escalationReason}
+            </p>
+            {details?.message && (
+              <p className="break-words text-muted-foreground">{details?.message}</p>
             )}
             <p className="text-muted-foreground/70">
               Handed back to the agent to act explicitly or narrow the goal.
             </p>
           </ToolSection>
         )}
-        {refusedBeforeStart && <Problem code={refusedBeforeStart} message={parsed.message} />}
+        {turnedDown && !waiting && <Problem code={turnedDown} message={details?.message} />}
         {!goal && delivered > 0 && (
           <Expect
             predicates={Array.isArray(call.args.expect) ? call.args.expect : []}
-            verdict={text(parsed.summary.verdict) || undefined}
+            verdict={act?.verdict}
           />
         )}
-        {goal?.done_when && goal.done_when.length > 0 && call.status !== 'running' && (
+        {goal?.done_when && goal.done_when.length > 0 && details && (
           <Expect
             predicates={goal.done_when}
-            verdict={status === 'done' ? text(parsed.summary.verdict) || 'satisfied' : 'unknown'}
+            verdict={status === 'done' ? (act?.verdict ?? 'satisfied') : 'unknown'}
           />
         )}
-        {call.status === 'running' && !steps.length && !shownDecisions.length && (
+        {call.status === 'running' && !steps.length && !decisions.length && (
           <ToolSection>
             <Shimmer className="text-[12px]">working…</Shimmer>
           </ToolSection>
         )}
-        <Shots after={call.images[0] ?? shots.after} before={shots.before} />
-        <Raised
-          app={app}
-          call={call}
-          conversation={id}
-          session={session}
-          status={refusedBeforeStart ?? outcomes.find((o) => o.code)?.code}
-        />
+        <Shots after={after} before={before} />
+        <Raised app={app} call={call} conversation={id} details={details} session={session} />
         {call.status === 'error' && <ToolOutput isError output={call.output} />}
         <ToolDiagnostics diagnostics={call.diagnostics} />
       </ToolContent>
-      <AnchorLine anchor={parsed.anchor} noTask={parsed.noTask} />
+      <TaskLine details={details} />
     </Tool>
   )
 }
@@ -650,18 +635,18 @@ export function Act({ call }: { call: ToolCallView }) {
 export function Apps({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   const { id, session } = useSession()
-  const parsed = parseResult(call)
+  const details = detailsOf(call)
+  const summary = summaryOf(details)
   const launch = text(call.args.launch)
-  const structured = (parsed.summary.structured ?? {}) as Record<string, unknown>
-  const apps = (Array.isArray(structured.apps) ? structured.apps : []) as Record<string, unknown>[]
-  const ok = parsed.summary.ok === true
-  const status = ok ? 'delivered' : parsed.status
+  const apps = (Array.isArray(summary.apps) ? summary.apps : []) as Record<string, unknown>[]
+  const status = launch && summary.ok === true ? 'delivered' : details?.status
+  const failed = !!status && toneOf(status) !== 'good'
   return (
     <Tool>
       <ToolHeader
         meta={
           <>
-            {launch ? (
+            {launch || failed ? (
               <Verdict status={status} />
             ) : (
               apps.length > 0 && <span>{plural(apps.length, 'app')}</span>
@@ -670,7 +655,7 @@ export function Apps({ call }: { call: ToolCallView }) {
           </>
         }
         name={launch ? 'launch' : 'apps'}
-        state={headerState(call.status, launch ? toneOf(status) : 'good')}
+        state={headerState(call.status, toneOf(status))}
         title={launch || 'running apps'}
       />
       <ToolContent>
@@ -685,16 +670,14 @@ export function Apps({ call }: { call: ToolCallView }) {
             </ul>
           </ToolSection>
         )}
-        {launch && status && status !== 'delivered' && (
-          <Problem code={status} message={parsed.message} />
-        )}
+        {failed && <Problem code={status} message={details?.message} />}
         {launch && (
-          <Raised app={launch} call={call} conversation={id} session={session} status={status} />
+          <Raised app={launch} call={call} conversation={id} details={details} session={session} />
         )}
         {call.status === 'error' && <ToolOutput isError output={call.output} />}
         <ToolDiagnostics diagnostics={call.diagnostics} />
       </ToolContent>
-      <AnchorLine anchor={parsed.anchor} />
+      <TaskLine details={details} />
     </Tool>
   )
 }

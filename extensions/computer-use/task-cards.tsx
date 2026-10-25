@@ -26,18 +26,30 @@ import type { ToolCallView } from '@/sdk'
 import type { Evidence, Subgoal, TaskSpec, TaskState } from './types.ts'
 import { Requests } from './requests.tsx'
 import {
-  AnchorLine,
+  detailsOf,
   headerState,
-  parseResult,
   predicate,
   refusalText,
   short,
+  summaryOf,
+  TaskLine,
   toneClass,
   toneOf,
   useSession,
 } from './shared.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
+
+/** A computer_task result from its `details`: status and message, and the task's own summary fields. */
+function parseTask(call: ToolCallView) {
+  const details = detailsOf(call)
+  return {
+    details,
+    status: details?.status,
+    message: details?.message,
+    summary: summaryOf(details),
+  }
+}
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`
 
 const subgoalMarks: Record<Subgoal['status'], ReactNode> = {
@@ -186,7 +198,7 @@ function Meter({ task }: { task: TaskState }) {
 
 function Start({ call }: { call: ToolCallView }) {
   const { id, session } = useSession()
-  const parsed = parseResult(call)
+  const parsed = parseTask(call)
   const spec = (call.args.spec ?? {}) as Partial<TaskSpec>
   // The live task, while it is still the one this call started.
   const task = session?.task && session.task.spec.id === spec.id ? session.task : undefined
@@ -238,7 +250,7 @@ function Start({ call }: { call: ToolCallView }) {
           <Requests
             compact
             conversation={id}
-            only={(request) => request.kind === 'task' || request.kind === 'change'}
+            only={(request) => request.kind === 'task'}
             reasons={needs}
             session={session}
           />
@@ -266,6 +278,12 @@ const criterionMarks = {
   unmet: <XIcon className="size-3.5 text-error" />,
   unknown: <CircleHelpIcon className="size-3.5 text-warning" />,
 }
+
+/** The same proof recorded twice (one call verifying for two steps) shows once. */
+const unique = (evidence: Evidence[]) =>
+  evidence.filter(
+    (e, index) => evidence.findIndex((o) => JSON.stringify(o) === JSON.stringify(e)) === index,
+  )
 
 /** One piece of evidence, as a compact mono line: what was verified or read, in which app. */
 function Proof({ evidence }: { evidence: Evidence }) {
@@ -300,7 +318,7 @@ const headlines = {
 function Finish({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   const { session } = useSession()
-  const parsed = parseResult(call)
+  const parsed = parseTask(call)
   const criteria = (
     Array.isArray(parsed.summary.criteria) ? parsed.summary.criteria : []
   ) as Criterion[]
@@ -383,11 +401,13 @@ function Finish({ call }: { call: ToolCallView }) {
                   </span>
                   {criterion.state === 'met' && fresh.length > 0 && (
                     <span className="block space-y-0.5 pt-0.5 font-mono text-[11px] text-muted-foreground">
-                      {fresh.slice(-2).map((evidence, index) => (
-                        <span className="block truncate" key={index}>
-                          <Proof evidence={evidence} />
-                        </span>
-                      ))}
+                      {unique(fresh)
+                        .slice(-2)
+                        .map((evidence, index) => (
+                          <span className="block truncate" key={index}>
+                            <Proof evidence={evidence} />
+                          </span>
+                        ))}
                     </span>
                   )}
                   {criterion.state !== 'met' && (
@@ -428,8 +448,14 @@ function Finish({ call }: { call: ToolCallView }) {
 /** Sub-goals, activate, checkpoint, replan and status: the change in one line, with the task anchor. */
 function Step({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
-  const { session } = useSession()
-  const parsed = parseResult(call)
+  const { id: conversation, session } = useSession()
+  const parsed = parseTask(call)
+  // A replan that weakens the task waits on the user under the card that asked for it, while it still waits.
+  const change =
+    text(call.args.action) === 'replan' &&
+    parsed.status === 'awaiting_confirmation' &&
+    session?.task?.spec.id === parsed.details?.task?.id &&
+    session?.pending.some((p) => p.kind === 'change')
   const action = text(call.args.action)
   const list = (
     Array.isArray(call.args.list)
@@ -457,7 +483,7 @@ function Step({ call }: { call: ToolCallView }) {
   const ok = ['active', 'done', 'partial', 'blocked', 'completed'].includes(parsed.status ?? '')
   const tone = ok ? 'good' : toneOf(parsed.status)
   return (
-    <Tool>
+    <Tool defaultOpen={!!change}>
       <ToolHeader
         meta={
           <>
@@ -473,6 +499,15 @@ function Step({ call }: { call: ToolCallView }) {
         title={title}
       />
       <ToolContent>
+        {change && session && conversation !== undefined && (
+          <ToolSection>
+            <Requests
+              conversation={conversation}
+              only={(request) => request.kind === 'change'}
+              session={session}
+            />
+          </ToolSection>
+        )}
         {list.length > 0 && (
           <ToolSection>
             <ol className="space-y-0.5">
@@ -491,7 +526,7 @@ function Step({ call }: { call: ToolCallView }) {
         {call.status === 'error' && <ToolOutput isError output={call.output} />}
         <ToolDiagnostics diagnostics={call.diagnostics} />
       </ToolContent>
-      <AnchorLine anchor={parsed.anchor} />
+      <TaskLine details={parsed.details} />
     </Tool>
   )
 }
