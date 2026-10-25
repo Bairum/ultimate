@@ -241,7 +241,9 @@ export default function watchdog(host: ExtensionHost) {
         }
         await runtime.commit(async (tx) => {
           const reported = await tx.doc(Reported, ROOT_CONVERSATION_ID)
-          reported.failures.unshift({ ...data, at: task.input.until - RETRY_AFTER })
+          // Newest first by when the run failed: reports of older failures can finish later.
+          reported.failures.push({ ...data, at: task.input.until - RETRY_AFTER })
+          reported.failures.sort((a, b) => b.at - a.at)
           reported.failures.splice(FAILURE_LIMIT)
           // Reporting ends the watchdog's hold on a subagent's provider failure: its action has given up.
           const actions = Object.values((await tx.doc(Subagents, recipient)).actions)
