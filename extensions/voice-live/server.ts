@@ -152,7 +152,7 @@ export function answerTask(host: ExtensionHost) {
     null
   >({
     name: 'voice-live.answer',
-    version: 2,
+    version: 1,
     initial: () => ({ phase: 'answer' }),
     phases: {
       answer: async (task, runtime, ctx) => {
