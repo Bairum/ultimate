@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { due as decide, IDLE_STOP, LEAD, TTL } from '../extensions/keep-warm/due.ts'
+import { due as decide, IDLE_STOP, LEAD, MIN_TOKENS, TTL } from '../extensions/keep-warm/due.ts'
 import type { Activity } from '../extensions/keep-warm/due.ts'
 import * as keepWarm from '../extensions/keep-warm/server.ts'
 
@@ -11,12 +11,20 @@ const target = {
   running: false,
   child: false,
   submission: false,
+  tokens: 300_000,
 }
 const due = (input: Partial<Activity>) => decide({ now, ...target, ...input })
 
 it('pings in the last minutes of the cache hour while the user was here recently', () => {
   expect(due({ now, lastRequest: now - LEAD, inputAt: now - minutes(70) })).toBe(true)
   expect(due({ now, lastRequest: now - minutes(59), inputAt: now - minutes(59) })).toBe(true)
+})
+
+it('leaves a small cached context to expire', () => {
+  const input = { now, lastRequest: now - LEAD, inputAt: now }
+  expect(due({ ...input, tokens: MIN_TOKENS - 1 })).toBe(false)
+  expect(due({ ...input, tokens: undefined })).toBe(false)
+  expect(due({ ...input, tokens: MIN_TOKENS })).toBe(true)
 })
 
 it('waits while the cache is fresh and never pings a cold one', () => {

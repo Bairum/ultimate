@@ -11,6 +11,7 @@ Most expensive full cache rewrites followed idle gaps while a coordinator waited
 - Only `claude-code` and `anthropic` qualify. Once a minute, the timer checks for a cache renewed 55–60 minutes ago by an answer with cache usage on the current provider/model, or a successful ping with cache usage.
 - One attempt per conversation per cache window: only 55–60 minutes after the latest real request or cache-reading ping. A waiting coordinator can therefore renew every ~55 minutes, bounded by the failure and 8-hour stops. Attempts also impose a 55-minute floor across model switches.
 - Pings stop after 8 hours without user input to @ultimate, for every target. No input since installation means no pings. `user.input` includes typed input and answers to questions.
+- No ping when the cached context is under 50k tokens (input plus cache tokens of the request that last renewed it): a miss there costs about as much as the ping.
 - Pause (including a rate-limit pause) stops pings. A failure blocks that conversation until a newer real cache request. Cold caches are never rebuilt by a ping.
 - The transaction claiming the attempt rechecks the switch, idle state, cache-window spacing and coordinator's pending work. It records `interrupted` before sending, so a crash counts as failure. The result and usage are committed together on the pinged conversation with `accountResponse`.
 

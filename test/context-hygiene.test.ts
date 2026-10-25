@@ -375,7 +375,7 @@ it('bounds cheap Anthropic suffixes by positions rather than just tokens', () =>
   expect(gateOpen({ ...input, suffixPositions: positions, newContext: true }, defaults)).toBe(true)
 })
 
-it.each(['pressure', 'no-pressure', 'no-store', 'save-fails'] as const)(
+it.each(['pressure', 'no-pressure', 'no-store', 'save-fails', 'off'] as const)(
   'masks only old large results with a recoverable output file: %s',
   async (mode) => {
     const home = await mkdtemp(join(tmpdir(), 'hygiene-mask-'))
@@ -384,7 +384,11 @@ it.each(['pressure', 'no-pressure', 'no-store', 'save-fails'] as const)(
     const f = await fixture(
       false,
       mode === 'no-pressure' ? 1000000 : 100000,
-      { userHome: '/nonexistent', project: {} },
+      // Masking is opt-in: 'off' runs under pressure with the default settings.
+      {
+        userHome: '/nonexistent',
+        project: mode === 'off' ? {} : { contextHygiene: { mask: true } },
+      },
       mode === 'no-store' ? undefined : mode === 'save-fails' ? broken : home,
     )
     const original = 'old output\n'.repeat(8000)

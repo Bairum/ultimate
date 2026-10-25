@@ -31,17 +31,22 @@ export default function contextHygiene(
         beforeRequest: async ({ messages }, api, ctx) => {
           try {
             const thresholds = { ...defaults }
+            // Masking is opt-in: the replay over stored history priced it as a net cost at cache-read rates, so it
+            // only pays for context headroom.
+            let mask = false
             for (const settings of [
               await readSettings(userSettingsPath(host.userHome)),
               await host.projectSettings(),
             ]) {
               const configured = settings.contextHygiene
-              if (configured && typeof configured === 'object' && !Array.isArray(configured))
+              if (configured && typeof configured === 'object' && !Array.isArray(configured)) {
                 for (const key of Object.keys(defaults) as (keyof Thresholds)[]) {
                   const value = configured[key]
                   if (typeof value === 'number' && Number.isFinite(value) && value >= 0)
                     thresholds[key] = value
                 }
+                if (typeof configured.mask === 'boolean') mask = configured.mask
+              }
             }
             const conversation = await host.harness().conversation(api.conversationId, ctx)
             if (!conversation) throw new Error('Conversation unavailable')
@@ -64,6 +69,7 @@ export default function contextHygiene(
             for (let i = before.length - 1; i >= 0; i--)
               maskSuffix[i] = maskSuffix[i + 1] + estimate(before[i])
             if (
+              mask &&
               model &&
               model.contextWindow > 0 &&
               maskSuffix[0] > thresholds.pressureRatio * model.contextWindow

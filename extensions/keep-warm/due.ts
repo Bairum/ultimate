@@ -6,6 +6,11 @@ export const TTL = 60 * 60_000
 export const LEAD = 55 * 60_000
 /** No ping once the user has been away this long. */
 export const IDLE_STOP = 8 * 60 * 60_000
+/**
+ * No ping for a smaller cached context: a miss there costs little more than the ping's own read, and short contexts
+ * (a fresh branch, a short @ultimate session) would add pings for nothing.
+ */
+export const MIN_TOKENS = 50_000
 
 export type Target = {
   provider: string
@@ -25,6 +30,8 @@ export const eligible = (target: Target) =>
 export type Activity = Target & {
   now: number
   lastRequest?: number
+  /** The context the cache holds: input plus cache tokens of the request that renewed it. */
+  tokens?: number
   /** Latest user input to @ultimate, shared by all targets. */
   inputAt?: number
   failedAfter?: number
@@ -35,9 +42,10 @@ export type Activity = Target & {
 
 /** Renew once near the end of each cache window; never rebuild or retry a failed ping. */
 export function due(activity: Activity) {
-  const { now, lastRequest, inputAt, failedAfter, pingAt, paused } = activity
+  const { now, lastRequest, inputAt, failedAfter, pingAt, paused, tokens } = activity
   if (!eligible(activity) || paused) return false
   if (lastRequest === undefined || inputAt === undefined) return false
+  if (tokens === undefined || tokens < MIN_TOKENS) return false
   if (failedAfter !== undefined && failedAfter >= lastRequest) return false
   if (pingAt !== undefined && now - pingAt < LEAD) return false
   const age = now - lastRequest

@@ -58,8 +58,8 @@ export const cached = (message: AssistantMessage, model: string) =>
   message.usage.cacheRead + message.usage.cacheWrite > 0
 
 /**
- * When the conversation's own requests last renewed `model`'s cache (ms): its newest such response within the hour. A failed
- * response or one of another model renews nothing, so it does not count.
+ * When the conversation's own requests last renewed `model`'s cache (ms), and the context it cached (tokens): its newest
+ * such response within the hour. A failed response or one of another model renews nothing, so it does not count.
  */
 async function answeredAt(
   host: ExtensionHost,
@@ -76,7 +76,10 @@ async function answeredAt(
       const message = entry.model?.[0]
       if (message?.role !== 'assistant') continue
       if (now - message.timestamp >= TTL) return undefined
-      if (message.provider === provider && cached(message, model)) return message.timestamp
+      if (message.provider === provider && cached(message, model)) {
+        const { input, cacheRead, cacheWrite } = message.usage
+        return { at: message.timestamp, tokens: input + cacheRead + cacheWrite }
+      }
     }
     cursor = page.next
   } while (cursor)
@@ -137,13 +140,17 @@ async function activity(host: ExtensionHost, doc: WarmDocState, now: number) {
         ? previous
         : undefined
     const pinged = last && !last.error && (last.read ?? 0) + (last.write ?? 0) > 0 ? last.at : 0
+    // The newer of the answer and the ping tells how much context the cache holds.
+    const tokens =
+      pinged > (answered?.at ?? 0) ? (last!.read ?? 0) + (last!.write ?? 0) : answered?.tokens
     found.push({
       ...signals,
       id,
       title: standing ? '@ultimate' : summary.title || `#${id}`,
       provider: model.provider,
       model: model.modelId,
-      lastRequest: Math.max(answered ?? 0, pinged) || undefined,
+      lastRequest: Math.max(answered?.at ?? 0, pinged) || undefined,
+      tokens,
       failedAfter: previous?.error ? previous.at : undefined,
       pingAt: previous?.at,
       inputAt: doc.inputAt,
