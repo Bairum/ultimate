@@ -1,7 +1,11 @@
 import type { Message } from '@earendil-works/pi-ai'
 import { expect, it, vi } from 'vitest'
 import { elideObservations } from '../extensions/computer-use/elide.ts'
-import { observedOutput, judgeValueEquals } from '../extensions/computer-use/observe.ts'
+import {
+  observedOutput,
+  judgeValueEquals,
+  splitValueEquals,
+} from '../extensions/computer-use/observe.ts'
 import type { Observation } from '../extensions/computer-use/types.ts'
 
 vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => ({
@@ -119,4 +123,11 @@ it('judges value_equals over every match, including static text the Driver omits
   expect(judgeValueEquals(calculator, equals('42'))).toBe('satisfied')
   expect(judgeValueEquals(calculator, equals('43'))).toBe('unsatisfied')
   expect(judgeValueEquals(calculator, equals('42', 'AXTextField'))).toBe('unknown')
+})
+
+it('leaves value_equals predicates with other element conditions to the Driver', () => {
+  // Judging these locally dropped `enabled`, so a disabled button verified as satisfied.
+  const guarded = { element: { selector: { role: 'AXButton' }, value_equals: 'x', enabled: true } }
+  const plain = { element: { selector: { role: 'AXStaticText' }, value_equals: '42' } }
+  expect(splitValueEquals([guarded, plain])).toEqual({ local: [plain], remote: [guarded] })
 })

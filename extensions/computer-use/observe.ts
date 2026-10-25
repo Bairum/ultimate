@@ -9,7 +9,6 @@ import { defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { parseObservation, ancestry } from './parse-observation.ts'
 import type { Driver, Observation, Predicate, Verdict } from './types.ts'
-import { screenText } from './jev.ts'
 import { updateSession } from './session.ts'
 import * as task from './task.ts'
 import { untrusted } from './content.ts'
@@ -301,9 +300,13 @@ export function observeTool(host: ExtensionHost) {
 
 type ValueEquals = { role?: string; labelContains?: string; value: string }
 
+/** A pure `{element: {selector, value_equals}}` predicate; any other condition (enabled, selected, exists) stays with the Driver. */
 function valueEquals(predicate: Predicate): ValueEquals | undefined {
   const element = predicate.element
+  if (Object.keys(predicate).length !== 1) return undefined
   if (!element || typeof element !== 'object' || Array.isArray(element)) return undefined
+  if (Object.keys(element).some((key) => key !== 'selector' && key !== 'value_equals'))
+    return undefined
   const { selector, value_equals: value } = element
   if (!selector || typeof selector !== 'object' || Array.isArray(selector)) return undefined
   if (typeof value !== 'string' && typeof value !== 'number') return undefined
@@ -332,7 +335,12 @@ export function splitValueEquals(predicates: Predicate[]) {
  * if nothing matches. All predicates must hold.
  */
 export function judgeValueEquals(observation: Observation, predicates: Predicate[]): Verdict {
-  const text = screenText(observation)
+  // Every static text line, untruncated: `screenText` caps lines for fingerprints, which would misjudge long windows.
+  const text = observation.tree
+    .split('\n')
+    .map((line) => /AXStaticText = "(.*)"/.exec(line)?.[1])
+    .filter((line): line is string => line !== undefined)
+    .map((line) => line.replace(/[\u200E\u200F\u2066-\u2069]/g, ''))
   const verdicts = predicates.map((predicate): Verdict => {
     const want = valueEquals(predicate)!
     const needle = want.labelContains?.toLowerCase()
