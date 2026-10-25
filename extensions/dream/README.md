@@ -14,7 +14,7 @@ for @ultimate and the dream branch, is in [DREAM.md](DREAM.md); this file is the
    follow-up when it is busy). Each input goes through a `dream.deliver` task created in the commit of the state it
    announces, so a crash cannot strand a request or a session. A granted automation's `act {do: 'dream'}` starts the
    session at once, without a handoff.
-3. @ultimate starts one branch that runs the five passes (memory, failures, tools, corrections, codify) as
+3. @ultimate starts one branch that runs the six passes (memory, failures, tools, corrections, codify, project) as
    `dream-pass` subagents (`agents/dream-pass.md`), reporting each with `pass`. Its first report names it the
    session's `dreamer`.
 4. The branch files the journal with `journal`: exactly three `learned` lines, Markdown `text` and the proposals. It

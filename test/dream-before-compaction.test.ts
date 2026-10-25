@@ -684,7 +684,7 @@ it("carries @ultimate's handoff, else its compaction summary without its memory,
   })
 })
 
-it("renames a stored session's afterCompaction to beforeCompaction, keeping its outcome", () => {
+it("renames a stored session's afterCompaction to beforeCompaction and adds the project pass", () => {
   const migrate = (
     Sessions as unknown as { definition: { migrate: (v: object, from: number) => object } }
   ).definition.migrate
@@ -696,6 +696,8 @@ it("renames a stored session's afterCompaction to beforeCompaction, keeping its 
         sessions: [
           {
             id: 1,
+            passes: { codify: { status: 'done' } },
+            journal: { learned: [], text: '', at: 2 },
             afterCompaction: {
               automation: 'A4',
               name: 'Dream after compaction',
@@ -704,7 +706,7 @@ it("renames a stored session's afterCompaction to beforeCompaction, keeping its 
               outcome,
             },
           },
-          { id: 2 },
+          { id: 2, passes: { codify: { status: 'running' } } },
         ],
       },
       1,
@@ -714,6 +716,11 @@ it("renames a stored session's afterCompaction to beforeCompaction, keeping its 
     sessions: [
       {
         id: 1,
+        passes: {
+          codify: { status: 'done' },
+          project: { status: 'done', note: 'not part of this dream' },
+        },
+        journal: { learned: [], text: '', at: 2 },
         beforeCompaction: {
           automation: 'A4',
           name: 'Dream after compaction',
@@ -722,7 +729,10 @@ it("renames a stored session's afterCompaction to beforeCompaction, keeping its 
           outcome,
         },
       },
-      { id: 2 },
+      {
+        id: 2,
+        passes: { codify: { status: 'running' }, project: { status: 'waiting' } },
+      },
     ],
   })
 })

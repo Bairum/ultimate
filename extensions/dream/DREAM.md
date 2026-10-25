@@ -1,7 +1,8 @@
 # Dreaming
 
 Like people, agents need time to process what they learned. A dream is a working session: Ultimate reads back over
-the project's conversations, memory, failures and tools, writes a journal of what it learned, and proposes changes.
+the project's conversations, memory, failures and tools, writes a journal of what it learned, and proposes changes:
+to itself, and to how it works in this particular project (what it keeps doing by hand here, and what to build for it).
 The user decides each proposal with @ultimate; approved ones become ordinary branches, and the dream follows them
 until they land. Nothing changes code, memory or storage by itself.
 
@@ -39,7 +40,9 @@ record it with `decide {…, reason}`, one line on why; then tell the user what 
 reply: false. Never decide hands-off otherwise. For each decision:
 
 - **Approved code, prompt or doc change:** start a branch for it (it is ordinary work: assess or build, review, land),
-  then `decide {status: 'approved', branch}`. The dream marks it landed when that branch lands.
+  then `decide {status: 'approved', branch}`. The dream marks it landed when that branch lands. A `project` proposal
+  is built into the project's `.ultimate/`: put its evidence and the existing extension or feature pull request it
+  adapts into the branch prompt, and the branch follows the integrate-ultimate skill.
 - **Approved memory change:** apply it with one `remember` batch, then `decide {status: 'applied'}`.
 - **Rejected:** `decide {status: 'rejected'}`.
 
@@ -61,14 +64,16 @@ dream's own bookkeeping (`pass`, `journal`) is part of the job, not a change.
    why there is none). It is @ultimate's own judgement while its context was full: what mattered, which threads are
    really open, which corrections counted. Put it in every pass brief as the primary input; the transcripts are the
    evidence behind it, and a pass checks the handoff against them rather than taking it on trust.
-1. Run the five passes in parallel, each as a `dream-pass` subagent (background), with the session number, its pass
+1. Run the six passes in parallel, each as a `dream-pass` subagent (background), with the session number, its pass
    name and the brief below. Before starting each, call `pass {session, pass, status: 'running'}`; when it reports,
    `pass {…, status: 'done', note}` with a one-line note (or `failed` with the reason).
 2. Check each report against its evidence; drop what does not hold up.
 3. Merge them into the journal and file it with `journal`: `learned` is exactly three short lines in Ultimate's own
    voice ("I learned…", "I keep…", "I'd like…"); `text` is Markdown with one section per pass; `proposals` lists each
    proposed change once: `id` (a slug), `pass`, `title` (one line saying what changes), `size` (S/M/L), `risk`, and
-   `retire` (the memory slug it makes redundant) for codify proposals. Propose `chapter`, a 2–3 word lowercase,
+   `retire` (the memory slug it makes redundant) for codify proposals. A project proposal's title asks the question
+   with its count ("Agents checked the device API by hand in 6 branches: build a `devices` tool here?"), and its
+   `text` section keeps the evidence and what it adapts. Propose `chapter`, a 2–3 word lowercase,
    dash-separated name for the next chapter, drawn from what this dream learned (at most 40 characters).
 4. Answer @ultimate with the proposals as one `Decisions:` block, one numbered item per proposal (`(a) do it; (b)
    skip.`), each naming its id, then `My picks:`.
@@ -98,3 +103,13 @@ conversation only where they point at something.
   the user). Say the memory delete or update that follows once it is
   codified. Also check the skills that exist: one that is stale, duplicated or never read gets an update or removal
   proposal.
+- **project** — what Ultimate could do better in this project's own work. Read the root's tally (abstracts and
+  landings), the project's conversations and `git log`, and look for what repeats: steps agents did by hand again and
+  again (the same commands, checks, lookups, setup), what the user asked for more than once, and where branches got
+  stuck on something specific to the project (dev server, test data, environment, deploy). Each proposal says what
+  happened and how often, with `#conversation/entry` or commit evidence, and what to build in `<project>/.ultimate/`:
+  an extension, a surface, an agent, a skill or a setting, following the integrate-ultimate skill. Before proposing
+  something new, look for one to adapt in the clone's `extensions/` and the open feature pull requests
+  (`gh pr list --repo HazAT/ultimate --label feature`). It proposes; it builds nothing. When the project is Ultimate
+  itself, leave Ultimate's tools and harness to the tools and codify passes and look only at the project's own work;
+  say "nothing project-specific" when that is what you found.

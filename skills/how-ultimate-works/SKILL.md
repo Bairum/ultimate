@@ -63,7 +63,8 @@ Remember the answer: it goes into the memory about the user at setup.
 - What I learn about the project lives in its **memory**: decisions, facts and lessons that every new branch starts
   from.
 - I'm meant to run long and fill my context. Around 70% I write a handoff and a **dream** starts by itself: a review
-  of what went well and badly that proposes memory changes and improvements to me and to the project. You decide
+  of what went well and badly that proposes memory changes and improvements to me, and what to build for this project
+  where I keep doing the same thing by hand ("this happened in 6 branches: shall we build a tool here?"). You decide
   each proposal, unless you granted the automation to decide for you.
 - After the dream, **Fall asleep** starts a fresh chapter from the handoff and the memories. Nothing is deleted; the
   old chapter stays readable. A fresh chapter matters because I may have just been improved, and you want the new
