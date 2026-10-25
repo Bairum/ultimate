@@ -28,6 +28,7 @@ import {
   ChooseAction,
   DecideAction,
   DetailsAction,
+  DismissAction,
   ExtensionsAction,
   FirstRunDoneAction,
   HelpAction,
@@ -38,7 +39,7 @@ import {
   WalkthroughAction,
 } from './refs.ts'
 
-export const Starts = defineDoc<{ roots: Record<string, number> }>({
+export const Starts = defineDoc<{ roots: Record<string, number>; dismissed?: boolean }>({
   kind: StartsDoc.kind,
   checkpointWhen: () => false,
   version: 1,
@@ -159,6 +160,7 @@ async function modelLine(host: ExtensionHost, conversation: Conversation) {
 
 export const userActions = [
   'start',
+  'dismiss',
   'walkthrough',
   'help',
   'choose',
@@ -253,6 +255,12 @@ export const actions: Record<string, ExtensionAction> = {
       ;(await tx.doc(Starts, ROOT_CONVERSATION_ID)).roots[String(root)] = id
     }, context)
     return { id }
+  }),
+  dismiss: implementAction(DismissAction, async (_args, { host }) => {
+    await host.harness().commit(async (tx) => {
+      ;(await tx.doc(Starts, ROOT_CONVERSATION_ID)).dismissed = true
+    }, context)
+    return { dismissed: true }
   }),
   walkthrough: implementAction(WalkthroughAction, async (_args, { host }) => {
     const id = await host.need(SubagentsApi).standing('ultimate', context)

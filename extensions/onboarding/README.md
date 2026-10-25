@@ -22,7 +22,9 @@ and preserves the instructions. Request id `onboarding:<root>` ensures one input
 Start here is a card above @ultimate's composer (`survey.tsx`, through the SDK's `composer` renderer) until
 onboarding has run for the project's root: `onboarding.starts` names the root, or the root carries memories (a new
 chapter's root, set up long ago; `onboarded.ts`). Its one button, **Set up with @ultimate**, calls `start { root }`,
-like Get ready's Continue; once that records the root, the card is gone for good. The History page (the root) takes
+like Get ready's Continue; once that records the root, the card is gone for good. Its × calls the user-only
+`dismiss`, which sets `dismissed` on `onboarding.starts` and hides the card for the project on every device; ⌘K
+**Get ready…** still starts setup. The History page (the root) takes
 no input.
 
 @ultimate greets and first walks the user through how Ultimate works with the `how-ultimate-works` skill

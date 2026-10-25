@@ -1,4 +1,4 @@
-import { CompassIcon, LoaderCircleIcon } from 'lucide-react'
+import { CompassIcon, LoaderCircleIcon, XIcon } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
@@ -6,7 +6,7 @@ import { api, errorMessage, useConversation, useDocOf, useSystem } from '@/sdk'
 import { column, MemoryDoc, useRoots } from '../lineage/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { onboarded } from './onboarded.ts'
-import { StartAction, StartsDoc } from './refs.ts'
+import { DismissAction, StartAction, StartsDoc } from './refs.ts'
 
 /** Above @ultimate's composer until onboarding has run for the project: one click starts it. */
 export function StartComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
@@ -29,12 +29,12 @@ function StartHere({ dock }: { dock?: boolean }) {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string>()
   if (root === undefined || starts === undefined || memories === undefined) return null
-  if (onboarded(starts?.roots[String(root)], memories)) return null
-  const begin = async () => {
+  if (starts?.dismissed || onboarded(starts?.roots[String(root)], memories)) return null
+  const run = async (action: () => Promise<unknown>) => {
     setSending(true)
     setError(undefined)
     try {
-      await api.action(StartAction, { root })
+      await action()
     } catch (failure) {
       setError(errorMessage(failure))
     } finally {
@@ -57,10 +57,26 @@ function StartHere({ dock }: { dock?: boolean }) {
               '@ultimate walks you through how it works, helps you choose your setup and reads the project.'}
           </p>
         </div>
-        <Button className="ml-auto" disabled={sending} onClick={() => void begin()}>
-          {sending ? <LoaderCircleIcon className="motion-safe:animate-spin" /> : <CompassIcon />}
-          Set up with @ultimate
-        </Button>
+        <div className="ml-auto flex items-center gap-1">
+          <Button
+            disabled={sending}
+            onClick={() => void run(() => api.action(StartAction, { root }))}
+          >
+            {sending ? <LoaderCircleIcon className="motion-safe:animate-spin" /> : <CompassIcon />}
+            Set up with @ultimate
+          </Button>
+          <Button
+            aria-label="Dismiss"
+            className="text-muted-foreground hover:text-foreground"
+            disabled={sending}
+            onClick={() => void run(() => api.action(DismissAction))}
+            size="icon-sm"
+            title="Not now. ⌘K Get ready… starts setup later."
+            variant="ghost"
+          >
+            <XIcon />
+          </Button>
+        </div>
       </div>
     </div>
   )
