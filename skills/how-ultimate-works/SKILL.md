@@ -19,6 +19,7 @@ on the right"). Use the user's language, not internal jargon; never mention tool
 - I'm @ultimate, one long-running conversation. It's this one: the first row in the sidebar, or the @ultimate button on
   a phone.
 - Tell me what you want. I hand the work out and everything comes back here, including decisions that need you.
+- Want me to work differently? Ask me to change myself.
 
 Question (choice): "Make sense?" — Got it · Tell me more · Skip the rest
 

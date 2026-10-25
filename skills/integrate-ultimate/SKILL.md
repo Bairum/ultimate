@@ -22,6 +22,7 @@ Gather evidence, citing file:line, before forming opinions.
   - deploy;
   - required secrets, by name only (never print or read values; read `.env` keys only by name).
 - **The domain model:** what the project's "things" are (posts, services, tickets, datasets), where they live, their states, and how they are created and changed.
+- **What Ultimate already has:** the clone's `extensions/` and the open feature pull requests (`gh pr list --repo HazAT/ultimate --label feature`). Adapting one into `.ultimate/` beats building from scratch; change the clone's core only for a clear-cut fix, since edits there conflict with every update.
 - **Existing agent assets:** `AGENTS.md`/`CLAUDE.md`, `.pi/skills/` (Ultimate loads these as-is), `.claude/`, prompts, and scripts that agents already drive. These encode the real workflow; reuse them and don't reinvent them.
 - **How people actually work:**
   - `git log` subjects;
