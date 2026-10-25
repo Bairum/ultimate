@@ -18,13 +18,17 @@ agent uses `openai-codex/gpt-6-luna` through Pi's existing ChatGPT login, low th
 3. `Relay` joins transcript fragments after 1,200 ms quiet. Every finished user line goes through `heard` as a
    `voice.heard` input to Voice (`whenBusy: 'steer'`). GPT-Live's own speech can be logged as `live` lines;
    commentary output is not logged twice. Delegation events are ignored.
-4. `extensions/voice-live/agents/voice.md` configures the standing agent with exactly three deferred tools:
+4. `extensions/voice-live/agents/voice.md` configures the standing agent with three deferred tools and codemode:
    - `voice_say {text}` writes an `ultimate` `voice.line` with `speech: true`. The browser sends it as commentary.
    - `voice_ask_ultimate {request}` writes a forwarded user line and schedules the durable answer task. It answers
      @ultimate's newest open question through Messages, or submits a typed `voice.utterance` with the clean request.
      The task follows that specific input receipt, including Messages delivery, not idle or an arbitrary delay.
    - `voice_note {text}` writes a quiet `note` line, forwarded by the browser as `session.thinking.append`.
      Tool names are prefixed to avoid colliding with other agents' tools (especially lineage's `note`).
+   - `codemode` answers status questions (what is running, did something land, open to-dos) with one script of
+     `ultimate.*` reads, then `voice_say`, without an @ultimate turn. It stays read-only by instruction, not by a
+     code guard: the definition tells Voice never to start, change, message or write anything, and to pass
+     anything that needs doing or judgement, or that it is unsure about, to @ultimate.
 5. The answer task sends @ultimate's full answer back as a `voice.answer` input to Voice. A tool-terminated message
    uses its user-facing text and numbered questions/options. Voice speaks the conclusion in 2–4 short sentences,
    preserving decisions without reading Markdown, paths or code aloud. There is no summary-model speech rewrite.
