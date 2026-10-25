@@ -1,14 +1,14 @@
 /** Browser WebRTC lifecycle, independent of React and the shell. Never holds an API key. */
 import type { ActionRef } from '../../shared/extension-api.ts'
-import { EndAction, SayAction, StartAction } from './refs.ts'
+import { EndAction, LogAction, SayAction, StartAction } from './refs.ts'
 import { Relay } from './relay.ts'
-import type { LiveEvent, RelaySay } from './relay.ts'
+import type { LiveEvent, RelayOut } from './relay.ts'
 
 export type LiveOptions = {
   /** Pass the shell's api.action (or a typed wrapper). */
   action: <A, R>(ref: ActionRef<A, R>, args: A) => Promise<R>
   onEvent: (event: LiveEvent) => void
-  /** An utterance was accepted; line is its durable voice.line entry id. */
+  /** A request was forwarded to @ultimate; line is its durable voice.line entry id. */
   onLine?: (line: { line: number; text: string; delegation?: string }) => void
   onError: (error: Error) => void
 }
@@ -64,18 +64,23 @@ export async function startLive(options: LiveOptions): Promise<LiveSession> {
     if (channel.readyState !== 'open') throw new Error('Live voice data channel is not open')
     channel.send(JSON.stringify(event))
   }
-  const accept = (utterances: RelaySay[]) => {
-    for (const utterance of utterances) {
+  const accept = (outs: RelayOut[]) => {
+    for (const out of outs) {
+      // In order: Daniel's yes is logged before the request it confirms is forwarded.
       pending = pending
         .then(async () => {
+          if ('log' in out) {
+            await options.action(LogAction, out.log)
+            return
+          }
           const result = await options.action(SayAction, {
-            text: utterance.say,
-            ...(utterance.delegation ? { delegation: utterance.delegation } : {}),
+            text: out.forward,
+            ...(out.delegation ? { delegation: out.delegation } : {}),
           })
           options.onLine?.({
             line: result.line,
-            text: utterance.say,
-            ...(utterance.delegation ? { delegation: utterance.delegation } : {}),
+            text: out.forward,
+            ...(out.delegation ? { delegation: out.delegation } : {}),
           })
         })
         .catch((error: unknown) => {
@@ -184,13 +189,15 @@ export async function startLive(options: LiveOptions): Promise<LiveSession> {
         })
         send({ type: 'session.input_audio.unmute' })
       },
-      speak: (text, delegationId) =>
+      speak: (text, delegationId) => {
+        relay.spoke()
         send({
           type: 'session.commentary.append',
           event_id: crypto.randomUUID(),
           delegation_id: delegationId,
           content: text,
-        }),
+        })
+      },
       close,
     }
   } catch (error) {

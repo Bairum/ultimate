@@ -9,7 +9,7 @@ import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import { Messages } from '../extensions/messages/api.ts'
 import { Summaries, setAutomaticSummaries } from '../extensions/conversations/summary.ts'
-import { Voice, LIVE_INSTRUCTIONS } from '../extensions/voice-live/server.ts'
+import { Voice, liveInstructions } from '../extensions/voice-live/server.ts'
 import type { VoiceLine } from '../extensions/voice-live/refs.ts'
 import { SPEECH_PROMPT, speakable } from '../extensions/voice-live/speech.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
@@ -70,7 +70,7 @@ async function fixture() {
     expect(JSON.parse(request!.body as string)).toEqual({
       session: {
         model: 'gpt-live-1',
-        instructions: LIVE_INSTRUCTIONS,
+        instructions: liveInstructions(true),
         audio: { output: { voice: 'marin' } },
         delegation: { type: 'client' },
       },
@@ -178,7 +178,12 @@ it('starts an ownerless passive log, submits custom utterances, and speaks short
     role: 'daniel',
     text: 'Please check the tests',
     delegation: 'd1',
+    forwarded: true,
   })
+  // Small talk stays in Voice: logged, never an input to @ultimate.
+  await f.action('log', { role: 'daniel', text: 'Can you hear me?' })
+  await f.action('log', { role: 'live', text: 'Yes, loud and clear.' })
+  expect((await f.entries(f.main)).filter((e) => e.kind === 'voice.utterance')).toHaveLength(1)
   expect(spoken.data).toMatchObject({
     role: 'ultimate',
     text: 'The tests pass.',

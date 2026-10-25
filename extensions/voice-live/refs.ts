@@ -4,10 +4,15 @@ import { actionRef, docRef } from '../../shared/extension-api.ts'
 export type VoiceStatus = { available: true } | { available: false; reason: string }
 export type VoiceState = { conversation?: number }
 export type VoiceSession = { phase: 'started' | 'ended'; at: number; seconds?: number }
+/**
+ * One line of the Voice transcript. `daniel`: what he said, `forwarded` when it is the request passed to @ultimate;
+ * `live`: GPT-Live's own speech (small talk, clarifying, asking to pass on); `ultimate`: an answer read out.
+ */
 export type VoiceLine = {
-  role: 'daniel' | 'ultimate'
+  role: 'daniel' | 'live' | 'ultimate'
   text: string
   delegation?: string
+  forwarded?: true
   source?: { conversation: number; entry: number }
   speech?: true
 }
@@ -22,10 +27,15 @@ export const StartAction = actionRef<{ sdp: string }, { sdp: string; conversatio
   'voice-live',
   'start',
 )
-/** A finished utterance → its Daniel voice.line entry id. The answer arrives as another voice.line. */
+/** A confirmed request → its forwarded Daniel voice.line entry id. The answer arrives as another voice.line. */
 export const SayAction = actionRef<{ text: string; delegation?: string }, { line: number }>(
   'voice-live',
   'say',
+)
+/** A line said in the session that stays in Voice: Daniel's talk or GPT-Live's own. Never reaches @ultimate. */
+export const LogAction = actionRef<{ role: 'daniel' | 'live'; text: string }, { line: number }>(
+  'voice-live',
+  'log',
 )
 /** Record the ended divider after closing the data-channel session. */
 export const EndAction = actionRef<{ seconds?: number }, Record<string, never>>('voice-live', 'end')

@@ -16,7 +16,8 @@ import type { SummaryModel } from '../conversations/summary-model.ts'
 import { Messages, MessagesApi } from '../messages/api.ts'
 import type { Question } from '../messages/api.ts'
 import { Standing } from '../subagents/api.ts'
-import { EndAction, SayAction, StartAction, StatusAction, VoiceDoc } from './refs.ts'
+import { EndAction, LogAction, SayAction, StartAction, StatusAction, VoiceDoc } from './refs.ts'
+import { CONFIRM } from './relay.ts'
 import type { VoiceLine, VoiceSession, VoiceState } from './refs.ts'
 import { speakable } from './speech.ts'
 
@@ -40,23 +41,35 @@ async function apiKey(host: ExtensionHost, signal: AbortSignal) {
   return (await runtime.getAuth('openai', { signal }))?.auth.apiKey
 }
 
-export const LIVE_INSTRUCTIONS = `You are a voice relay between Daniel and Ultimate, a coding agent. Daniel's requests, questions and statements are all for Ultimate, not for you. Speak in Daniel's language.
+/** GPT-Live's prompt: it talks with Daniel itself and passes on only real requests, asking first when `confirm`. */
+export function liveInstructions(confirm: boolean) {
+  return `You are the voice in Daniel's ear for Ultimate, a coding agent working on his software projects. You talk with Daniel; Ultimate does the work. Speak in Daniel's language, briefly and naturally.
+
+You handle yourself, without Ultimate: greetings, "can you hear me", "are you there", small talk, questions about this voice connection, and "what is Ultimate doing" or "still working?" (answer from the progress notes you were given, or say it is still working). Never invent what Ultimate found or did.
+
+Everything about his code, projects, branches, tests or any work is a request for Ultimate. If it is unclear, ask one short question to get it clear.${
+    confirm
+      ? ` Then ask exactly: "Should I pass this to Ultimate: <the request in one short sentence, in his words>?" and wait. Only after he says yes, pass it on.`
+      : ` Then say "Passing that on" and pass it on.`
+  }
 
 Backchannel policy
-Use only a very short acknowledgement such as "passing that on" or "got it". If asked while waiting, say "still on it". Ask Daniel to repeat only when unintelligible. Keep backchannels minimal.
+Use minimal backchannels.
 
 Interruption policy
 Stop speaking and listen when Daniel interrupts.
 
 Delegation policy
 Backend tools:
-Ultimate handles every request, question and statement. Client commentary supplies its answers.
+- Ultimate: does all work on Daniel's projects and answers questions about them. Its answers arrive as commentary.
 Generate <|SpawnThinking|> when:
-Daniel makes any intelligible request, question or statement for Ultimate.
+- ${confirm ? 'Daniel has just said yes to passing a request on.' : 'Daniel has made a clear request for Ultimate.'}
 Do not generate <|SpawnThinking|> when:
-You are acknowledging, asking for a repeat, or speaking supplied commentary.
-Never answer on your own. Do not guess the result while waiting.
-When commentary arrives, say it plainly in Daniel's language without adding content.`
+- Daniel greets you, checks the connection, makes small talk or asks what Ultimate is doing.
+- The request is still unclear${confirm ? ', or he has not said yes yet' : ''}.
+Do not guess the result while waiting.
+When commentary arrives, say it plainly without adding content.`
+}
 
 export const Voice = defineDoc<VoiceState>({
   kind: VoiceDoc.kind,
@@ -68,7 +81,7 @@ export const Voice = defineDoc<VoiceState>({
   initial: () => ({}),
 })
 export const docs = [Voice]
-export const userActions = ['status', 'start', 'say', 'end']
+export const userActions = ['status', 'start', 'say', 'log', 'end']
 const terminal = { status: 'terminal', outcome: { status: 'completed', result: null } } as const
 
 async function voiceId(host: ExtensionHost) {
@@ -129,6 +142,7 @@ function questionsText(questions: Question[]) {
 const danielLine = (input: { text: string; delegation?: string }): VoiceLine => ({
   role: 'daniel',
   text: input.text,
+  forwarded: true,
   ...(input.delegation ? { delegation: input.delegation } : {}),
 })
 
@@ -380,7 +394,7 @@ export const actions = {
       body: JSON.stringify({
         session: {
           model: 'gpt-live-1',
-          instructions: LIVE_INSTRUCTIONS,
+          instructions: liveInstructions(CONFIRM),
           audio: { output: { voice: 'marin' } },
           delegation: { type: 'client' },
           ...(input.length ? { input } : {}),
@@ -441,6 +455,19 @@ export const actions = {
       'voice.line',
       danielLine(input),
       `voice:line:${input.request}`,
+    )
+    return { line }
+  }),
+  log: implementAction(LogAction, async (args, { host }) => {
+    const { role, text } = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
+    if ((role !== 'daniel' && role !== 'live') || typeof text !== 'string' || !text.trim())
+      throw new Error('Expected a daniel or live role and text')
+    const line = await write(
+      host,
+      await voiceId(host),
+      'voice.line',
+      { role, text: text.trim() },
+      `voice:log:${crypto.randomUUID()}`,
     )
     return { line }
   }),
