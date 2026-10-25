@@ -36,7 +36,6 @@ import { implementAction } from '../../lib/actions.ts'
 import { actingAs } from '../../lib/acting-as.ts'
 import type { ActionInput } from '../../lib/actions.ts'
 import type { ActionContext } from '../../server/actions.ts'
-import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import type { LandedData } from '../workspaces/api.ts'
@@ -1227,32 +1226,6 @@ export function compareLinks(
   })
 }
 
-/** Validates a new branch's prompt and configuration. */
-function rootInput(args: JsonValue) {
-  const input = (args ?? {}) as Partial<BranchInput>
-  if (typeof input.prompt !== 'string') throw new Error('prompt must be a string')
-  if (input.title !== undefined && typeof input.title !== 'string')
-    throw new Error('title must be a string')
-  if (
-    input.model !== undefined &&
-    (typeof input.model?.provider !== 'string' || typeof input.model.modelId !== 'string')
-  )
-    throw new Error('model must be { provider, modelId }')
-  if (input.images !== undefined) {
-    if (!Array.isArray(input.images) || input.images.length > maxImages)
-      throw new Error(`images must be an array of at most ${maxImages}`)
-    for (const image of input.images)
-      if (
-        !imageMimeTypes.includes(image?.mimeType) ||
-        typeof image.data !== 'string' ||
-        !image.data ||
-        Buffer.byteLength(image.data, 'base64') > maxImageBytes
-      )
-        throw new Error('Expected supported image MIME type and base64 data of at most 2 MiB')
-  }
-  return input
-}
-
 export const actions = {
   ...rewindActions,
   /** The roots, and with `{ id }` that conversation's tree root and its branch state when it is a branch. */
@@ -1263,14 +1236,6 @@ export const actions = {
     const root = await rootOf(host, id, context)
     const branch = (await host.harness().snapshot(Branch, id, context))?.branch
     return { roots, ...(root === undefined ? {} : { root }), ...(branch ? { branch } : {}) }
-  },
-  async branch(args: JsonValue, { host }: ActionContext) {
-    const input = rootInput(args)
-    for (const key of ['from', 'at'] as const)
-      if (input[key] !== undefined && (!Number.isSafeInteger(input[key]) || input[key] < 1))
-        throw new Error(`${key} must be a positive integer`)
-    if (input.from === undefined) throw new Error('from must be a positive integer')
-    return startBranch(host, input as BranchInput, context)
   },
   /**
    * `{id, limit?, types?}`: the newest landings, notes, branches and compactions in root `id`, newest first (default

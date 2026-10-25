@@ -10,11 +10,12 @@ import { afterEach, beforeAll, expect, it } from 'vitest'
 import { abstract, leaveNote, Tally } from '../../extensions/lineage/server.ts'
 import { Seen, tallyText } from '../../extensions/lineage/catchup.ts'
 import { context } from '../../server/harness.ts'
-import { fauxServer, post, seedTally, sourceCopy, temp, until } from '../helpers.ts'
+import { branchProbe, fauxServer, post, seedTally, sourceCopy, temp, until } from '../helpers.ts'
 
 let ultimateRoot: string
 beforeAll(async () => {
   ultimateRoot = await sourceCopy(await temp())
+  await branchProbe(ultimateRoot)
   await writeFile(
     join(ultimateRoot, '.ultimate/settings.json'),
     JSON.stringify({ extensions: { enable: ['plan', 'subagents'] } }),
@@ -222,7 +223,7 @@ it('warns an isolated workspace it is behind, prioritizes old overlaps, and caps
   const f = await catchupFixture()
   await ask(f.server, ROOT_CONVERSATION_ID, 'An idea')
   const { id } = (
-    await post(f.server, '/api/extensions/lineage/actions/branch', {
+    await post(f.server, '/api/extensions/branch-probe/actions/branch', {
       args: { from: 1, prompt: 'Branch task', isolated: true },
     })
   ).data.result as { id: ConversationId }
@@ -250,7 +251,9 @@ it('warns an isolated workspace it is behind, prioritizes old overlaps, and caps
 const branchFrom = async (server: Server, args: Record<string, unknown>) => {
   // An empty first conversation is a root that read nothing yet; one with history stays an ordinary root.
   if (args.from === 1) await seedTally(server.harness)
-  const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', { args })
+  const { status, data } = await post(server, '/api/extensions/branch-probe/actions/branch', {
+    args,
+  })
   expect([status, data.error]).toEqual([200, undefined])
   const id = data.result.id as ConversationId
   await (await server.harness.conversation(id, context))!.waitForIdle(context)
