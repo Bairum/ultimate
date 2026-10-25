@@ -292,7 +292,7 @@ export function Observe({ call }: { call: ToolCallView }) {
         : []
   ) as Record<string, unknown>[]
   const status = details?.status
-  const failed = toneOf(status) !== 'good'
+  const failed = !!status && toneOf(status) !== 'good'
   return (
     <Tool>
       <ToolHeader
