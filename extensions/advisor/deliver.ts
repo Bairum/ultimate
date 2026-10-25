@@ -1,5 +1,6 @@
 import type { Context } from '@earendil-works/chord'
 import type { ConversationId } from '@earendil-works/pi-durable'
+import { LiveDoc } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { AdvisorNoteEntry, Role, RoleProfile, ReviewPoint, Threshold } from './refs.ts'
 import { advisory, rank } from './render.ts'
@@ -36,9 +37,14 @@ export async function deliver(
   id: ConversationId,
   entry: AdvisorNoteEntry,
   context: Context,
+  run?: number,
 ) {
   const conversation = await host.harness().conversation(id, context)
   if (!conversation) throw new Error('Advisor recipient unavailable')
+  if (entry.delivered === 'steer') {
+    const live = await host.harness().snapshot(LiveDoc, id, context)
+    if (!live?.run || live.run.inputs[0] !== run) entry = { ...entry, delivered: 'note' }
+  }
   const content = advisory(entry.advisor, entry.notes)
   const draft = { kind: 'advisor.note', data: entry }
   const requestId = `advisor:${entry.review}`

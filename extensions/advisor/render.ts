@@ -13,6 +13,8 @@ export function textOf(entry: EntryRecord | undefined) {
     )
     .join('\n')
 }
+export const isContinuation = (entry: EntryRecord, continuations: readonly string[]) =>
+  entry.kind === 'pi.user' && continuations.includes(textOf(entry))
 export function renderInput(
   entries: readonly EntryRecord[],
   role: Role,
@@ -22,8 +24,11 @@ export function renderInput(
   ledger?: unknown,
   latest?: string,
   compact = false,
+  continuations: readonly string[] = [],
 ) {
-  const clean = entries.filter((e) => e.kind !== 'advisor.note')
+  const clean = entries.filter(
+    (e) => e.kind !== 'advisor.note' && !isContinuation(e, continuations),
+  )
   const results = new Map(
     clean.flatMap((e) =>
       (e.model ?? []).flatMap((m) =>
@@ -65,7 +70,7 @@ export function renderInput(
     rubric: rubric.slice(0, 20_480),
     signal,
     agents: agents.slice(0, 8192),
-    request: textOf(clean.findLast(isInput)).slice(0, compact ? 1500 : 8000),
+    request: textOf(clean.find(isInput)).slice(0, compact ? 1500 : 8000),
     latest:
       latest?.slice(0, compact ? 1500 : 8000) ??
       clean

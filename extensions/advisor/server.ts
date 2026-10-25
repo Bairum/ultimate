@@ -10,7 +10,7 @@ import {
   LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, HookApi } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryId, HookApi } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
@@ -22,10 +22,10 @@ import { Roots } from '../lineage/api.ts'
 import { ConfigAction, SetConfigAction, SetRubricAction, FeedbackAction, ROLES } from './refs.ts'
 import type { Role, ReviewPoint } from './refs.ts'
 import { configuration, NAME, validateConfig } from './config.ts'
-import { docs, Runs, State } from './state.ts'
+import { docs, Runs, State, pruneRuns } from './state.ts'
 import { review, runEntries } from './review.ts'
 import type { ReviewInput } from './review.ts'
-import { signals } from './signals.ts'
+import { signals, initialSignals } from './signals.ts'
 
 export { docs }
 export const userActions = ['setConfig', 'setRubric', 'feedback']
@@ -199,7 +199,13 @@ export default function advisor(host: ExtensionHost) {
       if (input.point === 'idle') row.idleReviewed = row.lastActivity
     }, context)
   }
-  async function activity(api: HookApi, context: Context) {
+  async function activity(
+    api: HookApi,
+    context: Context,
+    assistant: EntryId,
+    results: readonly EntryId[],
+    scan: boolean,
+  ) {
     return host.harness().commit(async (tx) => {
       const run = (await tx.doc(LiveDoc, api.conversationId)).run?.inputs[0]
       const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
@@ -209,13 +215,34 @@ export default function advisor(host: ExtensionHost) {
           ...(run !== undefined ? { run } : {}),
           rounds: 0,
           signals: [],
-          ...(row?.lastInput !== undefined ? { lastInput: row.lastInput } : {}),
+          ...(row?.deliveries !== undefined ? { deliveries: [...row.deliveries] } : {}),
           ...(row?.pending !== undefined ? { pending: row.pending } : {}),
         }
         row = runs.conversations[api.conversationId]
       }
       row.lastActivity = Date.now()
-      return { run, rounds: ++row.rounds, signals: [...row.signals] }
+      let found: string[] = []
+      if (scan) {
+        const entries = (
+          await Promise.all([assistant, ...results].map((id) => tx.entry(id)))
+        ).filter((entry) => entry !== undefined)
+        const state = JSON.parse(JSON.stringify(row.scan ?? initialSignals())) as ReturnType<
+          typeof initialSignals
+        >
+        found = signals(
+          entries,
+          host.conversations().find((c) => c.id === api.conversationId)?.cwd ?? host.projectRoot,
+          '',
+          state,
+        ).filter((s) => !row.signals.includes(s))
+        row.scan = state
+        row.signals.push(...found)
+      }
+      if (row.lastRound !== assistant) {
+        row.rounds++
+        row.lastRound = assistant
+      }
+      return { run, rounds: row.rounds, found }
     }, context)
   }
   const timer = setInterval(() => {
@@ -227,14 +254,12 @@ export default function advisor(host: ExtensionHost) {
   })
   async function tick() {
     const view = await config(false)
-    if (
-      !ROLES.some(
-        (r) => view.effective.roles?.[r]?.enabled && view.effective.roles[r]?.at?.includes('idle'),
-      )
-    )
-      return
+    if (!ROLES.some((r) => view.effective.roles?.[r]?.enabled)) return
     const context = BACKGROUND_CONTEXT
     const concluded = await host.want(ConversationsApi)?.concluded(context)
+    await host.harness().commit(async (tx) => {
+      pruneRuns(await tx.doc(Runs, ROOT_CONVERSATION_ID), concluded ?? new Set(), Date.now())
+    }, context)
     const runs = await host.harness().snapshot(Runs, ROOT_CONVERSATION_ID, context)
     for (const summary of host.conversations()) {
       const id = summary.id as ConversationId
@@ -257,6 +282,18 @@ export default function advisor(host: ExtensionHost) {
       await background(id, { role: target.role, point: 'idle' }, context)
     }
   }
+  async function settleYield(api: HookApi, result: { continue: string } | null, context: Context) {
+    const kept = await api.memo('advisor:yield', result, context)
+    await host.harness().commit(async (tx) => {
+      const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
+      const row = runs.conversations[api.conversationId]
+      for (const id of row?.deliveries ?? [])
+        if (runs.deliveries[id]?.delivered === 'continue') delete runs.deliveries[id]
+      if (row?.deliveries)
+        row.deliveries = row.deliveries.filter((id) => runs.deliveries[id] !== undefined)
+    }, context)
+    return kept ?? undefined
+  }
   return defineExtension({
     name: 'advisor',
     tasks: [ReviewTask],
@@ -265,30 +302,18 @@ export default function advisor(host: ExtensionHost) {
         afterTools: async (_assistant, _results, api, context) => {
           const target = await enabled(api.conversationId, context)
           if (!target) return
-          const current = await activity(api, context)
+          const current = await activity(
+            api,
+            context,
+            _assistant,
+            _results,
+            !!target.profile.at?.includes('signals'),
+          )
           let point: ReviewPoint | undefined
           let signal: string | undefined
-          if (target.profile.at?.includes('signals')) {
-            const found = signals(
-              await runEntries(host, api.conversationId, context),
-              host.conversations().find((c) => c.id === api.conversationId)?.cwd ??
-                host.projectRoot,
-            ).filter((s) => !current.signals.includes(s))
-            if (
-              current.rounds > 40 &&
-              !current.signals.includes('more than 40 tool rounds') &&
-              !found.includes('more than 40 tool rounds')
-            )
-              found.push('more than 40 tool rounds')
-            if (found.length) {
-              point = 'signals'
-              signal = found.join('; ')
-              await host.harness().commit(async (tx) => {
-                ;(await tx.doc(Runs, ROOT_CONVERSATION_ID)).conversations[
-                  api.conversationId
-                ].signals.push(...found)
-              }, context)
-            }
+          if (current.found.length) {
+            point = 'signals'
+            signal = current.found.join('; ')
           }
           if (
             !point &&
@@ -306,6 +331,8 @@ export default function advisor(host: ExtensionHost) {
         onYield: async (answer, api, context) => {
           const target = await enabled(api.conversationId, context)
           if (!target) return undefined
+          const kept = await api.memo<{ continue: string } | null>('advisor:yield', context)
+          if (kept !== undefined) return settleYield(api, kept, context)
           const run = (await api.snapshot(LiveDoc, api.conversationId, context))?.run?.inputs[0]
           const latest = answer.content
             .flatMap((b) => (b.type === 'text' ? [b.text] : []))
@@ -343,25 +370,48 @@ export default function advisor(host: ExtensionHost) {
               runs.conversations[api.conversationId] ??= { rounds: 0, signals: [] }
               const row = runs.conversations[api.conversationId]
               if (row.run !== run) {
-                row.run = run
-                row.continued = false
+                runs.conversations[api.conversationId] = {
+                  ...(run !== undefined ? { run } : {}),
+                  rounds: 0,
+                  signals: [],
+                  lastActivity: Date.now(),
+                  ...(row.pending !== undefined ? { pending: row.pending } : {}),
+                  ...(row.deliveries !== undefined ? { deliveries: [...row.deliveries] } : {}),
+                }
               }
             }, context)
-            const view = await config()
-            return await review(
-              host,
-              api,
-              {
-                role: target.role,
-                point: 'answer',
-                run,
-                latest,
-                ...(detected.length ? { signal: detected.join('; ') } : {}),
-              },
-              view.effective,
-              view.rubrics,
-              context,
-            )
+            const deadline = AbortSignal.timeout(90_000)
+            let expired!: () => void
+            const timeout = new Promise<undefined>((resolve) => {
+              expired = () => resolve(undefined)
+              deadline.addEventListener('abort', expired, { once: true })
+            })
+            const work = (async () => {
+              const view = await config()
+              deadline.throwIfAborted()
+              return review(
+                host,
+                api,
+                {
+                  role: target.role,
+                  point: 'answer',
+                  run,
+                  latest,
+                  ...(detected.length ? { signal: detected.join('; ') } : {}),
+                },
+                view.effective,
+                view.rubrics,
+                context,
+                deadline,
+              )
+            })()
+            try {
+              const result = await Promise.race([work, timeout])
+              if (deadline.aborted) return undefined
+              return settleYield(api, result ?? null, context)
+            } finally {
+              deadline.removeEventListener('abort', expired)
+            }
           } catch (error) {
             // Advisory: provider and storage failures must never hold the final answer.
             host.notice(`Advisor answer review: ${String(error)}`)

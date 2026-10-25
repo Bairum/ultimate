@@ -1,8 +1,13 @@
 import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { allowedPath, scopedPath, reviewTools, OUTPUT_LIMIT } from '../extensions/advisor/tools.ts'
+vi.mock('../lib/exec.ts', () => ({
+  exec: async () => {
+    throw Object.assign(new Error('not ignored'), { code: 1 })
+  },
+}))
 
 const folders: string[] = []
 afterEach(async () => {
@@ -36,6 +41,14 @@ it('refuses traversal, symlink escapes and secret names, and bounds reads and to
     'id_ed25519',
     '.npmrc',
     '.netrc',
+    'nested/.git/config',
+    '.git-credentials',
+    '.aws/credentials',
+    '.config/gh/hosts.yml',
+    '.pgpass',
+    'private.p12',
+    'private.pfx',
+    '.dev.vars',
     '.ultimate/conversations/db',
     '.ultimate/advisors/.env',
   ])

@@ -1,6 +1,7 @@
 import { defineDoc } from '@earendil-works/pi-durable'
 import { AdvisorState, AdvisorLedger } from './refs.ts'
 import type { AdvisorStateDoc, Role, RoleProfile, LedgerItem } from './refs.ts'
+import type { SignalState } from './signals.ts'
 
 export const State = defineDoc<AdvisorStateDoc>({
   kind: AdvisorState.kind,
@@ -28,14 +29,19 @@ export const Runs = defineDoc<{
       run?: number
       continued?: boolean
       rounds: number
+      lastRound?: number
       pending?: number
       lastActivity?: number
       lastInput?: number
       idleReviewed?: number
       signals: string[]
+      continuations?: string[]
+      deliveries?: string[]
+      scan?: SignalState
     }
   >
   settled: string[]
+  settledAt?: Record<string, number>
   deliveries: Record<string, import('./refs.ts').AdvisorNoteEntry>
 }>({
   kind: 'advisor.runs',
@@ -60,4 +66,24 @@ export function budgetExceeded(
     (spend?.total ?? 0) >= dayUsd ||
     (profile.dayUsd !== undefined && (spend?.roles[role] ?? 0) >= profile.dayUsd)
   )
+}
+/** Operational history is short-lived; public notes and spend have their own retention. */
+export function pruneRuns(
+  runs: ReturnType<typeof Runs.definition.initial>,
+  concluded: ReadonlySet<number>,
+  now: number,
+) {
+  const cutoff = now - 86_400_000
+  runs.settled = runs.settled.filter((id) => (runs.settledAt?.[id] ?? 0) >= cutoff)
+  const retained = new Set(runs.settled)
+  for (const id of Object.keys(runs.settledAt ?? {}))
+    if (!retained.has(id)) delete runs.settledAt![id]
+  for (const id of Object.keys(runs.deliveries)) if (!retained.has(id)) delete runs.deliveries[id]
+  for (const [id, row] of Object.entries(runs.conversations)) {
+    if (concluded.has(Number(id))) {
+      for (const delivery of row.deliveries ?? []) delete runs.deliveries[delivery]
+      delete runs.conversations[id]
+    } else if (row.deliveries)
+      row.deliveries = row.deliveries.filter((key) => runs.deliveries[key] !== undefined)
+  }
 }
