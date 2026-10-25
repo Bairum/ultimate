@@ -114,8 +114,10 @@ it.each(['sk-ant-test', 'sk-ant-oat-test'])(
   async (apiKey) => {
     const payload = await capture(history(200), { apiKey })
     expect(markers(payload)).toHaveLength(4)
-    expect(payload.system?.filter((block) => block.cache_control)).toHaveLength(
-      apiKey.includes('oat') ? 2 : 1,
+    expect(payload.system?.filter((block) => block.cache_control)).toHaveLength(1)
+    const cache = { type: 'ephemeral', ttl: '1h' }
+    expect(payload.system?.map((block) => block.cache_control)).toEqual(
+      apiKey.includes('oat') ? [undefined, cache] : [cache],
     )
     expect(payload.tools?.at(-1)?.cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
     expect(payload.messages.at(-1)?.content.at(-1)?.cache_control).toBeDefined()
@@ -127,9 +129,23 @@ it.each(['sk-ant-test', 'sk-ant-oat-test'])(
     const checkpoints = payload.messages.flatMap((message, index) =>
       index < payload.messages.length - 1 && message.content.at(-1)?.cache_control ? [index] : [],
     )
-    expect(checkpoints).toEqual(apiKey.includes('oat') ? [] : [384])
+    expect(checkpoints).toEqual([384])
   },
 )
+
+it('keeps the OAuth identity marker when there is no system text', async () => {
+  const context = history(200)
+  const initial = context.messages[0]
+  if (initial.role !== 'system') throw new Error('Expected leading system message')
+  const payload = await capture(
+    { messages: [{ ...initial, content: '' }, ...context.messages.slice(1)] },
+    { apiKey: 'sk-ant-oat-test' },
+  )
+  expect(payload.system).toHaveLength(1)
+  expect(payload.system?.[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
+  expect(payload.messages[384].content.at(-1)?.cache_control).toBeDefined()
+  expect(markers(payload)).toHaveLength(4)
+})
 
 it('keeps checkpoint positions and bytes stable when three messages are appended', async () => {
   const context = history(200)
