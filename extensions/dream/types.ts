@@ -56,8 +56,8 @@ export type Seed = {
   continues?: { conversation: number; handoff?: string; summary?: string }
 }
 
-/** The five passes a dream runs, in the order the journal lists them. */
-export const PASSES = ['memory', 'failures', 'tools', 'corrections', 'codify'] as const
+/** The six passes a dream runs, in the order the journal lists them. */
+export const PASSES = ['memory', 'failures', 'tools', 'corrections', 'codify', 'project'] as const
 export type PassName = (typeof PASSES)[number]
 
 /** Top-level conversations at work besides @ultimate: a dream reads finished work, not work in progress. */

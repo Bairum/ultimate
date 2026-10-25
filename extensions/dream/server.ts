@@ -1,6 +1,6 @@
 /**
  * Dream: a working session in which Ultimate processes what it learned. The user starts it; @ultimate starts a dream
- * branch that runs five passes and files a journal here; the proposals go to the user as decisions, and the approved
+ * branch that runs six passes and files a journal here; the proposals go to the user as decisions, and the approved
  * ones are followed until their branches land. Nothing here changes code, memory or storage by itself.
  */
 import { existsSync } from 'node:fs'
@@ -60,17 +60,27 @@ import type { PassName } from './types.ts'
 export const Sessions = defineDoc<{ next: number; sessions: Session[]; waiting?: Waiting }>({
   kind: DreamDoc.kind,
   checkpointWhen: () => false,
-  // Version 1 named a built-in automation's session `afterCompaction`; the record itself is the same.
-  version: 2,
+  // Version 1 named a built-in automation's session `afterCompaction`; the record itself is the same. Versions before
+  // 3 ran five passes: their sessions get `project` as waiting, or as skipped once the journal is filed.
+  version: 3,
   migrate: (value) => {
     const doc = value as { next: number; sessions: (Session & { afterCompaction?: unknown })[] }
     return {
       ...doc,
-      sessions: doc.sessions.map(({ afterCompaction, ...session }) =>
-        afterCompaction
-          ? { ...session, beforeCompaction: afterCompaction as Session['beforeCompaction'] }
-          : session,
-      ),
+      sessions: doc.sessions.map(({ afterCompaction, ...session }) => ({
+        ...session,
+        ...(afterCompaction
+          ? { beforeCompaction: afterCompaction as Session['beforeCompaction'] }
+          : {}),
+        passes: {
+          ...session.passes,
+          project:
+            session.passes.project ??
+            (session.journal
+              ? { status: 'done' as const, note: 'not part of this dream' }
+              : { status: 'waiting' as const }),
+        },
+      })),
     }
   },
   scope: 'conversation',

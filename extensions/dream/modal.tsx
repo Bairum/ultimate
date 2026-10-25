@@ -19,6 +19,7 @@ const passWhat: Record<PassName, string> = {
   tools: 'which tools fail, crawl or go unused',
   corrections: 'what you told me twice, and what I wish I could do',
   codify: 'memories that should become how I work',
+  project: 'what I keep doing by hand here, and what to build for it',
 }
 
 /** What pressing Dream does, what keeps it from starting now, and the button that starts it. */
@@ -87,7 +88,7 @@ function Body({ onClose }: { onClose: () => void }) {
         </div>
         <section className="space-y-1.5">
           <h3 className="font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
-            Five passes
+            Six passes
           </h3>
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-[13px] leading-5">
             {PASSES.map((pass) => (

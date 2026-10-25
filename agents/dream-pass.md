@@ -1,6 +1,6 @@
 ---
 name: dream-pass
-description: Runs one read-only pass of a dream (memory, failures, tools, corrections or codify) and reports findings with evidence.
+description: Runs one read-only pass of a dream (memory, failures, tools, corrections, codify or project) and reports findings with evidence.
 model: openai-codex/gpt-6.1-sol
 fast: true
 tools: [read, bash, codemode, memory]
@@ -16,6 +16,6 @@ Report:
 
 1. One line: what this pass found overall.
 2. Findings, most important first, each with its evidence (`#conversation/entry`, a trace error and its count, a commit or `path:line`) and how often it happened.
-3. Proposals: one per change, each with a slug id, a one-line title of what changes, size (S/M/L), risk, and for codify the memory slug it retires. Memory changes as add/update/delete ops with a reason each.
+3. Proposals: one per change, each with a slug id, a one-line title of what changes, size (S/M/L), risk, for codify the memory slug it retires, and for project what to build in `<project>/.ultimate/` and what it adapts. Memory changes as add/update/delete ops with a reason each.
 
 Say what you could not check.

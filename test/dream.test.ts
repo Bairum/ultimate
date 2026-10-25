@@ -72,6 +72,7 @@ it('lets one session run at a time, with every pass waiting', async () => {
     tools: { status: 'waiting' },
     corrections: { status: 'waiting' },
     codify: { status: 'waiting' },
+    project: { status: 'waiting' },
   })
   await expect(startSession(tx, 11)).rejects.toThrow('Dream session 1 is still open')
 })
