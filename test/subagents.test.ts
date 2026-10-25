@@ -141,6 +141,7 @@ async function fixture(
         ...prepared,
         harness: () => opened!.harness,
         metadata: Metadata,
+        implement: () => {},
         need: idleNeed,
         notice: (message: string) => errors.push(message),
         onOpen: (callback: () => Promise<void>) => {
