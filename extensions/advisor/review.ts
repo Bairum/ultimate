@@ -22,10 +22,12 @@ import type {
 } from './refs.ts'
 import { Reviewed } from './refs.ts'
 import { State, Runs, Ledger, budgetExceeded, utcDay } from './state.ts'
-import { advisory, isContinuation, parseNotes, renderInput } from './render.ts'
+import { isContinuation, parseNotes, renderInput } from './render.ts'
 import { deliver, route } from './deliver.ts'
 import { reviewTools, toolDefinitions, scopedPath } from './tools.ts'
 
+import { stored } from './tracking.ts'
+import { pruneNotes } from './manage.ts'
 export type ReviewRuntime = Pick<HookApi, 'memo' | 'models' | 'taskId' | 'conversationId'>
 export type ReviewInput = {
   role: Role
@@ -455,11 +457,12 @@ export async function review(
           point: input.point,
           model: modelName!,
           delivered,
-          notes: notes.map((n, i) => ({ ...n, id: `${reviewId}:${i}` })),
-        }
-        if (delivered === 'continue') {
-          row.continuations ??= []
-          row.continuations.push(advisory(advisor, notes))
+          notes: notes.map((n, i) => {
+            const noteId = `${reviewId}:${i}`
+            runs.nextRef = (runs.nextRef ?? 0) + 1
+            const ref = runs.nextRef.toString(36).padStart(5, '0')
+            return { ...n, id: noteId, ref }
+          }),
         }
         for (const n of entry.notes) {
           current.notes.push({
@@ -470,13 +473,11 @@ export async function review(
             point: input.point,
             at: Date.now(),
             status: 'open',
+            delivered,
           })
           activity.notes[n.severity]++
         }
-        while (current.notes.length > 500) {
-          const index = current.notes.findIndex((n) => n.status !== 'open')
-          current.notes.splice(index < 0 ? 0 : index, 1)
-        }
+        pruneNotes(current, Date.now())
       }
       if (!skipped && input.role === 'ultimate') {
         const ledger = await tx.doc(Ledger, id)
@@ -504,6 +505,7 @@ export async function review(
         ...(skipped ? { skipped } : {}),
       })
     }, context)
+    if (entry) stored(host, id, entry.notes, entry.delivered !== 'card')
     if (entry) {
       continuation = (await deliver(host, id, entry, context, input.run)) ?? continuation
       if (entry.delivered !== 'continue')
