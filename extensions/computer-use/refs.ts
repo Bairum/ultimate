@@ -4,6 +4,7 @@ import type { JevDecision, TaskState } from './types.ts'
 import type { Grant } from './types.ts'
 import type { JsonValue } from '@earendil-works/chord'
 import type { Step, StepOutcome, Verdict } from './types.ts'
+import type { PracticeCheck } from './types.ts'
 
 export type Session = {
   task?: TaskState
@@ -70,12 +71,23 @@ export type ComputerDetails = {
     criteria: { met: number; total: number }
     steps: { used: number; limit: number }
     lastCheck?: string
+    approval?: {
+      app: UntrustedText
+      window?: number | UntrustedText
+      consequential: UntrustedText[]
+      pixel: true
+      actions: Step['kind'][]
+      steps: number
+      minutes: number
+      foreground: boolean
+      takeover: boolean
+    }
   } | null
   status?: string
   message?: string
   summary?: { value: JsonValue; untrusted: true }
   teach?: {
-    status: TeachStatus
+    status: TeachStatus | 'practice' | 'mismatch'
     endedBy?: 'unavailable'
     frames: number
     dropped: Record<string, number>
@@ -89,6 +101,26 @@ export type ComputerDetails = {
       pitfalls?: UntrustedText[]
       approved?: boolean
       consequential: boolean
+    }[]
+    practice?: {
+      task: string
+      skill: string
+      scope: 'project' | 'personal'
+      status: 'ready' | 'mismatch'
+      title: UntrustedText
+      app: UntrustedText
+      window: { id: number; titleSubstring: UntrustedText }
+      checks: { step: number; phase: 'before' | 'after'; at: number; frame: FrameRef }[]
+      final?: FrameRef
+    }
+    mismatches?: {
+      step: number
+      phase: 'before' | 'after'
+      at: number
+      expected: UntrustedText[]
+      seen: UntrustedText[]
+      taught: FrameRef
+      fresh: FrameRef
     }[]
   }
   act?: {
@@ -190,6 +222,30 @@ export type FrameMeta = {
   diff: { appeared: string[]; disappeared: string[]; region?: [number, number, number, number] }
   inferred: string
 }
+export type FrameRef = { id: string; width: number; height: number; file?: string }
+export type TeachPractice = {
+  task: string
+  skill: string
+  scope: 'project' | 'personal'
+  status: 'ready' | 'mismatch'
+  title: string
+  app: string
+  bundle: string
+  window: { id: number; titleSubstring: string }
+  steps: TaughtStep[]
+  frames: Record<string, FrameRef>
+  checks: PracticeCheck[]
+  final?: PracticeCheck
+}
+export type TeachMismatch = {
+  step: number
+  phase: 'before' | 'after'
+  at: number
+  expected: string[]
+  seen: string[]
+  taught: FrameRef
+  fresh: FrameMeta
+}
 export type Teach = {
   segment?: {
     id: string
@@ -197,6 +253,8 @@ export type Teach = {
     bundle?: string
     onceGrantAt?: number
     window: number
+    windowTitle?: string
+    source?: { scope: 'project' | 'personal'; name: string; hash: string }
     title: string
     startedAt: number
     endsAt: number
@@ -208,6 +266,8 @@ export type Teach = {
   }
   steps?: TaughtStep[]
   saved?: { path: string; at: number }
+  practice?: TeachPractice
+  mismatches?: TeachMismatch[]
 }
 /** Forks start fresh: recording consent and private frame files must not spread to children. */
 export const TeachDoc = docRef<Teach>('computer.teach')
@@ -250,3 +310,8 @@ export const TeachRejectAction = actionRef<{ conversation: number }, Teach>(
   'computer-use',
   'teachReject',
 )
+/** {conversation, scope, name} → non-recording review; user and host only, all approvals cleared. */
+export const TeachReopenAction = actionRef<
+  { conversation: number; scope: 'project' | 'personal'; name: string },
+  Teach
+>('computer-use', 'teachReopen')
