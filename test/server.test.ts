@@ -903,7 +903,7 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
   })
   it('runs logins in the models extension: prompt, answer, cancel, no credential leak, dead flows cancelled', async () => {
     const { server, options } = await fixture(false, {
-      models: await readFile(resolvePath('extensions/models/server.ts'), 'utf8'),
+      models: `export { default, actions, docs, userActions } from ${JSON.stringify(resolvePath('extensions/models/server.ts'))}`,
     })
     vi.spyOn(server.host.modelRuntime, 'getProvider').mockReturnValue({
       id: 'stub',

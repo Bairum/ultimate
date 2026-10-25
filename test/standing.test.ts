@@ -39,7 +39,12 @@ async function fixture() {
     ultimateRoot: path,
     userHome: path,
     home: join(path, 'state'),
-    faux: fauxProvider({ models: [{ id: 'faux-1', reasoning: true }] }),
+    faux: fauxProvider({
+      models: [
+        { id: 'faux-1', reasoning: true },
+        { id: 'faux-pinned', reasoning: true },
+      ],
+    }),
   })
   const tool = defineTool({
     name: 't',
@@ -144,11 +149,11 @@ it('keeps one ownerless standing conversation, refreshes its definition and recr
   })
   expect(await host.harness.snapshot(Profile, id, ctx)).toEqual({ definition: 'x' })
   expect(await host.harness.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)).toEqual({ x: id })
-  await writeFile(file, definition('Edited', 'model: anthropic/claude-opus-4-8\n'))
+  await writeFile(file, definition('Edited', 'model: faux/faux-pinned\n'))
   await service.standing('x', ctx)
   expect(await conversation.agent(ctx)).toMatchObject({
     instructions: 'Edited',
-    model: { provider: 'anthropic', modelId: 'claude-opus-4-8' },
+    model: { provider: 'faux', modelId: 'faux-pinned' },
   })
   await expect(service.standing('missing', ctx)).rejects.toThrow('Standing agents: @x')
   await writeFile(
@@ -169,7 +174,7 @@ it('keeps one ownerless standing conversation, refreshes its definition and recr
       id: recreated,
       agent: 'x',
       kind: 'standing',
-      model: 'anthropic/claude-opus-4-8',
+      model: 'faux/faux-pinned',
       thinking: 'off',
     },
     { id, agent: 'x', kind: 'standing', model: 'faux/faux-1', thinking: 'off' },
@@ -227,14 +232,11 @@ it('keeps a model chosen in the standing conversation across refreshes unless th
     model: chosen,
     thinkingLevel: 'high',
   })
-  await writeFile(
-    file,
-    definition('Pinned', 'model: anthropic/claude-opus-4-8\nthinking: minimal\n'),
-  )
+  await writeFile(file, definition('Pinned', 'model: faux/faux-pinned\nthinking: minimal\n'))
   await service.standing('x', ctx)
   expect(await conversation.agent(ctx)).toMatchObject({
     instructions: 'Pinned',
-    model: { provider: 'anthropic', modelId: 'claude-opus-4-8' },
+    model: { provider: 'faux', modelId: 'faux-pinned' },
     thinkingLevel: 'minimal',
   })
 })

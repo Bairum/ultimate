@@ -195,11 +195,12 @@ async function launch(subagents = false, initialIntent = false, root = false, br
   }))
   const questionsRequested = vi.fn<() => Promise<void>>(async () => {})
   const install = (registry = server.host.registry) => {
-    vi.spyOn(server.host.modelRuntime, 'getAvailableSnapshot').mockImplementation(() =>
-      server.host.modelRuntime
+    vi.spyOn(server.host.modelRuntime, 'getAvailableSnapshot').mockImplementation(() => [
+      server.host.faux!.getModel(),
+      ...server.host.modelRuntime
         .getModels()
         .filter((model) => model.provider === 'openai-codex' && model.id === 'gpt-6-luna'),
-    )
+    ])
     const existing = registry.snapshot().extension('conversations')!
     registry.install(
       defineExtension({
