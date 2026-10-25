@@ -27,6 +27,7 @@ export async function withDetails<T extends { structuredOutput?: JsonValue; deta
     ...Object.values(state?.spec.scope.params ?? {}),
     ...Object.values(state?.pendingChange?.scope?.params ?? {}),
     ...strings(record(input.goal).params),
+    ...strings(input.params),
     ...strings(record(record(input.spec).scope).params),
     ...strings(record(input.scope).params),
     ...actions.flatMap((action) =>
@@ -65,6 +66,23 @@ export async function withDetails<T extends { structuredOutput?: JsonValue; deta
         criteria: { met: state.criteriaMet?.length ?? 0, total: state.spec.criteria.length },
         steps: { used: state.counters.steps, limit: state.spec.stop.steps },
         lastCheck: state.ledger.findLast((entry) => entry.kind === 'checkpoint')?.reason,
+        ...(state.spec.approval
+          ? {
+              approval: {
+                ...state.spec.approval,
+                app: { text: state.spec.approval.app, untrusted: true as const },
+                window:
+                  typeof state.spec.approval.window === 'string'
+                    ? { text: state.spec.approval.window, untrusted: true as const }
+                    : state.spec.approval.window,
+                takeover: !!state.runTakeover,
+                consequential: state.spec.scope.consequential.map((text) => ({
+                  text,
+                  untrusted: true as const,
+                })),
+              },
+            }
+          : {}),
       }
     : null
   if (name === 'computer_act' && !details.act) {
@@ -94,11 +112,15 @@ export async function withDetails<T extends { structuredOutput?: JsonValue; deta
         ...(typeof data.message === 'string' ? { message: data.message } : {}),
       },
       // Protocol enums are not payload echoes; keep them usable by card renderers.
-      (key, v: unknown) =>
-        typeof v === 'string' &&
-        !['kind', 'status', 'mode', 'verdict', 'outcome', 'escalationReason', 'role'].includes(key)
+      function (this: unknown, key, v: unknown) {
+        return typeof v === 'string' &&
+          this !== task?.approval?.actions &&
+          !['kind', 'status', 'mode', 'verdict', 'outcome', 'escalationReason', 'role'].includes(
+            key,
+          )
           ? redact(v)
-          : v,
+          : v
+      },
     ),
   ) as ComputerDetails
   return { ...value, details: safe }

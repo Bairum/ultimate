@@ -17,6 +17,7 @@ import {
   parseRegions,
   matchLabel,
   screenshotPoint,
+  normalizeLabel,
 } from './perception.ts'
 
 export const hash = (value: unknown) =>
@@ -166,9 +167,21 @@ export const preflightGates: Gate[] = [
         }
   },
 ]
+function inApproval(ctx: GateContext) {
+  return (
+    !!ctx.session.task &&
+    !!ctx.identity &&
+    !!ctx.observation &&
+    task.approvalScope(ctx.session.task, ctx.identity, ctx.observation, ctx.step.kind)
+  )
+}
+export function runTakeover(ctx: GateContext) {
+  return !!ctx.session.task?.runTakeover && inApproval(ctx)
+}
 export async function frontmostGate(ctx: GateContext): Promise<Refusal | undefined> {
   const takeover =
-    ctx.foreground && ctx.session.takeovers.some((t) => matchesApp(ctx.identity!, t.app))
+    ctx.foreground &&
+    (runTakeover(ctx) || ctx.session.takeovers.some((t) => matchesApp(ctx.identity!, t.app)))
   if (ctx.foreground && !takeover)
     return { refuse: 'user_active', message: 'Foreground delivery requires a user takeover.' }
   const { apps } = await listApps(ctx.driver, ctx.signal)
@@ -185,8 +198,10 @@ export async function frontmostGate(ctx: GateContext): Promise<Refusal | undefin
 }
 export const conversationBudgetGate: Gate = (ctx) =>
   ctx.count >= 20 ||
-  ctx.session.budget.steps >= 60 ||
-  (ctx.session.budget.startedAt > 0 && Date.now() - ctx.session.budget.startedAt >= 15 * 60_000)
+  ctx.session.budget.steps >= (inApproval(ctx) ? ctx.session.task!.spec.approval!.steps : 60) ||
+  (ctx.session.budget.startedAt > 0 &&
+    Date.now() - ctx.session.budget.startedAt >=
+      (inApproval(ctx) ? ctx.session.task!.spec.approval!.minutes : 15) * 60_000)
     ? {
         refuse: 'budget',
         message:
@@ -204,7 +219,10 @@ export const dispatchGates: Gate[] = [
     if (
       ctx.observation.degraded &&
       config.foregroundForDegraded !== 'background' &&
-      !(ctx.foreground && ctx.session.takeovers.some((t) => matchesApp(ctx.identity!, t.app)))
+      !(
+        ctx.foreground &&
+        (runTakeover(ctx) || ctx.session.takeovers.some((t) => matchesApp(ctx.identity!, t.app)))
+      )
     )
       return {
         refuse: 'takeover_required',
@@ -277,6 +295,17 @@ export const dispatchGates: Gate[] = [
       return undefined
     }
     let risky = ctx.unlabelledPixel || consequential(ctx.step, ctx.target).hit
+    // A whole verified effective label, never a substring or an unlabelled pixel, is pre-approved only in this scope.
+    if (
+      !ctx.unlabelledPixel &&
+      ctx.target?.label &&
+      inApproval(ctx) &&
+      ctx.session.task!.spec.scope.consequential.some(
+        (label) =>
+          !!normalizeLabel(label) && normalizeLabel(label) === normalizeLabel(ctx.target!.label!),
+      )
+    )
+      return undefined
     const classify = ctx.host.want(ClassifyApi)
     if (!risky && classify) {
       const redact = redactor([

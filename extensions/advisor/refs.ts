@@ -108,6 +108,12 @@ export type NoteResponse = {
   /** Entry ids, commits or tool calls showing it. */
   evidence?: string
   at: number
+  /** For `judged`: TypeSafe's Jev typed judgment, or the advisor model when Jev was unsure or unavailable. */
+  judge?: 'jev' | 'sol'
+  /** Jev's confidence in its choice, 0–1 (also kept when it fell below the threshold and the advisor model decided). */
+  confidence?: number
+  /** The judging model, e.g. `jev-1.14.0` or `openai-codex/gpt-6.1-sol`. */
+  model?: string
 }
 
 export type StoredNote = {

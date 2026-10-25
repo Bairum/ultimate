@@ -134,6 +134,14 @@ export const sources: Record<NonNullable<StoredNote['response']>['source'], stri
   auto: 'auto',
 }
 
+/** Who judged a response, and how sure Jev was: "Jev 92%", or "Sol · Jev 40%" when Jev was unsure. */
+export function judgeLabel(response: StoredNote['response']) {
+  if (response?.source !== 'judged' || !response.judge) return undefined
+  const jev =
+    response.confidence === undefined ? '' : `Jev ${Math.round(response.confidence * 100)}%`
+  return response.judge === 'jev' ? jev || 'Jev' : ['Sol', jev].filter(Boolean).join(' · ')
+}
+
 export const reasons: Record<DismissReason, string> = {
   'false-alarm': 'false alarm',
   handled: 'already handled',
