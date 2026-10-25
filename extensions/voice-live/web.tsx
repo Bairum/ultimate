@@ -6,6 +6,7 @@ import {
   LoaderCircleIcon,
   MicIcon,
   MicOffIcon,
+  Maximize2Icon,
   Minimize2Icon,
   PhoneOffIcon,
   SquareArrowOutUpRightIcon,
@@ -197,7 +198,11 @@ function LiveIndicator() {
   const actions = useUltimate()
   const phone = useViewport() === 'phone'
   const now = useNow(1000, mode.phase === 'live')
+  const { main } = useIds()
   if (mode.phase === 'off' && !mode.problem) return null
+  // On @ultimate's conversation, Voice's own card (collapsed or expanded) already says all this: one indicator only.
+  if (mode.phase !== 'off' && actions.surface === 'agent' && actions.conversationId === main)
+    return null
   if (mode.phase === 'off')
     return (
       <span
@@ -434,10 +439,16 @@ function Stage() {
   }, [inFront, width, phone])
 
   if (!isMain || voice === undefined) return null
+  const collapsed = mode.phase !== 'off' && !inFront && !sideOpen
   const still = reduced()
   const away = phone ? 'translateY(105%)' : 'translateX(14%) scale(0.96)'
   return (
     <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden" ref={ref}>
+      {collapsed && (
+        <ConversationScope id={voice}>
+          <Collapsed phone={phone} />
+        </ConversationScope>
+      )}
       {inFront && phone && (
         <button
           className="pointer-events-auto absolute inset-x-0 top-0 flex h-11 cursor-pointer items-center justify-center gap-2 bg-gradient-to-b from-background via-background/90 to-background/40 font-mono text-[11px] text-muted-foreground"
@@ -481,13 +492,14 @@ function Stage() {
                   <Kbd>{keyHint}</Kbd> back
                 </span>
                 <button
-                  aria-label="Send Voice back; it keeps listening"
-                  className="flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+                  aria-label="Collapse Voice; it keeps listening"
+                  className="flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[12px] text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
                   onClick={() => live.setFront(false)}
-                  title={`Send Voice back · keeps listening · ${keyHint}`}
+                  title={`Collapse · keeps listening · ${keyHint}`}
                   type="button"
                 >
                   <Minimize2Icon className="size-3.5" />
+                  Collapse
                 </button>
               </span>
             </header>
@@ -496,6 +508,117 @@ function Stage() {
         </section>
       )}
     </div>
+  )
+}
+
+/**
+ * Voice collapsed: a small card at the side of @ultimate's conversation while the session keeps listening. It says what
+ * is happening now (with the words being heard), and a tap brings the full Voice view back.
+ */
+function Collapsed({ phone }: { phone: boolean }) {
+  const mode = useMode()
+  const step = useStep(mode)
+  const asleep = mode.phase === 'paused'
+  return (
+    <div
+      className={cn(
+        'pointer-events-auto absolute flex items-center gap-1 rounded-2xl border bg-background/95 p-1 shadow-xl shadow-black/30 backdrop-blur motion-safe:animate-fade-in',
+        step.step === 'working' || step.step === 'answer' || step.step === 'waiting'
+          ? 'border-brand/40'
+          : 'border-border',
+        phone ? 'inset-x-3 top-2' : 'top-3 right-5 w-80',
+      )}
+      data-voice-live-collapsed={step.step}
+    >
+      <button
+        aria-label={`Voice: ${step.step} · expand`}
+        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-xl p-1 text-left outline-none hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring"
+        onClick={() => live.setFront(true)}
+        title={`Expand Voice · ${keyHint}`}
+        type="button"
+      >
+        <StepMark mode={mode} size="small" step={step} />
+        <span className="min-w-0 flex-1">
+          <StepLine mode={mode} step={step} />
+        </span>
+        <Maximize2Icon className="mr-1 size-3.5 shrink-0 text-muted-foreground" />
+      </button>
+      {asleep ? (
+        <button
+          className="h-8 shrink-0 cursor-pointer rounded-lg px-2 text-[12px] text-brand outline-none hover:bg-brand/15 focus-visible:ring-1 focus-visible:ring-ring"
+          onClick={() => void live.open(mode.waiting)}
+          type="button"
+        >
+          {mode.waiting ? 'Hear it' : 'Resume'}
+        </button>
+      ) : (
+        <button
+          aria-label={mode.muted ? 'Unmute microphone' : 'Mute microphone'}
+          aria-pressed={mode.muted}
+          className={cn(
+            'flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50',
+            mode.muted && 'text-warning hover:text-warning',
+          )}
+          disabled={mode.phase !== 'live'}
+          onClick={() => live.setMuted(!mode.muted)}
+          title={mode.muted ? 'Unmute' : 'Mute'}
+          type="button"
+        >
+          {mode.muted ? <MicOffIcon className="size-4" /> : <MicIcon className="size-4" />}
+        </button>
+      )}
+      <button
+        aria-label="End voice relay"
+        className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-error/15 hover:text-error focus-visible:ring-1 focus-visible:ring-ring"
+        onClick={live.end}
+        title="End voice relay"
+        type="button"
+      >
+        <PhoneOffIcon className="size-4" />
+      </button>
+    </div>
+  )
+}
+
+/** The collapsed card's two lines: the step, then the words being heard or what it is about. */
+function StepLine({ step, mode }: { step: Step; mode: VoiceMode }) {
+  const title =
+    step.step === 'hearing'
+      ? 'Hearing you…'
+      : step.step === 'speaking'
+        ? 'Speaking'
+        : step.step === 'deciding'
+          ? 'Thinking it over'
+          : step.step === 'working'
+            ? '@ultimate is on it'
+            : step.step === 'answer' || step.step === 'waiting'
+              ? 'Answer ready'
+              : step.step === 'connecting'
+                ? 'Connecting…'
+                : step.step === 'paused'
+                  ? 'Listening paused'
+                  : step.step === 'muted'
+                    ? 'Muted'
+                    : step.step === 'ending'
+                      ? 'Ending…'
+                      : 'Listening'
+  const detail =
+    step.step === 'hearing' && mode.partial
+      ? mode.partial
+      : step.step === 'working'
+        ? step.request
+        : 'Voice · tap to expand'
+  return (
+    <>
+      <span className="block truncate text-[13px] leading-tight font-semibold">{title}</span>
+      {/* The newest words stay in view: the line is cut at its start, never its end. */}
+      <span
+        className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground [direction:rtl]"
+        title={detail}
+      >
+        <bdi>{detail}</bdi>
+      </span>
+    </>
   )
 }
 
@@ -621,13 +744,22 @@ function StepText({ step, mode }: { step: Step; mode: VoiceMode }) {
 }
 
 /** The step's mark: the live level while the user talks, a calm spinner while something works, else the mic. */
-function StepMark({ step, mode }: { step: Step; mode: VoiceMode }) {
+function StepMark({
+  step,
+  mode,
+  size = 'large',
+}: {
+  step: Step
+  mode: VoiceMode
+  size?: 'small' | 'large'
+}) {
   const busy = ['connecting', 'ending', 'deciding', 'working', 'answer'].includes(step.step)
   const hot = mode.phase === 'live' && !mode.muted
   return (
     <span
       className={cn(
-        'flex size-11 shrink-0 items-center justify-center rounded-full transition-colors',
+        'flex shrink-0 items-center justify-center rounded-full transition-colors',
+        size === 'small' ? 'size-9 [&_svg]:size-4' : 'size-11',
         busy
           ? 'bg-brand/12 text-brand'
           : step.step === 'speaking'

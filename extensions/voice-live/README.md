@@ -51,6 +51,10 @@ sidebar's phase and elapsed time), then the spoken answer, unfolding to @ultimat
 `source` is the answer entry) with Open in @ultimate; a notice turns it failed. Heard lines and Voice's own small
 talk stay quiet, tool cards are hidden and ordinary agent prose is quiet.
 
+Collapse (or Alt+V) sends Voice back without stopping it: on @ultimate's conversation a small card at the top right
+(full width under the header on phones) shows the step and the words being heard, with Mute, End and expand. Elsewhere
+the title-bar pill says voice is live; on @ultimate the card replaces it, so there is one indicator at a time.
+
 Voice mode outlasts individual sessions. After two quiet minutes the session closes and listening pauses; an answer
 wakes it (or waits for a tap if browser activation blocks it). A pending forwarded request gets a short “Still on it”
 after 20 seconds, then every 45 seconds. Acknowledgements do not clear that pending state. Mute, End, the level meter,
