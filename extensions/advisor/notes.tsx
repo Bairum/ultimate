@@ -15,6 +15,7 @@ import { ROLES, SEVERITIES } from './refs.ts'
 import type { DismissReason, NoteSelection, Role, Severity, StoredNote } from './refs.ts'
 import {
   isLive,
+  judgeLabel,
   manage,
   OUTCOMES,
   outcomeOf,
@@ -609,7 +610,13 @@ function NoteItem({
               <span
                 className={outcomes[outcome].text}
                 data-response={outcome}
-                title={[outcomes[outcome].title, note.response?.reason].filter(Boolean).join('\n')}
+                title={[
+                  outcomes[outcome].title,
+                  judgeLabel(note.response) && `judged by ${judgeLabel(note.response)}`,
+                  note.response?.reason,
+                ]
+                  .filter(Boolean)
+                  .join('\n')}
               >
                 {outcomes[outcome].word}
               </span>

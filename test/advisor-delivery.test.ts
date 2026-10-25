@@ -25,6 +25,7 @@ import { renderInput } from '../extensions/advisor/render.ts'
 import { Standing, Profile } from '../extensions/subagents/api.ts'
 import type { AdvisorNoteEntry, Role } from '../extensions/advisor/refs.ts'
 import { closeOut, expireNotes } from '../extensions/advisor/lifecycle.ts'
+import { ClassifyApi } from '../extensions/classify/api.ts'
 vi.mock('../lib/exec.ts', () => ({
   exec: async () => {
     throw Object.assign(new Error('not ignored'), { code: 1 })
@@ -615,6 +616,60 @@ it('judges read notes once, resolves acknowledgements without a model, and prese
     dismissReason: 'false-alarm',
     response: { status: 'disputed', source: 'ack' },
   })
+})
+it('judges with Jev first and falls back to the advisor model below its confidence threshold', async () => {
+  const read = async (f: Awaited<ReturnType<typeof fixture>>) => {
+    const note = await lifecycleNote(f)
+    await f.hooks.beforeRequest(
+      {
+        messages: [
+          { role: 'user', content: `<advisory id="${note.ref}">test</advisory>`, timestamp: 0 },
+        ],
+      },
+      f.api(),
+      context,
+    )
+  }
+  const jev = (choice: string, confidence: number) => {
+    const ask = vi.fn<() => Promise<unknown>>(async () => ({
+      model: 'jev-1.14.0',
+      answers: { response: { type: 'choice', choice, confidence, probabilities: {} } },
+      usage: { inputTokens: 1_000_000 },
+    }))
+    return { ask, want: (api: unknown) => (api === ClassifyApi ? { ask } : undefined) }
+  }
+  const sure = await fixture()
+  await read(sure)
+  const confident = jev('deferred', 0.9)
+  Object.assign(sure.host, { want: confident.want })
+  const calls = sure.stream.mock.calls.length
+  const spent = async () =>
+    (await sure.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.spend[utcDay(Date.now())]
+      ?.roles.worker ?? 0
+  const before = await spent()
+  await closeOut(sure.host, sure.api(), { run: 100, latest: 'later' }, sure.config, context)
+  expect(sure.stream).toHaveBeenCalledTimes(calls)
+  expect(confident.ask).toHaveBeenCalledOnce()
+  const state = (await sure.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
+  expect(state.notes[0].response).toMatchObject({
+    status: 'deferred',
+    source: 'judged',
+    judge: 'jev',
+    confidence: 0.9,
+    model: 'jev-1.14.0',
+  })
+  // A million input tokens at Jev's $0.042 per million.
+  expect((await spent()) - before).toBeCloseTo(0.042)
+  const unsure = await fixture()
+  await read(unsure)
+  Object.assign(unsure.host, { want: jev('addressed', 0.4).want })
+  unsure.response.content = [
+    fauxText(JSON.stringify({ status: 'ignored', reason: 'no related change', evidence: '#30' })),
+  ]
+  await closeOut(unsure.host, unsure.api(), { run: 100, latest: 'done' }, unsure.config, context)
+  expect(
+    (await unsure.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0].response,
+  ).toMatchObject({ status: 'ignored', judge: 'sol', confidence: 0.4, reason: 'no related change' })
 })
 it('records late and unread notes on the five-minute tick and reports lifecycle stats', async () => {
   const interval = vi.spyOn(globalThis, 'setInterval')
