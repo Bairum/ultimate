@@ -148,8 +148,32 @@ it('writes a card without model context, and a note as passive user context', as
     delivered: 'card',
     notes: notes.map((n) => ({ ...n, id: 'n1' })),
   }
+  await f.harness.commit(async (tx) => {
+    const state = await tx.doc(State, ROOT_CONVERSATION_ID)
+    for (const id of ['n1', 'n2'])
+      state.notes.push({
+        ...entry.notes[0],
+        id,
+        conversation: f.id,
+        advisor: entry.advisor,
+        role: entry.role,
+        point: entry.point,
+        at: Date.now(),
+        status: 'open',
+      })
+  }, context)
   await deliver(f.host, f.id, entry, context)
-  await deliver(f.host, f.id, { ...entry, review: 'note', delivered: 'note' }, context)
+  await deliver(
+    f.host,
+    f.id,
+    {
+      ...entry,
+      review: 'note',
+      delivered: 'note',
+      notes: entry.notes.map((n) => ({ ...n, id: 'n2' })),
+    },
+    context,
+  )
   const conversation = (await f.harness.conversation(f.id, context))!
   await until(async () => (await conversation.context(context)).messages.length === 1)
   const entries = (await conversation.entries({ order: 'ascending' }, 20, undefined, context)).items
@@ -160,6 +184,13 @@ it('writes a card without model context, and a note as passive user context', as
     entries.find((e) => (e.data as AdvisorNoteEntry)?.review === 'note')?.model?.[0],
   ).toMatchObject({ role: 'user', content: expect.stringContaining('<advisory') })
   expect((await conversation.context(context)).messages).toHaveLength(1)
+  const stored = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes
+  expect(stored.find((n) => n.id === 'n1')?.entry).toBe(
+    entries.find((e) => (e.data as AdvisorNoteEntry)?.review === 'card')?.id,
+  )
+  expect(stored.find((n) => n.id === 'n2')?.entry).toBe(
+    entries.find((e) => (e.data as AdvisorNoteEntry)?.review === 'note')?.id,
+  )
 })
 it('continues at most once per run, even on a new generation', async () => {
   const f = await fixture()
@@ -409,7 +440,9 @@ it.each(['idle', 'new run'] as const)(
       else live.run!.inputs = [200 as never]
     }, context)
     const recipient = (await f.harness.conversation(f.id, context))!
-    const submit = vi.spyOn(recipient, 'submit').mockResolvedValue({} as never)
+    const submit = vi
+      .spyOn(recipient, 'submit')
+      .mockResolvedValue({ status: async () => ({ type: 'write', status: 'queued' }) } as never)
     const conversation = vi.spyOn(f.harness, 'conversation').mockResolvedValue(recipient)
     try {
       const entry: AdvisorNoteEntry = {

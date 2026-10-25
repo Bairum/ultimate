@@ -1,10 +1,11 @@
 import type { Context } from '@earendil-works/chord'
-import type { ConversationId } from '@earendil-works/pi-durable'
-import { LiveDoc } from '@earendil-works/pi-durable'
+import type { ConversationId, Submission } from '@earendil-works/pi-durable'
+import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { AdvisorNoteEntry, Role, RoleProfile, ReviewPoint, Threshold } from './refs.ts'
 import { advisory, rank } from './render.ts'
 import type { ReviewNote } from './render.ts'
+import { State } from './state.ts'
 
 function reaches(notes: ReviewNote[], threshold: Threshold | undefined) {
   return (
@@ -49,13 +50,14 @@ export async function deliver(
   const draft = { kind: 'advisor.note', data: entry }
   const requestId = `advisor:${entry.review}`
   // Writes permit an entry without model messages: cards never enter the model context.
+  let submission: Submission
   if (entry.delivered === 'steer')
-    await conversation.submit(
+    submission = await conversation.submit(
       { type: 'input', whenBusy: 'steer', requestId, entry: draft, content },
       context,
     )
   else
-    await conversation.submit(
+    submission = await conversation.submit(
       {
         type: 'write',
         requestId,
@@ -68,5 +70,13 @@ export async function deliver(
       },
       context,
     )
+  const status = await submission.status(context)
+  if (status.entry !== undefined)
+    await host.harness().commit(async (tx) => {
+      const state = await tx.doc(State, ROOT_CONVERSATION_ID)
+      const ids = new Set(entry.notes.map((note) => note.id))
+      for (const note of state.notes)
+        if (note.conversation === id && ids.has(note.id)) note.entry = status.entry
+    }, context)
   return entry.delivered === 'continue' ? content : undefined
 }
