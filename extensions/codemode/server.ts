@@ -37,7 +37,8 @@ import { shortTitle } from '../../lib/title.ts'
 import { apiSource, apiSummaries } from '../../lib/api-files.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { ActionContext } from '../../server/actions.ts'
-import { READ_BYTES, READS, readProject } from './projects.ts'
+import { READS, readProject } from './projects.ts'
+import { REMOTE_BYTES } from '../../lib/remote.ts'
 import type { Read } from './projects.ts'
 import { closedChapter, id, limit, readChapter } from './chapters.ts'
 import type { HistoryRead } from './chapters.ts'
@@ -222,6 +223,7 @@ function globals(
       const project =
         options && typeof options === 'object' && 'project' in options ? options.project : undefined
       if (project !== undefined) {
+        // Checked here: `project` is stripped below, so the chapter read never sees the pair.
         if (
           options &&
           typeof options === 'object' &&
@@ -296,7 +298,7 @@ function globals(
     {
       name: 'trace',
       description:
-        'Recorded calls (service, action, reactor, tool), newest `limit` oldest first; filter by trace id, conversation or ISO `since`.',
+        'Recorded calls (service, action, reactor, tool, model): the newest `limit` (default 100, at most 1000), oldest first; filter by trace id, conversation or ISO `since`.',
       signature:
         '(query?: { trace?: string; conversation?: number; since?: string; limit?: number; project?: string }): Promise<{ id: string; parent?: string; trace: string; at: string; ms: number; caller: string; callee: string; kind: string; name: string; ok: boolean; error?: string; args?: string; result?: string; conversation?: number; task?: number; entry?: number }[]>',
       execute: read('trace', 0),
@@ -404,7 +406,8 @@ function globals(
     },
     {
       name: 'doc',
-      description: 'Read an exported extension document by kind; defaults to this conversation.',
+      description:
+        'Read an exported extension document or pi.agent, pi.inbox, pi.live or pi.usage by kind; defaults to this conversation, or to conversation 1 in another project.',
       signature:
         '(kind: string, conversationId?: number, options?: { project?: string }): Promise<unknown>',
       // Another project has no conversation of yours to default to: it reads conversation 1 unless one is named.
@@ -457,7 +460,7 @@ export const actions = {
       args ?? [],
     )
     const result = JSON.parse(JSON.stringify(value ?? null)) as JsonValue
-    if (Buffer.byteLength(JSON.stringify(result)) > READ_BYTES)
+    if (Buffer.byteLength(JSON.stringify(result)) > REMOTE_BYTES)
       throw new Error('The answer is larger than 1 MiB; ask for a smaller limit')
     return result
   },
@@ -482,6 +485,13 @@ export default function codemode(host: ExtensionHost) {
         background?: boolean
       }[] = []
       const subagentAnswers = new Set<number>()
+      /** Stream a settled call as `✓ <name> <args> <ms>ms`, the line the card parses while the script runs. */
+      const log = (name: string, call: (typeof calls)[number]) => {
+        if (!context.abortSignal?.aborted)
+          api.output(
+            `${call.status === 'ok' ? '✓' : '✗'} ${name} ${(JSON.stringify(call.args) ?? '').slice(0, 200)} ${call.ms}ms\n`,
+          )
+      }
       const record = (name: string, args: unknown[]) => {
         const started = performance.now()
         const call: (typeof calls)[number] = { name, args, status: 'running', ms: 0 }
@@ -489,10 +499,7 @@ export default function codemode(host: ExtensionHost) {
         return (status: string) => {
           call.status = status
           call.ms = Math.round(performance.now() - started)
-          if (!context.abortSignal?.aborted)
-            api.output(
-              `${status === 'ok' ? '✓' : '✗'} ${name} ${(JSON.stringify(args) ?? '').slice(0, 200)} ${call.ms}ms\n`,
-            )
+          log(name, call)
         }
       }
       const controller = new AbortController()
@@ -587,10 +594,7 @@ export default function codemode(host: ExtensionHost) {
           } finally {
             active = false
             call.ms = Math.round(performance.now() - started)
-            if (!context.abortSignal?.aborted)
-              api.output(
-                `${call.status === 'ok' ? '✓' : '✗'} tools.${call.name} ${(JSON.stringify(args) ?? '').slice(0, 200)} ${call.ms}ms\n`,
-              )
+            log(`tools.${call.name}`, call)
           }
         },
       }))
@@ -663,7 +667,7 @@ export default function codemode(host: ExtensionHost) {
         await summarize(api, context, calls, result.ok ? undefined : result.error.message)
         if (result.ok) {
           if (result.storeWrites.delete.length || Object.keys(result.storeWrites.set).length) {
-            // Durable 1.0 commits this separately: a crash can retain writes while reporting the call interrupted.
+            // Pi Durable has no result transaction, so this commits separately: a crash can retain writes while reporting the call interrupted.
             await api.commit(async (tx) => {
               const store = await tx.doc(Store, api.conversationId)
               for (const key of result.storeWrites.delete) delete store[key]

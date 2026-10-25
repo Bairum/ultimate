@@ -50,7 +50,10 @@ outside the caller's commit (Pi's compaction, the machine's health file, an uplo
 its own right after it. For debugging what the user did: `user.input` (a typed prompt, steer or follow-up, an
 answer or dismissal, a review: its conversation, entry or message and length, never the text) and
 `ui.navigated` (the surface or Agent's conversation changed, reported by the browser after a second and deduped),
-each with the browser's `device` label and, through Tailscale Serve, the `login`. A typed input and a review commit
+each with the browser's `device` label and, through Tailscale Serve, the `login` and the client's tailnet `address`
+(`100.64.0.0/10` or `fd7a:115c:a1e0::/48`, for example `100.64.0.2`; any other forwarded address is dropped). UI
+action calls get the same `Device` as `ctx.device`. A `beforeInput` hook gets no device: it sees only the input entry
+and runs for queued inputs too, so record the device from a UI action instead. A typed input and a review commit
 right after Pi admits them, which has no hook for queued inputs; answers commit with their reply. Something the user must see
 exactly once and that feeds the result the owner reports, like the lander's deploy handoff, stays a call, idempotent by
 request id; when it calls up the layering, it goes through an extension point (below).

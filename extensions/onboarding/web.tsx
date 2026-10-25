@@ -8,6 +8,7 @@ import {
   useAction,
   useConversation,
   useDialog,
+  useDocOf,
   useEvent,
   useExtensions,
   useSystem,
@@ -21,7 +22,14 @@ import { IsolationAction } from '../workspaces/ui.tsx'
 import { StartComposer } from './survey.tsx'
 import { ExtensionsPanel } from './panel.tsx'
 import { firstRunDialog, gitDialog, projectDialog } from './parts.tsx'
-import { ChooseAction, HelpAction, StartAction, StatusAction, WalkthroughAction } from './refs.ts'
+import {
+  ChooseAction,
+  HelpAction,
+  StartAction,
+  StartsDoc,
+  StatusAction,
+  WalkthroughAction,
+} from './refs.ts'
 
 function useIsolation() {
   const workspaces = useExtensions().some((extension) => extension.name === 'workspaces')
@@ -131,15 +139,19 @@ function SetupLink({ card, children }: { card: 'project' | 'git'; children: stri
     </Tooltip>
   )
 }
+/** Dismissing Start here quiets the setup reminders too; ⌘K Get ready… and the Extensions panel still reach them. */
+const useDismissed = () => useDocOf(1, StartsDoc)?.dismissed === true
 function Undecided() {
   const project = useSystem()?.project
-  return project?.config && project.decision === null ? (
+  const dismissed = useDismissed()
+  return !dismissed && project?.config && project.decision === null ? (
     <SetupLink card="project">project setup</SetupLink>
   ) : null
 }
 function NoGit() {
   const reason = useIsolation()?.reason
-  return reason ? <SetupLink card="git">set up git</SetupLink> : null
+  const dismissed = useDismissed()
+  return reason && !dismissed ? <SetupLink card="git">set up git</SetupLink> : null
 }
 
 type Choice = { card: string; summary: string; toolCallId: string }

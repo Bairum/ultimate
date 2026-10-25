@@ -639,7 +639,7 @@ it("reads another running project's history through its API, and names a project
   expect(unknown.text).toContain('poe2-rust')
 })
 
-it('lists conversations with their title and cwd, since the prompt no longer does', async () => {
+it('lists conversations with their title and cwd', async () => {
   const { server } = await fixture()
   const create = async (title: string) =>
     ((await post(server, '/api/conversations', { title })).data as { id: number }).id

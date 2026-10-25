@@ -1,12 +1,13 @@
 /** Agent definitions: parsing, discovery across the `agents/` folders, and the agent change a definition makes. */
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { readdir, readFile, rm } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { clampThinkingLevel } from '@earendil-works/pi-ai'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { Agent, AgentChange } from '@earendil-works/pi-durable'
 import { parseFrontmatter, resolveCliModel } from '@earendil-works/pi-coding-agent'
 import type { ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent'
 import type { Source } from '../server/project.ts'
+import { writeTextAtomically } from './json-file.ts'
 // oxlint-disable-next-line no-restricted-imports -- agent discovery follows the core project trust decision
 import { projectDecision, useProjectSetup } from '../server/project-setup.ts'
 // oxlint-disable-next-line no-restricted-imports -- extension-owned definitions follow the same enabled folders as their facets
@@ -463,21 +464,8 @@ export async function saveDefinition(
   const text = serializeDefinition(name, frontmatter, instructions)
   // Reading it back checks the name before it becomes a path.
   const definition = readDefinition(text, join(directory, `${name}.md`), modelRuntime)
-  await writeAtomically(definition.path, text)
+  await writeTextAtomically(definition.path, text)
   return { ...definition, source: scope }
-}
-
-async function writeAtomically(path: string, text: string) {
-  const directory = dirname(path)
-  await mkdir(directory, { recursive: true })
-  const temporary = join(directory, `.${basename(path)}.${process.pid}.${Date.now()}.tmp`)
-  try {
-    await writeFile(temporary, text)
-    await rename(temporary, path)
-  } catch (error) {
-    await rm(temporary, { force: true })
-    throw error
-  }
 }
 
 /**
@@ -573,7 +561,7 @@ export async function saveOverlay(
   const overlay = `---\n${[`name: ${scalar(name)}`, `addTools: ${toolList(addTools)}`, ...settings].join('\n')}\n---\n${body ? `\n${body}\n` : ''}`
   // Reading it back resolves the model, so an unknown one writes nothing.
   parseOverlay(overlay, path, modelRuntime)
-  await writeAtomically(path, overlay)
+  await writeTextAtomically(path, overlay)
   return { path }
 }
 

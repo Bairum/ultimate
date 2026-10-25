@@ -1,4 +1,4 @@
-One compact, read-only summary of this Ultimate for dashboards that poll several instances: the clone's commit, failed runs, provider health, open questions to the user and how many conversations are busy. On by default; it does nothing until called.
+One compact, read-only summary of this Ultimate for dashboards that poll several instances: the clone's commit, failed runs, provider health, open questions to the user, how many conversations are busy and which extensions are on or broken. On by default; it does nothing until called.
 
 ## Action
 
@@ -31,7 +31,12 @@ One compact, read-only summary of this Ultimate for dashboards that poll several
     "count": 1,
     "first": { "text": "questions 1. Ship it?", "conversation": 57, "message": 812 }
   },
-  "busy": 3
+  "busy": 3,
+  "extensions": [
+    { "name": "status", "source": "builtin", "enabled": true },
+    { "name": "cloud", "source": "builtin", "enabled": false },
+    { "name": "deploys", "source": "user", "enabled": true, "error": "SyntaxError: …" }
+  ]
 }
 ```
 
@@ -42,5 +47,6 @@ Each field comes from the API of the extension that owns it, never from its docu
 - `providers`: Health's providers with a login on this machine (`HealthApi.providers()`), with `state` `ok`, `failing` or `unknown`, and the error of a failing one. Absent while Health is off.
 - `questions`: the messages waiting on the user's answer (`MessagesApi.openQuestions()`), `first` the oldest, its text the one line its card shows.
 - `busy`: conversations running a turn now.
+- `extensions`: every discovered extension from the host's registry (`host.extensions()`), with its `source` (`builtin`, `user` or `project`), whether it is `enabled`, and `error` when its server facet failed to load. A dashboard compares the enabled set with what it expects, and spots a broken extension after a rollout.
 
 Another machine calls it over the tailnet like any action, with an `Origin` header of the instance's own origin: `POST <tailnet url>/api/extensions/status/actions/status` with `{ "args": { "since": 1793025600000 } }` answers `{ "result": Status }`. The caller must be in that instance's `tailscale.allow`. It reads only memory, a small file and two documents, so polling every 30 seconds is cheap; the trace counts repeated calls instead of writing each.

@@ -66,6 +66,12 @@ export async function status(host: ExtensionHost, since: number, now: number): P
         : {}),
     },
     busy: host.conversations().filter((conversation) => conversation.busy).length,
+    extensions: host.extensions().map(({ name, source, enabled, server }) => ({
+      name,
+      source,
+      enabled,
+      ...(server?.error ? { error: server.error } : {}),
+    })),
   }
 }
 
