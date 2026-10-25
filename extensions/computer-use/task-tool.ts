@@ -16,6 +16,7 @@ import { observeWindow } from './observe.ts'
 import { verifyOcr, ocrEvidence } from './verify-ocr.ts'
 import { allGrants, resolveIdentity, readConsent } from './gates.ts'
 import { redactor } from './content.ts'
+import { readTeach } from './teach.ts'
 
 export type TaskArgs =
   | { action: 'start'; spec: Parameters<typeof task.startTask>[0] }
@@ -28,6 +29,15 @@ export type TaskArgs =
   | { action: 'status' }
 export const subgoalsSchema = Type.Array(Type.Object({ id: Type.String(), text: Type.String() }), {
   minItems: 1,
+})
+export const approvalSchema = Type.Object({
+  app: Type.String(),
+  window: Type.Optional(Type.Union([Type.String(), Type.Integer({ minimum: 1 })])),
+  pixel: Type.Literal(true),
+  actions: Type.Array(Type.String(), { minItems: 1 }),
+  steps: Type.Integer({ minimum: 1, maximum: 200 }),
+  minutes: Type.Number({ exclusiveMinimum: 0, maximum: 60 }),
+  foreground: Type.Boolean(),
 })
 export const criteriaSchema = Type.Array(
   Type.Object({
@@ -133,10 +143,16 @@ export async function taskTool(
   if (args.action === 'finish') {
     return setup(host, conversation, async (driver) => {
       const evidence: task.Evidence[] = []
+      const taught = (await readTeach(host, conversation)).practice
+      const practice =
+        taught?.task === state.spec.id && state.practiceRun === taught.task ? taught : undefined
+      const practiceModule = practice ? await import('./practice.ts') : undefined
       const finished = await task.finish(
         state,
         args.outcome,
         async (preds) => {
+          if (practice && practiceModule)
+            return practiceModule.finalPracticeCheck(host, conversation, driver, practice, signal)
           let verdict: Verdict = 'unsatisfied'
           for (const app of state.spec.scope.apps) {
             const listed = await driver.call('list_windows', { app }, signal)
@@ -215,6 +231,9 @@ export async function taskTool(
           : undefined,
         signal,
         Date.now(),
+        practice && practiceModule
+          ? { criteria: practiceModule.practiceCriteria(practice.steps), checks: practice.checks }
+          : undefined,
       )
       const lastDone = finished.state.ledger.findLast(
         (entry) => entry.kind === 'subgoal_done',
@@ -229,8 +248,15 @@ export async function taskTool(
         doc.confirmed = []
         doc.pending = doc.pending.filter((p) => p.kind !== 'confirm')
         // Stop can arrive during verification; completion must never overwrite it.
-        if (doc.task?.status === state.status) doc.task = finished.state
-        else if (doc.task) finished.state = plainTask(doc.task)
+        if (doc.task?.status === state.status) {
+          // Own input can revoke run authority without changing task status while verification awaits.
+          if (!doc.task.runTakeover) finished.state.runTakeover = false
+          if (doc.task.practiceMismatch) {
+            finished.state.practiceMismatch = true
+            finished.state.runTakeover = false
+          }
+          doc.task = finished.state
+        } else if (doc.task) finished.state = plainTask(doc.task)
       })
       return result({
         status: finished.refuse ?? finished.state.status,
@@ -273,6 +299,7 @@ export async function taskTool(
     if (args.action === 'activate') next = task.activate(plainTask(doc.task), args.id, Date.now())
     if (args.action === 'replan') next = task.replan(plainTask(doc.task), args, Date.now())
     next = activatePending(next)
+    if (!doc.task.runTakeover) next.runTakeover = false
     doc.task = next
     if (next.pendingChange && !doc.pending.some((p) => p.kind === 'change'))
       doc.pending.push({ kind: 'change', app: next.spec.scope.apps.join(', '), at: Date.now() })
@@ -300,6 +327,7 @@ export function taskToolDefinition(host: ExtensionHost) {
             goal: Type.String(),
             criteria: criteriaSchema,
             scope: scopeSchema,
+            approval: Type.Optional(approvalSchema),
             stop: Type.Optional(
               Type.Object({
                 steps: Type.Optional(Type.Number()),
@@ -326,6 +354,7 @@ export function taskToolDefinition(host: ExtensionHost) {
           subgoals: Type.Optional(subgoalsSchema),
           criteria: Type.Optional(criteriaSchema),
           scope: Type.Optional(scopeSchema),
+          approval: Type.Optional(approvalSchema),
         }),
         Type.Object({
           action: Type.Literal('finish'),
@@ -358,6 +387,7 @@ export async function intentInConversation(
   host: ExtensionHost,
   conversation: number,
   intent: string,
+  substring = false,
 ) {
   const target = await host.harness().conversation(conversation as ConversationId, context)
   if (!target || !intent.trim()) return false
@@ -382,7 +412,8 @@ export async function intentInConversation(
           ...text.split(/\r?\n/).map(normalized),
           ...whole.split(/(?<=[.!?])\s+/),
         ]
-        if (candidates.includes(normalized(intent))) return true
+        // Parameter values are literal data: normalization must not manufacture whitespace/control characters.
+        if (substring ? text.includes(intent) : candidates.includes(normalized(intent))) return true
       }
     }
     cursor = page.next

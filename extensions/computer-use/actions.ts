@@ -7,6 +7,7 @@ import {
   TeachEditAction,
   TeachSaveAction,
   TeachRejectAction,
+  TeachReopenAction,
 } from './refs.ts'
 import {
   startTeaching,
@@ -178,6 +179,18 @@ export const actions = {
       overwrite: args.overwrite,
     })
   }),
+  teachReopen: implementAction(TeachReopenAction, async (args, { host, device }) => {
+    validate(args)
+    if (!device) throw new Error('teachReopen requires a user browser action')
+    if ((args.scope !== 'project' && args.scope !== 'personal') || typeof args.name !== 'string')
+      throw new Error('Invalid skill destination')
+    const { reopenTeaching } = await import('./practice.ts')
+    return reopenTeaching(host, {
+      conversation: args.conversation,
+      scope: args.scope,
+      name: args.name,
+    })
+  }),
   teachReject: implementAction(TeachRejectAction, (args, { host }) => {
     validate(args)
     return rejectTeaching(host, args.conversation)
@@ -333,6 +346,7 @@ export const actions = {
 }
 export const userActions = [
   'teachStart',
+  'teachReopen',
   'teachStop',
   'teachPause',
   'teachResume',

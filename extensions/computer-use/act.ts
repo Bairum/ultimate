@@ -38,6 +38,7 @@ import {
   preflightGates,
   conversationBudgetGate,
   frontmostGate,
+  runTakeover,
   resolveIdentity,
   listApps,
   confirmRefusal,
@@ -593,7 +594,9 @@ export async function act(
         const stillConsented =
           canonicalConsent(ctx.identity!, await allGrants(host, conversation, latest)) === 'granted'
         const takeover =
-          args.foreground && latest.takeovers.some((t) => matchesApp(ctx.identity!, t.app))
+          args.foreground &&
+          (runTakeover({ ...ctx, session: latest }) ||
+            latest.takeovers.some((t) => matchesApp(ctx.identity!, t.app)))
         const stillTakenOver = !focusRefusal && ((!ctx.frontmost && !args.foreground) || takeover)
         const stopped = await isStopped(host, conversation, { session: latest, active, signal })
         if (stopped || !stillConsented || !stillTakenOver) {

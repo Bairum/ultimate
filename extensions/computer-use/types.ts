@@ -141,6 +141,24 @@ export type GoalResult =
 
 /** Initial goal-mode thresholds (decision 5a); settings `computerUse.jev.*` may override them. */
 export const jevThresholds = { act: 0.8, margin: 0.25, done: 0.85, risk: 0.3, maxCandidates: 24 }
+export type Approval = {
+  app: string
+  window?: string | number
+  pixel: true
+  actions: Step['kind'][]
+  steps: number
+  minutes: number
+  foreground: boolean
+}
+export type PracticeCheck = {
+  step: number
+  phase: 'before' | 'after'
+  at: number
+  predicates: Predicate[]
+  capture: string
+  ref: string
+  frame: { id: string; width: number; height: number; file?: string }
+}
 export type TaskSpec = {
   id: string
   intent: string
@@ -153,6 +171,7 @@ export type TaskSpec = {
     consequential: string[]
   }
   stop: { steps: number; minutes: number; escalations: number }
+  approval?: Approval
   link?: { conversation: number; task?: string }
 }
 export type Evidence = (
@@ -180,6 +199,7 @@ export type Replan = {
   subgoals?: { id: string; text: string }[]
   criteria?: TaskSpec['criteria']
   scope?: TaskSpec['scope']
+  approval?: Approval
 }
 export type TaskState = {
   spec: TaskSpec
@@ -207,6 +227,9 @@ export type TaskState = {
   loopDetected?: boolean
   criteriaMet?: string[]
   pendingChange?: Replan
+  runTakeover?: boolean
+  practiceMismatch?: boolean
+  practiceRun?: string
 }
 export type Refusal = { refuse: string; message: string }
 export type Grant = {
