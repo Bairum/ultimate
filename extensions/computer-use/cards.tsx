@@ -307,13 +307,18 @@ function StopButton({ conversation }: { conversation?: number }) {
 /** A refusal or failure as one line: what it means in words, the code for reference. */
 function Problem({ code, message }: { code: string; message?: string }) {
   const waits = asks.includes(code)
+  const fix = fixes[code]
   return (
     <ToolSection>
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
         <span className={toneClass[toneOf(code)]}>{refusalText(code)}</span>
         <span className="text-muted-foreground/60">{code}</span>
       </div>
-      {message && !waits && <p className="break-words text-muted-foreground">{message}</p>}
+      {fix ? (
+        <p className="break-words text-muted-foreground">{fix}</p>
+      ) : (
+        message && !waits && <p className="break-words text-muted-foreground">{message}</p>
+      )}
     </ToolSection>
   )
 }
@@ -875,6 +880,7 @@ export function Line({ call }: { call: ToolCallView }): ReactNode {
   if (call.name === 'computer_observe') return `observe ${app || 'apps'}`
   if (call.name === 'computer_apps') return app ? `launch ${app}` : 'list apps'
   if (call.name === 'computer_task') return `task ${text(call.args.action)}`
+  if (call.name === 'computer_teach') return `teach ${text(call.args.action)}`
   const goal = call.args.goal as { text?: string } | undefined
   return goal
     ? `act ${app} · ${text(goal.text)}`

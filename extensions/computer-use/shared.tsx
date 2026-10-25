@@ -103,6 +103,8 @@ const refusals: Record<string, string> = {
   perception_unavailable: 'could not read the screen',
   capture_required: 'needs a screenshot',
   timeout: 'wait timed out',
+  teaching: 'you are teaching: the agent only watches',
+  teaching_elsewhere: 'another conversation is teaching in this app',
 }
 export const refusalText = (code: string) =>
   refusals[code] ?? (code.startsWith('task_') ? `task ${code.slice(5).replace('_', ' ')}` : code)
@@ -111,6 +113,10 @@ export const refusalText = (code: string) =>
 export const fixes: Record<string, string> = {
   window_not_visible:
     'The window is off screen or shrunk to a Stage Manager thumbnail, so its pixels cannot be read. Turn Stage Manager off or bring the window to the front; the agent then observes again.',
+  teaching:
+    'This conversation is recording a lesson, so the agent may not act. Stop or finish the recording first.',
+  teaching_elsewhere:
+    'Another conversation is recording a lesson in this app or window. This agent cannot act there until that recording stops.',
 }
 
 /** The marker every piece of screen text carries: it is shown as plain text and never acted on. */
@@ -296,6 +302,8 @@ export const toneOf = (status?: string): Tone =>
           'checkpoint_due',
           'window_not_visible',
           'timeout',
+          'teaching',
+          'teaching_elsewhere',
         ].includes(status)
       ? 'wait'
       : 'bad'

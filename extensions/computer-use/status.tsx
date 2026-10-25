@@ -22,6 +22,7 @@ import {
 import { ConversationRef } from '../conversations/ui.tsx'
 import { HardStopAction, ResumeAction, SessionDoc, StopAction } from './refs.ts'
 import type { Session } from './shared.tsx'
+import { TeachStatus } from './teach-live.tsx'
 
 const statusButton =
   '-mx-1 flex cursor-pointer items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent'
@@ -268,7 +269,10 @@ export function ComputerStatus() {
   return (
     <>
       {watched.map((id) => (
-        <Item conversation={id} key={id} stopped={stopped} />
+        <span className="flex items-center gap-2.5" key={id}>
+          <TeachStatus conversation={id} />
+          <Item conversation={id} stopped={stopped} />
+        </span>
       ))}
     </>
   )

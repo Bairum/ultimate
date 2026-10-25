@@ -73,6 +73,8 @@ async function fixture(classify?: ClassifyService, extraTools: ToolRegistration[
       return resources.get(key)
     },
     onClose: (close: () => Promise<void>) => closes.push(close),
+    onOpen: () => {},
+    onRelease: () => {},
     want: () => classify,
   } as unknown as ExtensionHost
   const extension = computerUse(host)
@@ -1033,6 +1035,7 @@ it('refuses an operator override that adds bash despite its trusted definition n
     'computer_observe',
     'computer_act',
     'computer_apps',
+    'computer_teach',
   ])
 })
 
@@ -1371,6 +1374,7 @@ it('accepts the real computer-operator definition resolved by the subagents chil
       'computer_apps',
       'computer_observe',
       'computer_task',
+      'computer_teach',
       'read',
     ])
   expect(agent.deferred).toEqual([])

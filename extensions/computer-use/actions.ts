@@ -1,4 +1,21 @@
 import type { ExtensionHost } from '../../server/extensions.ts'
+import {
+  TeachStartAction,
+  TeachStopAction,
+  TeachPauseAction,
+  TeachResumeAction,
+  TeachEditAction,
+  TeachSaveAction,
+  TeachRejectAction,
+} from './refs.ts'
+import {
+  startTeaching,
+  finishTeaching,
+  resumeTeaching,
+  editTeaching,
+  saveTeaching,
+  rejectTeaching,
+} from './teach.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { readSession, updateSession, wake } from './session.ts'
 import {
@@ -64,6 +81,7 @@ export async function stop(host: ExtensionHost, conversation: number) {
     await interrupt(host, id, affected.has(id))
   state.observations.clear()
   state.zoomed.clear()
+  await Promise.all(host.conversations().map(({ id }) => finishTeaching(host, id)))
   if (previous.stopped) await hardStop(host)
   return readSession(host, conversation)
 }
@@ -91,6 +109,7 @@ export async function hardStop(host: ExtensionHost) {
   // Kill concurrently with durable updates: disk latency must not delay the emergency stop.
   await Promise.all([
     ...updates,
+    ...host.conversations().map(({ id }) => finishTeaching(host, id)),
     (async () => {
       if (state.driver) await (await state.driver).stop()
       else await stopDriver()
@@ -110,6 +129,59 @@ async function interrupt(host: ExtensionHost, conversation: number, markStopped:
   })
 }
 export const actions = {
+  teachStart: implementAction(TeachStartAction, (args, { host }) => {
+    validate(args, true)
+    if (
+      typeof args.title !== 'string' ||
+      (args.window !== undefined &&
+        typeof args.window !== 'string' &&
+        typeof args.window !== 'number') ||
+      (args.minutes !== undefined && typeof args.minutes !== 'number')
+    )
+      throw new Error('Invalid teaching arguments')
+    return startTeaching(host, {
+      conversation: args.conversation,
+      app: args.app,
+      title: args.title,
+      window: args.window,
+      minutes: args.minutes,
+    })
+  }),
+  teachStop: implementAction(TeachStopAction, (args, { host }) => {
+    validate(args)
+    return finishTeaching(host, args.conversation)
+  }),
+  teachPause: implementAction(TeachPauseAction, (args, { host }) => {
+    validate(args)
+    return finishTeaching(host, args.conversation, true)
+  }),
+  teachResume: implementAction(TeachResumeAction, (args, { host }) => {
+    validate(args)
+    return resumeTeaching(host, args.conversation)
+  }),
+  teachEdit: implementAction(TeachEditAction, (args, { host }) => {
+    validate(args)
+    return editTeaching(host, args.conversation, args.steps)
+  }),
+  teachSave: implementAction(TeachSaveAction, (args, { host }) => {
+    validate(args)
+    if (
+      (args.scope !== 'project' && args.scope !== 'personal') ||
+      typeof args.name !== 'string' ||
+      (args.overwrite !== undefined && typeof args.overwrite !== 'boolean')
+    )
+      throw new Error('Invalid save arguments')
+    return saveTeaching(host, {
+      conversation: args.conversation,
+      scope: args.scope,
+      name: args.name,
+      overwrite: args.overwrite,
+    })
+  }),
+  teachReject: implementAction(TeachRejectAction, (args, { host }) => {
+    validate(args)
+    return rejectTeaching(host, args.conversation)
+  }),
   confirmTask: implementAction(ConfirmTaskAction, async (args, { host }) => {
     validate(args)
     await updateSession(host, args.conversation, (doc) => {
@@ -260,6 +332,13 @@ export const actions = {
   }),
 }
 export const userActions = [
+  'teachStart',
+  'teachStop',
+  'teachPause',
+  'teachResume',
+  'teachEdit',
+  'teachSave',
+  'teachReject',
   'confirmTask',
   'confirmChange',
   'grant',
