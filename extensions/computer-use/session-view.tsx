@@ -1,11 +1,12 @@
-/** The `computer.session` document in the Documents tab: what waits on you, which apps you allowed, the latest steps. */
+/** The `computer.session` document in the Documents tab: what waits on you, teaching, which apps you allowed, the latest steps. */
 import { useState } from 'react'
-import { api, errorMessage, formatTime, useDocOf } from '@/sdk'
+import { api, errorMessage, formatTime, useConversations, useDocOf } from '@/sdk'
 import type { DocumentProps } from '@/sdk'
 import { Requests } from './requests.tsx'
 import { DenyAction, SessionDoc } from './refs.ts'
 import { Mark } from './shared.tsx'
 import type { Outcome, Session } from './shared.tsx'
+import { TeachSection } from './teach-cards.tsx'
 
 function Heading({ children }: { children: string }) {
   return (
@@ -35,12 +36,21 @@ export function SessionView({ value, conversationId }: DocumentProps) {
           (g) => g.scope === 'project' || (g.scope === 'deny' && g.denyScope === 'project'),
         ) ?? [])
   const grants = standing(project, session.grants)
+  const operator = useConversations().some(
+    (c) => c.id === conversationId && c.label === 'computer-operator',
+  )
   return (
     <div className="space-y-1 font-mono text-[12px]">
       {session.pending.length > 0 && (
         <>
           <Heading>Needs you</Heading>
           <Requests conversation={conversationId} session={session} />
+        </>
+      )}
+      {operator && (
+        <>
+          <Heading>Teach</Heading>
+          <TeachSection conversation={conversationId} />
         </>
       )}
       <Heading>Allowed apps</Heading>

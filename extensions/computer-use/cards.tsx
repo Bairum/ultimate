@@ -875,6 +875,7 @@ export function Line({ call }: { call: ToolCallView }): ReactNode {
   if (call.name === 'computer_observe') return `observe ${app || 'apps'}`
   if (call.name === 'computer_apps') return app ? `launch ${app}` : 'list apps'
   if (call.name === 'computer_task') return `task ${text(call.args.action)}`
+  if (call.name === 'computer_teach') return `teach ${text(call.args.action)}`
   const goal = call.args.goal as { text?: string } | undefined
   return goal
     ? `act ${app} · ${text(goal.text)}`
