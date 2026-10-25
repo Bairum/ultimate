@@ -138,7 +138,11 @@ describe('computer task grounding', () => {
     for (let i = 0; i < 15; i++) state = step(state, String(i), true)
     const alone = await checkpoint(state, { assessment: 'Still exporting', recentSteps: [] })
     expect(checkpointGate(alone.state)?.refuse).toBe('checkpoint_due')
-    const judged = await checkpoint(state, { assessment: 'Still exporting', recentSteps: [] }, ask())
+    const judged = await checkpoint(
+      state,
+      { assessment: 'Still exporting', recentSteps: [] },
+      ask(),
+    )
     expect(checkpointGate(judged.state)).toBeUndefined()
   })
 
