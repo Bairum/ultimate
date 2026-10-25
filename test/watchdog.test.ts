@@ -29,6 +29,7 @@ import type {
 import { afterEach, expect, it } from 'vitest'
 import watchdog, { diagnose } from '../extensions/watchdog/server.ts'
 import { idleNote } from '../extensions/watchdog/idle.ts'
+import type { WatchdogService } from '../extensions/watchdog/api.ts'
 import { Messages } from '../extensions/messages/api.ts'
 import { Branch } from '../extensions/lineage/api.ts'
 import { Standing, Subagents } from '../extensions/subagents/api.ts'
@@ -91,7 +92,11 @@ async function fixture(
   const onOpen: (() => Promise<void>)[] = []
   const onClose: (() => Promise<void>)[] = []
   const notices: string[] = []
+  let service: WatchdogService | undefined
   const host = {
+    implement: (_api: unknown, implementation: WatchdogService) => {
+      service = implementation
+    },
     harness: () => harness,
     metadata: Metadata,
     notice: (text: string) => notices.push(text),
@@ -236,6 +241,7 @@ async function fixture(
     root,
     registry,
     host,
+    failures: (since: number) => service!.failures(since),
     ultimate,
     notices,
     conversation,
@@ -330,6 +336,17 @@ it('reports a branch failure once, with its title, error and last tool step; rep
   expect(await f.entries()).toHaveLength(1)
   expect(await f.tasks()).toHaveLength(1)
   expect(f.notices).toEqual([])
+  expect(await f.failures(0)).toEqual([
+    {
+      conversation: branch,
+      title: 'Fix the build',
+      error: 'invalid model configuration',
+      step: 'read',
+      retried: false,
+      at: 1_000_000,
+    },
+  ])
+  expect(await f.failures(1_000_001)).toEqual([])
 })
 
 it('routes an owned child failure only to its parent', async () => {

@@ -106,6 +106,14 @@ export default function messages(host: ExtensionHost) {
         device,
       )
     },
+    openQuestions: async (ctx) =>
+      (
+        (await host.harness().snapshot(Messages, ROOT_CONVERSATION_ID, ctx))?.messages ?? []
+      ).flatMap((m) =>
+        openQuestion(m) && typeof m.from === 'number'
+          ? [{ message: m.id, conversation: m.from, at: m.at, text: gist(m) }]
+          : [],
+      ),
     dismiss: async (messageId, ctx, device) => {
       const log = await host.harness().snapshot(Messages, ROOT_CONVERSATION_ID, ctx)
       const message = log?.messages.find((m) => m.id === messageId)
