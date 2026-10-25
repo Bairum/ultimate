@@ -806,6 +806,8 @@ export default function automations(host: ExtensionHost) {
   host.need(MessagesApi)
   const api = backend(host)
   host.implement(AutomationsApi, {
+    create: async (args) => (await api.operate({ ...args, action: 'create' })) as Automation,
+    delete: async (id) => void (await api.operate({ action: 'delete', id })),
     resume: async (id) => (await api.operate({ action: 'resume', id }), api.status(id)),
     pause: async (id) => (await api.operate({ action: 'pause', id }), api.status(id)),
     run: async (id) => (await api.operate({ action: 'run', id }), api.status(id)),

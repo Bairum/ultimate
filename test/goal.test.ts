@@ -60,6 +60,24 @@ function fakeTx() {
   } as unknown as Tx & { tasks: typeof tasks }
 }
 
+/** The automations service: a ledger of reminders with their enabled state. */
+function fakeAutomations() {
+  const ledger = new Map<string, { name: string; enabled: boolean; subscribers?: number[] }>()
+  let next = 1
+  const service = {
+    create: async (args: { name: string; subscribers?: number[] }) => {
+      const id = `A${next++}`
+      ledger.set(id, { ...args, enabled: true })
+      return { id }
+    },
+    delete: async (id: string) => void ledger.delete(id),
+    pause: async (id: string) => void (ledger.get(id)!.enabled = false),
+    resume: async (id: string) => void (ledger.get(id)!.enabled = true),
+    read: async (_tx: Tx, id: string) => ledger.get(id),
+  }
+  return { ledger, service }
+}
+
 it('keeps one goal open at a time and ends it once', async () => {
   const tx = fakeTx()
   await expect(start(tx, '  ', 0)).rejects.toThrow('nonempty')
@@ -131,7 +149,10 @@ it('records decisions with the screenshots of its own conversation only', async 
 
 it("notes the open goal on @ultimate's runs only, and lets only @ultimate keep it", async () => {
   const tx = fakeTx()
-  const extension = goalExtension({ doc: () => undefined } as unknown as ExtensionHost)
+  const extension = goalExtension({
+    doc: () => undefined,
+    need: () => undefined,
+  } as unknown as ExtensionHost)
   const hooks = extension.hooks![0].handlers as GenerationHooks
   const before = (conversationId: number, kind = 'pi.user') =>
     hooks.beforeInput({ kind }, { tx, conversationId } as never, BACKGROUND_CONTEXT)
@@ -165,11 +186,68 @@ it("notes the open goal on @ultimate's runs only, and lets only @ultimate keep i
   expect(await before(ULTIMATE)).toBeUndefined()
 })
 
+it('keeps a reminder while the goal is open: paused while waiting on the user, gone once ended', async () => {
+  const tx = fakeTx()
+  const { ledger, service } = fakeAutomations()
+  const host = {
+    harness: () => ({ commit: (fn: (tx: Tx) => unknown) => fn(tx) }),
+    need: () => service,
+    doc: () => undefined,
+  } as unknown as ExtensionHost
+  const { actions } = await import('../extensions/goal/server.ts')
+  const extension = goalExtension(host)
+  const tool = extension.tools!.find((candidate) => candidate.name === 'goal')!
+  const run = (args: object) =>
+    tool.execute(
+      args as never,
+      { conversationId: ULTIMATE, commit: (fn: (tx: Tx) => unknown) => fn(tx) } as never,
+      undefined as never,
+    )
+  const goal = await actions.start({ text: 'Make it fast' }, { host } as never)
+  expect(goal.reminder).toBe('A1')
+  expect(ledger.get('A1')).toEqual({
+    name: 'Goal reminder',
+    schedule: 'every 30m',
+    subscribers: [ULTIMATE],
+    enabled: true,
+  })
+
+  // Its fire tells @ultimate what to check; other inputs do not.
+  const hooks = extension.hooks![0].handlers as GenerationHooks
+  const note = async (input: object) =>
+    (await hooks.beforeInput(input as never, { tx, conversationId: ULTIMATE }, BACKGROUND_CONTEXT))!
+      .entries![0].model![0].content as string
+  expect(await note({ kind: 'automations.fired', data: { id: 'A1' } })).toContain(
+    'This is the goal reminder',
+  )
+  expect(await note({ kind: 'pi.user' })).not.toContain('This is the goal reminder')
+
+  await expect(run({ action: 'pause' })).rejects.toThrow('reason')
+  await expect(run({ action: 'resume' })).rejects.toThrow('not paused')
+  await run({ action: 'pause', reason: 'Which account to deploy to?' })
+  expect(ledger.get('A1')!.enabled).toBe(false)
+  expect((await openGoal(tx))!.waiting).toMatchObject({ reason: 'Which account to deploy to?' })
+  expect(await note({ kind: 'pi.user' })).toContain('Waiting on the user')
+  await run({ action: 'resume' })
+  expect(ledger.get('A1')!.enabled).toBe(true)
+  expect((await openGoal(tx))!.waiting).toBeUndefined()
+
+  await run({ action: 'finish', outcome: 'met', summary: 'Done' })
+  expect(ledger.size).toBe(0)
+  await actions.start({ text: 'Again' }, { host } as never)
+  await actions.end(null, { host } as never)
+  expect(ledger.size).toBe(0)
+})
+
 it('grants nothing through a start card still queued after the user ended its goal', async () => {
   const tx = fakeTx()
-  const extension = goalExtension({ doc: () => undefined } as unknown as ExtensionHost)
+  const { service } = fakeAutomations()
+  const host = {
+    harness: () => ({ commit: (fn: (tx: Tx) => unknown) => fn(tx) }),
+    need: () => service,
+  } as unknown as ExtensionHost
+  const extension = goalExtension(host)
   const actions = await import('../extensions/goal/server.ts').then((module) => module.actions)
-  const host = { harness: () => ({ commit: (fn: (tx: Tx) => unknown) => fn(tx) }) }
   await actions.start({ text: 'Make it fast' }, { host } as never)
   await actions.end(null, { host } as never)
   const [started, report] = tx.tasks.map((task) => task.input)

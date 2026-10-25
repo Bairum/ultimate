@@ -111,7 +111,7 @@ it('lets a project extension read, pause and resume an automation through the se
   expect(server.extensions.catalogue().apis.find((api) => api.name === 'automations')).toEqual({
     name: 'automations',
     provider: 'automations',
-    needs: [],
+    needs: ['goal'],
     wants: ['prs'],
   })
 })

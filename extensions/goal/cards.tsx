@@ -6,6 +6,8 @@ import {
   CheckIcon,
   CircleDashedIcon,
   CircleSlashIcon,
+  BellIcon,
+  BellOffIcon,
   FlagIcon,
   LoaderCircleIcon,
 } from 'lucide-react'
@@ -193,12 +195,43 @@ export function StartedCard({ entry }: { entry: EntryRecord }) {
             <>
               <Criteria goal={goal} />
               <Decisions goal={goal} latest={3} />
+              <Reminder goal={goal} />
               <Footer />
             </>
           )}
         </>
       )}
     </Card>
+  )
+}
+
+/** The goal reminder's state: waking @ultimate every 30 minutes, or paused while it waits on the user. */
+function Reminder({ goal }: { goal: Goal }) {
+  if (!goal.reminder && !goal.waiting) return null
+  return (
+    <p
+      className="flex items-start gap-2 border-t border-border/60 px-4 py-2 text-[12px] leading-snug"
+      data-goal-reminder={goal.waiting ? 'paused' : 'active'}
+    >
+      {goal.waiting ? (
+        <>
+          <BellOffIcon className="mt-0.5 size-3.5 shrink-0 text-warning" />
+          <span className="min-w-0">
+            <span className="text-warning">Waiting on you:</span> {goal.waiting.reason}
+            <span className="ml-2 font-mono text-[11px] text-muted-foreground">
+              reminder paused since {formatTime(goal.waiting.at)}
+            </span>
+          </span>
+        </>
+      ) : (
+        <>
+          <BellIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+          <span className="text-muted-foreground">
+            A reminder wakes me every 30 minutes to check nothing is stuck.
+          </span>
+        </>
+      )}
+    </p>
   )
 }
 

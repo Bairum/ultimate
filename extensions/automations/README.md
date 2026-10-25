@@ -83,7 +83,7 @@ Discovery runs only for a project chosen as local, on open, list, status and slu
 
 ## Service
 
-`AutomationsApi` in `api.ts`, token `automations`, offers `resume(id)`, `pause(id)`, `run(id)`, `status(id)`, each returning the record with computed `alive`. This optional extension is accessed with `want`; external project extensions use `host.want({name:'automations'})`. Mutating methods commit: call outside transactions; from a reactor, do not await them, and report rejection with `.catch`.
+`AutomationsApi` in `api.ts`, token `automations`, offers `create(args)` (the tool's create; `subscribers` stand in for a caller) and `delete(id)`, and `resume(id)`, `pause(id)`, `run(id)`, `status(id)`, each returning the record with computed `alive`; goal keeps its reminder through it. This optional extension is accessed with `want`; external project extensions use `host.want({name:'automations'})`. Mutating methods commit: call outside transactions; from a reactor, do not await them, and report rejection with `.catch`.
 
 ## Browser API
 
