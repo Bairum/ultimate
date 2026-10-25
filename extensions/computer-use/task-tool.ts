@@ -32,6 +32,7 @@ export const subgoalsSchema = Type.Array(Type.Object({ id: Type.String(), text: 
 })
 export const approvalSchema = Type.Object({
   app: Type.String(),
+  appName: Type.Optional(Type.String()),
   window: Type.Optional(Type.Union([Type.String(), Type.Integer({ minimum: 1 })])),
   pixel: Type.Literal(true),
   actions: Type.Array(Type.String(), { minItems: 1 }),
@@ -288,10 +289,29 @@ export async function taskTool(
     next = checked.state
     scores = checked.scores
   }
+  const replanLesson =
+    args.action === 'replan' && args.scope
+      ? (await readTeach(host, conversation)).practice
+      : undefined
+  const validateLabels =
+    args.action === 'replan' && args.scope
+      ? (await import('./practice.ts')).taughtConsequential
+      : undefined
+  let rejectedLabels = false
   await updateSession(host, conversation, (doc) => {
     if (!doc.task) throw new Error('No computer task')
     if (doc.task.status !== 'active') {
       next = plainTask(doc.task)
+      return
+    }
+    if (
+      args.action === 'replan' &&
+      args.scope &&
+      doc.task.practiceRun === doc.task.spec.id &&
+      (replanLesson?.task !== doc.task.spec.id ||
+        !validateLabels?.(replanLesson.steps, args.scope.consequential))
+    ) {
+      rejectedLabels = true
       return
     }
     if (args.action === 'subgoals')
@@ -304,6 +324,8 @@ export async function taskTool(
     if (next.pendingChange && !doc.pending.some((p) => p.kind === 'change'))
       doc.pending.push({ kind: 'change', app: next.spec.scope.apps.join(', '), at: Date.now() })
   })
+  if (rejectedLabels)
+    return anchored(host, conversation, result({ status: 'consequential_not_taught' }))
   return anchored(
     host,
     conversation,
@@ -383,11 +405,31 @@ export function taskToolDefinition(host: ExtensionHost) {
   })
 }
 
+function parameterInText(text: string, value: string) {
+  const explicit = [...text.split(/\r?\n/), ...text.split(/(?<=[.!?])\s+/)].map((part) =>
+    part.trim(),
+  )
+  if (explicit.includes(value)) return true
+  const quoted =
+    /"([^"]*)"|(?<![\p{L}\p{N}_])'([^']*)'(?![\p{L}\p{N}_])|`([^`]*)`|“([^”]*)”|(?<![\p{L}\p{N}_])‘([^’]*)’(?![\p{L}\p{N}_])/gu
+  if ([...text.matchAll(quoted)].some((match) => match.slice(1).includes(value))) return true
+  if (
+    Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value.trim()))
+      .length < 3
+  )
+    return false
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  // Keep identifiers, paths and contractions intact; trailing sentence punctuation is a boundary.
+  const before = '(?:^|[\\s"“”`(\\[{: =]|(?<![\\p{L}\\p{N}_])[\'‘’])'
+  const after = '(?=$|[\\s"“”`)\\]}]|[\'‘’](?![\\p{L}\\p{N}_])|[.,!?;:](?:\\s|$))'
+  return new RegExp(before + escaped + after, 'u').test(text)
+}
+
 export async function intentInConversation(
   host: ExtensionHost,
   conversation: number,
   intent: string,
-  substring = false,
+  parameter = false,
 ) {
   const target = await host.harness().conversation(conversation as ConversationId, context)
   if (!target || !intent.trim()) return false
@@ -400,20 +442,23 @@ export async function intentInConversation(
       if (entry.kind !== 'pi.user' && entry.kind !== 'subagents.instruction') continue
       for (const message of entry.model ?? []) {
         if (message.role !== 'user') continue
-        const text =
+        const blocks =
           typeof message.content === 'string'
-            ? message.content
-            : message.content
-                .flatMap((block) => (block.type === 'text' ? [block.text] : []))
-                .join(' ')
+            ? [message.content]
+            : message.content.flatMap((block) => (block.type === 'text' ? [block.text] : []))
+        // Never manufacture value bytes between text blocks; only intent allows normalization.
+        if (parameter) {
+          if (blocks.some((text) => parameterInText(text, intent))) return true
+          continue
+        }
+        const text = blocks.join(' ')
         const whole = normalized(text)
         const candidates = [
           whole,
           ...text.split(/\r?\n/).map(normalized),
           ...whole.split(/(?<=[.!?])\s+/),
         ]
-        // Parameter values are literal data: normalization must not manufacture whitespace/control characters.
-        if (substring ? text.includes(intent) : candidates.includes(normalized(intent))) return true
+        if (candidates.includes(normalized(intent))) return true
       }
     }
     cursor = page.next

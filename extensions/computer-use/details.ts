@@ -71,6 +71,10 @@ export async function withDetails<T extends { structuredOutput?: JsonValue; deta
               approval: {
                 ...state.spec.approval,
                 app: { text: state.spec.approval.app, untrusted: true as const },
+                appName:
+                  state.spec.approval.appName === undefined
+                    ? undefined
+                    : { text: state.spec.approval.appName, untrusted: true as const },
                 window:
                   typeof state.spec.approval.window === 'string'
                     ? { text: state.spec.approval.window, untrusted: true as const }

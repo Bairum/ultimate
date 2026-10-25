@@ -1,6 +1,6 @@
 import { withAbortSignal } from '@earendil-works/chord/context'
 import { defineExtension, GenerationTask, hook, section } from '@earendil-works/pi-durable'
-import type { ToolRegistration } from '@earendil-works/pi-durable'
+import type { ConversationId, ToolRegistration } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ComputerSession } from './session.ts'
 import { plainTask, operatorOnly } from './tool-helpers.ts'
@@ -23,8 +23,16 @@ export default function computerUse(host: ExtensionHost) {
       hook(GenerationTask, {
         beforeInput: async (input, { tx, conversationId }) => {
           const doc = await tx.doc(ComputerSession, conversationId)
-          // Wakes/notes keep the run; the user's next own input releases only run-level foreground authority.
-          if (input.kind === 'pi.user' && doc.task) doc.task.runTakeover = false
+          // Own/direct-parent user input revokes run authority; synthetic wakes and notes do not.
+          if (input.kind === 'pi.user') {
+            if (doc.task) doc.task.runTakeover = false
+            // Summaries already resolve task ownership; do not scan subagent histories or wake children.
+            for (const child of host.conversations()) {
+              if (child.parentConversationId !== conversationId) continue
+              const session = await tx.doc(ComputerSession, child.id as ConversationId)
+              if (session.task) session.task.runTakeover = false
+            }
+          }
           if (doc.task?.status !== 'active') return undefined
           return {
             entries: [

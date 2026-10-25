@@ -73,6 +73,7 @@ export type ComputerDetails = {
     lastCheck?: string
     approval?: {
       app: UntrustedText
+      appName?: UntrustedText
       window?: number | UntrustedText
       consequential: UntrustedText[]
       pixel: true

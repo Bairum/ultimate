@@ -34,6 +34,7 @@ import { json, result } from './tool-helpers.ts'
 import { redactor } from './content.ts'
 import * as task from './task.ts'
 
+class ProjectUntrusted extends Error {}
 const validSkillName = (skill: unknown): skill is string =>
   typeof skill === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skill) && skill.length <= 64
 async function skillScopes(host: ExtensionHost, skill: string) {
@@ -42,6 +43,7 @@ async function skillScopes(host: ExtensionHost, skill: string) {
     await Promise.all(
       (['project', 'personal'] as const).map(async (scope) => {
         try {
+          if (scope === 'project' && (await host.projectSetup()).decision !== true) return undefined
           const paths = await teachingPaths(
             scope === 'project' ? host.projectRoot : host.userHome,
             skill,
@@ -69,6 +71,8 @@ export async function readProcedure(
 ) {
   if (!validSkillName(skill) || !['project', 'personal'].includes(scope))
     throw new Error('Unsafe skill name')
+  if (scope === 'project' && (await host.projectSetup()).decision !== true)
+    throw new ProjectUntrusted('project_untrusted')
   const paths = await teachingPaths(scope === 'project' ? host.projectRoot : host.userHome, skill)
   if (!paths.hasDestination) throw new Error('Unknown taught skill')
   const directory = join(paths.skills, skill)
@@ -165,6 +169,24 @@ function predicates(step: TaughtStep): Predicate[] {
     },
   ]
 }
+export function taughtConsequential(
+  steps: readonly TaughtStep[],
+  labels: unknown,
+): labels is string[] {
+  return (
+    Array.isArray(labels) &&
+    labels.every(
+      (label) =>
+        typeof label === 'string' &&
+        !!normalizeLabel(label) &&
+        steps.some(
+          (step) =>
+            step.consequential && normalizeLabel(step.target.label) === normalizeLabel(label),
+        ),
+    )
+  )
+}
+
 function actionKind(action: TaughtStep['action']) {
   return action === 'upload' || action === 'select' ? ('click' as const) : action
 }
@@ -200,8 +222,13 @@ export async function startPractice(
     let saved: Awaited<ReturnType<typeof readProcedure>>
     try {
       saved = await readProcedure(host, args.skill, scope)
-    } catch {
+    } catch (error) {
       // File/schema errors fail closed without echoing potentially hostile procedure text.
+      if (error instanceof ProjectUntrusted)
+        return result({
+          status: 'project_untrusted',
+          message: 'Trust the project setup before loading project lessons.',
+        })
       return result({
         status: 'resave_required',
         message: 'Re-save this reviewed lesson with teachSave before practice.',
@@ -224,18 +251,7 @@ export async function startPractice(
         message: 'Practice supports at most 100 steps (a 200-step approval).',
       })
     const consequential = args.consequential ?? []
-    if (
-      !Array.isArray(consequential) ||
-      consequential.some(
-        (label) =>
-          typeof label !== 'string' ||
-          !normalizeLabel(label) ||
-          !steps.some(
-            (step) =>
-              step.consequential && normalizeLabel(step.target.label) === normalizeLabel(label),
-          ),
-      )
-    )
+    if (!taughtConsequential(steps, consequential))
       return result({ status: 'consequential_not_taught' })
     if (!(await intentInConversation(host, conversation, manifest.title)))
       return result({
@@ -274,6 +290,7 @@ export async function startPractice(
       scope: { apps: [manifest.app.name], actions, params, consequential },
       approval: {
         app: manifest.app.bundle || manifest.app.name,
+        appName: manifest.app.name,
         window: manifest.window.titleSubstring || manifest.window.id,
         pixel: true as const,
         actions,

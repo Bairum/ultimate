@@ -4,17 +4,7 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { Type } from '@earendil-works/pi-ai'
 import { resizeImage } from '@earendil-works/pi-coding-agent'
 import { createHash, randomUUID } from 'node:crypto'
-import {
-  copyFile,
-  lstat,
-  mkdir,
-  readFile,
-  readdir,
-  realpath,
-  rename,
-  rm,
-  writeFile,
-} from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { TeachDoc } from './refs.ts'
@@ -32,7 +22,12 @@ import { parseWindow, windowFor } from './observe.ts'
 import { consequential } from './policy.ts'
 import { redactor, untrusted } from './content.ts'
 import { json, result } from './tool-helpers.ts'
-import { saveEvidence, teachDirectory, protectTeachReview } from './evidence-files.ts'
+import {
+  saveEvidence,
+  teachDirectory,
+  protectTeachReview,
+  copyTeachingImage,
+} from './evidence-files.ts'
 import { recordTeaching, credentialCue } from './teach-recorder.ts'
 import type { Driver, Element, Step } from './types.ts'
 
@@ -650,11 +645,13 @@ export async function saveTeaching(
       if (frame.file) {
         const relative = `frames/${s.n}-${frame.id}.png`
         let copied = true
-        await copyFile(frame.file, join(staged, relative)).catch((error: NodeJS.ErrnoException) => {
-          if (error.code !== 'ENOENT') throw error
-          copied = false
-          notes.push(`Frame ${frame.id} was missing; saved without its image.`)
-        })
+        await copyTeachingImage(frame.file, join(staged, relative)).catch(
+          (error: NodeJS.ErrnoException) => {
+            if (error.code !== 'ENOENT') throw error
+            copied = false
+            notes.push(`Frame ${frame.id} was missing; saved without its image.`)
+          },
+        )
         if (copied) frames[frame.id].file = relative
       }
     }

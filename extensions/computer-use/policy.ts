@@ -86,6 +86,10 @@ const labelWords = (text: string) =>
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replaceAll('_', ' ')
 
+export const sensitiveField = (target: Element | undefined) =>
+  target?.role === 'AXSecureTextField' ||
+  /password|passcode|secret|token/i.test(labelWords(target?.label ?? ''))
+
 export function consequential(
   step: Step,
   target: Element | undefined,
@@ -93,11 +97,7 @@ export function consequential(
 ): { hit: boolean; reason?: string } {
   if (['click', 'double_click', 'right_click'].includes(step.kind) && !target?.label?.trim())
     return { hit: true, reason: 'Unlabelled click' }
-  if (
-    (step.kind === 'type' || step.kind === 'set_value') &&
-    (target?.role === 'AXSecureTextField' ||
-      /password|passcode|secret|token/i.test(labelWords(target?.label ?? '')))
-  )
+  if ((step.kind === 'type' || step.kind === 'set_value') && sensitiveField(target))
     return { hit: true, reason: 'Sensitive field' }
   if (step.kind === 'type' && /[\r\n]/.test(step.text))
     return { hit: true, reason: 'Text may submit a form' }

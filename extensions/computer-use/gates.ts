@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ClassifyApi } from '../classify/api.ts'
-import { confirmationKey, consequential, consentFor, consume, denyList } from './policy.ts'
+import {
+  confirmationKey,
+  consequential,
+  sensitiveField,
+  consentFor,
+  consume,
+  denyList,
+} from './policy.ts'
 import type { Driver, Element, Observation, Step } from './types.ts'
 import { readSession, isStopped, hasConfirmation } from './session.ts'
 import type { Session } from './session.ts'
@@ -294,9 +301,13 @@ export const dispatchGates: Gate[] = [
       ctx.confirmationUsed = true
       return undefined
     }
-    let risky = ctx.unlabelledPixel || consequential(ctx.step, ctx.target).hit
-    // A whole verified effective label, never a substring or an unlabelled pixel, is pre-approved only in this scope.
+    const consequence = consequential(ctx.step, ctx.target)
+    let risky = ctx.unlabelledPixel || consequence.hit
+    // Approving a label never approves another risk or bypasses the independent Jev check.
     if (
+      ['click', 'double_click', 'right_click', 'menu'].includes(ctx.step.kind) &&
+      consequence.reason?.startsWith('Consequential label: ') &&
+      !sensitiveField(ctx.target) &&
       !ctx.unlabelledPixel &&
       ctx.target?.label &&
       inApproval(ctx) &&
@@ -305,7 +316,7 @@ export const dispatchGates: Gate[] = [
           !!normalizeLabel(label) && normalizeLabel(label) === normalizeLabel(ctx.target!.label!),
       )
     )
-      return undefined
+      risky = false
     const classify = ctx.host.want(ClassifyApi)
     if (!risky && classify) {
       const redact = redactor([

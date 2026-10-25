@@ -46,6 +46,7 @@ export function validateApproval(raw: unknown): asserts raw is Approval {
     Array.isArray(raw) ||
     typeof value.app !== 'string' ||
     !value.app.trim() ||
+    (value.appName !== undefined && (typeof value.appName !== 'string' || !value.appName.trim())) ||
     value.pixel !== true ||
     typeof value.foreground !== 'boolean' ||
     !Array.isArray(value.actions) ||

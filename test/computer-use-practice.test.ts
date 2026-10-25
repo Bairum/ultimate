@@ -8,7 +8,13 @@ import { readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
-import type { Approval, TaskSpec } from '../extensions/computer-use/types.ts'
+import type {
+  Approval,
+  TaskSpec,
+  Step,
+  Element,
+  Observation,
+} from '../extensions/computer-use/types.ts'
 import type { Region } from '../extensions/computer-use/perception.ts'
 import type { TaughtStep } from '../extensions/computer-use/refs.ts'
 import computerUse, { actions } from '../extensions/computer-use/server.ts'
@@ -25,6 +31,8 @@ import { beforePractice } from '../extensions/computer-use/practice.ts'
 import { Profile } from '../extensions/subagents/api.ts'
 import { saveEvidence } from '../extensions/computer-use/evidence-files.ts'
 import * as task from '../extensions/computer-use/task.ts'
+import { dispatchGates } from '../extensions/computer-use/gates.ts'
+import type { GateContext } from '../extensions/computer-use/gates.ts'
 import { createFakeDriver } from './computer-use-fake-driver.ts'
 import { temp, removeTemp } from './helpers.ts'
 
@@ -75,14 +83,16 @@ async function fixture() {
   faux.setResponses(Array.from({ length: 20 }, () => fauxAssistantMessage('Noted')))
   const registry = createRegistry()
   let harness: Harness
-  let conversation = 1
+  const conversations: { id: number; parentConversationId?: number }[] = []
+  let trusted: boolean | undefined = true
   const host = {
     home,
     userHome: home,
     projectRoot: home,
     projectSettings: async () => ({}),
+    projectSetup: async () => ({ decision: trusted }),
     harness: () => harness,
-    conversations: () => [{ id: conversation }],
+    conversations: () => conversations,
     want: () => undefined,
     onClose: (fn: () => Promise<void>) => closes.push(fn),
     onRelease: () => {},
@@ -98,7 +108,7 @@ async function fixture() {
   const root = await harness.root(context, {
     agent: { model: { provider: 'faux', modelId: 'faux-1' } },
   })
-  conversation = root.id
+  conversations.push({ id: root.id })
   await harness.commit(async (tx) => {
     ;(await tx.doc(Profile, root.id)).definition = 'computer-operator'
   }, context)
@@ -220,6 +230,20 @@ async function fixture() {
   }
   const finish = (outcome = 'done') =>
     invoke('computer_task', { action: 'finish', outcome, summary: 'Practice result' })
+  const addConversation = async (parentConversationId?: number) => {
+    const child = await harness.createConversation(
+      {
+        ownership: { kind: 'ownerless' },
+        agent: { model: { provider: 'faux', modelId: 'faux-1' } },
+      },
+      context,
+    )
+    conversations.push({
+      id: child.id,
+      ...(parentConversationId === undefined ? {} : { parentConversationId }),
+    })
+    return child
+  }
   cleanup.push(async () => {
     for (const close of closes.toReversed()) await close()
     await harness.close(context)
@@ -240,6 +264,10 @@ async function fixture() {
     practice,
     check,
     finish,
+    addConversation,
+    trust: (decision: boolean | undefined) => {
+      trusted = decision
+    },
   }
 }
 const data = (value: { structuredOutput?: unknown }) =>
@@ -764,7 +792,7 @@ it.each(['2', 'type', 'file'])(
   async (value) => {
     const f = await fixture()
     await f.save([{ ...lessonStep(), action: 'type', value: { param: 'file' } }])
-    await f.say(`Upload lesson\nUse value ${value}`)
+    await f.say(`Upload lesson\nUse value '${value}'`)
     const raw = await f.invoke('computer_teach', {
       action: 'practice',
       skill: 'lesson',
@@ -798,3 +826,305 @@ it.each(['drafting', 'review'] as const)(
     expect(after.segment?.frames).toEqual(before.segment?.frames)
   },
 )
+
+it.each(['stop', 'hardStop'] as const)(
+  '%s revokes every conversation run takeover and Resume does not restore it',
+  async (kind) => {
+    const f = await fixture()
+    await f.start()
+    await f.confirm()
+    const other = await f.addConversation()
+    const initial = (await readSession(f.host, f.root.id)).task!
+    expect(initial.runTakeover).toBe(true)
+    await updateSession(f.host, other.id, (doc) => {
+      doc.task = structuredClone(initial)
+    })
+    if (kind === 'stop') await actions.stop({ conversation: f.root.id }, f.ctx)
+    else await actions.hardStop({}, f.ctx)
+    await actions.resume({ conversation: f.root.id }, f.ctx)
+    await f.host.harness().waitForIdle(context)
+    expect((await readSession(f.host, other.id)).task).toMatchObject({
+      status: 'active',
+      runTakeover: false,
+    })
+    expect((await readSession(f.host, f.root.id)).task?.runTakeover).toBe(false)
+  },
+)
+
+it.each([false, undefined])(
+  'refuses untrusted project lessons (%s) in practice, reopen and scope discovery',
+  async (decision) => {
+    const f = await fixture()
+    await f.save()
+    await f.say('Upload lesson')
+    f.trust(decision)
+    const scopes = await f.invoke('computer_teach', { action: 'practice', skill: 'lesson' })
+    expect(scopes.structuredOutput).toMatchObject({
+      status: 'scope_required',
+      scopes: ['personal'],
+    })
+    expect(data(await f.practice()).status).toBe('project_untrusted')
+    await expect(reopen(f)).rejects.toThrow('project_untrusted')
+    expect((await readSession(f.host, f.root.id)).task).toBeUndefined()
+    expect((await readTeach(f.host, f.root.id)).segment?.status).toBe('saved')
+    expect(
+      data(
+        await f.invoke('computer_teach', {
+          action: 'practice',
+          skill: 'lesson',
+          scope: 'personal',
+        }),
+      ).status,
+    ).toBe('awaiting_confirmation')
+  },
+)
+
+const bypassCases: {
+  name: string
+  step: Step
+  role?: string
+  label?: string
+  approved: boolean
+}[] = [
+  ...(['click', 'double_click', 'right_click'] as const).map((kind) => ({
+    name: kind,
+    step: { kind, element: 's:1' },
+    approved: true,
+  })),
+  { name: 'menu', step: { kind: 'menu', path: ['Upload skill'] }, approved: true },
+  { name: 'committing key', step: { kind: 'key', key: 'Enter' }, approved: false },
+  {
+    name: 'committing chord',
+    step: { kind: 'key', key: 'Delete', modifiers: ['cmd'] },
+    approved: false,
+  },
+  {
+    name: 'multiline typing',
+    step: { kind: 'type', element: 's:1', text: 'hello\nworld' },
+    approved: false,
+  },
+  {
+    name: 'single-line typing',
+    step: { kind: 'type', element: 's:1', text: 'hello' },
+    approved: false,
+  },
+  {
+    name: 'sensitive typing',
+    step: { kind: 'type', element: 's:1', text: 'hello' },
+    label: 'Upload password',
+    approved: false,
+  },
+  {
+    name: 'secure value',
+    step: { kind: 'set_value', element: 's:1', value: 'hello' },
+    role: 'AXSecureTextField',
+    approved: false,
+  },
+  {
+    name: 'sensitive click',
+    step: { kind: 'click', element: 's:1' },
+    label: 'Upload password',
+    approved: false,
+  },
+  {
+    name: 'secure click',
+    step: { kind: 'click', element: 's:1' },
+    role: 'AXSecureTextField',
+    approved: false,
+  },
+]
+async function checkLabelBypass(
+  step: Step,
+  label = 'Upload skill',
+  role = 'AXButton',
+  risk?: number,
+) {
+  const f = await fixture()
+  f.fake.frontmostPid = 123
+  await f.start({
+    approval: { ...approval(), actions: [step.kind] },
+    scope: { apps: ['Calculator'], actions: [step.kind], params: {}, consequential: [label] },
+  })
+  await f.confirm()
+  if (risk !== undefined)
+    Object.assign(f.host, {
+      want: () => ({ ask: async () => ({ answers: { risk: { type: 'noul', noul: risk } } }) }),
+    })
+  const target: Element = {
+    token: 's:1',
+    index: 1,
+    depth: 0,
+    role,
+    label,
+    enabled: true,
+    actions: [],
+  }
+  const observation: Observation = {
+    app: 'Calculator',
+    pid: 123,
+    windowId: 456,
+    title: 'Calculator',
+    snapshot: 's',
+    elements: [target],
+    tree: '',
+    truncated: false,
+  }
+  const session = await readSession(f.host, f.root.id)
+  const ctx: GateContext = {
+    session,
+    conversation: f.root.id,
+    grants: session.grants,
+    app: 'Calculator',
+    step,
+    target,
+    observation,
+    identity: { name: 'Calculator', bundle: 'com.apple.calculator' },
+    foreground: true,
+    active: { stopped: false, inFlight: false },
+    count: 0,
+    signal: new AbortController().signal,
+    host: f.host,
+    driver: await runtime(f.host).driver!,
+  }
+  for (const gate of dispatchGates) {
+    const refusal = await gate(ctx)
+    if (refusal) return refusal.refuse
+  }
+  return undefined
+}
+it.each(bypassCases)(
+  'label approval only bypasses label risk: $name',
+  async ({ step, label, role, approved }) => {
+    expect(await checkLabelBypass(step, label, role)).toBe(
+      approved ? undefined : 'confirm_required',
+    )
+  },
+)
+it('still requires a card when Jev finds risk in a pre-approved label click', async () => {
+  expect(
+    await checkLabelBypass({ kind: 'click', element: 's:1' }, 'Upload skill', 'AXButton', 0.9),
+  ).toBe('confirm_required')
+})
+
+it.each([
+  { value: '1', text: 'Use account 12345', accepted: false },
+  { value: '123', text: 'Use account 12345', accepted: false },
+  { value: '/tmp', text: 'Use file /tmp/example.txt', accepted: false },
+  { value: '1', text: 'Use file "1"', accepted: true },
+  { value: '/tmp/example.txt', text: 'Use file /tmp/example.txt.', accepted: true },
+  { value: '1', text: '1', accepted: true },
+  { value: 't upload John', text: "I can't upload John's report", accepted: false },
+  { value: 'Use sample.', text: 'First request. Use sample. Next request.', accepted: true },
+  { value: 'brief file', text: 'Use file “brief file”', accepted: true, brief: true },
+])(
+  'requires bounded literal param provenance: $text / $value',
+  async ({ value, text, accepted, brief }) => {
+    const f = await fixture()
+    await f.save([{ ...lessonStep(), action: 'type', value: { param: 'file' } }])
+    const content = `Upload lesson\n${text}`
+    if (brief) {
+      await f.root.submit(
+        { type: 'input', content, entry: { kind: 'subagents.instruction' } },
+        context,
+      )
+      await f.host.harness().waitForIdle(context)
+    } else await f.say(content)
+    const built = await f.invoke('computer_teach', {
+      action: 'practice',
+      skill: 'lesson',
+      scope: 'project',
+      params: { file: value },
+    })
+    expect(data(built).status).toBe(accepted ? 'awaiting_confirmation' : 'param_provenance')
+    expect(!!(await readSession(f.host, f.root.id)).task).toBe(accepted)
+  },
+)
+
+it('parent user input revokes a child run takeover but not an unrelated conversation', async () => {
+  const f = await fixture()
+  await f.start()
+  await f.confirm()
+  const child = await f.addConversation(f.root.id)
+  const unrelated = await f.addConversation()
+  const initial = (await readSession(f.host, f.root.id)).task!
+  for (const id of [child.id, unrelated.id])
+    await updateSession(f.host, id, (doc) => {
+      doc.task = structuredClone(initial)
+    })
+  await f.say('I am taking control')
+  expect((await readSession(f.host, child.id)).task?.runTakeover).toBe(false)
+  expect((await readSession(f.host, unrelated.id)).task?.runTakeover).toBe(true)
+})
+
+it('requires taught consequential labels again on practice replan, before changing any state', async () => {
+  const f = await fixture()
+  await f.save([{ ...lessonStep(), target: { label: 'Upload skill', anchors: [] } }])
+  await f.say('Upload lesson')
+  await f.practice()
+  await f.confirm()
+  const initial = (await readSession(f.host, f.root.id)).task!
+  for (const label of ['Untaught', 'Upload']) {
+    const changed = await f.invoke('computer_task', {
+      action: 'replan',
+      reason: 'Add a label',
+      scope: { ...initial.spec.scope, consequential: [label] },
+    })
+    expect(data(changed).status).toBe('consequential_not_taught')
+    expect((await readSession(f.host, f.root.id)).task).toEqual(initial)
+  }
+  const changed = await f.invoke('computer_task', {
+    action: 'replan',
+    reason: 'Add the taught label',
+    scope: { ...initial.spec.scope, consequential: ['Upload skill'] },
+  })
+  expect(data(changed).status).toBe('awaiting_confirmation')
+})
+
+it('exposes the saved app display name alongside the canonical approval id without matching on it', async () => {
+  const f = await fixture()
+  await f.save()
+  await f.say('Upload lesson')
+  const built = await f.practice()
+  expect(data(built).spec.approval).toMatchObject({
+    app: 'com.apple.calculator',
+    appName: 'Calculator',
+  })
+  expect(built.details).toMatchObject({
+    task: {
+      approval: {
+        app: { text: 'com.apple.calculator', untrusted: true },
+        appName: { text: 'Calculator', untrusted: true },
+      },
+    },
+  })
+  await f.confirm()
+  await f.finish('partial')
+  await f.start({ approval: { ...approval(), app: 'Other', appName: 'Calculator' } })
+  await f.confirm()
+  expect(data(await f.click()).outcomes[0].code).toBe('user_active')
+})
+
+it('does not manufacture parameter whitespace between separate user text blocks', async () => {
+  const f = await fixture()
+  await f.save([{ ...lessonStep(), action: 'type', value: { param: 'file' } }])
+  await f.say('Upload lesson')
+  await f.root.submit(
+    {
+      type: 'input',
+      content: [
+        { type: 'text', text: '1' },
+        { type: 'text', text: '2' },
+      ],
+    },
+    context,
+  )
+  await f.host.harness().waitForIdle(context)
+  const built = await f.invoke('computer_teach', {
+    action: 'practice',
+    skill: 'lesson',
+    scope: 'project',
+    params: { file: '1 2' },
+  })
+  expect(data(built).status).toBe('param_provenance')
+  expect((await readSession(f.host, f.root.id)).task).toBeUndefined()
+})

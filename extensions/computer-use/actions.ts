@@ -122,6 +122,7 @@ export async function hardStop(host: ExtensionHost) {
 async function interrupt(host: ExtensionHost, conversation: number, markStopped: boolean) {
   await updateSession(host, conversation, (doc) => {
     if (markStopped) doc.stopped = true
+    if (doc.task) doc.task.runTakeover = false
     doc.confirmed = []
     doc.pending = doc.pending.filter((p) => p.kind !== 'confirm')
     if (markStopped && doc.task)

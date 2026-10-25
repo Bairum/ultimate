@@ -143,6 +143,7 @@ export type GoalResult =
 export const jevThresholds = { act: 0.8, margin: 0.25, done: 0.85, risk: 0.3, maxCandidates: 24 }
 export type Approval = {
   app: string
+  appName?: string
   window?: string | number
   pixel: true
   actions: Step['kind'][]

@@ -227,6 +227,8 @@ const visible = (payload: string) =>
 
 type Approval = NonNullable<NonNullable<ComputerDetails['task']>['approval']>
 const wrap = (text: string) => ({ text, untrusted: true as const })
+const approvalApp = (approval: Approval) =>
+  approval.appName ? `${approval.appName.text} (${approval.app.text})` : approval.app.text
 /**
  * A task's approval in the `details.task.approval` shape (`details.ts` maps it the same way), for the live session the
  * confirmation reads. App, window title and consequential labels are untrusted text.
@@ -237,6 +239,7 @@ export function approvalOf(task: Session['task']): Approval | undefined {
   return {
     ...approval,
     app: wrap(approval.app),
+    appName: approval.appName === undefined ? undefined : wrap(approval.appName),
     window: typeof approval.window === 'string' ? wrap(approval.window) : approval.window,
     takeover: !!task.runTakeover,
     consequential: task.spec.scope.consequential.map(wrap),
@@ -258,7 +261,7 @@ export function ApprovalScope({ approval }: { approval: Approval }) {
         Pre-approved for this run
       </p>
       <Fact label="app">
-        <Screen>{approval.app.text}</Screen>
+        <Screen>{approvalApp(approval)}</Screen>
       </Fact>
       <Fact label="window">
         {approval.window === undefined ? (
@@ -282,8 +285,8 @@ export function ApprovalScope({ approval }: { approval: Approval }) {
         {approval.foreground ? (
           <span className="font-sans text-[12.5px] text-warning" data-computer-run-takeover>
             The agent may take the foreground in{' '}
-            <span className="text-foreground">“{approval.app.text}”</span> for this whole run: it
-            brings the window to the front and clicks there until the run ends, you Stop, or you
+            <span className="text-foreground">“{approvalApp(approval)}”</span> for this whole run:
+            it brings the window to the front and clicks there until the run ends, you Stop, or you
             type here.
           </span>
         ) : (
@@ -369,7 +372,11 @@ function ApprovalDiff({ before, after }: { before?: Approval; after: Approval })
           <ScreenMark />
         </span>
       </p>
-      <DiffRow after={`“${after.app.text}”`} before={was((a) => `“${a.app.text}”`)} label="app" />
+      <DiffRow
+        after={`“${approvalApp(after)}”`}
+        before={was((a) => `“${approvalApp(a)}”`)}
+        label="app"
+      />
       <DiffRow
         after={windowText(after.window)}
         before={was((a) => windowText(a.window))}

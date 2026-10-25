@@ -1,6 +1,26 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readdir, lstat, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, lstat, rm, writeFile, open } from 'node:fs/promises'
+import { constants, createWriteStream } from 'node:fs'
+import { pipeline } from 'node:stream/promises'
 import { join } from 'node:path'
+
+/** Bind the copy to a regular inode; never follow a swapped source symlink. */
+export async function copyTeachingImage(source: string, destination: string) {
+  const before = await lstat(source)
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error('Unsafe teaching image')
+  const input = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  try {
+    const actual = await input.stat()
+    if (!actual.isFile() || actual.dev !== before.dev || actual.ino !== before.ino)
+      throw new Error('Teaching image changed before copying')
+    await pipeline(
+      input.createReadStream(),
+      createWriteStream(destination, { flags: 'wx', mode: 0o600 }),
+    )
+  } finally {
+    await input.close()
+  }
+}
 
 const missing = (error: NodeJS.ErrnoException) => error.code === 'ENOENT'
 export const teachDirectory = (home: string, conversation: number, segment: string) => {

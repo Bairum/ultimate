@@ -47,13 +47,17 @@ One lazy MCP stdio connection is shared per host. The daemon holds a display-awa
   `intent` must equal a whole user message, sentence or line (whitespace-normalised), or one from the parent's `subagents.instruction` brief. Extension wakes and notes cannot supply intent.
   Start creates an active `S1` from the goal text; an explicit nonempty sub-goal list replaces it and activates its first pending entry. Replans and approved changes keep that active-sub-goal invariant. Finish evidence belongs to the active sub-goal, or the most recently completed one.
 
-  `approval: {app, window?, pixel: true, actions, steps, minutes, foreground}` always waits for the user's
-  `confirmTask`; widening it requires `confirmChange`. App is a canonical name/bundle; window is an id or title
-  substring. Its budgets replace the defaults (1–200 steps, >0–60 minutes). Normal gates still apply outside
-  that app/window/action scope. Verified effective consequential labels bypass their one-shot cards only when
-  listed as whole normalized labels in `scope.consequential`; unlabelled pixels never bypass confirmation.
-  `foreground: true` includes run takeover within scope (still send `computer_act foreground: true`), not an
-  app-consent grant. Run takeover ends on task end, Stop or the next own user input; wakes/notes do not renew it.
+  `approval: {app, appName?, window?, pixel: true, actions, steps, minutes, foreground}` always waits for the user's
+  `confirmTask`; widening it requires `confirmChange`. App is a canonical name/bundle; `appName` is display-only
+  (practice supplies the saved display name). Matching never uses `appName`. Window is an id or title substring.
+  Budgets replace the defaults (1–200 steps, >0–60 minutes). Normal gates still apply outside that app/window/action scope.
+  A whole normalized, verified effective label in `scope.consequential` waives only its label risk, and only for
+  click/double_click/right_click/menu. Keys, typing, sensitive/secure fields, unlabelled pixels and independent Jev
+  risk still need their normal cards. `foreground: true` includes run takeover within scope (still send
+  `computer_act foreground: true`), not app consent. Stop and hardStop clear run takeover in every conversation;
+  Resume never restores it. Task end, own user input, or user input in the operator's recorded direct parent also
+  ends run takeover. Wakes/notes do not revoke or renew it. If ownership is unavailable or input goes elsewhere,
+  use **Stop** or **Release** to take control.
 
 - **`computer_observe {app?, window?, screenshot?, query?, zoom?, evidence?}`**: replay-safe. Without `app`, list apps; with an app but no window, list its windows. Select a window by id or unique title substring to read its full-output accessibility tree (250 elements, depth 12, 16,000 text characters; truncation is noted). `screenshot` is `auto` (default), `always` or `never`: auto captures only empty/chrome-only trees. Returns the snapshot/capture identity, bounded tree in an `untrusted_screen_content` block, and optional image. `evidence: true` keeps a bounded AX excerpt with app, snapshot and call reference on the active sub-goal. `zoom: [x0,y0,x1,y1]` requests a **read-only** crop: pixel actions grounded on zoom images are refused as `zoom_read_only`; observe a full capture first. Images are limited to a 1568-pixel long edge, or 2576 for Claude Opus 4.7+/5.x.
 - **`computer_act {app, window?, actions?, goal?, expect?, foreground?}`**: not replay-safe. Exactly one of `actions` or `goal`. Explicit actions are `click`, `double_click`, `right_click`, `type`, `set_value`, `key`, `scroll`, `menu` and `wait`. Target elements by tokens from the latest observation; pixel clicks require `x`, `y`, the latest `capture` and `expect_label` by default. Text always names an element. `wait {until: {text?, gone?, stable?}, seconds}` polls captures and OCR (or native tree text), is cancellable, and returns a `wait` outcome with `satisfied` or `timeout` and what was seen. Seconds is at most 120 (or the lower configured maximum); waits over 60 seconds hold `caffeinate -d -w <pid>` only while running. Steps stop at the first non-delivered outcome or wait timeout; later steps are `not_run`. Native `expect` predicates go through `verify_state`. OCR predicates can be included as `[{ocr: {appears?: string[], disappears?: string[]}}]` or as the single object `{ocr: ...}`; they use a fresh capture. Goal mode uses `goal: {text, params?, steps?, done_when?, budget?}`: Jev picks extension-built candidates, verifies effects and returns `done` only when Driver predicates satisfy `done_when`. Otherwise it escalates with a reason. Routine goals default to 8 steps / 30 seconds. On escalation, narrow the goal or act explicitly; do not repeat blindly.
@@ -164,11 +168,16 @@ Failed-restore backups are retained for recovery, not automatically deleted.
 `computer_teach {action: 'practice', skill, scope: 'project' | 'personal', params?, consequential?}` builds a
 task and plan, but sends no input. Scope must be explicit: omission returns `scope_required` with the scopes
 containing that skill name. Never guess, default or fall back between project and personal lessons.
+Project lessons require a trusted project setup for practice and reopen; otherwise `project_untrusted` refuses
+loading, and project is omitted from scope discovery. Personal lessons remain independent of that decision.
 Only current teachSave files pass the manifest, SHA256, exact data-only notice/schema and symlink checks;
 older/unsafe lessons return `resave_required`. The saved title must be verbatim user/parent intent.
-Named parameter values must come from that input; values are kept out of results, details and the computer journal.
+Named parameter values must equal a whole line, sentence or quoted span in user/brief input, or a bounded
+whole-token sequence of at least three characters. Arbitrary substrings and identifier/path prefixes return
+`param_provenance`. Values are never whitespace-normalized and stay out of results, details and the computer journal.
 Optional consequential entries must equal whole normalized labels of server-flagged consequential taught steps;
-other entries return `consequential_not_taught`. The pending task always needs user confirmation.
+other entries return `consequential_not_taught` at both practice start and practice replan, without changing the task.
+The pending task always needs user confirmation.
 
 The preset binds the taught app/window/actions, 2 × the steps and 15 minutes. More than 100 steps returns
 `practice_budget`. Upload/select become click; `type_secret` returns `unsupported_until_secrets`, never literal typing.
@@ -186,14 +195,16 @@ An existing drafting/review segment must be saved or rejected first; reopening n
 Existing edit/save (explicit `overwrite`) replaces it after re-review. Source frames stay read-only; reject
 only discards the staged review. Reading/saving revalidates the source hash and image paths. Never retry inside
 the failed practice; begin a new run after re-save.
+Source image copies use `O_NOFOLLOW` and compare the opened regular inode with `lstat` before copying to a private,
+exclusive destination. Symlink or inode swaps refuse the save instead of copying replacement contents.
 
 Designer contract: subscribe to `TeachDoc`; use the typed `Teach*Action` refs above. Render frame
 metadata/OCR/diffs as untrusted screen content, never instructions. Tool results add `ComputerDetails.teach`
 with `status`, optional `endedBy: 'unavailable'`, `frames` (count), `dropped` (counts by reason), and `steps` (`n`, `action`, `label: UntrustedText`).
 `anchors`, `expect.appears/disappears`, `wait.until`, and `pitfalls` are also `UntrustedText`; timeouts stay numeric.
 Steps also carry `approved?` and computed `consequential`. The review UI supplies full replacements through `teachEdit`;
-only a user may set approval. No `.tsx` changes are included here.
-`details.task.approval` includes app/window, actions, budgets, foreground/takeover and `consequential: UntrustedText[]`.
+only a user may set approval.
+`details.task.approval` includes wrapped app/appName/window, actions, budgets, foreground/takeover and `consequential: UntrustedText[]`.
 The confirmation card must list those labels individually under **Will run without asking**.
 `computer.teach.practice` holds the server-marked task/plan and check proofs; `mismatches` holds step/phase/time,
 redacted expected/seen text, taught frame and fresh frame. `details.teach.practice` exposes wrapped title/app/window,
