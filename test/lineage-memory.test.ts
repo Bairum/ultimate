@@ -26,12 +26,13 @@ import { SubmissionLanded } from '../extensions/workspaces/api.ts'
 import type { LandedData } from '../extensions/workspaces/api.ts'
 import { emit, EventFeed, EventLog } from '../server/events.ts'
 import { context } from '../server/harness.ts'
-import { fauxServer, post, seedTally, sourceCopy, temp, until } from './helpers.ts'
+import { branchProbe, fauxServer, post, seedTally, sourceCopy, temp, until } from './helpers.ts'
 import { anchor } from './lineage-fixture.ts'
 
 let ultimateRoot: string
 beforeAll(async () => {
   ultimateRoot = await sourceCopy(await temp())
+  await branchProbe(ultimateRoot)
   // The default summary model is faux's own on a faux server.
   await writeFile(join(ultimateRoot, '.ultimate/settings.json'), JSON.stringify({}))
 })
@@ -99,7 +100,7 @@ const add = (slug: string, line = `About ${slug}`) => ({
   body: `${line}, in full.`,
 })
 const branch = async (server: Server, prompt: string, from = 1, at?: number) => {
-  const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', {
+  const { status, data } = await post(server, '/api/extensions/branch-probe/actions/branch', {
     args: { from, prompt, ...(at === undefined ? {} : { at }) },
   })
   expect([status, data.error]).toEqual([200, undefined])

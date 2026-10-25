@@ -3,8 +3,10 @@ A project is a forest of conversation trees. Each root keeps a non-agent tally o
 The UI calls a root's tally its **context** ("what every new branch starts from"); "tally" stays the internal name of the
 document, tools and model-facing text, where agents and stored entries already use it.
 
-- **Branch** (action `branch`
-  `{ from, at?, prompt, title?, images?, isolated?, model?, thinkingLevel? }` → `{ id }`). It forks the source at `at` (default: its latest entry) as an
+- **Branch** (`LineageApi.branch`
+  `{ from, at?, prompt, title?, images?, isolated?, model?, thinkingLevel?, deliver?, by?, receipt? }` → `{ id }`; there
+  is no action: agents start branches with the messages extension's `branch` tool, whose reply-enabled first message
+  returns the branch's answer). It forks the source at `at` (default: its latest entry) as an
   ownerless conversation in the project root, optionally isolated in its own worktree. It inherits the source context
   (or, from a root with memories, starts at a memory brief: see Project memory), then the durable `lineage.prompt` task submits the prompt and images as its first
   input. Doc `lineage.branch` holds `{ from, at, intent }`; `inputAt` is when the branch was asked for, not inherited
