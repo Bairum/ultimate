@@ -16,13 +16,14 @@ import type { Triage } from './refs.ts'
 const bare = (line: string) => line.trim().replace(/[*_`]+$/, '')
 
 /**
- * An answer that asks for a decision: it ends with a question or numbered options. A numbered list led by a line such
- * as "Once it has landed, I'll:" is plan steps, unless that line names a decision or the message has lettered options.
+ * An answer that asks for a decision: it ends with a question, numbered options or the coordinator's `My picks:` line.
+ * A numbered list led by a line such as "Once it has landed, I'll:" is plan steps, unless that line names a decision or
+ * the message has lettered options.
  */
 export function needsDecision(text: string) {
   const lines = text.trim().split('\n')
   const last = bare(lines.at(-1)!)
-  if (last.endsWith('?')) return true
+  if (last.endsWith('?') || /^my picks:/i.test(last)) return true
   if (!/^\d+[.)]\s/.test(last)) return false
   const lead = lines.findLast((line) => line.trim() && !/^\s*\d+[.)]\s|^\s{2,}\S/.test(line))
   return (

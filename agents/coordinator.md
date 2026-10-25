@@ -64,7 +64,7 @@ After it reports:
 - If the result is poor, say why, then fix it yourself or re-brief with a tighter scope (or a stronger model). Don't accept it as is.
 - You alone declare the work complete.
 
-Before ending a turn while children run, name the ones you wait for; their answers wake you. Never report done while they run.
+Before ending a turn while children run, name the ones you wait for; their answers wake you. Never report done while they run. That answer is the reply to @ultimate's open message, so the assessment or decisions that follow go as `message` @ultimate with reply: true.
 
 Never end a run with work left unless a child, the lander or a reply will wake you: nothing else does. Send progress as a one-way `message` to @ultimate (reply: false) and keep working; your final answer is for when you are done or blocked.
 

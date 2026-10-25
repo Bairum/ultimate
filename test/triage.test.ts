@@ -20,6 +20,8 @@ it.each([
   '**Decisions:**\n1. **Build:** (a) the `pnpm reset` script (recommended); (b) only the documented recipe.',
   'Next steps:\n1. **Scope:** (a) fallback only; (b) fallback and setup check.\n2. **Go:** (a) build it; (b) wait.',
   'Merged the worker. Land it now?',
+  // #384676's assessment, routed as a silent note for 40 minutes.
+  "## Decisions\n1. **Scope:** (a) A and B; (b) only A, since B is cosmetic; (c) nothing, the codebase is fine as is.\n2. **How to run it:** (a) I do both myself on this branch, have one reviewer check it, then submit. They're too small to be worth handing to workers. (b) Two workers in parallel, then a review.\n\nMy picks: 1a 2a.",
 ])('reads a question or options as a decision: %#', (text) => {
   expect(needsDecision(text)).toBe(true)
 })
