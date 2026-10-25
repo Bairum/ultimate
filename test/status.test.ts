@@ -40,7 +40,17 @@ const host = (off: string[] = []) =>
     want: (api: { name: string }) => (off.includes(api.name) ? undefined : services[api.name]),
     need: (api: { name: string }) => services[api.name],
     conversations: () => [{ busy: true }, { busy: false }, { busy: true }],
+    extensions: () => [
+      { name: 'status', source: 'builtin', enabled: true, path: '/x', server: { docs: [] } },
+      { name: 'cloud', source: 'builtin', enabled: false, path: '/y' },
+      { name: 'deploys', source: 'user', enabled: true, server: { error: 'SyntaxError' } },
+    ],
   }) as unknown as ExtensionHost
+const extensions = [
+  { name: 'status', source: 'builtin', enabled: true },
+  { name: 'cloud', source: 'builtin', enabled: false },
+  { name: 'deploys', source: 'user', enabled: true, error: 'SyntaxError' },
+]
 
 it('summarizes the clone, failures, providers, questions and busy conversations from their owners', async () => {
   expect(await status(host(), 940, 1000)).toEqual({
@@ -53,6 +63,7 @@ it('summarizes the clone, failures, providers, questions and busy conversations 
     ],
     questions: { count: 2, first: { text: 'Ship it?', conversation: 9, message: 4 } },
     busy: 2,
+    extensions,
   })
   expect((await status(host(), 960, 1000)).failures).toEqual([])
 })
@@ -62,5 +73,6 @@ it('leaves out what an extension that is off owns', async () => {
     at: 1000,
     questions: { count: 2, first: { text: 'Ship it?', conversation: 9, message: 4 } },
     busy: 2,
+    extensions,
   })
 })

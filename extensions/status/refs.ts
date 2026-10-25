@@ -28,6 +28,13 @@ export type Status = {
   questions: { count: number; first?: { text: string; conversation: number; message: number } }
   /** Conversations running a turn now. */
   busy: number
+  /** Every discovered extension; `error` is why its server facet failed to load. */
+  extensions: {
+    name: string
+    source: 'builtin' | 'user' | 'project'
+    enabled: boolean
+    error?: string
+  }[]
 }
 
 /** `{ since? }` (epoch ms, default 24 hours ago) → this Ultimate's status. Read-only. */
