@@ -257,3 +257,57 @@ it('redacts parameter values and normalised forms from the entire classify paylo
     (await runGoal({ text: 'Open bob@x.com', params: { Name: 'bob@x.com' } }, f.deps)).status,
   ).toBe('escalated')
 })
+
+it('counts a change in the screen text as an effect, as a calculator display only shows there', async () => {
+  // The real Driver omits AXStaticText from its structured elements: pressing × changed only the tree's display text.
+  let display = '6'
+  const buttons = [element(1, 'AXButton', 'Multiply'), element(2, 'AXButton', '7')]
+  const settle = vi.fn<NonNullable<GoalDeps['settle']>>(async () => {
+    display = '6×'
+  })
+  const observe = vi.fn<GoalDeps['observe']>(async () => ({
+    app: 'Calculator',
+    pid: 1,
+    windowId: 1,
+    title: 'Calculator',
+    snapshot: 's1',
+    tree: `- [0] AXWindow "Calculator"\n    - AXStaticText = "\u200e${display}"`,
+    truncated: false,
+    elements: structuredClone(buttons),
+  }))
+  let calls = 0
+  const result = await runGoal(
+    { text: 'Press Multiply', steps: ['Multiply'], budget: { steps: 1 } },
+    {
+      app: 'Calculator',
+      observe,
+      act: async () => ({ status: 'delivered', text: 'ok' }),
+      verify: async () => 'satisfied',
+      ask: async ({ questions }) => {
+        calls++
+        const id = Object.keys(
+          (questions.next as { criteria: Record<string, string> }).criteria,
+        ).find((k) => k.includes('multiply'))!
+        return {
+          model: 'fake',
+          usage: { inputTokens: 0 },
+          answers: {
+            next: { type: 'choice', choice: id, confidence: 1, probabilities: { [id]: 1 } },
+            done: { type: 'noul', noul: 0 },
+            risk: { type: 'noul', noul: 0 },
+          },
+        }
+      },
+      allowed: () => 'ok',
+      settle,
+      stopped: () => false,
+      signal: new AbortController().signal,
+      now: () => 0,
+      record: () => {},
+    },
+  )
+  expect(settle).toHaveBeenCalledTimes(1)
+  expect(result.decisions.some((d) => d.outcome === 'verified')).toBe(true)
+  expect(result).toMatchObject({ status: 'escalated', reason: 'budget' })
+  expect(calls).toBe(1)
+})
