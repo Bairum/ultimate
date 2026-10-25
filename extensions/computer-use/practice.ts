@@ -299,7 +299,9 @@ export async function startPractice(
         foreground: config.pixel?.foregroundForDegraded !== 'background',
       },
     }
-    const started = await taskTool(host, conversation, call, { action: 'start', spec }, signal)
+    const started = await taskTool(host, conversation, call, { action: 'start', spec }, signal, {
+      appName: manifest.app.name,
+    })
     if ((await readSession(host, conversation)).task?.spec.id !== spec.id) return started
     await updateTeach(host, conversation, (doc) => {
       doc.practice = {

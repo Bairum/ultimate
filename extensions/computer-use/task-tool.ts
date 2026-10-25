@@ -4,7 +4,7 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ClassifyApi } from '../classify/api.ts'
-import type { Verdict } from './types.ts'
+import type { Approval, Verdict } from './types.ts'
 import { readSession, updateSession, isStopped } from './session.ts'
 import { result, anchored, plainTask, activatePending, object } from './tool-helpers.ts'
 import { runtime, setup, cacheKey, settings } from './runtime.ts'
@@ -32,7 +32,7 @@ export const subgoalsSchema = Type.Array(Type.Object({ id: Type.String(), text: 
 })
 export const approvalSchema = Type.Object({
   app: Type.String(),
-  appName: Type.Optional(Type.String()),
+  // No appName here: the display name is server-set from a saved lesson, never written by the model.
   window: Type.Optional(Type.Union([Type.String(), Type.Integer({ minimum: 1 })])),
   pixel: Type.Literal(true),
   actions: Type.Array(Type.String(), { minItems: 1 }),
@@ -59,6 +59,8 @@ export async function taskTool(
   call: string,
   args: TaskArgs,
   signal: AbortSignal,
+  /** Server-only facts a model cannot supply, such as a saved lesson's app display name. */
+  trusted: { appName?: string } = {},
 ) {
   const planned =
     args.action === 'subgoals' ? args.list : args.action === 'replan' ? args.subgoals : undefined
@@ -81,7 +83,20 @@ export async function taskTool(
         }),
       )
     signal.throwIfAborted()
-    const started = task.startTask(args.spec, Date.now())
+    // The display name is server-set from a saved lesson; a model-written one would mislabel the approval card.
+    const { appName: _ignored, ...approval } = args.spec.approval ?? { appName: undefined }
+    const started = task.startTask(
+      args.spec.approval
+        ? {
+            ...args.spec,
+            approval: {
+              ...approval,
+              ...(trusted.appName ? { appName: trusted.appName } : {}),
+            } as Approval,
+          }
+        : args.spec,
+      Date.now(),
+    )
     started.state = task.activate(
       task.setSubgoals(started.state, [{ id: 'S1', text: started.state.spec.goal }], Date.now()),
       'S1',
@@ -317,7 +332,18 @@ export async function taskTool(
     if (args.action === 'subgoals')
       next = task.setSubgoals(plainTask(doc.task), args.list, Date.now())
     if (args.action === 'activate') next = task.activate(plainTask(doc.task), args.id, Date.now())
-    if (args.action === 'replan') next = task.replan(plainTask(doc.task), args, Date.now())
+    if (args.action === 'replan') {
+      const current = plainTask(doc.task)
+      const kept = current.spec.approval
+      let change = args
+      if (args.approval) {
+        // Keep the lesson's display name only while the canonical app is unchanged; never take the model's.
+        const { appName: _ignored, ...approval } = args.approval
+        const appName = kept && kept.app === approval.app ? kept.appName : undefined
+        change = { ...args, approval: { ...approval, ...(appName ? { appName } : {}) } }
+      }
+      next = task.replan(current, change, Date.now())
+    }
     next = activatePending(next)
     if (!doc.task.runTakeover) next.runTakeover = false
     doc.task = next

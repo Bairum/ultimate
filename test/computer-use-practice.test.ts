@@ -891,7 +891,7 @@ const bypassCases: {
     step: { kind, element: 's:1' },
     approved: true,
   })),
-  { name: 'menu', step: { kind: 'menu', path: ['Upload skill'] }, approved: true },
+  { name: 'menu', step: { kind: 'menu', path: ['Upload skill'] }, approved: false },
   { name: 'committing key', step: { kind: 'key', key: 'Enter' }, approved: false },
   {
     name: 'committing chord',
@@ -1099,7 +1099,14 @@ it('exposes the saved app display name alongside the canonical approval id witho
   })
   await f.confirm()
   await f.finish('partial')
-  await f.start({ approval: { ...approval(), app: 'Other', appName: 'Calculator' } })
+  // Regression (review #54947): a model-written display name is dropped, so the card shows the real app.
+  const started = await f.start({
+    approval: { ...approval(), app: 'Other', appName: 'Calculator' },
+  })
+  expect(started.details).toMatchObject({ task: { approval: { app: { text: 'Other' } } } })
+  expect(
+    (started.details as { task?: { approval?: { appName?: unknown } } }).task?.approval?.appName,
+  ).toBeUndefined()
   await f.confirm()
   expect(data(await f.click()).outcomes[0].code).toBe('user_active')
 })

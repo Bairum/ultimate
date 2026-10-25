@@ -52,7 +52,7 @@ One lazy MCP stdio connection is shared per host. The daemon holds a display-awa
   (practice supplies the saved display name). Matching never uses `appName`. Window is an id or title substring.
   Budgets replace the defaults (1–200 steps, >0–60 minutes). Normal gates still apply outside that app/window/action scope.
   A whole normalized, verified effective label in `scope.consequential` waives only its label risk, and only for
-  click/double_click/right_click/menu. Keys, typing, sensitive/secure fields, unlabelled pixels and independent Jev
+  click/double_click/right_click (never menus, whose risk spans the whole path). Keys, typing, sensitive/secure fields, unlabelled pixels and independent Jev
   risk still need their normal cards. `foreground: true` includes run takeover within scope (still send
   `computer_act foreground: true`), not app consent. Stop and hardStop clear run takeover in every conversation;
   Resume never restores it. Task end, own user input, or user input in the operator's recorded direct parent also

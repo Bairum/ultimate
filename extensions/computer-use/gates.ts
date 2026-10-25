@@ -305,7 +305,8 @@ export const dispatchGates: Gate[] = [
     let risky = ctx.unlabelledPixel || consequence.hit
     // Approving a label never approves another risk or bypasses the independent Jev check.
     if (
-      ['click', 'double_click', 'right_click', 'menu'].includes(ctx.step.kind) &&
+      // Menus never qualify: their risk comes from the whole path, which a single approved label cannot cover.
+      ['click', 'double_click', 'right_click'].includes(ctx.step.kind) &&
       consequence.reason?.startsWith('Consequential label: ') &&
       !sensitiveField(ctx.target) &&
       !ctx.unlabelledPixel &&
