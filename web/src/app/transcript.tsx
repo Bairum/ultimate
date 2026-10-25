@@ -703,6 +703,7 @@ function TranscriptEntries() {
       {partial && (
         <AssistantView busy message={partial} results={results} slots={slots} streaming />
       )}
+      <Slot name="transcript.end" />
       <LiveStatus busy={busy} id={id} live={live} partial={partial} />
       {tailSpace > 0 && (
         <div aria-hidden="true" data-history-anchor-space style={{ height: tailSpace }} />
