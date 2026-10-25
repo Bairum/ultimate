@@ -19,6 +19,7 @@ import { homedir } from 'node:os'
 import { realpath } from 'node:fs/promises'
 import { extensionModules } from './vite-extensions.ts'
 import { admit, createAccess } from './request-security.ts'
+import type { PairingOpener } from './request-security.ts'
 import { writeProject } from './project.ts'
 import { reportCore } from './supervisor-protocol.ts'
 import { viteLogger } from './vite-logger.ts'
@@ -30,6 +31,8 @@ const send = (message: ChildMessage) => process.send?.(message)
 export interface ServerOptions extends HostOptions {
   port?: number
   publicUrl?: string
+  instance?: boolean
+  pairingOpener?: PairingOpener
 }
 export async function prepareServer(options: Partial<ServerOptions> = {}) {
   const ultimateRoot =
@@ -111,7 +114,12 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       allowedHosts: true,
       hmr: { server: hmr },
       fs: {
-        allow: [ultimateRoot, projectRoot, resolvePath(options.userHome ?? homedir(), '.ultimate')],
+        // Only user extensions from ~/.ultimate: its root holds secrets.json and user-key.
+        allow: [
+          ultimateRoot,
+          projectRoot,
+          resolvePath(options.userHome ?? homedir(), '.ultimate/extensions'),
+        ],
       },
     },
     appType: 'spa',
@@ -207,7 +215,10 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     )
     await extensions.opened()
     await system.changed()
-    api = await createApi(host, harness, events, system, extensions, access)
+    api = await createApi(host, harness, events, system, extensions, access, {
+      instance: options.instance ?? Boolean(process.env.ULTIMATE_INSTANCE_OWNER),
+      opener: options.pairingOpener,
+    })
     harness.harness.resume()
     return { ...harness, api, system }
   }

@@ -15,12 +15,13 @@ export default function secrets(host: ExtensionHost) {
       section(
         'secrets',
         () =>
-          'Secrets are managed by the user in the Secrets panel (⌘K → Secrets). Never read, print, or copy ~/.ultimate/secrets.json. When a tool reports a missing secret, tell the user its name and where to add it.',
+          'Secrets are managed by the user in the Secrets panel (⌘K → Secrets). Never read, print, or copy ~/.ultimate/secrets.json or ~/.ultimate/user-key. When a tool reports a missing secret, tell the user its name and where to add it.',
       ),
     ],
   })
 }
 export const userActions = ['set', 'delete']
+export const hostActions = ['set', 'delete']
 
 export const actions: Record<string, ExtensionAction> = {
   list: implementAction(ListAction, async (_args, { host }) => {

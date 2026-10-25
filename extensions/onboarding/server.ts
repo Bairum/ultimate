@@ -168,6 +168,14 @@ export const userActions = [
   'applyFirstRun',
   'firstRunDone',
 ]
+export const hostActions = [
+  'choose',
+  'decide',
+  'setExtension',
+  'adoptProjectSetup',
+  'applyFirstRun',
+  'firstRunDone',
+]
 
 export const actions: Record<string, ExtensionAction> = {
   help: implementAction(HelpAction, async (args, { host }) => {

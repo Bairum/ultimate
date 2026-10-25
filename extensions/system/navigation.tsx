@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
-import { api, useUltimate } from '@/sdk'
+import { api, usePairing, useUltimate } from '@/sdk'
 import { NavigatedAction } from './refs.ts'
 
 /** How long a view must stay before it counts: passing through a surface on the way to another is no navigation. */
@@ -18,11 +18,13 @@ const subscribe = (listener: () => void) => {
 export function NavigationReporter() {
   const { surface, conversationId } = useUltimate()
   const visible = useSyncExternalStore(subscribe, () => document.visibilityState === 'visible')
+  // A user-only action: an unpaired browser would only be refused, on every view.
+  const user = usePairing().whoami?.user === true
   const conversation = surface === 'agent' ? conversationId : undefined
   const reported = useRef<string | undefined>(undefined)
   useEffect(() => {
     const key = `${surface}:${conversation ?? ''}`
-    if (!visible || key === reported.current) return undefined
+    if (!visible || !user || key === reported.current) return undefined
     const timer = setTimeout(() => {
       reported.current = key
       // A missed report only leaves a gap in the debug log; it never needs the user's attention.
@@ -34,6 +36,6 @@ export function NavigationReporter() {
         .catch(() => (reported.current = undefined))
     }, SETTLE_MS)
     return () => clearTimeout(timer)
-  }, [surface, conversation, visible])
+  }, [surface, conversation, visible, user])
   return null
 }

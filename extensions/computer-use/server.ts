@@ -80,3 +80,12 @@ export { act } from './act.ts'
 export { observeWindow } from './observe.ts'
 export { gates } from './gates.ts'
 export { actions, userActions } from './actions.ts'
+// Each one lets agents operate the real Mac (takeover: the user's frontmost app); deny, stop, hardStop and release only take authority away.
+export const hostActions = [
+  'grant',
+  'confirm',
+  'confirmTask',
+  'confirmChange',
+  'resume',
+  'takeover',
+]

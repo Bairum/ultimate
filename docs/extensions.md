@@ -150,6 +150,14 @@ so lint (`lint/ultimate.ts`) keeps them small and documented:
 Pick the channel by what crosses it: services for calls between extensions, documents for durable state, durable
 events (above) for "this happened", actions for the UI and user boundary.
 
+Action boundaries are server-facet exports: `userActions` require a paired browser over HTTP and are refused by
+in-process agents; `hostActions` is their subset affecting shared user state, the clone or external accounts and
+always requires the real cookie, even in preview instances. Other user actions are allowed without a cookie in
+previews, whose state is scratch. `peerActions` are admitted server-to-server HTTP calls, refused by in-process
+agents but not cookie-gated; they cannot overlap user actions. Installation validates every name against `actions`
+and host names against `userActions`. Ordinary actions remain available to agents. Neither Origin nor fetch
+metadata authenticates a user; pairing issues the HttpOnly `ultimate-user` cookie.
+
 ## Tracing
 
 `server/trace.ts` records every service call (`<caller extension>` → `<api>.<method>`), extension action

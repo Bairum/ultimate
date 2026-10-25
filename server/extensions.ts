@@ -1,3 +1,5 @@
+import { PairingRequired } from './request-security.ts'
+import type { HttpCaller } from './request-security.ts'
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { compareExtensions, discoverExtensions } from './discovery.ts'
@@ -259,6 +261,8 @@ export async function loadExtensions(
   }
   const actions = new Map<string, Record<string, ExtensionAction>>()
   const userActions = new Map<string, string[]>()
+  const hostActions = new Map<string, string[]>()
+  const peerActions = new Map<string, string[]>()
   /** Read-only actions a surface polls: the trace counts their successful calls instead of writing them. */
   const pollActions = new Map<string, string[]>()
   const settingsReloads = new Set<string>()
@@ -274,18 +278,29 @@ export async function loadExtensions(
   let open = false
   const cleanups = new Set<() => Promise<void>>()
   const resources = new Map<string, unknown>()
+  /**
+   * `by` is the HTTP caller's class (server/api.ts always passes it), or `agent` for the in-process agent path, which
+   * checks its own limits. Omitted, it is a trusted in-process caller such as a test.
+   */
   async function invoke(
     name: string,
     action: string,
     args: JsonValue,
     signal: AbortSignal,
     conversationId?: number,
-    caller = 'ui',
+    by: HttpCaller | 'agent' = { user: true, host: true },
     device?: Device,
   ) {
     const table = actions.get(name)
     const fn = table && Object.hasOwn(table, action) ? table[action] : undefined
     if (!fn) throw new Error(`Unknown extension action: ${name}/${action}`)
+    if (
+      by !== 'agent' &&
+      ((userActions.get(name)?.includes(action) && !by.user) ||
+        (hostActions.get(name)?.includes(action) && !by.host))
+    )
+      throw new PairingRequired()
+    const caller = by === 'agent' ? 'agent' : 'ui'
     if (
       conversationId !== undefined &&
       (!Number.isSafeInteger(conversationId) || conversationId < 1)
@@ -317,7 +332,7 @@ export async function loadExtensions(
   }
   const extensionHost: ExtensionHost = {
     invoke: async (name, action, args, signal, conversationId) => {
-      if (userActions.get(name)?.includes(action))
+      if (userActions.get(name)?.includes(action) || peerActions.get(name)?.includes(action))
         throw new Error(`${name}/${action} is a user-only action`)
       return invoke(name, action, args, signal, conversationId, 'agent')
     },
@@ -529,6 +544,25 @@ export async function loadExtensions(
             )
           )
             throw new Error('userActions must contain registered action names')
+          const exportedHostActions: unknown = module.hostActions ?? []
+          if (
+            !Array.isArray(exportedHostActions) ||
+            exportedHostActions.some(
+              (action) => typeof action !== 'string' || !exportedUserActions.includes(action),
+            )
+          )
+            throw new Error('hostActions must contain userActions names')
+          const exportedPeerActions: unknown = module.peerActions ?? []
+          if (
+            !Array.isArray(exportedPeerActions) ||
+            exportedPeerActions.some(
+              (action) =>
+                typeof action !== 'string' ||
+                !Object.hasOwn(exportedActions, action) ||
+                exportedUserActions.includes(action),
+            )
+          )
+            throw new Error('peerActions must contain registered non-user action names')
           const exportedPollActions: unknown = module.pollActions ?? []
           if (
             !Array.isArray(exportedPollActions) ||
@@ -547,6 +581,8 @@ export async function loadExtensions(
           if (open) await Promise.all([...facetOpeners.get(facetHost)!].map(runOpener))
           actions.set(name, exportedActions)
           userActions.set(name, exportedUserActions)
+          hostActions.set(name, exportedHostActions)
+          peerActions.set(name, exportedPeerActions)
           pollActions.set(name, exportedPollActions)
           if (module.reloadOnSettings === true) settingsReloads.add(name)
           else settingsReloads.delete(name)
@@ -579,6 +615,8 @@ export async function loadExtensions(
         documents.delete(name)
         actions.delete(name)
         userActions.delete(name)
+        hostActions.delete(name)
+        peerActions.delete(name)
         pollActions.delete(name)
         settingsReloads.delete(name)
         record.actions = []
@@ -599,6 +637,8 @@ export async function loadExtensions(
         host.extensionSources.delete(name)
         actions.delete(name)
         userActions.delete(name)
+        hostActions.delete(name)
+        peerActions.delete(name)
         pollActions.delete(name)
         settingsReloads.delete(name)
         host.builds.remove(name)

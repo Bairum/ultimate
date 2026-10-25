@@ -3,7 +3,13 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { defineExtension } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
-import { prepareFauxServer as prepareServer, until, post, attach } from './helpers.ts'
+import {
+  prepareFauxServer as prepareServer,
+  until,
+  post,
+  attach,
+  cookieHeaders,
+} from './helpers.ts'
 import { context } from '../server/harness.ts'
 import type { ServerEvents } from '../shared/protocol.ts'
 import { fixture, orderedSource } from './server-fixture.ts'
@@ -98,6 +104,7 @@ describe('server reload', () => {
           headers: {
             Origin: `http://localhost:${server.port}`,
             'Content-Type': 'application/json',
+            ...cookieHeaders(server),
           },
           body: '{}',
         })

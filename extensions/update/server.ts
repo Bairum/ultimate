@@ -350,6 +350,7 @@ async function apply(
 }
 
 export const userActions = ['merge']
+export const hostActions = ['merge']
 
 export const actions = {
   /** The clone's update state from the last check. */

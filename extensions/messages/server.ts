@@ -75,7 +75,7 @@ export const actions = {
   },
 }
 /** Only another instance posts these, over its API: no agent here can pose as a remote Ultimate. */
-export const userActions = ['remote', 'remoteReply']
+export const peerActions = ['remote', 'remoteReply']
 export default function messages(host: ExtensionHost) {
   // Core, always on; resolved where they are called, declared here so the catalogue lists them.
   host.need(LineageApi)

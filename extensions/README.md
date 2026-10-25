@@ -626,23 +626,24 @@ Agents call actions in codemode with `await ultimate.action('todos', 'list', arg
 or throwing the action's error. Calls run in-process on behalf of the calling conversation, with the sandbox abort
 signal; omitted args become null. `ultimate.extensions()` lists actions; document their args in your README.
 
-A server facet may export `userActions: string[]` alongside `actions` to reserve named actions for the UI.
-Every name must refer to a registered action; invalid declarations fail facet installation. Use this for choices
-only the user should make, such as granting project trust, managing secrets, or logging in to providers:
+A server facet may export action boundaries alongside `actions`:
 
-```ts
-export const userActions = ['decide']
-```
+- `userActions: string[]`: only a paired browser may call these over HTTP. Codemode refuses them with
+  `<extension>/<action> is a user-only action`.
+- `hostActions: string[]`: a subset of `userActions` whose effects leave the instance's scratch home (shared
+  credentials, user settings, trust, the clone or external accounts). These always need the real pairing cookie.
+- `peerActions: string[]`: server-to-server actions, callable over HTTP by any admitted caller but refused in
+  codemode, like user actions. They must not also be user actions.
 
-Codemode rejects these calls with `<extension>/<action> is a user-only action`; the HTTP path still calls them.
+Every declared name must refer to a registered action; invalid declarations fail facet installation.
+For example, `export const userActions = ['decide']`. Preview instances let cookie-less callers use scratch user
+actions, but never host actions. Ordinary actions remain open to agents. Origin and fetch metadata do not prove
+user identity: HTTP user authority comes only from the HttpOnly `ultimate-user` pairing cookie.
 
 Likewise `pollActions: string[]` names read-only actions a surface polls with changing arguments (cursors, windows):
 the call trace counts their successful calls in `host.trace.polls()` instead of writing them, with the plain action
 and service calls they make; a failure, a model call or a tool call under one is written with the chain above it.
-This is an explicit opt-out from agent action dispatch, not a security sandbox against arbitrary agent code.
-
-The HTTP endpoint remains browser-only: requests require `Sec-Fetch-Site: same-origin` or a loopback `Origin`
-matching the server's port. A plain agent `curl` receives 403; use `ultimate.action` instead of forging browser headers.
+These boundaries are not an OS sandbox against arbitrary agent code.
 
 ## Surfaces
 
@@ -928,6 +929,7 @@ live stream for the shown conversation plus one for each conversation whose docu
 | `useRestart()`                                                            | `api.restart()` with its outcome: `run`, `busy`, `pending` generation, and `error` when a check or boot failed or an activation was rolled back                                                                          |
 | `getConversation()`, `getState()`                                         | The same data now, outside React: in commands and callbacks. Components use the hooks.                                                                                                                                   |
 | `useNotices()`, `useCommands()`, `useExtensions()`, `useNow(ms, active?)` | Server and client notices, all commands, installed web facets, a clock ticking every `ms` while `active`                                                                                                                 |
+| `usePairing()`, `getPairing()`, `refreshPairing()`                        | Whether this browser is paired (`whoami.host`) and may act as the user (`whoami.user`), and `refusedAt` of the last call refused for want of pairing; skip background user-only actions while `user` is false            |
 | `useDocumentRenderers()`                                                  | Registered document renderers by kind (see [Documents](#documents))                                                                                                                                                      |
 | `useStore(select)`                                                        | Any slice of the client state (`State`), re-rendering when it changes                                                                                                                                                    |
 

@@ -23,8 +23,17 @@ import { clampThinkingLevel, getSupportedThinkingLevels } from '@earendil-works/
 import { Metadata } from './metadata.ts'
 import { EVENT_LOG_LABEL, emit } from './events.ts'
 import { UserInputEvent } from '../shared/events.ts'
-import { admit, deviceOf } from './request-security.ts'
-import type { Access } from './request-security.ts'
+import {
+  admit,
+  deviceOf,
+  classify,
+  userCookie,
+  pairingCodes,
+  proxied,
+  loopbackAuthority,
+  PairingRequired,
+} from './request-security.ts'
+import type { Access, HttpCaller, PairingOpener } from './request-security.ts'
 import { conversationIndex } from './project.ts'
 import { maxUploadBytes, pruneUploads, saveUpload, UploadTooLarge } from './uploads.ts'
 import { windowOps, windowView } from './view-window.ts'
@@ -77,9 +86,16 @@ function failed(request: IncomingMessage, response: ServerResponse, error: unkno
   if (!response.headersSent) {
     // An unread body (a refused upload) would otherwise be read to its end to keep the connection alive.
     if (!request.complete) response.setHeader('Connection', 'close')
-    reply(response, error instanceof HttpError ? error.status : 500, {
-      error: error instanceof HttpError ? error.message : 'Request failed',
-    })
+    reply(
+      response,
+      error instanceof HttpError || error instanceof PairingRequired ? error.status : 500,
+      {
+        error:
+          error instanceof HttpError || error instanceof PairingRequired
+            ? error.message
+            : 'Request failed',
+      },
+    )
   } else response.destroy()
 }
 /** Start a server-sent event stream; `end` stops its heartbeat and closes it. */
@@ -111,9 +127,8 @@ async function runAction(
   extensions: Extensions,
   [, name, key]: RegExpExecArray,
   data: Record<string, unknown>,
+  caller: HttpCaller,
 ) {
-  if (request.headers['sec-fetch-site'] !== 'same-origin' && !request.headers.origin)
-    throw new HttpError(403, 'Extension actions require a browser request')
   if (!extensions.action(name, key)) throw new HttpError(404, 'Unknown extension action')
   const id = data.conversationId
   if (id !== undefined && (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1))
@@ -132,11 +147,12 @@ async function runAction(
       args,
       controller.signal,
       id,
-      'ui',
+      caller,
       deviceOf(request.headers),
     )
     reply(response, 200, { result })
   } catch (error) {
+    if (error instanceof PairingRequired) throw error
     // An aborted action is the client leaving (a newer call, an unmount), not a fault.
     if (!controller.signal.aborted && (error as Error)?.name !== 'AbortError')
       console.error(`Extension action ${name}/${key}:`, error)
@@ -155,8 +171,17 @@ export async function createApi(
   system: Awaited<ReturnType<typeof createSystem>>,
   extensions: Extensions,
   access: Access,
+  options: { instance?: boolean; opener?: PairingOpener } = {},
 ) {
   const { harness, root } = opened
+  let cookie: Promise<string> | undefined
+  // A failed read (unsafe permissions) is retried on the next request instead of failing every request until restart.
+  const credential = () =>
+    (cookie ??= userCookie(host.userHome).catch((error: unknown) => {
+      cookie = undefined
+      throw error
+    }))
+  const pairing = pairingCodes(options.opener)
   const streams = new Set<() => Promise<void>>()
   const graph = await harness.taskGraph(context)
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -369,6 +394,61 @@ export async function createApi(
           !(await admit(request, new URL(system.current().process.url).port || '80', access.rules))
         )
           throw new HttpError(403, 'Forbidden')
+        const caller = classify(request.headers, await credential(), options.instance)
+        const origin =
+          access.origins().find((value) => new URL(value).host === request.headers.host) ??
+          `${new URL(system.current().process.url).protocol}//${request.headers.host}`
+        if (request.method === 'GET' && url.pathname === '/api/whoami') {
+          json(200, caller)
+          return true
+        }
+        if (request.method === 'GET' && url.pathname === '/api/pair') {
+          if (!pairing.consume(url.searchParams.get('code') ?? '', origin)) {
+            response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
+            response.end(
+              'This pairing link was already used or has expired. Ask for a new one from Ultimate.',
+            )
+          } else {
+            response.writeHead(302, {
+              'Set-Cookie': `${await credential()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=34560000${new URL(origin).protocol === 'https:' ? '; Secure' : ''}`,
+              Location: '/',
+            })
+            response.end()
+          }
+          return true
+        }
+        if (request.method === 'POST' && url.pathname === '/api/pair') {
+          if (
+            proxied(request.headers) ||
+            !loopbackAuthority(request.headers.host, new URL(origin).port || '80')
+          )
+            throw new HttpError(403, 'Pair on this machine from a local browser')
+          if (!pairing.open(origin, deviceOf(request.headers)))
+            throw new HttpError(429, 'Ask again in 10 seconds')
+          json(202, { ok: true })
+          return true
+        }
+        if (request.method === 'POST' && url.pathname === '/api/pair/link') {
+          if (!caller.user) throw new PairingRequired()
+          const data = await body(request)
+          const target = data.origin ?? origin
+          if (
+            typeof target !== 'string' ||
+            (target !== origin && !access.origins().includes(target))
+          )
+            throw new HttpError(400, 'Expected this server’s origin')
+          json(200, { url: pairing.mint(target, 600000) })
+          return true
+        }
+        if (
+          request.method === 'POST' &&
+          (url.pathname === '/api/restart' ||
+            url.pathname === '/api/conversations' ||
+            /^\/api\/conversations\/\d+\/(submit|abort|configure|compact)$/.test(url.pathname) ||
+            /^\/api\/conversations\/\d+\/inbox\/\d+\/cancel$/.test(url.pathname)) &&
+          !caller.user
+        )
+          throw new PairingRequired()
         if (request.method === 'GET' && url.pathname === '/api/events') {
           const selected = url.searchParams.get('conversation')
           const id = selected === null ? root.id : Number(selected)
@@ -447,7 +527,7 @@ export async function createApi(
             : undefined,
         )
         if (action) {
-          await runAction(request, response, extensions, action, data)
+          await runAction(request, response, extensions, action, data, caller)
           return true
         }
         if (url.pathname === '/api/ui') {

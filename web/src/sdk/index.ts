@@ -74,14 +74,19 @@ export type { ComposerTarget } from '../app/composer.tsx'
 export { api } from './client.ts'
 export { ActionError } from './api.ts'
 export type { ActionOptions, Api } from './api.ts'
+/** Whether an error is a call the server refused because this browser is not paired. */
+export { refusedForPairing } from './pairing.ts'
+export type { Pairing, Whoami } from './pairing.ts'
 export type { UseActionOptions } from './hooks.ts'
 /** Typed refs for a project extension's own documents and actions; built-ins keep theirs in `refs.ts`. */
 export { actionRef, docRef } from '../../../shared/extension-api.ts'
 export type { ActionRef, DocRef } from '../../../shared/extension-api.ts'
 export {
   getConversation,
+  getPairing,
   getState,
   refreshModels,
+  refreshPairing,
   useAction,
   useCompact,
   useCommands,
@@ -99,6 +104,7 @@ export {
   useIntro,
   useModels,
   useNotices,
+  usePairing,
   useNow,
   useRestart,
   useReady,

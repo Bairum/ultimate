@@ -14,6 +14,7 @@ import {
   post,
   attach,
   held,
+  cookieHeaders,
 } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { UiState } from '../server/ui-state.ts'
@@ -475,7 +476,7 @@ export default host => { host.resource('cleanup.process',()=>{
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Origin: server.url,
+          ...cookieHeaders(server),
           'User-Agent':
             'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1',
         },
