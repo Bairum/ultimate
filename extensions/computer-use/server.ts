@@ -5,6 +5,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { ComputerSession } from './session.ts'
 import { plainTask, operatorOnly } from './tool-helpers.ts'
 import { runtime } from './runtime.ts'
+import { elideObservations } from './elide.ts'
 import { observeTool } from './observe.ts'
 import { actTool, appsTool } from './act.ts'
 import { taskToolDefinition } from './task-tool.ts'
@@ -21,6 +22,11 @@ export default function computerUse(host: ExtensionHost) {
     name: 'computer-use',
     hooks: [
       hook(GenerationTask, {
+        // Old screenshots and AX trees are superseded by newer observations; stored history keeps them.
+        beforeRequest: ({ messages }) => {
+          const elided = elideObservations(messages)
+          return elided === messages ? undefined : { messages: elided }
+        },
         beforeInput: async (_input, { tx, conversationId }) => {
           const doc = await tx.doc(ComputerSession, conversationId)
           if (doc.task?.status !== 'active') return undefined

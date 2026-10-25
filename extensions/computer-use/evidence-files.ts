@@ -25,6 +25,8 @@ async function directories(path: string) {
     throw error
   })
 }
+const PRUNE_INTERVAL_MS = 10 * 60 * 1000
+const lastPrune = new Map<string, number>()
 /** Thirty days; ordinary evidence 200 MB/conversation, teaching 300 MB/segment, 1 GB globally.
  * Only explicit directory entries are traversed; symlinks are never followed.
  */
@@ -33,7 +35,12 @@ export async function pruneEvidence(
   now = Date.now(),
   limit = 200 * 1024 * 1024,
   globalLimit = 1024 * 1024 * 1024,
+  { force = false }: { force?: boolean } = {},
 ) {
+  // The scan walks every conversation's evidence: once per interval per home unless a caller needs the caps now.
+  const previous = lastPrune.get(home)
+  if (!force && previous !== undefined && now - previous < PRUNE_INTERVAL_MS) return
+  lastPrune.set(home, now)
   const root = join(home, 'computer-use')
   await mkdir(root, { recursive: true })
   const all: { path: string; size: number; at: number; review?: boolean }[] = []
@@ -89,6 +96,6 @@ export async function saveEvidence(
   await mkdir(directory, { recursive: true, mode: 0o700 })
   const path = join(directory, `${Date.now()}-${randomUUID()}.png`)
   await writeFile(path, png, { flag: 'wx', mode: 0o600 })
-  await pruneEvidence(home)
+  await pruneEvidence(home, undefined, undefined, undefined, { force: true })
   return path
 }

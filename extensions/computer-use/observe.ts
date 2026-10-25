@@ -1,13 +1,15 @@
 import { ObservationUnavailable, json, result, plainTask, object } from './tool-helpers.ts'
-import { runtime, setup, cacheKey } from './runtime.ts'
+import { runtime, setup, cacheKey, imageSize, acquireBusy, permissionMissing } from './runtime.ts'
+import { clock as realClock } from './perception.ts'
+import type { Clock } from './perception.ts'
 import { windowSchema, prepare } from './schemas.ts'
-import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import { resizeImage } from '@earendil-works/pi-coding-agent'
 import { defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { parseObservation, ancestry } from './parse-observation.ts'
-import type { Driver, Observation } from './types.ts'
+import type { Driver, Observation, Predicate, Verdict } from './types.ts'
+import { screenText } from './jev.ts'
 import { updateSession } from './session.ts'
 import * as task from './task.ts'
 import { untrusted } from './content.ts'
@@ -59,7 +61,11 @@ export function parseWindow(reply: Awaited<ReturnType<Driver['call']>>, app: str
   )
     throw new ObservationUnavailable(
       reply.refusal?.code ??
-        (reason.startsWith('screen_locked') ? 'screen_locked' : 'observation_unavailable'),
+        (reason.startsWith('screen_locked')
+          ? 'screen_locked'
+          : permissionMissing(reason)
+            ? 'permission_required'
+            : 'observation_unavailable'),
       reply.refusal?.message ?? reason,
     )
   return parseObservation(
@@ -75,6 +81,7 @@ export async function observeWindow(
   query?: string,
   maxDimension = 1568,
   signal?: AbortSignal,
+  time: Clock = realClock,
 ): Promise<Observation> {
   const target = await windowFor(driver, app, window, signal)
   const args = {
@@ -88,7 +95,23 @@ export async function observeWindow(
     include_screenshot: screenshot === 'always',
     ...(query ? { query } : {}),
   }
-  let observed = parseWindow(await driver.call('get_window_state', args, signal), app)
+  // A read can fail transiently while the window redraws: retry once. A locked screen, missing permission or abort never is.
+  const read = async (call: typeof args) => {
+    try {
+      return parseWindow(await driver.call('get_window_state', call, signal), app)
+    } catch (error) {
+      if (
+        !(error instanceof ObservationUnavailable) ||
+        error.status !== 'observation_unavailable' ||
+        signal?.aborted
+      )
+        throw error
+      await time.sleep(300, signal ?? new AbortController().signal)
+      signal?.throwIfAborted()
+      return parseWindow(await driver.call('get_window_state', call, signal), app)
+    }
+  }
+  let observed = await read(args)
   const chromeOnly = !observed.elements.some(
     (e) =>
       !['AXWindow', 'AXGroup', 'AXScrollArea', 'AXSplitGroup', 'AXToolbar'].includes(e.role) &&
@@ -100,10 +123,7 @@ export async function observeWindow(
       e.depth > 0,
   )
   if (screenshot === 'auto' && chromeOnly)
-    observed = parseWindow(
-      await driver.call('get_window_state', { ...args, include_screenshot: true }, signal),
-      app,
-    )
+    observed = await read({ ...args, include_screenshot: true })
   observed.isOnScreen ??= target.isOnScreen
   observed.truncated ||= observed.tree.length > 16_000
   observed.tree = observed.tree.slice(0, 16_000)
@@ -191,8 +211,9 @@ export function observeTool(host: ExtensionHost) {
         return result({ status: 'stopped' })
       return setup(host, api.conversationId, async (driver) => {
         const state = runtime(host)
-        if (state.busy) return result({ status: 'busy' })
-        state.busy = true
+        const signal = ctx.abortSignal ?? new AbortController().signal
+        if (!(await acquireBusy(host, api.conversationId, signal)))
+          return result({ status: state.busy ? 'busy' : 'stopped' })
         try {
           await pruneEvidence(host.home)
           if (args.app) {
@@ -220,11 +241,7 @@ export function observeTool(host: ExtensionHost) {
               status: 'invalid_arguments',
               message: 'app is required with window',
             })
-          const agent = await (
-            await host.harness().conversation(api.conversationId, context)
-          )?.agent(context)
-          const model = agent?.model?.modelId ?? ''
-          const max = /opus.*(?:4[.-][7-9]|5[.-])/i.test(model) ? 2576 : 1568
+          const max = await imageSize(host)
           const observation = await observeWindow(
             driver,
             args.app,
@@ -233,6 +250,7 @@ export function observeTool(host: ExtensionHost) {
             args.query,
             max,
             ctx.abortSignal,
+            state.clock,
           )
           if (args.zoom) {
             const [x1, y1, x2, y2] = args.zoom
@@ -279,4 +297,62 @@ export function observeTool(host: ExtensionHost) {
       })
     },
   })
+}
+
+type ValueEquals = { role?: string; labelContains?: string; value: string }
+
+function valueEquals(predicate: Predicate): ValueEquals | undefined {
+  const element = predicate.element
+  if (!element || typeof element !== 'object' || Array.isArray(element)) return undefined
+  const { selector, value_equals: value } = element
+  if (!selector || typeof selector !== 'object' || Array.isArray(selector)) return undefined
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined
+  const { role, label_contains: label } = selector
+  return {
+    ...(typeof role === 'string' ? { role } : {}),
+    ...(typeof label === 'string' ? { labelContains: label } : {}),
+    value: String(value),
+  }
+}
+
+/**
+ * Split `verify_state` predicates into `value_equals` ones, which the Driver checks against the first matching element
+ * only, and the rest.
+ */
+export function splitValueEquals(predicates: Predicate[]) {
+  return {
+    local: predicates.filter((p) => valueEquals(p)),
+    remote: predicates.filter((p) => !valueEquals(p)),
+  }
+}
+
+/**
+ * Judge `value_equals` predicates against every match in an observation: its structured elements plus static text, which
+ * the Driver omits from them. Satisfied if any match has the value, unsatisfied if matches exist and none does, unknown
+ * if nothing matches. All predicates must hold.
+ */
+export function judgeValueEquals(observation: Observation, predicates: Predicate[]): Verdict {
+  const text = screenText(observation)
+  const verdicts = predicates.map((predicate): Verdict => {
+    const want = valueEquals(predicate)!
+    const needle = want.labelContains?.toLowerCase()
+    const values = observation.elements
+      .filter(
+        (e) =>
+          (want.role === undefined || e.role === want.role) &&
+          (needle === undefined || (e.label ?? '').toLowerCase().includes(needle)),
+      )
+      .map((e) => e.value)
+    if (want.role === undefined || want.role === 'AXStaticText')
+      values.push(
+        ...text.filter((line) => needle === undefined || line.toLowerCase().includes(needle)),
+      )
+    if (!values.length) return 'unknown'
+    return values.includes(want.value) ? 'satisfied' : 'unsatisfied'
+  })
+  return verdicts.includes('unsatisfied')
+    ? 'unsatisfied'
+    : verdicts.includes('unknown')
+      ? 'unknown'
+      : 'satisfied'
 }

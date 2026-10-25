@@ -90,6 +90,7 @@ const refusals: Record<string, string> = {
   criteria_unmet: 'criteria not met',
   busy: 'another computer call is running',
   setup: 'Cua Driver not set up',
+  permission_required: 'macOS permission missing',
   screen_locked: 'screen is locked',
   incomplete: 'incomplete',
   awaiting_confirmation: 'waits for you',

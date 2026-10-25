@@ -1,6 +1,16 @@
 import { teachingBlocked } from './teach.ts'
 import { windowSchema, predicates, prepare } from './schemas.ts'
-import { settings, runtime, driverFor, setup, cacheKey } from './runtime.ts'
+import {
+  settings,
+  runtime,
+  driverFor,
+  setup,
+  cacheKey,
+  acquireBusy,
+  imageSize,
+  permissionMissing,
+  PERMISSION_FIX,
+} from './runtime.ts'
 import { json, result, anchored, plainTask, changeTask } from './tool-helpers.ts'
 import type { JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
@@ -26,7 +36,7 @@ import type {
 import type { ActStepDetails } from './refs.ts'
 import { readSession, updateSession, isStopped, hasConfirmation } from './session.ts'
 import type { Active } from './runtime.ts'
-import { observeWindow, observedOutput } from './observe.ts'
+import { observeWindow, observedOutput, splitValueEquals, judgeValueEquals } from './observe.ts'
 import {
   outline,
   actionHash,
@@ -152,15 +162,18 @@ export async function act(
       message: 'Provide exactly one of actions or goal.',
     })
   const runtimeState = runtime(host)
-  if (runtimeState.busy)
-    return result({
-      status: 'busy',
-      message: 'Another computer call is active; observe again when it finishes.',
-    })
+  if (!(await acquireBusy(host, conversation, signal)))
+    return result(
+      runtimeState.busy
+        ? {
+            status: 'busy',
+            message: 'Another computer call is active; observe again when it finishes.',
+          }
+        : { status: 'stopped' },
+    )
   const abort = new AbortController()
   signal = AbortSignal.any([signal, abort.signal])
   const active: Active = { stopped: false, inFlight: false, abort }
-  runtimeState.busy = true
   runtimeState.active.set(conversation, active)
   try {
     const teachingAtDispatch = await teachingBlocked(host, conversation, args)
@@ -198,6 +211,7 @@ export async function act(
       runtimeState.observations.get(cacheKey(conversation, args.app))?.degraded ||
       args.actions?.some((s) => ('x' in s && s.x !== undefined) || s.kind === 'wait') ||
       (Array.isArray(args.expect) ? args.expect.some((p) => p.ocr) : args.expect?.ocr)
+    const maxDimension = await imageSize(host)
     const config = { ...pixelDefaults, ...(needsPixels ? (await settings(host)).pixel : {}) }
     const expectations: Predicate[] = Array.isArray(args.expect)
       ? args.expect
@@ -292,15 +306,16 @@ export async function act(
         message: 'Observe and select a window before acting.',
       })
     }
-    const capture = (maxDimension: number) =>
+    const capture = (longest: number) =>
       observeWindow(
         driver,
         args.app,
         args.window ?? observation?.windowId,
         'always',
         undefined,
-        maxDimension,
+        longest,
         signal,
+        runtimeState.clock,
       )
     const observe = async () => {
       const latest = await readSession(host, conversation)
@@ -321,8 +336,9 @@ export async function act(
         args.window ?? observation?.windowId,
         observation?.degraded ? 'always' : 'never',
         undefined,
-        1568,
+        maxDimension,
         signal,
+        runtimeState.clock,
       )
       runtimeState.observations.set(cacheKey(conversation, args.app), observation)
       runtimeState.zoomed.delete(cacheKey(conversation, args.app))
@@ -357,19 +373,30 @@ export async function act(
         })
         return 'satisfied'
       }
-      const checked = await driver.call(
-        'verify_state',
-        {
-          pid: observation.pid,
-          window_id: observation.windowId,
-          expect: preds,
-          timeout_ms: 0,
-        },
-        signal,
-      )
-      const verdict = checked.structured?.verdict ?? checked.structured?.status
-      const verified =
-        checked.ok && (verdict === 'satisfied' || verdict === 'unsatisfied') ? verdict : 'unknown'
+      const { local, remote } = splitValueEquals(preds)
+      const localVerdict = local.length ? judgeValueEquals(observation, local) : 'satisfied'
+      let verified: Verdict = localVerdict
+      if (remote.length) {
+        const checked = await driver.call(
+          'verify_state',
+          {
+            pid: observation.pid,
+            window_id: observation.windowId,
+            expect: remote,
+            timeout_ms: 0,
+          },
+          signal,
+        )
+        const verdict = checked.structured?.verdict ?? checked.structured?.status
+        const remoteVerdict =
+          checked.ok && (verdict === 'satisfied' || verdict === 'unsatisfied') ? verdict : 'unknown'
+        verified =
+          localVerdict === 'unsatisfied' || remoteVerdict === 'unsatisfied'
+            ? 'unsatisfied'
+            : localVerdict === 'unknown' || remoteVerdict === 'unknown'
+              ? 'unknown'
+              : 'satisfied'
+      }
       if (verified === 'satisfied')
         await changeTask(host, conversation, (state) => {
           const evidence: task.Evidence = {
@@ -638,7 +665,13 @@ export async function act(
               }
             : reply.refusal
               ? { status: 'refused', code: reply.refusal.code, message: reply.refusal.message }
-              : { status: 'failed', message: reply.text }
+              : permissionMissing(reply.text)
+                ? {
+                    status: 'refused',
+                    code: 'permission_required',
+                    message: `${reply.text} Grant it with: ${PERMISSION_FIX}`,
+                  }
+                : { status: 'failed', message: reply.text }
         } catch {
           // Once sent, a transport error cannot prove non-delivery; never automatically retry it.
           outcome = { status: 'unknown' }
@@ -675,7 +708,7 @@ export async function act(
             ) {
               if (observation?.degraded || ('x' in next && next.x !== undefined))
                 await screenStable(capture, signal, config.settleMs, runtimeState.clock)
-              observation = await capture(1568)
+              observation = await capture(maxDimension)
               runtimeState.observations.set(cacheKey(conversation, args.app), observation)
               post = observation
             }
@@ -829,7 +862,7 @@ export async function act(
         ...visible,
         ...('observation' in outcome ? { observation: undefined } : {}),
       })
-      const view = observation ? await observedOutput(observation) : undefined
+      const view = observation ? await observedOutput(observation, maxDimension) : undefined
       const uiDecisions = (await readSession(host, conversation)).journal.flatMap((j) =>
         j.call === call && j.decision
           ? [
@@ -915,8 +948,11 @@ export async function act(
             : 'incomplete')),
       outcomes,
       verdict,
+      ...(outcomes.some((o) => o.status === 'refused' && o.code === 'permission_required')
+        ? { fix: PERMISSION_FIX }
+        : {}),
     }
-    const view = await observedOutput(observation!)
+    const view = await observedOutput(observation!, maxDimension)
     const rendered = result(summary)
     return {
       output: [...rendered.output, ...view.output],

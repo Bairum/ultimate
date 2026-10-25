@@ -458,6 +458,9 @@ export function Observe({ call }: { call: ToolCallView }) {
         {status === 'setup' && typeof summary.install === 'string' && (
           <ToolOutput output={summary.install} />
         )}
+        {status === 'permission_required' && typeof summary.fix === 'string' && (
+          <ToolOutput output={summary.fix} />
+        )}
         {call.status === 'error' && <ToolOutput isError output={call.output} />}
         <ToolDiagnostics diagnostics={call.diagnostics} />
       </ToolContent>

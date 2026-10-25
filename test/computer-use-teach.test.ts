@@ -473,9 +473,9 @@ it('prunes nested teaching frames by age and global cap without using the ordina
   await mkdir(outside)
   await writeFile(join(outside, 'safe.png'), 'safe')
   await symlink(outside, join(home, 'computer-use', '1', 'teach', 'linked'))
-  await pruneEvidence(home, Date.now(), 1)
+  await pruneEvidence(home, Date.now(), 1, undefined, { force: true })
   expect(await readdir(dir)).toEqual(['fresh.png'])
-  await pruneEvidence(home, Date.now(), 1, 0)
+  await pruneEvidence(home, Date.now(), 1, 0, { force: true })
   expect(await readdir(dir)).toEqual([])
   expect(await readFile(join(outside, 'safe.png'), 'utf8')).toBe('safe')
 })
@@ -689,11 +689,11 @@ it('protects review frames from global prune, renumbers approved steps, and note
     { ...step(), approved: false },
     { ...step(), n: 2, approved: true },
   ])
-  await pruneEvidence(f.home, Date.now(), undefined, 0)
+  await pruneEvidence(f.home, Date.now(), undefined, 0, { force: true })
   expect(await readFile(file, 'utf8')).toBe('png')
   protectTeachReview(f.home, f.root.id, 'segment', false)
   await openTeaching(f.host)
-  await pruneEvidence(f.home, Date.now(), undefined, 0)
+  await pruneEvidence(f.home, Date.now(), undefined, 0, { force: true })
   expect(await readFile(file, 'utf8')).toBe('png')
   const saved = await saveTeaching(f.host, {
     conversation: f.root.id,

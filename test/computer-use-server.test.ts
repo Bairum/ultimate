@@ -472,6 +472,7 @@ it('reserves the Driver before asynchronous consent checks so concurrent acts ca
     await finish.promise
     return { content: [], structuredContent: { status: 'ok' } }
   })
+  fakeClock(f)
   const first = f.run([{ kind: 'click', element: 's1:7' }])
   const second = f.run([{ kind: 'click', element: 's1:8' }])
   await sent.promise
@@ -481,6 +482,48 @@ it('reserves the Driver before asynchronous consent checks so concurrent acts ca
     finish.resolve()
     await first
   }
+})
+
+function fakeClock(f: Awaited<ReturnType<typeof fixture>>) {
+  const time = { now: 0 }
+  runtime(f.host).clock = {
+    now: () => time.now,
+    sleep: async (ms) => {
+      time.now += ms
+    },
+  }
+  return time
+}
+
+it('waits for another computer call to finish instead of returning busy at once', async () => {
+  const f = await fixture()
+  await f.grant()
+  const time = { now: 0 }
+  runtime(f.host).busy = true
+  runtime(f.host).clock = {
+    now: () => time.now,
+    sleep: async (ms) => {
+      time.now += ms
+      if (time.now >= 1000) runtime(f.host).busy = false
+    },
+  }
+  const view = await f.observe()
+  expect(view.app).toBe('Calculator')
+  expect(time.now).toBe(1000)
+})
+
+it('returns busy after five seconds of waiting', async () => {
+  const f = await fixture()
+  await f.grant()
+  const time = fakeClock(f)
+  runtime(f.host).busy = true
+  const output = await f.invoke('computer_observe', {
+    app: 'Calculator',
+    window: 456,
+    screenshot: 'never',
+  })
+  expect(data(output).status).toBe('busy')
+  expect(time.now).toBe(5000)
 })
 
 it('does not let a non-canonical app grant bypass the Terminal deny list', async () => {
@@ -877,7 +920,10 @@ it('does not let idle-timer setup mask a delivered act result', async () => {
   await f.grant()
   await f.observe()
   const log = vi.spyOn(console, 'error').mockImplementation(() => {})
-  vi.spyOn(f.host, 'projectSettings').mockRejectedValue(new Error('idle rearm failed'))
+  // The act reads its image size first; only the later idle re-arm fails.
+  vi.spyOn(f.host, 'projectSettings')
+    .mockResolvedValueOnce({})
+    .mockRejectedValue(new Error('idle rearm failed'))
   try {
     expect(data(await f.run([{ kind: 'click', element: 's1:7' }])).status).toBe('delivered')
     expect(log).toHaveBeenCalledWith('computer-use: idle timer failed:', expect.any(Error))
