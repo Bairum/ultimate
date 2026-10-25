@@ -18,6 +18,7 @@ import {
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
+import { Shimmer } from '@/components/ai/shimmer'
 import { ToolImage } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
@@ -118,10 +119,15 @@ export function Address({
   )
 }
 
-export function Body({ text }: { text: string }) {
+/** A message's text; `pending` shimmers in its place until the model has written any, on the line the text takes. */
+export function Body({ text, pending }: { text: string; pending?: string }) {
   return (
     <div className="min-w-0 px-3 py-3 text-[13px] leading-relaxed">
-      <MessageResponse>{text}</MessageResponse>
+      {pending && !text ? (
+        <Shimmer as="p">{pending}</Shimmer>
+      ) : (
+        <MessageResponse>{text}</MessageResponse>
+      )}
     </div>
   )
 }
@@ -185,10 +191,12 @@ export function Bubble({
   const status = sentStatus(message, running)
   const stored = entry?.model?.[0]
   const answer = message && log ? answerTo(log.messages, message) : undefined
+  // While the model still writes it, the body says so; a `sending` footer would repeat it.
+  const writing = running && !message && !text
   // In compact mode, how a message was sent is no news: only what asks something of you, or went wrong, says so.
   const shown =
     status === 'yours' ||
-    status === 'sending' ||
+    (status === 'sending' && !writing) ||
     status === 'failed' ||
     status === 'stopped' ||
     status === 'dismissed'
@@ -227,7 +235,9 @@ export function Bubble({
         )}
       </header>
       {lead}
-      {text !== undefined && <Body text={text} />}
+      {text !== undefined && (
+        <Body pending={writing ? 'Writing you a message…' : undefined} text={text} />
+      )}
       {message?.images && <MessageImages conversation={from} entry={message.images.entry} />}
       {children}
       {answer && <AttachedAnswer answer={answer} question={message!} />}
@@ -375,7 +385,9 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
         {message && <Answers message={message} />}
       </Bubble>
     )
-  const state = outgoingState(message, toUser, call.status !== 'done')
+  // Until the model has written any text, the body says it is writing; the card's state would repeat it.
+  const writing = call.status !== 'done' && !message && !text
+  const state = writing ? undefined : outgoingState(message, toUser, call.status !== 'done')
   const Icon = toUser ? InboxIcon : SendIcon
   return (
     <Fold
@@ -391,9 +403,9 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
               <Address id={recipient} remote={message?.remote} />
             )}
           </span>
-          {state && (
+          {(writing || state) && (
             <span className={cn('shrink-0', state === 'failed' && 'text-destructive')}>
-              · {state}
+              · {writing ? 'writing' : state}
             </span>
           )}
         </>
@@ -442,7 +454,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
             {message.error}
           </p>
         )}
-        <Body text={text ?? ''} />
+        <Body pending={writing ? 'Writing a message…' : undefined} text={text ?? ''} />
         {message && <Answers message={message} />}
       </Card>
     </Fold>
