@@ -22,6 +22,24 @@ export type VoiceLine = {
   speech?: true
 }
 export type VoiceUtterance = { text: string; line: number }
+/**
+ * What Voice was given at a session's start: the project memory, the user's recent requests to @ultimate and the open
+ * branches, as `text`. Only the newest one reaches the model, at its place in the transcript, or after the summary once
+ * compaction cut it. `error`: it could not be put together, and Voice started without one.
+ */
+export type VoiceContext = {
+  text: string
+  memories: number
+  requests: number
+  branches: number
+  tokens: number
+  at: number
+  /** How long it took to put together. */
+  ms?: number
+  error?: string
+  /** Placed again after a compaction cut it. */
+  again?: true
+}
 /** @ultimate's full answer to forwarded line `re`, as Voice received it; `source` is the answer in @ultimate. */
 export type VoiceAnswer = {
   text: string

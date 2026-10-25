@@ -1407,6 +1407,17 @@ export default function lineageExtension(host: ExtensionHost) {
     leaveNote: (to, text, source) => leaveNote(host, to, text, source),
     remember: (root, ops, ctx, now) =>
       host.harness().commit((tx) => applyMemoryOps(tx, root, ops, now), ctx),
+    memoryBrief: async (id, ctx) => {
+      const roots = await rootsOf(host, ctx)
+      const root = (await rootOf(host, id, ctx)) ?? (roots.length === 1 ? roots[0] : undefined)
+      if (root === undefined) return undefined
+      return host.harness().commit(async (tx) => {
+        const brief = await memoryBrief(tx, root)
+        if (!brief) return undefined
+        const { memories } = await tx.doc(Memory, root)
+        return { root, text: brief.text, memories: Object.keys(memories).length }
+      }, ctx)
+    },
     memoriesOf: async (id, ctx) => {
       const roots = await rootsOf(host, ctx)
       const root = (await rootOf(host, id, ctx)) ?? (roots.length === 1 ? roots[0] : undefined)
@@ -1535,8 +1546,13 @@ export default function lineageExtension(host: ExtensionHost) {
             if (!agent.model) return undefined
             const root = (await rootsOf(host, ctx)).includes(api.conversationId)
             const intent = (await api.snapshot(Branch, api.conversationId, ctx))?.branch?.intent
-            // The model's view of the replaced entries, with edits applied: an omitted abstract stays omitted.
-            const replaced = new Set(compaction.entries.map((entry) => entry.id))
+            // The model's view of the replaced entries, with edits applied: an omitted abstract stays omitted. Entries
+            // marked `transient` (a voice session's brief, placed afresh each time) stay out of the summary.
+            const replaced = new Set(
+              compaction.entries
+                .filter((entry) => !(entry.data as { transient?: unknown } | undefined)?.transient)
+                .map((entry) => entry.id),
+            )
             const view = await (await host
               .harness()
               .conversation(api.conversationId, ctx))!.context(ctx)

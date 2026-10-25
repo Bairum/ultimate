@@ -1,6 +1,7 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
   AudioLinesIcon,
+  BookOpenIcon,
   ChevronRightIcon,
   CircleAlertIcon,
   LoaderCircleIcon,
@@ -15,7 +16,8 @@ import {
 } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { Message, MessageContent } from '@/components/ai/message'
+import { Message, MessageContent, MessageResponse } from '@/components/ai/message'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Kbd } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -49,7 +51,7 @@ import { openAgentSource, StandingDoc, talkToUltimate } from '../subagents/ui.ts
 import * as live from './live.tsx'
 import type { VoiceMode } from './live.tsx'
 import { StatusAction } from './refs.ts'
-import type { VoiceAnswer, VoiceLine, VoiceSession, VoiceUtterance } from './refs.ts'
+import type { VoiceAnswer, VoiceContext, VoiceLine, VoiceSession, VoiceUtterance } from './refs.ts'
 
 const KEYS = 'alt+v'
 const useMode = () => useSyncExternalStore(live.subscribe, live.voiceMode)
@@ -595,13 +597,15 @@ function StepLine({ step, mode }: { step: Step; mode: VoiceMode }) {
               ? 'Answer ready'
               : step.step === 'connecting'
                 ? 'Connecting…'
-                : step.step === 'paused'
-                  ? 'Listening paused'
-                  : step.step === 'muted'
-                    ? 'Muted'
-                    : step.step === 'ending'
-                      ? 'Ending…'
-                      : 'Listening'
+                : step.step === 'loading'
+                  ? 'Loading context…'
+                  : step.step === 'paused'
+                    ? 'Listening paused'
+                    : step.step === 'muted'
+                      ? 'Muted'
+                      : step.step === 'ending'
+                        ? 'Ending…'
+                        : 'Listening'
   const detail =
     step.step === 'hearing' && mode.partial
       ? mode.partial
@@ -630,7 +634,15 @@ function StepLine({ step, mode }: { step: Step; mode: VoiceMode }) {
  */
 type Step =
   | {
-      step: 'off' | 'connecting' | 'ending' | 'paused' | 'waiting' | 'muted' | 'listening'
+      step:
+        | 'off'
+        | 'connecting'
+        | 'loading'
+        | 'ending'
+        | 'paused'
+        | 'waiting'
+        | 'muted'
+        | 'listening'
     }
   | { step: 'hearing' | 'speaking' | 'deciding' | 'answer' }
   | { step: 'working'; request: string; since?: number }
@@ -664,8 +676,15 @@ function useStep(mode: VoiceMode): Step {
       !settled.get(entry.id)?.failed,
   )
   const unspoken = [...settled.values()].some((state) => state.answered && !state.spoken)
+  // The session's brief follows its start divider; until it is there, Voice holds the user's first line for it.
+  const started = transcript.findLastIndex(
+    (entry) => entry.kind === 'voice.session' && (entry.data as VoiceSession).phase === 'started',
+  )
+  const briefed =
+    started < 0 || transcript.slice(started).some((entry) => entry.kind === 'voice.context')
   if (mode.phase === 'paused') return { step: mode.waiting ? 'waiting' : 'paused' }
   if (mode.floor === 'user') return { step: 'hearing' }
+  if (!briefed) return { step: 'loading' }
   if (mode.floor === 'voice') return { step: 'speaking' }
   if (unspoken) return { step: 'answer' }
   if (deciding) return { step: 'deciding' }
@@ -688,46 +707,48 @@ function StepText({ step, mode }: { step: Step; mode: VoiceMode }) {
       ? ['Voice is off', 'Start it to talk to @ultimate']
       : step.step === 'connecting'
         ? ['Connecting…', 'Opening the microphone and the voice session']
-        : step.step === 'ending'
-          ? ['Ending…', 'Closing the session']
-          : step.step === 'paused'
-            ? ['Listening paused', 'Closed after two quiet minutes · an answer wakes it']
-            : step.step === 'waiting'
-              ? ['Answer ready', 'Tap Hear it to hear it']
-              : step.step === 'hearing'
-                ? ['Hearing you…', 'Keep talking · a pause sends it']
-                : step.step === 'speaking'
-                  ? ['Speaking', 'Interrupt any time']
-                  : step.step === 'deciding'
-                    ? ['Thinking it over', 'Voice decides whether this goes to @ultimate']
-                    : step.step === 'answer'
-                      ? ['Answer ready', 'Putting it into words']
-                      : step.step === 'working'
-                        ? [
-                            <span className="flex min-w-0 items-baseline gap-2" key="working">
-                              <span className="shrink-0">@ultimate is on it</span>
-                              {step.since !== undefined && (
-                                <span className="font-mono text-[13px] font-normal text-muted-foreground tabular-nums">
-                                  {clock(now - step.since)}
-                                </span>
-                              )}
-                            </span>,
-                            <span className="flex min-w-0 items-center gap-1" key="request">
-                              <Provided input={busy ? main : undefined} point={ConversationPhase}>
-                                {(phase) =>
-                                  phase && (
-                                    <span className="shrink-0 text-brand">
-                                      {phase.word[0].toUpperCase() + phase.word.slice(1)} ·
-                                    </span>
-                                  )
-                                }
-                              </Provided>
-                              <span className="truncate">{step.request}</span>
-                            </span>,
-                          ]
-                        : step.step === 'muted'
-                          ? ['Muted', '@ultimate keeps working · unmute to talk']
-                          : ['Listening', 'Talk · requests go to @ultimate']
+        : step.step === 'loading'
+          ? ['Loading context…', 'Voice reads what @ultimate is up to · talk any time']
+          : step.step === 'ending'
+            ? ['Ending…', 'Closing the session']
+            : step.step === 'paused'
+              ? ['Listening paused', 'Closed after two quiet minutes · an answer wakes it']
+              : step.step === 'waiting'
+                ? ['Answer ready', 'Tap Hear it to hear it']
+                : step.step === 'hearing'
+                  ? ['Hearing you…', 'Keep talking · a pause sends it']
+                  : step.step === 'speaking'
+                    ? ['Speaking', 'Interrupt any time']
+                    : step.step === 'deciding'
+                      ? ['Thinking it over', 'Voice decides whether this goes to @ultimate']
+                      : step.step === 'answer'
+                        ? ['Answer ready', 'Putting it into words']
+                        : step.step === 'working'
+                          ? [
+                              <span className="flex min-w-0 items-baseline gap-2" key="working">
+                                <span className="shrink-0">@ultimate is on it</span>
+                                {step.since !== undefined && (
+                                  <span className="font-mono text-[13px] font-normal text-muted-foreground tabular-nums">
+                                    {clock(now - step.since)}
+                                  </span>
+                                )}
+                              </span>,
+                              <span className="flex min-w-0 items-center gap-1" key="request">
+                                <Provided input={busy ? main : undefined} point={ConversationPhase}>
+                                  {(phase) =>
+                                    phase && (
+                                      <span className="shrink-0 text-brand">
+                                        {phase.word[0].toUpperCase() + phase.word.slice(1)} ·
+                                      </span>
+                                    )
+                                  }
+                                </Provided>
+                                <span className="truncate">{step.request}</span>
+                              </span>,
+                            ]
+                          : step.step === 'muted'
+                            ? ['Muted', '@ultimate keeps working · unmute to talk']
+                            : ['Listening', 'Talk · requests go to @ultimate']
   return (
     <div className="min-w-0 flex-1" aria-live="polite" data-voice-step={step.step}>
       <div className="flex min-w-0 items-baseline gap-2 text-[17px] leading-tight font-semibold sm:text-[19px]">
@@ -753,7 +774,9 @@ function StepMark({
   mode: VoiceMode
   size?: 'small' | 'large'
 }) {
-  const busy = ['connecting', 'ending', 'deciding', 'working', 'answer'].includes(step.step)
+  const busy = ['connecting', 'loading', 'ending', 'deciding', 'working', 'answer'].includes(
+    step.step,
+  )
   const hot = mode.phase === 'live' && !mode.muted
   return (
     <span
@@ -1218,6 +1241,55 @@ function SessionRow({ entry }: { entry: EntryRecord }) {
   )
 }
 
+/**
+ * What Voice was given at a session's start, quiet and folded: the counts on one line, the brief itself when opened.
+ * An earlier session's brief no longer reaches the model, so it reads as past.
+ */
+function ContextRow({ entry }: { entry: EntryRecord }) {
+  const brief = entry.data as unknown as VoiceContext
+  const transcript = useTranscript()
+  const newest = transcript.findLast((e) => e.kind === 'voice.context')?.id === entry.id
+  const counts = brief.error
+    ? `couldn't load · ${brief.error}`
+    : [
+        `memory ${brief.memories}`,
+        `${brief.requests} recent request${brief.requests === 1 ? '' : 's'}`,
+        `${brief.branches} open branch${brief.branches === 1 ? '' : 'es'}`,
+      ].join(' · ')
+  return (
+    <Collapsible
+      className={cn(
+        'group/context my-2 rounded-md border border-border/60 bg-muted/20',
+        !newest && 'opacity-60',
+      )}
+      data-voice-context={newest ? 'current' : 'past'}
+    >
+      <CollapsibleTrigger className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-left font-mono text-[11px] text-muted-foreground hover:text-foreground">
+        <ChevronRightIcon className="size-3 shrink-0 transition-transform group-data-[state=open]/context:rotate-90" />
+        <BookOpenIcon
+          className={cn('size-3 shrink-0', brief.error ? 'text-error' : 'text-brand')}
+        />
+        <span className="shrink-0 text-foreground/80">
+          {brief.again ? 'Context again' : 'Context'}
+        </span>
+        <span className="min-w-0 truncate">· {counts}</span>
+        {!brief.error && (
+          <span className="ml-auto shrink-0 pl-2 tabular-nums opacity-70">
+            ~{(brief.tokens / 1000).toFixed(1)}k tokens
+          </span>
+        )}
+      </CollapsibleTrigger>
+      {!brief.error && (
+        <CollapsibleContent className="max-h-[28rem] overflow-y-auto border-t border-border/60 px-3 py-2.5 text-[12px] leading-relaxed text-muted-foreground">
+          <MessageResponse>
+            {brief.text.replace(/^<voice_context>\n|\n<\/voice_context>$/g, '')}
+          </MessageResponse>
+        </CollapsibleContent>
+      )}
+    </Collapsible>
+  )
+}
+
 /** In @ultimate: what the user said, as their turn, marked as spoken. */
 function UtteranceRow({ entry }: { entry: EntryRecord }) {
   const data = entry.data as unknown as VoiceUtterance
@@ -1337,6 +1409,7 @@ export default defineWebExtension({
     'voice.answer': () => null,
     'pi.assistant': AgentRow,
     'voice.session': SessionRow,
+    'voice.context': ContextRow,
     'voice.utterance': UtteranceRow,
   },
   commands: [

@@ -5,6 +5,8 @@ import {
   defineExtension,
   defineTask,
   defineTool,
+  GenerationTask,
+  hook,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, ToolTaskInput, Tx } from '@earendil-works/pi-durable'
@@ -15,8 +17,11 @@ import { readSecret } from '../../lib/secrets.ts'
 import { Messages, MessagesApi } from '../messages/api.ts'
 import type { Question } from '../messages/api.ts'
 import { Standing, SubagentsApi } from '../subagents/api.ts'
+import { ConversationsApi } from '../conversations/api.ts'
+import { LineageApi } from '../lineage/api.ts'
 import { EndAction, HeardAction, LogAction, StartAction, StatusAction } from './refs.ts'
-import type { VoiceAnswer, VoiceLine, VoiceSession } from './refs.ts'
+import type { VoiceAnswer, VoiceContext, VoiceLine, VoiceSession } from './refs.ts'
+import { voiceBrief } from './brief.ts'
 
 const SECRET = 'OPENAI_API_KEY'
 const NO_KEY = `Live voice needs an OpenAI API key: add ${SECRET} in ⌘K → Secrets`
@@ -83,6 +88,57 @@ async function lines(tx: Tx, id: ConversationId, limit: number) {
     cursor = page.next
   } while (cursor)
   return result.toReversed()
+}
+
+/** The brief each Voice conversation's session is still putting together; a heard line waits for it. */
+const pending = (host: ExtensionHost) =>
+  host.resource('voice-live.briefs', () => new Map<ConversationId, Promise<unknown>>())
+
+const briefMessage = (text: string) => ({
+  role: 'user' as const,
+  content: text,
+  timestamp: Date.now(),
+})
+
+/** The newest stored brief of Voice conversation `id`, read inside `tx`. */
+async function newestBrief(tx: Tx, id: ConversationId) {
+  let cursor: Cursor | undefined
+  do {
+    const page = await tx.scanEntries({ conversationId: id, order: 'descending' }, 100, cursor)
+    const found = page.items.find((entry) => entry.kind === 'voice.context')
+    if (found) return found
+    cursor = page.next
+  } while (cursor)
+  return undefined
+}
+
+/**
+ * Put the session's brief into Voice's transcript as a context entry, replacing the previous brief for the model: its
+ * edit omits it, and that one's edit the one before, so only the newest counts. `transient`: compaction summaries leave
+ * it out, and Voice's next request places it again when compaction cut it (see the beforeRequest hook).
+ */
+async function placeBrief(
+  host: ExtensionHost,
+  id: ConversationId,
+  session: string,
+  brief: VoiceContext,
+) {
+  const previous = await host.harness().commit((tx) => newestBrief(tx, id), context)
+  const conversation = (await host.harness().conversation(id, context))!
+  // Admitted, not awaited: while Voice is busy it queues, still ahead of any line heard after it.
+  await conversation.submit(
+    {
+      type: 'write',
+      requestId: `voice:context:${session}`,
+      entry: {
+        kind: 'voice.context',
+        data: { ...brief, transient: true },
+        ...(brief.error ? {} : { model: [briefMessage(brief.text)] }),
+        ...(previous ? { edits: [{ target: previous.id, action: 'omit' as const }] } : {}),
+      },
+    },
+    context,
+  )
 }
 
 /** Display-only writes need no model message and never launch a turn. */
@@ -355,6 +411,25 @@ export const actions = {
     const key = await apiKey(host, signal)
     if (!key) throw new Error(NO_KEY)
     const id = await host.need(SubagentsApi).standing('voice', context)
+    // Put together while the session connects; a failure becomes a brief that says so, never a failed start.
+    const main = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
+    const started = performance.now()
+    const brief = (
+      main
+        ? voiceBrief(host, main, context)
+        : Promise.reject(new Error('@ultimate is not available'))
+    ).then(
+      (made) => ({ ...made, ms: Math.round(performance.now() - started) }),
+      (error: unknown): VoiceContext => ({
+        text: '',
+        memories: 0,
+        requests: 0,
+        branches: 0,
+        tokens: 0,
+        at: Date.now(),
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    )
     const recent = await host.harness().commit((tx) => lines(tx, id, 10), context)
     // Bound both messages and input size, leaving room below the 8,192-token session seed cap.
     const input = recent
@@ -401,12 +476,22 @@ export const actions = {
       { phase: 'started', at: Date.now() },
       `voice:start:${answer.session.id}`,
     )
+    const briefs = pending(host)
+    const placing = brief
+      .then((made) => placeBrief(host, id, answer.session!.id!, made))
+      .catch((error: unknown) => console.error('Voice brief:', error))
+      .finally(() => {
+        if (briefs.get(id) === placing) briefs.delete(id)
+      })
+    briefs.set(id, placing)
     return { sdp: answer.transport.sdp, conversation: id }
   }),
   heard: implementAction(HeardAction, async (args, { host }) => {
     const text = args && typeof args === 'object' && !Array.isArray(args) ? args.text : undefined
     if (typeof text !== 'string' || !text.trim()) throw new Error('Expected text')
     const id = await voiceId(host)
+    // The first line of a session goes in after its brief, so Voice reads it with the context.
+    await pending(host).get(id)
     const conversation = (await host.harness().conversation(id, context))!
     await conversation.submit(
       {
@@ -458,9 +543,40 @@ export const actions = {
 export default (host: ExtensionHost) => {
   host.need(MessagesApi)
   host.need(SubagentsApi)
+  host.need(LineageApi)
+  host.need(ConversationsApi)
   return defineExtension({
     name: 'voice-live',
     tasks: [answerTask(host)],
+    hooks: [
+      hook(GenerationTask, {
+        // A compaction that cut the newest brief leaves Voice without it: place it again after the summary. Like recall,
+        // the entry lands after this request's cutoff, so this request gets the same message appended.
+        beforeRequest: async (request, api, ctx) => {
+          if (
+            (await api.snapshot(Standing, ROOT_CONVERSATION_ID, ctx))?.voice !== api.conversationId
+          )
+            return undefined
+          const id = api.conversationId
+          const view = await (await host.harness().conversation(id, ctx))!.context(ctx)
+          if (!view.head) return undefined
+          const message = await host.harness().commit(async (tx) => {
+            const newest = await newestBrief(tx, id)
+            const data = newest?.data as VoiceContext | undefined
+            if (!newest || !data || data.error || view.entries.some((e) => e.id === newest.id))
+              return undefined
+            const again = briefMessage(data.text)
+            await tx.appendEntry(id, {
+              kind: 'voice.context',
+              data: { ...data, again: true, transient: true },
+              model: [again],
+            })
+            return again
+          }, ctx)
+          return message ? { messages: [...request.messages, message] } : undefined
+        },
+      }),
+    ],
     tools: [
       defineTool({
         name: 'voice_say',

@@ -139,31 +139,35 @@ async function fixture() {
         .length > 0,
   )
   await writeSecret(home, 'OPENAI_API_KEY', 'sk-test-not-real')
-  const originalFetch = globalThis.fetch
-  const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation((url, init) =>
-    url === 'https://api.openai.com/v1/live/sessions'
-      ? Promise.resolve(
-          Response.json({
-            session: { id: 'fake-live' },
-            transport: { type: 'webrtc', sdp: 'fake-answer' },
-          }),
-        )
-      : originalFetch(url, init),
-  )
-  let voice: ConversationId
-  try {
-    const result = await post(server, '/api/extensions/voice-live/actions/start', {
-      args: { sdp: 'fake-offer' },
-    })
-    expect([result.status, result.data.error]).toEqual([200, undefined])
-    voice = result.data.result.conversation
-    const [, request] = fetch.mock.calls.find(
-      ([target]) => target === 'https://api.openai.com/v1/live/sessions',
-    )!
-    expect(JSON.parse(request!.body as string).session.instructions).toBe(liveInstructions())
-  } finally {
-    fetch.mockRestore()
+  let sessions = 0
+  const startSession = async () => {
+    const originalFetch = globalThis.fetch
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation((url, init) =>
+      url === 'https://api.openai.com/v1/live/sessions'
+        ? Promise.resolve(
+            Response.json({
+              session: { id: `fake-live-${++sessions}` },
+              transport: { type: 'webrtc', sdp: 'fake-answer' },
+            }),
+          )
+        : originalFetch(url, init),
+    )
+    try {
+      const result = await post(server, '/api/extensions/voice-live/actions/start', {
+        args: { sdp: 'fake-offer' },
+      })
+      expect([result.status, result.data.error]).toEqual([200, undefined])
+      const [, request] = fetch.mock.calls.find(
+        ([target]) => target === 'https://api.openai.com/v1/live/sessions',
+      )!
+      expect(JSON.parse(request!.body as string).session.instructions).toBe(liveInstructions())
+      return result.data.result.conversation as ConversationId
+    } finally {
+      fetch.mockRestore()
+    }
   }
+  const voice = await startSession()
+  const requests: string[][] = []
   const answers: string[] = []
   let answer = 'The tests pass.'
   const call = (name: string, args: JsonObject) =>
@@ -175,6 +179,11 @@ async function fixture() {
     const last = transcript.messages.findLast((m) => m.role !== 'system')!
     const text = typeof last.content === 'string' ? last.content : JSON.stringify(last.content)
     if (system.includes('You are the voice in the user')) {
+      requests.push(
+        transcript.messages.flatMap((m) =>
+          m.role === 'user' && typeof m.content === 'string' ? [m.content] : [],
+        ),
+      )
       if (last.role === 'toolResult') return call('voice_say', { text: 'Passing that on.' })
       if (text.startsWith('@ultimate answered')) {
         answers.push(text)
@@ -231,6 +240,8 @@ async function fixture() {
     server,
     main,
     voice,
+    startSession,
+    requests,
     action,
     entries,
     answers,
@@ -341,4 +352,54 @@ it('speaks a tool-terminated question and answers it through Messages, without a
   ).toBe('answered')
   expect((await f.entries(f.main)).filter((e) => e.kind === 'voice.utterance')).toHaveLength(1)
   expect((await f.entries(f.main)).some((e) => e.kind === 'board.message')).toBe(true)
+})
+
+it('briefs each session, waits for the brief before the first line, and lets only the newest reach Voice', async () => {
+  const f = await fixture()
+  const briefs = async () => (await f.entries(f.voice)).filter((e) => e.kind === 'voice.context')
+  await until(async () => (await briefs()).length === 1)
+  expect((await briefs())[0].data).toMatchObject({ requests: 0, branches: 0, transient: true })
+  expect((await briefs())[0].model?.[0]).toMatchObject({ role: 'user' })
+  // @ultimate gets a request, then a second session starts while its brief is held back.
+  await f.action('heard', { text: 'please check the tests' })
+  await f.waitAnswer(1)
+  const gate = Promise.withResolvers<void>()
+  const conversation = f.server.harness.conversation.bind(f.server.harness)
+  let opened = 0
+  const spy = vi.spyOn(f.server.harness, 'conversation').mockImplementation(async (id, ctx) => {
+    const found = await conversation(id, ctx)
+    if (id === f.voice) opened++
+    if (id !== f.main || !found) return found
+    return Object.assign(Object.create(found), {
+      entries: async (...args: Parameters<typeof found.entries>) => {
+        await gate.promise
+        return found.entries(...args)
+      },
+    })
+  })
+  try {
+    await f.startSession()
+    const before = opened
+    const heard = f.action('heard', { text: 'what was that about' })
+    // The line waits for the held brief: it does not reach Voice's conversation, so Voice has not run on it.
+    for (let tick = 0; tick < 200 && opened === before; tick++)
+      await new Promise((resolve) => setImmediate(resolve))
+    expect(opened).toBe(before)
+    expect((await f.entries(f.voice)).filter((e) => e.kind === 'voice.heard')).toHaveLength(1)
+    gate.resolve()
+    await heard
+  } finally {
+    spy.mockRestore()
+  }
+  const all = await f.entries(f.voice)
+  const second = all.filter((e) => e.kind === 'voice.context')[1]
+  const line = all.findLast((e) => e.kind === 'voice.heard')!
+  expect(second.id).toBeLessThan(line.id)
+  expect(second.data).toMatchObject({ requests: 1 })
+  expect((second.data as { text: string }).text).toContain('Please check the tests.')
+  expect(second.edits).toEqual([{ target: (await briefs())[0].id, action: 'omit' }])
+  await (await f.server.harness.conversation(f.voice, context))!.waitForIdle(context)
+  // Voice's request on that line carries the new brief once, and not the old one.
+  const seen = f.requests.at(-1)!.filter((m) => m.startsWith('<voice_context>'))
+  expect(seen).toEqual([(second.data as { text: string }).text])
 })
