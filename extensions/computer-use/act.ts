@@ -35,6 +35,7 @@ import {
   gates,
   allGrants,
   preflightGates,
+  conversationBudgetGate,
   frontmostGate,
   resolveIdentity,
   listApps,
@@ -42,6 +43,10 @@ import {
 } from './gates.ts'
 import type { GateContext, Refusal } from './gates.ts'
 import * as task from './task.ts'
+import { pixelDefaults, screenStable } from './perception.ts'
+import { verifyOcr, ocrEvidence } from './verify-ocr.ts'
+import { waitFor } from './wait.ts'
+import { pruneEvidence } from './evidence-files.ts'
 
 export function candidateStep(candidate: Candidate): Step {
   return candidate.action === 'set_value'
@@ -53,7 +58,7 @@ export type ActArgs = {
   window?: string | number
   actions?: Step[]
   goal?: Goal
-  expect?: Predicate[]
+  expect?: Predicate[] | { ocr: { appears?: string[]; disappears?: string[] } }
   foreground?: boolean
   criterion?: string
   subgoal?: string
@@ -151,6 +156,7 @@ export async function act(
   runtimeState.busy = true
   runtimeState.active.set(conversation, active)
   try {
+    await pruneEvidence(host.home)
     let session = await readSession(host, conversation)
     const taskRefusal = task.requireActiveTask(session.task)
     if (taskRefusal) return result({ status: taskRefusal.refuse, message: taskRefusal.message })
@@ -175,11 +181,47 @@ export async function act(
       ),
     ].filter(Boolean)
     const redact = redactor(values)
+    const needsPixels =
+      runtimeState.observations.get(cacheKey(conversation, args.app))?.degraded ||
+      args.actions?.some((s) => ('x' in s && s.x !== undefined) || s.kind === 'wait') ||
+      (Array.isArray(args.expect) ? args.expect.some((p) => p.ocr) : args.expect?.ocr)
+    const config = { ...pixelDefaults, ...(needsPixels ? (await settings(host)).pixel : {}) }
+    const expectations: Predicate[] = Array.isArray(args.expect)
+      ? args.expect
+      : args.expect
+        ? [args.expect]
+        : []
     const uiSteps: ActStepDetails[] = []
     const describe = (action: Step, outcome: StepOutcome, target?: Element) => {
       uiSteps.push({
         kind: action.kind,
         status: outcome.status,
+        ...('expect_label' in action && action.expect_label
+          ? { expectLabel: { text: redact(action.expect_label), untrusted: true as const } }
+          : {}),
+        ...((outcome.status === 'delivered' || outcome.status === 'refused') && outcome.ocrMatch
+          ? { ocrMatch: { text: redact(outcome.ocrMatch), untrusted: true as const } }
+          : {}),
+        ...(outcome.status === 'refused' && outcome.nearest
+          ? {
+              nearest: outcome.nearest.map((text) => ({
+                text: redact(text),
+                untrusted: true as const,
+              })),
+            }
+          : {}),
+        ...(outcome.status === 'delivered' && outcome.wait
+          ? {
+              wait: {
+                status: outcome.wait.status,
+                ms: outcome.wait.ms,
+                seen: outcome.wait.seen.map((text) => ({
+                  text: redact(text),
+                  untrusted: true as const,
+                })),
+              },
+            }
+          : {}),
         ...(outcome.status === 'refused'
           ? { code: redact(outcome.code), message: redact(outcome.message) }
           : {}),
@@ -237,6 +279,16 @@ export async function act(
         message: 'Observe and select a window before acting.',
       })
     }
+    const capture = (maxDimension: number) =>
+      observeWindow(
+        driver,
+        args.app,
+        args.window ?? observation?.windowId,
+        'always',
+        undefined,
+        maxDimension,
+        signal,
+      )
     const observe = async () => {
       const latest = await readSession(host, conversation)
       const identity = await resolveIdentity(driver, args.app, signal)
@@ -254,7 +306,7 @@ export async function act(
         driver,
         args.app,
         args.window ?? observation?.windowId,
-        'never',
+        observation?.degraded ? 'always' : 'never',
         undefined,
         1568,
         signal,
@@ -269,9 +321,29 @@ export async function act(
       return observation
     }
     let linkedProgress = false
+    let lastVerdict: Verdict = 'unknown'
     const verify = async (preds: Predicate[]): Promise<Verdict> => {
       linkedProgress = false
       if (!preds.length || !observation) return 'unknown'
+      if (await isStopped(host, conversation, { active, signal })) return 'unknown'
+      if (preds.some((p) => p.ocr)) {
+        const checked = await verifyOcr(driver, observation, preds, config, signal, redact)
+        if (checked.verdict !== 'satisfied') return checked.verdict
+        const evidence = await ocrEvidence(
+          host.home,
+          conversation,
+          observation,
+          preds,
+          call,
+          checked.excerpt,
+          args.criterion,
+        )
+        await changeTask(host, conversation, (state) => {
+          linkedProgress = task.predicateEvidence(state, evidence)
+          return task.addEvidence(state, subgoal!, evidence)
+        })
+        return 'satisfied'
+      }
       const checked = await driver.call(
         'verify_state',
         {
@@ -379,6 +451,75 @@ export async function act(
         (!original.capture || original.capture !== before.capture?.id)
       )
         return { status: 'refused', code: 'stale', message: 'Pixels need the latest capture id.' }
+      if (original.kind === 'wait') {
+        if (
+          !original.until ||
+          !Object.values(original.until).some(Boolean) ||
+          !Number.isFinite(original.seconds) ||
+          original.seconds < 0 ||
+          original.seconds > Math.min(120, config.maxWaitSeconds)
+        )
+          return {
+            status: 'refused',
+            code: 'invalid_arguments',
+            message:
+              'Wait requires until and a timeout within the configured limit (at most 120 seconds).',
+          }
+        session = await readSession(host, conversation)
+        const ctx: GateContext = {
+          ...initial,
+          session,
+          grants: await allGrants(host, conversation, session),
+          step: original,
+          dispatch: true,
+          observation,
+          count,
+        }
+        for (const gate of [...preflightGates, conversationBudgetGate]) {
+          const refusal = await gate(ctx)
+          if (refusal) return { status: 'refused', code: refusal.refuse, message: refusal.message }
+        }
+        const waited = await waitFor({
+          driver,
+          capture: async (size) => {
+            observation = await capture(size)
+            runtimeState.observations.set(cacheKey(conversation, args.app), observation)
+            return observation
+          },
+          until: original.until,
+          seconds: original.seconds,
+          signal,
+          stopped: () => isStopped(host, conversation, { active, signal }),
+          time: runtimeState.clock,
+          minConfidence: config.minConfidence,
+          redact,
+        })
+        if (waited.status === 'delivered') {
+          const index = count++
+          await updateSession(host, conversation, (doc) => {
+            doc.budget.startedAt ||= Date.now()
+            doc.budget.steps++
+            doc.journal.push({
+              call,
+              step: index,
+              kind: 'wait',
+              app: args.app,
+              status: 'delivered',
+              at: Date.now(),
+            })
+          })
+          await changeTask(host, conversation, (state) =>
+            task.recordStep(state, {
+              actionHash: actionHash(original),
+              delivered: true,
+              verifiedProgress: false,
+              subgoal: subgoal!,
+              outlineFingerprint: outline(observation),
+            }),
+          )
+        }
+        return waited
+      }
       for (let attempt = 0; attempt < 2; attempt++) {
         session = await readSession(host, conversation)
         const ctx: GateContext = {
@@ -395,7 +536,13 @@ export async function act(
           const refusal = await gate(ctx)
           if (refusal) {
             await pending(host, conversation, ctx.app, refusal, count)
-            return { status: 'refused', code: refusal.refuse, message: refusal.message }
+            return {
+              status: 'refused',
+              code: refusal.refuse,
+              message: refusal.message,
+              ...(ctx.ocrMatch ? { ocrMatch: redact(ctx.ocrMatch) } : {}),
+              ...(refusal.nearest ? { nearest: refusal.nearest.map(redact) } : {}),
+            }
           }
         }
         if (active.stopped || signal.aborted) return { status: 'not_run' }
@@ -403,8 +550,8 @@ export async function act(
         if (!command)
           return {
             status: 'refused',
-            code: 'unsupported_step',
-            message: 'Driver 0.37.0 has no wait tool.',
+            code: 'invalid_arguments',
+            message: 'This step has no Driver dispatch.',
           }
         const index = count++
         await updateSession(host, conversation, (doc) => {
@@ -456,7 +603,12 @@ export async function act(
           await updateSession(host, conversation, (doc) => {
             doc.journal.findLast((j) => j.call === call && j.step === index)!.status = 'refused'
           })
-          return { status: 'refused', code: refusal.refuse, message: refusal.message }
+          return {
+            status: 'refused',
+            code: refusal.refuse,
+            message: refusal.message,
+            ...(ctx.ocrMatch ? { ocrMatch: redact(ctx.ocrMatch) } : {}),
+          }
         }
         await updateSession(host, conversation, (doc) => {
           doc.confirmed = doc.confirmed.filter((c) => c.key !== ctx.confirmation)
@@ -466,7 +618,11 @@ export async function act(
         try {
           const reply = await driver.call(command.tool, command.args, signal)
           outcome = reply.ok
-            ? { status: 'delivered', text: reply.text }
+            ? {
+                status: 'delivered',
+                text: reply.text,
+                ...(ctx.ocrMatch ? { ocrMatch: redact(ctx.ocrMatch) } : {}),
+              }
             : reply.refusal
               ? { status: 'refused', code: reply.refusal.code, message: reply.refusal.message }
               : { status: 'failed', message: reply.text }
@@ -498,11 +654,23 @@ export async function act(
           let verified = false
           let post: Observation | undefined
           try {
+            if (
+              outcome.status === 'delivered' &&
+              (observation?.degraded ||
+                ('x' in next && next.x !== undefined) ||
+                expectations.some((p) => p.ocr))
+            ) {
+              if (observation?.degraded || ('x' in next && next.x !== undefined))
+                await screenStable(capture, signal, config.settleMs, runtimeState.clock)
+              observation = await capture(1568)
+              runtimeState.observations.set(cacheKey(conversation, args.app), observation)
+              post = observation
+            }
             verified =
               outcome.status === 'delivered' &&
-              (await verify(args.expect ?? [])) === 'satisfied' &&
+              (lastVerdict = await verify(expectations)) === 'satisfied' &&
               linkedProgress
-            if (outcome.status === 'delivered') post = await observe()
+            if (outcome.status === 'delivered' && !post) post = await observe()
           } catch (error) {
             await changeTask(host, conversation, (current) =>
               task.markInterrupted(current, 'crash', [], Date.now()),
@@ -541,7 +709,7 @@ export async function act(
       return { status: 'refused', code: 'stale', message: 'Stale token retry exhausted.' }
     }
     if (args.goal) {
-      const config = await settings(host)
+      const goalConfig = await settings(host)
       const decisions: Promise<void>[] = []
       let confirmationFailure: Refusal | undefined
       const outcome = await runGoal(args.goal, {
@@ -584,7 +752,7 @@ export async function act(
             const timer = setTimeout(resolve, 400)
             signal.addEventListener('abort', () => (clearTimeout(timer), resolve()), { once: true })
           }),
-        thresholds: config.jev,
+        thresholds: goalConfig.jev,
         record: (decision) => {
           const { chose, ...fields } = decision
           decisions.push(
@@ -707,17 +875,31 @@ export async function act(
         halted || active.stopped ? { status: 'not_run' } : await step(action)
       outcomes.push(outcome)
       describe(action, outcome, target)
-      halted ||= outcome.status !== 'delivered'
+      halted ||= outcome.status !== 'delivered' || outcome.wait?.status === 'timeout'
     }
-    const verdict = await verify(args.expect ?? [])
+    const hasOcr = expectations.some((p) => p.ocr)
+    const verdict =
+      hasOcr && !outcomes.some((o) => o.status === 'delivered')
+        ? 'unknown'
+        : hasOcr && outcomes.some((o) => o.status === 'delivered' && !o.wait)
+          ? lastVerdict
+          : await verify(expectations)
     const unknown = outcomes.some((o) => o.status === 'unknown')
     // An internal post-act read does not acknowledge an interrupted/unknown action for the planner.
-    if (!unknown && !outcomes.every((o) => o.status === 'delivered')) await observe()
+    if (
+      !unknown &&
+      !outcomes.every((o) => o.status === 'delivered') &&
+      !(await isStopped(host, conversation, { active, signal }))
+    )
+      await observe()
     const summary = {
       status: active.stopped
         ? 'stopped'
         : (outcomes.find((o) => o.status === 'refused')?.code ??
-          (outcomes.every((o) => o.status === 'delivered') ? 'delivered' : 'incomplete')),
+          (outcomes.every((o) => o.status === 'delivered')
+            ? (outcomes.findLast((o) => o.status === 'delivered' && o.wait)?.wait?.status ??
+              'delivered')
+            : 'incomplete')),
       outcomes,
       verdict,
     }
@@ -773,7 +955,17 @@ export function actTool(host: ExtensionHost) {
           ),
         }),
       ),
-      expect: Type.Optional(predicates),
+      expect: Type.Optional(
+        Type.Union([
+          predicates,
+          Type.Object({
+            ocr: Type.Object({
+              appears: Type.Optional(Type.Array(Type.String())),
+              disappears: Type.Optional(Type.Array(Type.String())),
+            }),
+          }),
+        ]),
+      ),
       foreground: Type.Optional(Type.Boolean()),
     }),
     async execute(args, api, ctx) {
@@ -944,6 +1136,7 @@ export const stepSchema = Type.Unsafe<Step>(
       x: Type.Optional(Type.Number()),
       y: Type.Optional(Type.Number()),
       capture: Type.Optional(Type.String()),
+      expect_label: Type.Optional(Type.String()),
     }),
     Type.Object({ kind: Type.Literal('type'), element, text: Type.String() }),
     Type.Object({ kind: Type.Literal('set_value'), element, value: Type.String() }),
@@ -959,6 +1152,14 @@ export const stepSchema = Type.Unsafe<Step>(
       direction: Type.Union(['up', 'down', 'left', 'right'].map((value) => Type.Literal(value))),
       amount: Type.Optional(Type.Integer({ minimum: 1 })),
     }),
-    Type.Object({ kind: Type.Literal('wait'), seconds: Type.Number({ minimum: 0, maximum: 30 }) }),
+    Type.Object({
+      kind: Type.Literal('wait'),
+      seconds: Type.Number({ minimum: 0, maximum: 120 }),
+      until: Type.Object({
+        text: Type.Optional(Type.String()),
+        gone: Type.Optional(Type.String()),
+        stable: Type.Optional(Type.Literal(true)),
+      }),
+    }),
   ]),
 )

@@ -67,7 +67,7 @@ export function consume(app: string, grants: Grant[], now: number): Grant[] {
 }
 
 const consequentialWords =
-  /\b(send|submit|delete|remove|move\s+to\s+trash|erase|buy|purchase|pay|order|checkout|subscribe|allow|install|sign\s*in|log\s*in|share|publish|post|transfer|confirm|accept|grant|quit|close\s+without\s+saving|don['’]?t\s+save)\b/i
+  /\b(send|submit|delete|remove|move\s+to\s+trash|erase|buy|purchase|pay|order|checkout|subscribe|allow|install|upload|sign\s*in|log\s*in|share|publish|post|transfer|confirm|accept|grant|quit|close\s+without\s+saving|don['’]?t\s+save)\b/i
 
 function modifier(key: string): string {
   return (
@@ -168,7 +168,7 @@ export function confirmationKey(
     target?.frame
       ? [target.frame.x, target.frame.y, target.frame.w, target.frame.h].map(Math.round)
       : null,
-    !target && 'x' in step ? [step.x, step.y] : null,
+    (!target || target.role === 'OCRText') && 'x' in step ? [step.x, step.y] : null,
     createHash('sha256').update(payload).digest('hex').slice(0, 16),
   ])
 }
@@ -201,6 +201,7 @@ export function normalizeArguments(raw: unknown): unknown {
   }
   if (typeof result.element === 'number' && typeof result.snapshot === 'string')
     result.element = `${result.snapshot}:${result.element}`
+  if (typeof result.expect_label === 'string') result.expect_label = result.expect_label.trim()
   if (['click', 'double_click', 'right_click'].includes(String(result.kind)))
     result.button ??= 'left'
   if (result.kind === 'key') {
@@ -253,7 +254,7 @@ export function hitTest(step: Step, observation: Observation): Element | undefin
   return observation.elements
     .filter((e) => {
       const f = e.frame
-      return f && x >= f.x && y >= f.y && x < f.x + f.w && y < f.y + f.h
+      return e.role !== 'AXWindow' && f && x >= f.x && y >= f.y && x < f.x + f.w && y < f.y + f.h
     })
     .toSorted((a, b) => b.depth - a.depth)[0]
 }

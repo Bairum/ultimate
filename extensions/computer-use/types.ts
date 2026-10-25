@@ -46,6 +46,8 @@ export type Observation = {
   title: string
   bounds?: { x: number; y: number; w: number; h: number }
   snapshot: string
+  degraded?: boolean
+  isOnScreen?: boolean
   elements: Element[]
   /** The Driver's compact Markdown tree, for the model. */
   tree: string
@@ -62,6 +64,7 @@ export type Step =
       x?: number
       y?: number
       capture?: string
+      expect_label?: string
     }
   | { kind: 'type'; element: string; text: string }
   | { kind: 'set_value'; element: string; value: string }
@@ -73,12 +76,17 @@ export type Step =
       amount?: number
     }
   | { kind: 'menu'; path: string[] }
-  | { kind: 'wait'; seconds: number }
+  | { kind: 'wait'; seconds: number; until: { text?: string; gone?: string; stable?: true } }
 
 /** What happened to one step. `unknown` only after an interruption or a timeout mid-step. */
 export type StepOutcome =
-  | { status: 'delivered'; text: string }
-  | { status: 'refused'; code: string; message: string }
+  | {
+      status: 'delivered'
+      text: string
+      ocrMatch?: string
+      wait?: { status: 'satisfied' | 'timeout'; seen: string[]; ms: number }
+    }
+  | { status: 'refused'; code: string; message: string; ocrMatch?: string; nearest?: string[] }
   | { status: 'failed'; message: string }
   | { status: 'not_run' }
   | { status: 'unknown' }
@@ -148,7 +156,15 @@ export type TaskSpec = {
   link?: { conversation: number; task?: string }
 }
 export type Evidence = (
-  | { kind: 'verify'; predicates: Predicate[]; verdict: Verdict; ref: string }
+  | {
+      kind: 'verify'
+      predicates: Predicate[]
+      verdict: Verdict
+      ref: string
+      path?: string
+      excerpt?: string
+      captureId?: string
+    }
   | { kind: 'ax'; snapshot: string; excerpt: string; ref: string }
   | { kind: 'capture'; captureId: string; path?: string; ref: string }
 ) & { app?: string; criterion?: string }

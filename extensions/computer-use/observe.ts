@@ -14,6 +14,7 @@ import { untrusted } from './content.ts'
 import { readSession, isStopped } from './session.ts'
 import { allGrants, resolveIdentity, readConsent, listApps } from './gates.ts'
 import type { ComputerDetails } from './refs.ts'
+import { pruneEvidence } from './evidence-files.ts'
 
 export async function windowFor(
   driver: Driver,
@@ -40,14 +41,22 @@ export async function windowFor(
     throw new Error(
       'Select exactly one window with computer_observe; window is ambiguous or missing',
     )
-  return { pid: Number(matches[0].pid), window_id: Number(matches[0].window_id) }
+  return {
+    pid: Number(matches[0].pid),
+    window_id: Number(matches[0].window_id),
+    isOnScreen: typeof matches[0].is_on_screen === 'boolean' ? matches[0].is_on_screen : undefined,
+  }
 }
 export function parseWindow(reply: Awaited<ReturnType<Driver['call']>>, app: string) {
   const reason =
     typeof reply.structured?.degraded_reason === 'string'
       ? reply.structured.degraded_reason
       : reply.text
-  if (!reply.ok || reply.structured?.degraded === true)
+  if (
+    !reply.ok ||
+    reason.startsWith('screen_locked') ||
+    (reply.structured?.degraded === true && !reply.images.length)
+  )
     throw new ObservationUnavailable(
       reply.refusal?.code ??
         (reason.startsWith('screen_locked') ? 'screen_locked' : 'observation_unavailable'),
@@ -69,12 +78,13 @@ export async function observeWindow(
 ): Promise<Observation> {
   const target = await windowFor(driver, app, window, signal)
   const args = {
-    ...target,
+    pid: target.pid,
+    window_id: target.window_id,
     full_output: true,
     tree_format: 'both',
     max_elements: 250,
     max_depth: 12,
-    max_dimension: maxDimension,
+    max_image_dimension: maxDimension,
     include_screenshot: screenshot === 'always',
     ...(query ? { query } : {}),
   }
@@ -94,6 +104,7 @@ export async function observeWindow(
       await driver.call('get_window_state', { ...args, include_screenshot: true }, signal),
       app,
     )
+  observed.isOnScreen ??= target.isOnScreen
   observed.truncated ||= observed.tree.length > 16_000
   observed.tree = observed.tree.slice(0, 16_000)
   return observed
@@ -183,6 +194,7 @@ export function observeTool(host: ExtensionHost) {
         if (state.busy) return result({ status: 'busy' })
         state.busy = true
         try {
+          await pruneEvidence(host.home)
           if (args.app) {
             const identity = await resolveIdentity(driver, args.app, ctx.abortSignal)
             if (!identity) return result({ status: 'app_identity' })

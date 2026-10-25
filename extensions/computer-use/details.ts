@@ -74,6 +74,9 @@ export async function withDetails<T extends { structuredOutput?: JsonValue; deta
       steps: actions.map((action, index): ActStepDetails => ({
         kind: action.kind as ActStepDetails['kind'],
         status: index ? 'not_run' : 'refused',
+        ...(typeof action.expect_label === 'string'
+          ? { expectLabel: { text: action.expect_label, untrusted: true } }
+          : {}),
         ...(!index && typeof data.status === 'string' ? { code: data.status } : {}),
         ...(!index && typeof data.message === 'string' ? { message: data.message } : {}),
       })),

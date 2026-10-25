@@ -9,7 +9,15 @@ import { json, message, object } from './tool-helpers.ts'
 import type { Active } from './runtime.ts'
 import { path, confirmationLocation } from './parse-observation.ts'
 import * as task from './task.ts'
-import { redactor } from './content.ts'
+import { redactor, untrusted } from './content.ts'
+import { settings } from './runtime.ts'
+import {
+  pixelDefaults,
+  visibleWindow,
+  parseRegions,
+  matchLabel,
+  screenshotPoint,
+} from './perception.ts'
 
 export const hash = (value: unknown) =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -67,6 +75,8 @@ export type GateContext = {
   confirmation?: string
   confirmationUsed?: boolean
   params?: string[]
+  ocrMatch?: string
+  unlabelledPixel?: boolean
 }
 export type Refusal = {
   refuse: string
@@ -77,6 +87,8 @@ export type Refusal = {
   payload?: string
   x?: number
   y?: number
+  /** The OCR labels nearest a refused pixel click, redacted; screen text, untrusted. */
+  nearest?: string[]
 }
 export type Gate = (ctx: GateContext) => undefined | Refusal | Promise<undefined | Refusal>
 // Task grounding precedes authority/safety gates; canonical scope is checked again at identity resolution.
@@ -171,8 +183,91 @@ export async function frontmostGate(ctx: GateContext): Promise<Refusal | undefin
     }
   return undefined
 }
+export const conversationBudgetGate: Gate = (ctx) =>
+  ctx.count >= 20 ||
+  ctx.session.budget.steps >= 60 ||
+  (ctx.session.budget.startedAt > 0 && Date.now() - ctx.session.budget.startedAt >= 15 * 60_000)
+    ? {
+        refuse: 'budget',
+        message:
+          'Computer-use budget exhausted (20 per call, 60 steps / 15 minutes per conversation).',
+      }
+    : undefined
 export const dispatchGates: Gate[] = [
   frontmostGate,
+  async (ctx): Promise<Refusal | undefined> => {
+    const pixel = 'x' in ctx.step && ctx.step.x !== undefined
+    if (!ctx.observation || (!pixel && !ctx.observation.degraded)) return undefined
+    const visibility = visibleWindow(ctx.observation)
+    if (visibility) return visibility
+    const config = { ...pixelDefaults, ...(await settings(ctx.host)).pixel }
+    if (
+      ctx.observation.degraded &&
+      config.foregroundForDegraded !== 'background' &&
+      !(ctx.foreground && ctx.session.takeovers.some((t) => matchesApp(ctx.identity!, t.app)))
+    )
+      return {
+        refuse: 'takeover_required',
+        message: 'Pixel input to a degraded window requires a user foreground takeover.',
+      }
+    const step = ctx.step
+    if (!('x' in step) || step.x === undefined || step.y === undefined) return undefined
+    if (!step.expect_label && (ctx.observation.degraded || config.requireLabel))
+      return { refuse: 'label_mismatch', message: 'Pixel actions require expect_label.' }
+    if (!step.expect_label) return undefined
+    const parsed = await parseRegions(ctx.driver, step.capture!, {}, ctx.signal)
+    const point = screenshotPoint(parsed.coordinateSpace, { x: step.x, y: step.y })
+    // A label the agent named but OCR cannot place is unverified: refuse rather than fall back to a blind confirmation.
+    if (!point)
+      return {
+        refuse: 'label_mismatch',
+        message:
+          'The capture has no usable coordinate metadata, so expect_label cannot be checked. Observe again.',
+      }
+    const checked = matchLabel(
+      parsed.regions,
+      step.expect_label,
+      point,
+      config.labelRadius,
+      config.minConfidence,
+    )
+    if (!checked.match) {
+      const redact = redactor(ctx.params ?? [])
+      const nearest = checked.candidates.slice(0, 8).map((r) => redact(r.label).slice(0, 60))
+      return {
+        // Ambiguous (the label appears more than once nearby) and wrong are both refusals; the code tells them apart.
+        refuse: checked.ambiguous ? 'label_ambiguous' : 'label_mismatch',
+        message: `Expected label did not match uniquely. Nearest labels: ${untrusted(nearest)}`,
+        nearest,
+      }
+    }
+    const target = ctx.target ?? {
+      token: '',
+      index: -1,
+      depth: 0,
+      role: 'OCRText',
+      enabled: true,
+      actions: [],
+    }
+    const containsPoint = (r: (typeof parsed.regions)[number]) =>
+      point.x >= r.bounds.x &&
+      point.x <= r.bounds.x + r.bounds.width &&
+      point.y >= r.bounds.y &&
+      point.y <= r.bounds.y + r.bounds.height
+    const atPoint = parsed.regions.filter(containsPoint)
+    const riskyLabels = atPoint
+      .filter((r) => r.kind === 'text' && consequential(step, { ...target, label: r.label }).hit)
+      .map((r) => r.label)
+    ctx.unlabelledPixel = !containsPoint(checked.match) || atPoint.some((r) => r.kind === 'icon')
+    ctx.target = {
+      ...target,
+      label: [
+        ...new Set([ctx.target?.label, checked.match.label, ...riskyLabels].filter(Boolean)),
+      ].join(' / '),
+    }
+    ctx.ocrMatch = [...new Set([checked.match.label, ...riskyLabels])].join(' / ')
+    return undefined
+  },
   async (ctx) => {
     const refusal = confirmRefusal(ctx.app, ctx.step, ctx.target, ctx.observation)
     const key = refusal.refuse === 'confirm_required' ? refusal.key : undefined
@@ -181,7 +276,7 @@ export const dispatchGates: Gate[] = [
       ctx.confirmationUsed = true
       return undefined
     }
-    let risky = consequential(ctx.step, ctx.target).hit
+    let risky = ctx.unlabelledPixel || consequential(ctx.step, ctx.target).hit
     const classify = ctx.host.want(ClassifyApi)
     if (!risky && classify) {
       const redact = redactor([
@@ -218,16 +313,7 @@ export const dispatchGates: Gate[] = [
     if (risky) return refusal
     return undefined
   },
-  (ctx) =>
-    ctx.count >= 20 ||
-    ctx.session.budget.steps >= 60 ||
-    (ctx.session.budget.startedAt > 0 && Date.now() - ctx.session.budget.startedAt >= 15 * 60_000)
-      ? {
-          refuse: 'budget',
-          message:
-            'Computer-use budget exhausted (20 per call, 60 steps / 15 minutes per conversation).',
-        }
-      : undefined,
+  conversationBudgetGate,
 ]
 export const gates = [...preflightGates, ...dispatchGates]
 export async function allGrants(host: ExtensionHost, conversation: number, session: Session) {

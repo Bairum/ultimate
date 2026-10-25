@@ -59,6 +59,7 @@ async function fixture() {
   const home = await temp()
   const host = {
     userHome: home,
+    home,
     projectSettings: async () => ({}),
     harness: () => harness,
     conversations: () => [{ id: 1 }],

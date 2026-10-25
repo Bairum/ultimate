@@ -5,18 +5,62 @@ import type { runGoal } from './jev.ts'
 import type { Driver, Observation } from './types.ts'
 import { result, message, anchored, ObservationUnavailable } from './tool-helpers.ts'
 import { isStopped } from './session.ts'
+import { pixelDefaults } from './perception.ts'
+import type { PixelSettings, Clock } from './perception.ts'
 
 export type Settings = {
   driverVersion?: string
   idleStopMinutes?: number
   jev?: Parameters<typeof runGoal>[1]['thresholds']
+  pixel?: Partial<PixelSettings>
+}
+/** Invalid types cannot relax safety; finite numeric settings are bounded at the configuration boundary. */
+export function pixelSettings(value: unknown): PixelSettings {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new ObservationUnavailable('invalid_settings', 'computerUse.pixel must be an object.')
+  const input = value as Record<string, unknown>
+  const number = (key: string, min: number, max: number, fallback: number) => {
+    const raw = input[key] === undefined ? fallback : input[key]
+    if (typeof raw !== 'number' || !Number.isFinite(raw))
+      throw new ObservationUnavailable(
+        'invalid_settings',
+        `computerUse.pixel.${key} must be a finite number.`,
+      )
+    return Math.max(min, Math.min(max, raw))
+  }
+  for (const key of ['requireLabel', 'clipboard', 'fileTransfer'])
+    if (key in input && typeof input[key] !== 'boolean')
+      throw new ObservationUnavailable(
+        'invalid_settings',
+        `computerUse.pixel.${key} must be a boolean.`,
+      )
+  return {
+    ...pixelDefaults,
+    requireLabel: input.requireLabel === undefined ? true : (input.requireLabel as boolean),
+    clipboard: input.clipboard === true,
+    fileTransfer: input.fileTransfer === true,
+    foregroundForDegraded: input.foregroundForDegraded === 'background' ? 'background' : 'takeover',
+    labelRadius: number('labelRadius', 0, 48, pixelDefaults.labelRadius),
+    minConfidence: number('minConfidence', 0.3, 1, pixelDefaults.minConfidence),
+    settleMs: number('settleMs', 0, 10000, pixelDefaults.settleMs),
+    maxWaitSeconds: number('maxWaitSeconds', 1, 600, pixelDefaults.maxWaitSeconds),
+  }
 }
 export async function settings(host: ExtensionHost): Promise<Settings> {
   const user = await readSettings(userSettingsPath(host.userHome))
   const project = await host.projectSettings()
+  for (const raw of [
+    (user.computerUse as Settings | undefined)?.pixel,
+    (project.computerUse as Settings | undefined)?.pixel,
+  ])
+    if (raw !== undefined) pixelSettings(raw)
   return {
     ...(user.computerUse as Settings | undefined),
     ...(project.computerUse as Settings | undefined),
+    pixel: pixelSettings({
+      ...(user.computerUse as Settings | undefined)?.pixel,
+      ...(project.computerUse as Settings | undefined)?.pixel,
+    }),
   }
 }
 export type Active = {
@@ -33,6 +77,7 @@ export type Runtime = {
   observations: Map<string, Observation>
   zoomed: Set<string>
   busy: boolean
+  clock?: Clock
   calls: Map<AbortController, number>
 }
 export function runtime(host: ExtensionHost) {

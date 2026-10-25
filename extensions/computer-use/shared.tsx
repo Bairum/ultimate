@@ -27,7 +27,7 @@ export const summaryOf = (details?: ComputerDetails): Record<string, unknown> =>
 }
 
 /** Refusals that wait on the user: amber, and the request card says the rest. */
-export const asks = ['consent_required', 'confirm_required', 'user_active']
+export const asks = ['consent_required', 'confirm_required', 'user_active', 'takeover_required']
 /** The code a call is waiting on the user for: its top-level status or a refused step's code. */
 export const waitingOf = (details?: ComputerDetails) =>
   details?.act?.mode === 'goal' && details.act.escalationReason === 'consequential'
@@ -96,9 +96,43 @@ const refusals: Record<string, string> = {
   unknown: 'outcome unknown',
   payload_too_large: 'too long to confirm',
   failed: 'failed',
+  label_mismatch: 'label not confirmed',
+  label_ambiguous: 'label appears more than once nearby',
+  window_not_visible: 'window not visible',
+  takeover_required: 'needs your foreground takeover',
+  perception_unavailable: 'could not read the screen',
+  capture_required: 'needs a screenshot',
+  timeout: 'wait timed out',
 }
 export const refusalText = (code: string) =>
   refusals[code] ?? (code.startsWith('task_') ? `task ${code.slice(5).replace('_', ' ')}` : code)
+
+/** What the user can do about a refusal the agent cannot fix alone, in their words. */
+export const fixes: Record<string, string> = {
+  window_not_visible:
+    'The window is off screen or shrunk to a Stage Manager thumbnail, so its pixels cannot be read. Turn Stage Manager off or bring the window to the front; the agent then observes again.',
+}
+
+/** The marker every piece of screen text carries: it is shown as plain text and never acted on. */
+export function ScreenMark() {
+  return (
+    <span className="ml-1.5 text-[10.5px] text-muted-foreground/60">screen text, untrusted</span>
+  )
+}
+
+/** Screen strings as `“a” · “b” · +3 more`, plain text with the marker. */
+export function ScreenList({ items, max = 6 }: { items: readonly string[]; max?: number }) {
+  const shown = items.slice(0, max)
+  return (
+    <>
+      {shown.map((item) => `“${item}”`).join(' · ')}
+      {items.length > max && (
+        <span className="text-muted-foreground/60"> · +{items.length - max} more</span>
+      )}
+      <ScreenMark />
+    </>
+  )
+}
 
 /** Why Jev handed a goal back. */
 export const escalations: Record<string, string> = {
@@ -127,6 +161,7 @@ export type Outcome =
   | 'not_run'
   | 'running'
   | 'waiting'
+  | 'timeout'
 const marks: Record<Outcome, [string, string]> = {
   delivered: ['✓', 'text-success'],
   refused: ['✗', 'text-error'],
@@ -135,6 +170,7 @@ const marks: Record<Outcome, [string, string]> = {
   not_run: ['·', 'text-muted-foreground/50'],
   running: ['●', 'animate-pulse-dot text-brand'],
   waiting: ['‖', 'text-warning'],
+  timeout: ['◷', 'text-warning'],
 }
 export function Mark({ outcome }: { outcome: Outcome }) {
   const [glyph, tone] = marks[outcome]
@@ -230,6 +266,15 @@ export function predicate(value: unknown) {
   }
   if (typeof p.value === 'string') return `value = “${p.value}”`
   if (typeof p.window_title === 'string') return `window “${p.window_title}”`
+  const ocr = (p.ocr && typeof p.ocr === 'object' ? p.ocr : undefined) as
+    | Record<string, unknown>
+    | undefined
+  if (ocr) {
+    const labels = (list: unknown, words: string) =>
+      (Array.isArray(list) ? list : []).map((label) => `“${String(label)}” ${words}`)
+    const parts = [...labels(ocr.appears, 'appears'), ...labels(ocr.disappears, 'gone')]
+    return `OCR ${parts.join(' · ') || 'check'}`
+  }
   return short(value, 60)
 }
 
@@ -245,7 +290,13 @@ export const toneOf = (status?: string): Tone =>
     ? 'good'
     : ['escalated', 'unknown', 'incomplete', 'stopped', 'awaiting_confirmation'].includes(status) ||
         status.endsWith('_required') ||
-        ['user_active', 'observe_first', 'checkpoint_due'].includes(status)
+        [
+          'user_active',
+          'observe_first',
+          'checkpoint_due',
+          'window_not_visible',
+          'timeout',
+        ].includes(status)
       ? 'wait'
       : 'bad'
 /**
