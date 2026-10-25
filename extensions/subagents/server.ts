@@ -341,6 +341,9 @@ async function waitInterruptibly(
   }
 }
 
+/** Extension-owned standing definitions retire when their extension is disabled live. */
+export const reloadOnSettings = true
+
 /** Browser actions for the Agents tab. */
 export const actions = {
   /** `{name}`: open the current definition's standing conversation. */
@@ -397,7 +400,7 @@ export const actions = {
     const shown = definition ?? invalid
     if (!shown) throw new Error(`Unknown agent: ${name}`)
     const files: Source[] = []
-    for (const root of agentRoots(host.ultimateRoot, host.projectRoot, host.userHome))
+    for (const root of await agentRoots(host.ultimateRoot, host.projectRoot, host.userHome))
       if (existsSync(join(root.path, `${name}.md`))) files.push(root.source)
     return {
       ...(definition ? { definition } : {}),

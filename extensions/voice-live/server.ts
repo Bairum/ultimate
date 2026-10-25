@@ -40,13 +40,13 @@ async function apiKey(host: ExtensionHost, signal: AbortSignal) {
 
 /** GPT-Live is only the audio interface; the standing Voice agent decides and answers. */
 export function liveInstructions() {
-  return `Listen to Daniel. Speak exactly the commentary you receive, in Daniel's language, without adding content. Never answer questions about his work yourself or announce a handoff on your own.
+  return `Listen to the user. Speak exactly the commentary you receive, in the user's language, without adding content. Never answer questions about their work yourself or announce a handoff on your own.
 
 Backchannel policy
 Give only short, natural backchannels while listening. Commentary supplies all substantive answers.
 
 Interruption policy
-Stop speaking and listen when Daniel interrupts.
+Stop speaking and listen when the user interrupts.
 
 Delegation policy
 Do not generate <|SpawnThinking|>: always. Do not delegate. The Voice agent receives every finished line and handles requests. Thinking notes are quiet context, not words to read aloud.`
@@ -121,8 +121,8 @@ function questionsText(questions: Question[]) {
 }
 
 /** Both writers share one request id, so the first write's time is the one kept. */
-const danielLine = (input: { text: string }): VoiceLine => ({
-  role: 'daniel',
+const userLine = (input: { text: string }): VoiceLine => ({
+  role: 'user',
   text: input.text,
   forwarded: true,
   at: Date.now(),
@@ -155,7 +155,7 @@ export function answerTask(host: ExtensionHost) {
     {
       voice: number
       main: number
-      /** Names Daniel's forwarded line, written once under `voice:line:<request>`. */
+      /** Names the user's forwarded line, written once under `voice:line:<request>`. */
       request: string
       text: string
       firstMessage: number
@@ -175,7 +175,7 @@ export function answerTask(host: ExtensionHost) {
           host,
           input.voice as ConversationId,
           'voice.line',
-          danielLine(input),
+          userLine(input),
           `voice:line:${input.request}`,
         )
         // The open question this utterance answers, chosen once: after our own answer it is no longer open.
@@ -251,14 +251,14 @@ export function answerTask(host: ExtensionHost) {
                 kind: 'voice.utterance',
                 data: { text: input.text, line },
               },
-              content: `Daniel, by voice (live transcript, may contain mistakes):\n${input.text}`,
+              content: `The user, by voice (live transcript, may contain mistakes):\n${input.text}`,
             },
             ctx,
           )
         }
         const settled = await receipt.wait(ctx)
         if (settled.status !== 'done' || settled.type !== 'input') {
-          // Said out loud too: Daniel waits by ear, so a silent failure looks like nothing happened.
+          // Said out loud too: the user waits by ear, so a silent failure looks like nothing happened.
           await write(
             host,
             input.voice as ConversationId,
@@ -361,10 +361,10 @@ export const actions = {
       .filter((line) => line.role !== 'note')
       .map((line) => ({
         type: 'message',
-        role: line.role === 'daniel' ? 'user' : 'assistant',
+        role: line.role === 'user' ? 'user' : 'assistant',
         content: [
           {
-            type: line.role === 'daniel' ? 'input_text' : 'output_text',
+            type: line.role === 'user' ? 'input_text' : 'output_text',
             text: line.text.slice(0, 200),
           },
         ],
@@ -413,7 +413,7 @@ export const actions = {
         type: 'input',
         whenBusy: 'steer',
         entry: { kind: 'voice.heard', data: { text: text.trim() } },
-        content: `Daniel, by voice (live transcript, may contain mistakes):\n${text.trim()}`,
+        content: `The user, by voice (live transcript, may contain mistakes):\n${text.trim()}`,
       },
       context,
     )
@@ -466,7 +466,7 @@ export default (host: ExtensionHost) => {
         name: 'voice_say',
         deferred: true,
         description:
-          'Speak text to Daniel through GPT-Live. Use for your answer, clarification or brief acknowledgement.',
+          'Speak text to the user through GPT-Live. Use for your answer, clarification or brief acknowledgement.',
         parameters: Type.Object({ text: Type.String({ minLength: 1 }) }),
         // The tool task's request id writes the spoken line once; correlation is memoized.
         replay: 'safe',
@@ -523,7 +523,7 @@ export default (host: ExtensionHost) => {
         name: 'voice_ask_ultimate',
         deferred: true,
         description:
-          'Pass a clear, self-contained request in Daniel’s words to @ultimate. Its answer returns as input; do not wait here.',
+          'Pass a clear, self-contained request in the user’s words to @ultimate. Its answer returns as input; do not wait here.',
         parameters: Type.Object({ request: Type.String({ minLength: 1 }) }),
         // A transactional receipt schedules once; the forwarded line has a stable write request id.
         replay: 'safe',
@@ -559,7 +559,7 @@ export default (host: ExtensionHost) => {
             host,
             api.conversationId,
             'voice.line',
-            danielLine(input),
+            userLine(input),
             `voice:line:${input.request}`,
           )
           return {

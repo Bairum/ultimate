@@ -499,7 +499,7 @@ function Stage() {
   )
 }
 
-// ---- Voice's composer: the controls, since Daniel talks ------------------------------------------------------------
+// ---- Voice's composer: the controls, since the user talks ------------------------------------------------------------
 
 /**
  * Where the pipeline is, read from the relay and the transcript: who has the floor, whether Voice is deciding, which
@@ -542,7 +542,7 @@ function useStep(mode: VoiceMode): Step {
   )
   const unspoken = [...settled.values()].some((state) => state.answered && !state.spoken)
   if (mode.phase === 'paused') return { step: mode.waiting ? 'waiting' : 'paused' }
-  if (mode.floor === 'daniel') return { step: 'hearing' }
+  if (mode.floor === 'user') return { step: 'hearing' }
   if (mode.floor === 'voice') return { step: 'speaking' }
   if (unspoken) return { step: 'answer' }
   if (deciding) return { step: 'deciding' }
@@ -620,7 +620,7 @@ function StepText({ step, mode }: { step: Step; mode: VoiceMode }) {
   )
 }
 
-/** The step's mark: the live level while Daniel talks, a calm spinner while something works, else the mic. */
+/** The step's mark: the live level while the user talks, a calm spinner while something works, else the mic. */
 function StepMark({ step, mode }: { step: Step; mode: VoiceMode }) {
   const busy = ['connecting', 'ending', 'deciding', 'working', 'answer'].includes(step.step)
   const hot = mode.phase === 'live' && !mode.muted
@@ -807,7 +807,7 @@ function useVoiceIds(): ReadonlySet<number> {
 // ---- transcript ----------------------------------------------------------------------------------------------------
 
 /**
- * A line of the relay. Daniel's words are turns of his; a request passed on to @ultimate is one card that follows it
+ * A line of the relay. The user's words are their turns; a request passed on to @ultimate is one card that follows it
  * to its answer, so the spoken answer and a failure notice for it live in that card. Other spoken lines are prose
  * under who spoke: @ultimate's answer with its source, the voice assistant's own words quieter.
  */
@@ -816,11 +816,11 @@ function LineRow({ entry }: { entry: EntryRecord }) {
   const actions = useUltimate()
   const mode = useMode()
   if (line.role === 'note') return null
-  if (line.role === 'daniel' && line.forwarded) return <RequestCard entry={entry} line={line} />
+  if (line.role === 'user' && line.forwarded) return <RequestCard entry={entry} line={line} />
   if ((line.role === 'ultimate' || line.role === 'notice') && line.re !== undefined) return null
-  if (line.role === 'daniel')
+  if (line.role === 'user')
     return (
-      <Message className="mt-3 first:mt-0" data-voice-line="daniel" from="user">
+      <Message className="mt-3 first:mt-0" data-voice-line="user" from="user">
         <MessageContent>
           <UserText text={line.text} />
         </MessageContent>
@@ -878,7 +878,7 @@ function LineRow({ entry }: { entry: EntryRecord }) {
 }
 
 /**
- * A request passed to @ultimate, as @ultimate's message card: what Daniel asked on top, then @ultimate working on it
+ * A request passed to @ultimate, as @ultimate's message card: what the user asked on top, then @ultimate working on it
  * (its phase, how long), then its answer. Folded, the answer is what Voice said aloud; unfolded, @ultimate's full
  * answer, with a way to it in @ultimate's conversation. A notice instead of an answer marks it failed.
  */
@@ -920,7 +920,7 @@ function RequestCard({ entry, line }: { entry: EntryRecord; line: VoiceLine }) {
   )
 }
 
-/** Daniel's request, as Voice passed it on: his side of the pair, in his colour. */
+/** The user's request, as Voice passed it on: their side of the pair, in their colour. */
 function Asked({ text }: { text: string }) {
   return (
     <div className="px-3 pt-2">
@@ -1024,7 +1024,7 @@ function Answer({
   )
 }
 
-/** No answer came: why, and what Voice told Daniel about it. */
+/** No answer came: why, and what Voice told the user about it. */
 function Failed({ notice, spoken }: { notice: VoiceLine; spoken?: VoiceLine }) {
   return (
     <>
@@ -1074,7 +1074,7 @@ function SessionRow({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/** In @ultimate: what Daniel said, as a turn of his, marked as spoken. */
+/** In @ultimate: what the user said, as their turn, marked as spoken. */
 function UtteranceRow({ entry }: { entry: EntryRecord }) {
   const data = entry.data as unknown as VoiceUtterance
   const message = entry.model?.[0]
@@ -1088,13 +1088,13 @@ function UtteranceRow({ entry }: { entry: EntryRecord }) {
 }
 
 /**
- * Daniel's actual heard input, distinct from the cleaned request Voice passes on: his words as he said them, quieter
+ * The user's actual heard input, distinct from the cleaned request Voice passes on: their words as spoken, quieter
  * than the request cards they may become.
  */
 function HeardRow({ entry }: { entry: EntryRecord }) {
   const { text } = entry.data as { text: string }
   return (
-    <Message className="mt-4 first:mt-0" data-voice-line="daniel" from="user">
+    <Message className="mt-4 first:mt-0" data-voice-line="user" from="user">
       <MessageContent className="group-[.is-user]:bg-secondary/50 group-[.is-user]:text-[13px] group-[.is-user]:text-foreground/80">
         <UserText text={text} />
       </MessageContent>

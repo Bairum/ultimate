@@ -64,7 +64,7 @@ export class Relay {
     return out
   }
 
-  /** Daniel is mid-sentence: words came in that are not a finished line yet. */
+  /** The user is mid-sentence: words came in that are not a finished line yet. */
   hearing(): boolean {
     return this.inputAt !== undefined
   }

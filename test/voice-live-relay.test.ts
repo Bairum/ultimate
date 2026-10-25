@@ -22,7 +22,7 @@ it('joins fragments into finished lines after 1.2 seconds quiet, regardless of d
   expect(relay.tick(9000)).toEqual([])
 })
 
-it('ignores output while speaking commentary, but still receives Daniel’s next line', () => {
+it('ignores output while speaking commentary, but still receives the user’s next line', () => {
   const relay = new Relay(0)
   relay.spoke()
   relay.event(spoken('The tests pass.'), 100)

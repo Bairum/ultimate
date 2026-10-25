@@ -1,7 +1,7 @@
 /**
  * This tab's voice mode: at most one live session, outside React, so a hot reload of `web.tsx` never orphans a running
  * session and its microphone. Voice mode outlasts its sessions: an idle session closes and the mode sleeps until an
- * answer arrives to speak or Daniel taps resume. Only End leaves it.
+ * answer arrives to speak or the user taps resume. Only End leaves it.
  */
 import { api, errorMessage, events } from '@/sdk'
 import type { ActionRef } from '@/sdk'
@@ -28,8 +28,8 @@ export type VoiceMode = {
   waiting?: string
   /** The Voice conversation sits in front of @ultimate's. Not durable: voice mode ends with its page. */
   front: boolean
-  /** Who has the floor in the live session: Daniel mid-sentence, or GPT-Live talking. */
-  floor?: 'daniel' | 'voice'
+  /** Who has the floor in the live session: the user mid-sentence, or GPT-Live talking. */
+  floor?: 'user' | 'voice'
 }
 
 let mode: VoiceMode = { phase: 'off', muted: false, front: false }
@@ -205,7 +205,7 @@ function tick() {
     return
   }
   const now = Date.now()
-  const floor = session.relay.hearing() ? 'daniel' : session.relay.talking() ? 'voice' : undefined
+  const floor = session.relay.hearing() ? 'user' : session.relay.talking() ? 'voice' : undefined
   if (floor !== mode.floor) set({ floor })
   // A forwarded request still unanswered: a short spoken "still on it", first after 20 s, then every 45 s.
   if (asked !== undefined && now - asked >= (nudged ? 45_000 : 20_000)) {

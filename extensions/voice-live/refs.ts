@@ -8,12 +8,12 @@ export type VoiceSession = {
   seconds?: number
 }
 /**
- * One line of the Voice transcript. `daniel`: the cleaned request forwarded to @ultimate;
+ * One line of the Voice transcript. `user`: the cleaned request forwarded to @ultimate;
  * `live`: GPT-Live's backchannels; `ultimate`: Voice's speech, `re` the forwarded line it answers;
  * `notice`: an unanswered request; `note`: quiet context sent to GPT-Live. `at`: when a forwarded line went out.
  */
 export type VoiceLine = {
-  role: 'daniel' | 'live' | 'ultimate' | 'notice' | 'note'
+  role: 'user' | 'live' | 'ultimate' | 'notice' | 'note'
   text: string
   forwarded?: true
   at?: number
@@ -36,9 +36,9 @@ export const StartAction = actionRef<{ sdp: string }, { sdp: string; conversatio
   'voice-live',
   'start',
 )
-/** A finished Daniel transcript → input to the Voice agent, steering while busy. */
+/** A finished user transcript → input to the Voice agent, steering while busy. */
 export const HeardAction = actionRef<{ text: string }, Record<string, never>>('voice-live', 'heard')
-/** GPT-Live's own line or a notice. Daniel's lines use heard instead. */
+/** GPT-Live's own line or a notice. The user's lines use heard instead. */
 export const LogAction = actionRef<{ role: 'live' | 'notice'; text: string }, { line: number }>(
   'voice-live',
   'log',

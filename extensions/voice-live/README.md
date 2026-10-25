@@ -1,5 +1,9 @@
 Live voice pairs GPT-Live's audio with a fast Luna agent that decides what to pass to @ultimate.
 
+This built-in is off by default. Enable it with `"extensions": { "enable": ["voice-live"] }` in your user or
+project `.ultimate/settings.json`. Its Voice agent loads only while the extension is enabled; user/project agent
+overlays still apply.
+
 Nothing is billable until a session starts or the Voice agent receives input. GPT-Live uses `OPENAI_API_KEY` from
 Secrets (⌘K → Secrets), or Pi's OpenAI **API key**, never its OAuth login. The key stays on the server. The Voice
 agent uses `openai-codex/gpt-6-luna` through Pi's existing ChatGPT login, low thinking and the fast tier.
@@ -11,12 +15,12 @@ agent uses `openai-codex/gpt-6-luna` through Pi's existing ChatGPT login, low th
    (`gpt-live-1`, voice `marin`). It seeds at most ten recent Voice lines, each clipped to 200 characters.
 2. After `session.started`, remote audio plays through an autoplay element. GPT-Live only listens, backchannels
    and speaks received commentary. It never handles work questions or decides to delegate.
-3. `Relay` joins transcript fragments after 1,200 ms quiet. Every finished Daniel line goes through `heard` as a
+3. `Relay` joins transcript fragments after 1,200 ms quiet. Every finished user line goes through `heard` as a
    `voice.heard` input to Voice (`whenBusy: 'steer'`). GPT-Live's own speech can be logged as `live` lines;
    commentary output is not logged twice. Delegation events are ignored.
-4. `agents/voice.md` configures the standing agent with exactly three deferred tools:
+4. `extensions/voice-live/agents/voice.md` configures the standing agent with exactly three deferred tools:
    - `voice_say {text}` writes an `ultimate` `voice.line` with `speech: true`. The browser sends it as commentary.
-   - `voice_ask_ultimate {request}` writes a forwarded Daniel line and schedules the durable answer task. It answers
+   - `voice_ask_ultimate {request}` writes a forwarded user line and schedules the durable answer task. It answers
      @ultimate's newest open question through Messages, or submits a typed `voice.utterance` with the clean request.
      The task follows that specific input receipt, including Messages delivery, not idle or an arbitrary delay.
    - `voice_note {text}` writes a quiet `note` line, forwarded by the browser as `session.thinking.append`.
@@ -32,7 +36,7 @@ agent uses `openai-codex/gpt-6-luna` through Pi's existing ChatGPT login, low th
 
 `Standing.voice` is the only Voice conversation index. Its `Unlisted` provider removes it from other sidebar lists;
 the Voice row nests under @ultimate. The dock under the transcript says what is happening now in large words: connecting,
-listening, hearing Daniel, Voice deciding, @ultimate on a request (its phase and time), an answer ready, speaking.
+listening, hearing the user, Voice deciding, @ultimate on a request (its phase and time), an answer ready, speaking.
 Each forwarded request is one @ultimate message card (`Bubble` from messages): what was asked, then working (the
 sidebar's phase and elapsed time), then the spoken answer, unfolding to @ultimate's full answer (`voice.answer`, whose
 `source` is the answer entry) with Open in @ultimate; a notice turns it failed. Heard lines and Voice's own small
