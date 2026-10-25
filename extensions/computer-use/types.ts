@@ -129,3 +129,63 @@ export type GoalResult =
 
 /** Initial goal-mode thresholds (decision 5a); settings `computerUse.jev.*` may override them. */
 export const jevThresholds = { act: 0.8, margin: 0.25, done: 0.85, risk: 0.3, maxCandidates: 24 }
+export type TaskSpec = {
+  id: string
+  intent: string
+  goal: string
+  criteria: { id: string; text: string; check: Predicate[] | 'evidence' }[]
+  scope: {
+    apps: string[]
+    params: Record<string, string>
+    actions: Step['kind'][]
+    consequential: string[]
+  }
+  stop: { steps: number; minutes: number; escalations: number }
+  link?: { conversation: number; task?: string }
+}
+export type Evidence = (
+  | { kind: 'verify'; predicates: Predicate[]; verdict: Verdict; ref: string }
+  | { kind: 'ax'; snapshot: string; excerpt: string; ref: string }
+  | { kind: 'capture'; captureId: string; path?: string; ref: string }
+) & { app?: string }
+export type Subgoal = {
+  id: string
+  text: string
+  status: 'pending' | 'active' | 'done' | 'blocked' | 'skipped' | 'needs_reverify'
+  attempts: number
+  evidence: Evidence[]
+}
+export type Replan = {
+  reason: string
+  subgoals?: { id: string; text: string }[]
+  criteria?: TaskSpec['criteria']
+  scope?: TaskSpec['scope']
+}
+export type TaskState = {
+  spec: TaskSpec
+  status:
+    | 'awaiting_confirmation'
+    | 'active'
+    | 'stopped'
+    | 'paused_by_user'
+    | 'done'
+    | 'partial'
+    | 'blocked'
+  subgoals: Subgoal[]
+  ledger: { at: number; kind: string; reason: string; ref?: string }[]
+  counters: {
+    steps: number
+    startedAt: number
+    sinceCheckpoint: number
+    sinceProgress: number
+    escalations: number
+  }
+  recent: { actions: string[]; outlines: string[] }
+  needsObserve: boolean
+  drift?: boolean
+  replanRequired?: boolean
+  loopDetected?: boolean
+  criteriaMet?: string[]
+  pendingChange?: Replan
+}
+export type Refusal = { refuse: string; message: string }

@@ -1,8 +1,9 @@
 /** Computer use: durable session state and the user's consent, confirmation and stop controls. */
 import { actionRef, docRef } from '../../shared/extension-api.ts'
-import type { JevDecision } from './types.ts'
+import type { JevDecision, TaskState } from './types.ts'
 
 export type Session = {
+  task?: TaskState
   grants: {
     app: string
     scope: 'once' | 'conversation' | 'project' | 'deny'
@@ -12,7 +13,7 @@ export type Session = {
   }[]
   confirmed: string[]
   pending: {
-    kind: 'consent' | 'confirm'
+    kind: 'consent' | 'confirm' | 'task' | 'change'
     app: string
     step?: number
     key?: string
@@ -79,4 +80,14 @@ export const TakeoverAction = actionRef<{ conversation: number; app: string }, S
 export const ReleaseAction = actionRef<{ conversation: number; app: string }, Session>(
   'computer-use',
   'release',
+)
+/** `{conversation}` → session; user-only confirmation of the task's intent and scope. */
+export const ConfirmTaskAction = actionRef<{ conversation: number }, Session>(
+  'computer-use',
+  'confirmTask',
+)
+/** `{conversation}` → session; user-only approval of criteria weakening or scope widening. */
+export const ConfirmChangeAction = actionRef<{ conversation: number }, Session>(
+  'computer-use',
+  'confirmChange',
 )

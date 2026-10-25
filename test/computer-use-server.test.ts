@@ -98,6 +98,36 @@ async function fixture(classify?: ClassifyService) {
       { app: 'Calculator', window: 456, actions: steps, foreground },
       new AbortController().signal,
     )
+  await invoke('computer_task', {
+    action: 'start',
+    spec: {
+      id: 'T1',
+      intent: 'Use Calculator',
+      goal: 'Use Calculator',
+      criteria: [{ id: 'C1', text: 'Calculator state verified', check: [{ value: '42' }] }],
+      scope: {
+        apps: ['Calculator', 'Term', 'Terminal'],
+        params: {},
+        actions: [
+          'click',
+          'double_click',
+          'right_click',
+          'type',
+          'set_value',
+          'key',
+          'menu',
+          'scroll',
+          'wait',
+        ],
+        consequential: [],
+      },
+    },
+  })
+  await invoke('computer_task', {
+    action: 'subgoals',
+    list: [{ id: 'S1', text: 'Use Calculator' }],
+  })
+  await invoke('computer_task', { action: 'activate', id: 'S1' })
   return { fake, driver, host, root, ctx, tools, invoke, observe, grant, run, resources }
 }
 const data = (output: { structuredOutput?: unknown }) =>

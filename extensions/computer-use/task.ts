@@ -1,66 +1,8 @@
 import type { ClassifyService } from '../classify/api.ts'
 import type { Escalation, Predicate, Step, Verdict } from './types.ts'
+import type { Evidence, Replan, TaskSpec, TaskState, Refusal } from './types.ts'
+export type { Evidence, Replan, Subgoal, TaskSpec, TaskState, Refusal } from './types.ts'
 
-export type TaskSpec = {
-  id: string
-  intent: string
-  goal: string
-  criteria: { id: string; text: string; check: Predicate[] | 'evidence' }[]
-  scope: {
-    apps: string[]
-    params: Record<string, string>
-    actions: Step['kind'][]
-    consequential: string[]
-  }
-  stop: { steps: number; minutes: number; escalations: number }
-  link?: { conversation: number; task?: string }
-}
-export type Evidence = (
-  | { kind: 'verify'; predicates: Predicate[]; verdict: Verdict; ref: string }
-  | { kind: 'ax'; snapshot: string; excerpt: string; ref: string }
-  | { kind: 'capture'; captureId: string; path?: string; ref: string }
-) & { app?: string }
-export type Subgoal = {
-  id: string
-  text: string
-  status: 'pending' | 'active' | 'done' | 'blocked' | 'skipped' | 'needs_reverify'
-  attempts: number
-  evidence: Evidence[]
-}
-export type Replan = {
-  reason: string
-  subgoals?: { id: string; text: string }[]
-  criteria?: TaskSpec['criteria']
-  scope?: TaskSpec['scope']
-}
-export type TaskState = {
-  spec: TaskSpec
-  status:
-    | 'awaiting_confirmation'
-    | 'active'
-    | 'stopped'
-    | 'paused_by_user'
-    | 'done'
-    | 'partial'
-    | 'blocked'
-  subgoals: Subgoal[]
-  ledger: { at: number; kind: string; reason: string; ref?: string }[]
-  counters: {
-    steps: number
-    startedAt: number
-    sinceCheckpoint: number
-    sinceProgress: number
-    escalations: number
-  }
-  recent: { actions: string[]; outlines: string[] }
-  needsObserve: boolean
-  drift?: boolean
-  replanRequired?: boolean
-  loopDetected?: boolean
-  criteriaMet?: string[]
-  pendingChange?: Replan
-}
-export type Refusal = { refuse: string; message: string }
 type Ask = ClassifyService['ask']
 const refuse = (code: string, message: string): Refusal => ({ refuse: code, message })
 const copy = (state: TaskState): TaskState => structuredClone(state)

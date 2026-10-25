@@ -23,6 +23,7 @@ export const ComputerSession = defineDoc<Session>({
   history: 'latest',
   // Forks get fresh authority, tokens and budgets, not the parent's in-flight desktop actions.
   // Project grants remain available through conversation 1; conversation grants never silently spread.
+  // Task intent and evidence belong to this operator too: a fork must start its own grounded task.
   fork: 'initial',
   checkpointWhen: () => false,
   initial: initialSession,
