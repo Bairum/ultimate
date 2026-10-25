@@ -76,6 +76,16 @@ pnpm cli            # emergency terminal agent when the UI, server or database i
   status line, and `pnpm restore <name>` on the other machine; see
   [Cloud backups](extensions/cloud/README.md#cloud-backups).
 
+### Recommended models
+
+We recommend running @ultimate on Claude Code Opus 5.5 (`claude-code/claude-opus-5-5`), and ideally the
+coordinators too; the other agents are your choice. Coordinators inherit @ultimate's model unless a definition pins
+one, so choosing Opus 5.5 for @ultimate covers both (this repository's `.ultimate/agents/coordinator.md` overlay pins
+it with high thinking). To set it up, install the CLI (`npm install -g @anthropic-ai/claude-code`), run
+`claude auth login`, then pick the model in the model picker; ⌘K → **Claude Code setup…** shows the login status. The
+[Claude Code provider](extensions/claude-code/README.md) is experimental: it depends on Claude Code's protocol and
+account limits, and subscription coverage is not guaranteed. This is a recommendation only; no default changes.
+
 ### Terminal status
 
 `pnpm start` / `ultimate` shows a compact live terminal dashboard: the public URL, supervisor/core lifecycle,
