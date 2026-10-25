@@ -136,8 +136,10 @@ export function mergeConfig(user: AdvisorConfig, project: AdvisorConfig): Adviso
   const advisors = { ...user.advisors }
   for (const [name, spec] of Object.entries(project.advisors ?? {}))
     advisors[name] = { ...advisors[name], ...spec }
-  return { dayUsd: 5, ...user, ...project, roles, advisors }
+  return { model: DEFAULT_MODEL, dayUsd: 5, ...user, ...project, roles, advisors }
 }
+/** The shipped advisor model; a user or trusted project `advisor.model` replaces it. */
+export const DEFAULT_MODEL = 'openai-codex/gpt-6.1-sol:medium'
 export type ConfigHost = Pick<
   ExtensionHost,
   'userHome' | 'projectRoot' | 'projectSetup' | 'projectSettings' | 'notice'

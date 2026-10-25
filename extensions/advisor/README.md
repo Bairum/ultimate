@@ -1,4 +1,4 @@
-Advisor is an optional second-model review of agent conversations: quiet by default, with role-specific rubrics, read-only checkout tools, durable advice and daily spending limits. The extension loads by default but does no reviewing until a role is explicitly enabled. There is no fallback to the agent's model.
+Advisor is an optional second-model review of agent conversations: quiet by default, with role-specific rubrics, read-only checkout tools, durable advice and daily spending limits. The extension loads by default but does no reviewing until a role is explicitly enabled. Reviews use `openai-codex/gpt-6.1-sol:medium` unless `advisor.model` (or an advisor's own `model`) says otherwise; there is no fallback to the agent's model.
 
 ## Configure
 
@@ -7,7 +7,7 @@ Put `advisor` in `~/.ultimate/settings.json` or a trusted project's `.ultimate/s
 ```json
 {
   "advisor": {
-    "model": "openai/gpt-4.1:off",
+    "model": "openai-codex/gpt-6.1-sol:medium",
     "dayUsd": 5,
     "advisors": {
       "verification": { "maxToolCalls": 6, "maxNotes": 3 }
@@ -20,11 +20,11 @@ Put `advisor` in `~/.ultimate/settings.json` or a trusted project's `.ultimate/s
 }
 ```
 
-Use a model available in your configured providers; the model above is an example, not an automatic selection. Settings merge built-in defaults, user, then trusted project, field by field (including each role and each named advisor). An invalid layer is ignored with a notice. Untrusted project settings and rubrics are ignored even when project settings would be empty.
+The model above is the shipped default; set another one available in your configured providers to replace it. Settings merge built-in defaults, user, then trusted project, field by field (including each role and each named advisor). An invalid layer is ignored with a notice. Untrusted project settings and rubrics are ignored even when project settings would be empty.
 
 ### Every field
 
-- `model`: `provider/id[:thinking]`; unset means skip (`no model`). Thinking: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.
+- `model`: `provider/id[:thinking]`, default `openai-codex/gpt-6.1-sol:medium`. A model that is unavailable (not logged in) records the review as skipped with the error; the agent's run continues. Thinking: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.
 - `dayUsd`: global daily USD budget, default 5, nonnegative.
 - `advisors`: named roster. Each name is 1–40 lowercase letters, digits or hyphens. Each entry accepts `model` (overrides global), `rubric` (filename without `.md`, defaults to advisor name), `maxToolCalls` (1–20, default 6), `maxNotes` (1–10, default 3 non-blockers; blockers are exempt).
 - `roles`: profiles keyed by the definition name, or `ultimate` for standing @ultimate. Unknown roles, roots, side chats and unlabelled conversations are never reviewed.
