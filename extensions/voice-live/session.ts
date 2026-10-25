@@ -73,6 +73,17 @@ export async function startLive(options: LiveOptions): Promise<LiveSession> {
             await options.action(LogAction, out.log)
             return
           }
+          if ('notSent' in out) {
+            await options.action(LogAction, { role: 'notice', text: out.notSent })
+            // GPT-Live said it passed something on: it corrects itself out loud.
+            send({
+              type: 'session.instructions.append',
+              event_id: crypto.randomUUID(),
+              delegation_id: null,
+              content: `Nothing was passed to Ultimate. Tell Daniel briefly that nothing was sent, and ask what he wants passed on.`,
+            })
+            return
+          }
           const result = await options.action(SayAction, {
             text: out.forward,
             ...(out.delegation ? { delegation: out.delegation } : {}),

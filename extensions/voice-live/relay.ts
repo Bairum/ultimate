@@ -1,10 +1,11 @@
 /**
  * Pure transcript relay; the caller supplies the clock and ticks. GPT-Live talks with Daniel itself and hands a request
- * to Ultimate only by delegating: with confirmation on, after asking "Should I pass this to Ultimate: …?" and his yes.
+ * to Ultimate by delegating. The relay, not GPT-Live's words, decides what is passed on: a delegation forwards the
+ * exchange since the last forward, and so does GPT-Live announcing a handoff it then fails to delegate.
  */
-/** Ask "Should I pass this to Ultimate: …?" before forwarding; false forwards each clear request with "Passing that on". */
-export const CONFIRM = true
 export const QUIET_MS = 1200
+/** How long a spoken "passing that on" waits for its delegation before the relay forwards on its own. */
+export const HANDOFF_MS = 2500
 export const IDLE_MS = 120_000
 export type LiveEvent = {
   type: string
@@ -15,15 +16,15 @@ export type LiveEvent = {
   reason?: string
   [key: string]: unknown
 }
-/** A finished line for the Voice transcript, or a request to forward to @ultimate. */
+/** A finished line for the Voice transcript, a request to forward to @ultimate, or a handoff with nothing to send. */
 export type RelayOut =
   | { log: { role: 'daniel' | 'live'; text: string } }
   | { forward: string; delegation?: string }
+  | { notSent: string }
 
-/** The request inside GPT-Live's confirmation question, as its instructions ask it to phrase it. */
-const ASKS = /pass (?:this|that|it)(?: on)? to Ultimate\s*[:,-]\s*(.+?)[?.!]*\s*$/i
-const YES =
-  /^(?:yes|yeah|yep|yup|sure|please|go ahead|do it|pass it on|send it|ok(?:ay)?|ja|genau|correct|right)\b/i
+/** GPT-Live saying it hands over: "passing that on", "asking Ultimate now", "I'll send that to Ultimate". */
+const HANDOFF =
+  /\b(?:pass(?:ing)?|send(?:ing)?|forward(?:ing)?|hand(?:ing)?)\b.{0,20}\b(?:on|along|over|to ultimate)\b|\bask(?:ing)? ultimate\b/i
 
 const clean = (text: string) => text.trim().replace(/\s+/g, ' ')
 
@@ -33,20 +34,16 @@ export class Relay {
   private output = ''
   private outputAt?: number
   private activityAt: number
-  /** Daniel's lines since the last forward: what a delegation without a parsed question forwards. */
-  private said: string[] = []
-  /** The request GPT-Live last asked to pass on, until it is forwarded or Daniel moves on. */
-  private asked?: string
-  /** Daniel said yes to `asked`; forward it at `confirmedAt + QUIET_MS` if no delegation arrives first. */
-  private confirmedAt?: number
+  /** The open exchange: what Daniel said, and GPT-Live's clarifying questions, since the last forward or answer. */
+  private exchange: { role: 'daniel' | 'live'; text: string }[] = []
+  /** GPT-Live announced a handoff at this time and no delegation has arrived yet. */
+  private announcedAt?: number
+  /** The relay forwarded an announced handoff itself: GPT-Live's late delegation for it is no new request. */
+  private late = false
   /** Output after `speak()` is Ultimate's answer being read out, already in the transcript. */
   private speaking = false
 
-  constructor(
-    now: number,
-    /** Ask before forwarding (true), or forward whatever GPT-Live delegates. */
-    private confirm = CONFIRM,
-  ) {
+  constructor(now: number) {
     this.activityAt = now
   }
 
@@ -58,7 +55,7 @@ export class Relay {
   event(event: LiveEvent, now: number): RelayOut[] {
     const out = this.tick(now)
     if (event.type === 'session.input_transcript.delta' && event.delta) {
-      out.push(...this.endOutput())
+      out.push(...this.endOutput(now))
       this.input += event.delta
       this.inputAt = now
       this.activityAt = now
@@ -67,8 +64,14 @@ export class Relay {
       this.output += event.delta
       this.outputAt = now
       this.activityAt = now
-    } else if (event.type === 'session.delegation.created' && event.delegation?.target === 'client')
-      out.push(...this.endInput(), ...this.forward(event.delegation.id))
+    } else if (
+      event.type === 'session.delegation.created' &&
+      event.delegation?.target === 'client'
+    ) {
+      out.push(...this.endInput())
+      if (this.late && !this.exchange.some((line) => line.role === 'daniel')) this.late = false
+      else out.push(...this.forward(event.delegation.id))
+    }
     return out
   }
 
@@ -76,10 +79,12 @@ export class Relay {
     const out: RelayOut[] = []
     if (this.inputAt !== undefined && now - this.inputAt >= QUIET_MS) out.push(...this.endInput())
     if (this.outputAt !== undefined && now - this.outputAt >= QUIET_MS)
-      out.push(...this.endOutput())
-    // A confirmed request GPT-Live failed to delegate still goes: nothing unconfirmed ever does.
-    if (this.confirmedAt !== undefined && now - this.confirmedAt >= QUIET_MS)
+      out.push(...this.endOutput(now))
+    // GPT-Live said it passed it on but never delegated: the relay passes it on itself.
+    if (this.announcedAt !== undefined && now - this.announcedAt >= HANDOFF_MS) {
       out.push(...this.forward())
+      this.late = true
+    }
     return out
   }
 
@@ -91,36 +96,36 @@ export class Relay {
     const text = clean(this.input)
     this.input = ''
     if (this.inputAt === undefined || !text) return []
-    const at = this.inputAt
     this.inputAt = undefined
     this.speaking = false
-    if (this.asked !== undefined && YES.test(text)) this.confirmedAt = at
-    else {
-      this.said.push(text)
-      // Anything but a yes after the question leaves it to GPT-Live to ask again.
-      this.asked = undefined
-      this.confirmedAt = undefined
-    }
+    this.late = false
+    this.exchange.push({ role: 'daniel', text })
     return [{ log: { role: 'daniel', text } }]
   }
 
-  private endOutput(): RelayOut[] {
+  private endOutput(now: number): RelayOut[] {
     const text = clean(this.output)
     this.output = ''
     if (this.outputAt === undefined || !text) return []
     this.outputAt = undefined
     if (this.speaking) return []
-    const asked = ASKS.exec(text)?.[1]
-    if (asked) this.asked = clean(asked)
+    if (HANDOFF.test(text)) this.announcedAt ??= now
+    // A question keeps the exchange open; any other reply (small talk answered) closes it.
+    else if (text.endsWith('?')) this.exchange.push({ role: 'live', text })
+    else this.exchange = []
     return [{ log: { role: 'live', text } }]
   }
 
   private forward(delegation?: string): RelayOut[] {
-    const text = this.asked ?? (this.confirm ? undefined : this.said.join(' '))
-    this.asked = undefined
-    this.confirmedAt = undefined
-    if (!text) return []
-    this.said = []
+    this.announcedAt = undefined
+    const lines = this.exchange.slice(-8)
+    this.exchange = []
+    if (!lines.some((line) => line.role === 'daniel'))
+      return [{ notSent: 'There was no request to pass on.' }]
+    const text =
+      lines.length === 1
+        ? lines[0].text
+        : lines.map((l) => `${l.role === 'daniel' ? 'Daniel' : 'Voice'}: ${l.text}`).join('\n')
     return [{ forward: text, ...(delegation ? { delegation } : {}) }]
   }
 }

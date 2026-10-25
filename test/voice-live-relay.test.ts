@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { QUIET_MS, Relay } from '../extensions/voice-live/relay.ts'
+import { HANDOFF_MS, QUIET_MS, Relay } from '../extensions/voice-live/relay.ts'
 import type { LiveEvent } from '../extensions/voice-live/relay.ts'
 
 const said = (delta: string): LiveEvent => ({ type: 'session.input_transcript.delta', delta })
@@ -9,44 +9,49 @@ const delegated = (id: string): LiveEvent => ({
   delegation: { id, target: 'client' },
 })
 
-it('keeps small talk in Voice and forwards nothing Daniel did not confirm', () => {
+it('keeps small talk in Voice and forwards a request on delegation', () => {
   const relay = new Relay(0)
-  expect(relay.event(said('Can you hear me?'), 10)).toEqual([])
-  expect(relay.event(spoken('Yes, loud and clear.'), 500)).toEqual([
+  relay.event(said('Can you hear me?'), 10)
+  expect(relay.event(spoken('Yep, I can hear you.'), 500)).toEqual([
     { log: { role: 'daniel', text: 'Can you hear me?' } },
   ])
   expect(relay.tick(500 + QUIET_MS)).toEqual([
-    { log: { role: 'live', text: 'Yes, loud and clear.' } },
+    { log: { role: 'live', text: 'Yep, I can hear you.' } },
   ])
-  // A delegation without a confirmed question forwards nothing.
-  expect(relay.event(delegated('d0'), 3000)).toEqual([])
-  expect(relay.tick(9000)).toEqual([])
+  relay.event(said('Land the side chat branch'), 3000)
+  expect(relay.event(delegated('d1'), 3500)).toEqual([
+    { log: { role: 'daniel', text: 'Land the side chat branch' } },
+    { forward: 'Land the side chat branch', delegation: 'd1' },
+  ])
 })
 
-it('forwards the confirmed request with its delegation, and a missed handoff only after a yes', () => {
+// Daniel's round-2 test: GPT-Live clarified, said "Okay, asking Ultimate now." and never delegated; nothing was sent.
+it('forwards the exchange itself when GPT-Live announces a handoff it never delegates', () => {
   const relay = new Relay(0)
-  relay.event(said('Um, land the side chat branch'), 10)
-  relay.event(spoken('Should I pass this to Ultimate: land the side chat branch?'), 1000)
-  relay.event(said('Yes please'), 3000)
-  expect(relay.event(delegated('d1'), 3500)).toEqual([
-    { log: { role: 'daniel', text: 'Yes please' } },
-    { forward: 'land the side chat branch', delegation: 'd1' },
+  relay.event(said('Can you ask Ultimate to check which conversations are ongoing'), 10)
+  relay.event(spoken('Do you mean which conversations are going on in Ultimate?'), 2000)
+  relay.event(said('Yes'), 4000)
+  relay.event(spoken('Okay, asking Ultimate now.'), 5000)
+  expect(relay.tick(5000 + QUIET_MS)).toEqual([
+    { log: { role: 'live', text: 'Okay, asking Ultimate now.' } },
   ])
-  expect(relay.tick(20_000)).toEqual([])
-
-  // GPT-Live asks and Daniel says yes, but no delegation arrives: forwarded after the quiet time.
-  relay.event(spoken('Should I pass this to Ultimate: run the tests?'), 30_000)
-  relay.event(said('yeah'), 31_000)
-  expect(relay.tick(31_000 + QUIET_MS)).toEqual([
-    { log: { role: 'daniel', text: 'yeah' } },
-    { forward: 'run the tests' },
+  expect(relay.tick(5000 + QUIET_MS + HANDOFF_MS)).toEqual([
+    {
+      forward:
+        'Daniel: Can you ask Ultimate to check which conversations are ongoing\nVoice: Do you mean which conversations are going on in Ultimate?\nDaniel: Yes',
+    },
   ])
+  // A late delegation for the same handoff forwards nothing twice, and says nothing.
+  expect(relay.event(delegated('late'), 20_000)).toEqual([])
+})
 
-  // A "no" leaves the question unconfirmed: nothing goes.
-  relay.event(spoken('Should I pass this to Ultimate: delete the branch?'), 40_000)
-  relay.event(said('No, wait'), 41_000)
-  expect(relay.tick(60_000)).toEqual([{ log: { role: 'daniel', text: 'No, wait' } }])
-  expect(relay.event(delegated('d2'), 60_100)).toEqual([])
+it('reports a handoff with nothing to pass on instead of staying silent', () => {
+  const relay = new Relay(0)
+  relay.event(spoken('Passing that on.'), 100)
+  relay.tick(100 + QUIET_MS)
+  expect(relay.tick(100 + QUIET_MS + HANDOFF_MS)).toEqual([
+    { notSent: 'There was no request to pass on.' },
+  ])
 })
 
 it('does not log Ultimate answers being read out as GPT-Live lines; any speech resets idle', () => {
@@ -55,13 +60,4 @@ it('does not log Ultimate answers being read out as GPT-Live lines; any speech r
   relay.event(spoken('The tests pass.'), 100)
   expect(relay.tick(100 + QUIET_MS)).toEqual([])
   expect(relay.idleFor(600)).toBe(500)
-})
-
-it('without confirmation forwards what Daniel said on delegation', () => {
-  const relay = new Relay(0, false)
-  relay.event(said('Land the side chat branch'), 10)
-  expect(relay.event(delegated('d1'), 500)).toEqual([
-    { log: { role: 'daniel', text: 'Land the side chat branch' } },
-    { forward: 'Land the side chat branch', delegation: 'd1' },
-  ])
 })

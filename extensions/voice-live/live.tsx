@@ -129,8 +129,23 @@ function tick() {
     set({ phase: 'paused', since: undefined, problem: mode.problem ?? 'The session closed' })
     return
   }
-  if (session.relay.idleFor(Date.now()) >= IDLE_MS) release('paused')
+  const now = Date.now()
+  // A forwarded request still unanswered: a short spoken "still on it", first after 20 s, then every 45 s.
+  if (asked !== undefined && now - asked >= (nudged ? 45_000 : 20_000)) {
+    asked = now
+    nudged = true
+    try {
+      session.speak('Still on it.', null)
+    } catch (error) {
+      set({ problem: describe(error) })
+    }
+  }
+  if (session.relay.idleFor(now) >= IDLE_MS) release('paused')
 }
+
+/** When the open forwarded request went out (or was last nudged about), until its answer is heard. */
+let asked: number | undefined
+let nudged = false
 
 function onEvent(event: LiveEvent) {
   if (event.type === 'session.closed' && session && mode.phase === 'live')
@@ -160,6 +175,8 @@ export async function open(speech?: string): Promise<void> {
       onEvent,
       onLine: ({ delegation }) => {
         if (delegation) delegations.add(delegation)
+        asked = Date.now()
+        nudged = false
       },
       onError: (error) => set({ problem: describe(error) }),
     })
@@ -190,6 +207,7 @@ export async function open(speech?: string): Promise<void> {
 
 /** An answer to speak: now while live, after the start in flight, or by waking a paused session. */
 export function hear(text: string, delegation?: string) {
+  asked = undefined
   if (mode.phase === 'live' && session) {
     try {
       session.speak(text, delegation && delegations.has(delegation) ? delegation : null)

@@ -2,6 +2,7 @@ import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
   ArrowRightIcon,
   AudioLinesIcon,
+  CircleAlertIcon,
   LoaderCircleIcon,
   MicIcon,
   MicOffIcon,
@@ -30,6 +31,7 @@ import {
   useDocOf,
   useEvent,
   useNow,
+  useTranscript,
   useUltimate,
   useViewport,
   UserText,
@@ -42,7 +44,6 @@ import { openAgentSource, StandingDoc, talkToUltimate } from '../subagents/ui.ts
 import * as live from './live.tsx'
 import type { VoiceMode } from './live.tsx'
 import { StatusAction, VoiceDoc } from './refs.ts'
-import { CONFIRM } from './relay.ts'
 import type { VoiceLine, VoiceSession, VoiceUtterance } from './refs.ts'
 
 const KEYS = 'alt+v'
@@ -333,6 +334,8 @@ function SpeakNew({ voice }: { voice: number }) {
       if (entry.id <= seen.current || entry.kind !== 'voice.line') continue
       const line = entry.data as unknown as VoiceLine
       if (line.role === 'ultimate' && line.speech) live.hear(line.text, line.delegation)
+      // @ultimate did not answer a forwarded request: say so, never leave Daniel waiting in silence.
+      else if (line.role === 'notice' && line.re !== undefined) live.hear(line.text)
     }
     seen.current = Math.max(seen.current, last)
   }, [entries, loading])
@@ -542,9 +545,7 @@ function VoiceDock({ core }: { core: ReactNode }) {
                   : 'Closed after two quiet minutes · an answer wakes it'
                 : mode.muted
                   ? '@ultimate keeps working · unmute to talk'
-                  : CONFIRM
-                    ? 'Talk · asks before passing on to @ultimate'
-                    : 'Talk · requests go straight to @ultimate'}
+                  : 'Talk · requests go straight to @ultimate'}
           </div>
         </div>
         {off || asleep ? (
@@ -679,15 +680,20 @@ function LineRow({ entry }: { entry: EntryRecord }) {
             line.forwarded && 'group-[.is-user]:border-brand/45 group-[.is-user]:bg-brand/5',
           )}
         >
-          {line.forwarded && (
-            <span className="-mb-1 flex items-center gap-1 font-mono text-[10.5px] text-brand">
-              <ArrowRightIcon className="size-3" />
-              passed to @ultimate
-            </span>
-          )}
+          {line.forwarded && <Forwarded id={entry.id} />}
           <UserText text={line.text} />
         </MessageContent>
       </Message>
+    )
+  if (line.role === 'notice')
+    return (
+      <div
+        className="mt-3 flex items-center gap-2 font-mono text-[11.5px] text-warning first:mt-0"
+        data-voice-line="notice"
+      >
+        <CircleAlertIcon className="size-3.5 shrink-0" />
+        {line.text}
+      </div>
     )
   if (line.role === 'live')
     return (
@@ -730,6 +736,39 @@ function LineRow({ entry }: { entry: EntryRecord }) {
         )}
       </div>
     </div>
+  )
+}
+
+/** Where a request passed to @ultimate stands: sent and being worked on, answered, or not answered. */
+function Forwarded({ id }: { id: number }) {
+  const entries = useTranscript()
+  const reply = entries.find(
+    (e) => e.kind === 'voice.line' && (e.data as unknown as VoiceLine).re === id,
+  )
+  const failed = reply && (reply.data as unknown as VoiceLine).role === 'notice'
+  return (
+    <span
+      className={cn(
+        '-mb-1 flex items-center gap-1 font-mono text-[10.5px]',
+        failed ? 'text-warning' : 'text-brand',
+      )}
+      data-forwarded={reply ? (failed ? 'failed' : 'answered') : 'working'}
+    >
+      <ArrowRightIcon className="size-3" />
+      passed to @ultimate
+      <span className="text-muted-foreground">
+        {' · '}
+        {reply ? (
+          failed ? (
+            'no answer'
+          ) : (
+            'answered'
+          )
+        ) : (
+          <span className="animate-pulse">working…</span>
+        )}
+      </span>
+    </span>
   )
 }
 

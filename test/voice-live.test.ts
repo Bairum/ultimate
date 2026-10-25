@@ -9,7 +9,7 @@ import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import { Messages } from '../extensions/messages/api.ts'
 import { Summaries, setAutomaticSummaries } from '../extensions/conversations/summary.ts'
-import { Voice, liveInstructions } from '../extensions/voice-live/server.ts'
+import { CONFIRM, Voice, liveInstructions } from '../extensions/voice-live/server.ts'
 import type { VoiceLine } from '../extensions/voice-live/refs.ts'
 import { SPEECH_PROMPT, speakable } from '../extensions/voice-live/speech.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
@@ -70,7 +70,7 @@ async function fixture() {
     expect(JSON.parse(request!.body as string)).toEqual({
       session: {
         model: 'gpt-live-1',
-        instructions: liveInstructions(true),
+        instructions: liveInstructions(CONFIRM),
         audio: { output: { voice: 'marin' } },
         delegation: { type: 'client' },
       },

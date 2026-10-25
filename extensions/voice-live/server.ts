@@ -17,7 +17,9 @@ import { Messages, MessagesApi } from '../messages/api.ts'
 import type { Question } from '../messages/api.ts'
 import { Standing } from '../subagents/api.ts'
 import { EndAction, LogAction, SayAction, StartAction, StatusAction, VoiceDoc } from './refs.ts'
-import { CONFIRM } from './relay.ts'
+
+/** Ask "Should I pass this to Ultimate: …?" before forwarding. Daniel chose off: "Passing that on" and forward. */
+export const CONFIRM = false
 import type { VoiceLine, VoiceSession, VoiceState } from './refs.ts'
 import { speakable } from './speech.ts'
 
@@ -41,7 +43,10 @@ async function apiKey(host: ExtensionHost, signal: AbortSignal) {
   return (await runtime.getAuth('openai', { signal }))?.auth.apiKey
 }
 
-/** GPT-Live's prompt: it talks with Daniel itself and passes on only real requests, asking first when `confirm`. */
+/**
+ * GPT-Live's prompt: it talks with Daniel itself and passes on real requests, asking first when `confirm`. The relay
+ * decides what was passed on (see relay.ts); this only shapes how GPT-Live talks.
+ */
 export function liveInstructions(confirm: boolean) {
   return `You are the voice in Daniel's ear for Ultimate, a coding agent working on his software projects. You talk with Daniel; Ultimate does the work. Speak in Daniel's language, briefly and naturally.
 
@@ -67,7 +72,7 @@ Generate <|SpawnThinking|> when:
 Do not generate <|SpawnThinking|> when:
 - Daniel greets you, checks the connection, makes small talk or asks what Ultimate is doing.
 - The request is still unclear${confirm ? ', or he has not said yes yet' : ''}.
-Do not guess the result while waiting.
+Do not guess the result while waiting. If Daniel asks while Ultimate works, say it is still on it.
 When commentary arrives, say it plainly without adding content.`
 }
 
@@ -253,6 +258,21 @@ export function answerTask(host: ExtensionHost) {
         }
         const settled = await receipt.wait(ctx)
         if (settled.status !== 'done' || settled.type !== 'input') {
+          // Said out loud too: Daniel waits by ear, so a silent failure looks like nothing happened.
+          await write(
+            host,
+            input.voice as ConversationId,
+            'voice.line',
+            {
+              role: 'notice',
+              text:
+                settled.status === 'unanswered' && settled.reason === 'aborted'
+                  ? 'Ultimate was stopped before it answered.'
+                  : 'Ultimate did not answer that.',
+              re: line,
+            },
+            `voice:answer:${line}`,
+          )
           await runtime.commit(
             () => ({
               status: 'terminal',
@@ -336,6 +356,7 @@ export function answerTask(host: ExtensionHost) {
             role: 'ultimate',
             text,
             speech: true,
+            re: line,
             source: { conversation: main, entry: settled.answer },
             ...(input.delegation ? { delegation: input.delegation } : {}),
           },
@@ -460,8 +481,12 @@ export const actions = {
   }),
   log: implementAction(LogAction, async (args, { host }) => {
     const { role, text } = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
-    if ((role !== 'daniel' && role !== 'live') || typeof text !== 'string' || !text.trim())
-      throw new Error('Expected a daniel or live role and text')
+    if (
+      (role !== 'daniel' && role !== 'live' && role !== 'notice') ||
+      typeof text !== 'string' ||
+      !text.trim()
+    )
+      throw new Error('Expected a daniel, live or notice role and text')
     const line = await write(
       host,
       await voiceId(host),

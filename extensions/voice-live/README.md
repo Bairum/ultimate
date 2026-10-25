@@ -12,9 +12,14 @@ The key stays on the server. GPT-Live has no ephemeral browser keys.
    `marin`, client delegation. It seeds at most ten recent Voice lines (each clipped to 200 characters).
 2. The browser applies the SDP answer and waits for `session.started`; it never sends `session.start` on WebRTC.
    Remote tracks play through an autoplay audio element; an `AnalyserNode` exposes microphone levels.
-3. `Relay` joins input transcript fragments. After 1,200 ms quiet it sends an utterance with the current delegation
-   id, or without one if delegation was missed and it contains at least three words. It does not filter echo.
-4. `say` passively writes Daniel's line to Voice. A durable task answers @ultimate's newest open question to the user
+3. GPT-Live talks with Daniel itself: small talk and connection checks stay in Voice (`log`, lines `daniel` and
+   `live`). `Relay` joins transcript fragments into lines after 1,200 ms quiet. **The relay decides what is passed
+   on, not GPT-Live's words**: a delegation forwards the open exchange since the last forward (Daniel's lines and
+   GPT-Live's clarifying questions; one line goes as is). GPT-Live _saying_ it hands over ("passing that on", "asking
+   Ultimate now") without delegating within 2.5 s forwards it too; that is what happened in Daniel's round-2 test.
+   A handoff with nothing to send writes a `notice` line and tells GPT-Live to say so. `CONFIRM` in `server.ts`
+   (off, Daniel's choice) would make GPT-Live ask "Should I pass this to Ultimate: …?" first.
+4. `say` passively writes Daniel's forwarded line to Voice. A durable task answers @ultimate's newest open question to the user
    through Messages, or submits a `voice.utterance` input with `whenBusy: 'steer'`. It waits for **that input receipt**,
    not idle or a guessed delay. In the question path it follows Messages' reply delivery to its input receipt.
 5. The task reads the assistant answer. If that run instead ended with a message to the user, its message text and
@@ -22,14 +27,15 @@ The key stays on the server. GPT-Live has no ephemeral browser keys.
    Other content is rewritten with the configured summary model, with memoized responses for replay safety and usage
    accounted to Voice. Without an available summary model, it strips code/links/paths and cuts to roughly sixty
    words plus “Details are on screen.” A configured model that fails is a failed task, not an invented answer.
-6. The result is another passive Voice line, `role: 'ultimate', speech: true`. The UI watches **new** such entries and
+6. The result is another passive Voice line, `role: 'ultimate', speech: true, re: <forwarded line>`; when
+   @ultimate does not answer (stopped, failed) it is a `notice` with `re` instead, spoken too. The UI watches **new** such entries and
    calls `session.speak(line.text, line.delegation ?? null)`. Do not replay historical speech on opening the view.
 
 Voice is one ownerless conversation per project, created on first `start`: title **Voice**, label `voice`, automatic
 summaries disabled. It runs no turns, and its display-only writes have no model messages. @ultimate keeps its normal
 transcript and behaviour. GPT-Live only acknowledges/delegates, never answers requests itself. The literal
 `Generate <|SpawnThinking|> when:` instruction and the backchannel/interruption/delegation policies live in
-`LIVE_INSTRUCTIONS` in `server.ts`.
+`liveInstructions` in `server.ts`.
 
 ## Designer contract
 
@@ -105,10 +111,10 @@ of protocol events. Also show session expiry/closure and prevent multiple local 
   While `paused`, an answer starts a new session and speaks it with `null`; without an earlier gesture on the page
   (`navigator.userActivation`) or when the start fails, it shows "Answer waiting · Tap to hear" instead.
 - **Transcript**: `voice.line` from Daniel is a user turn; a `forwarded` one is tinted and labelled "→ passed to
-  @ultimate". A `live` line is GPT-Live's own speech, quiet and labelled "voice assistant"; an `ultimate` line is the
+  @ultimate" with its state: working… until a line names it in `re`, then answered or no answer. A `notice` is a
+  warning line. While a forwarded request is unanswered, GPT-Live says "Still on it." after 20 s, then every 45 s. A `live` line is GPT-Live's own speech, quiet and labelled "voice assistant"; an `ultimate` line is the
   answer read out, labelled @ultimate, with a "full answer" link to its `source` entry. `voice.session` is a dashed
   divider ("Live · 14:02", "Ended · 3 min"); `voice.utterance` in @ultimate is Daniel's turn with a "by voice" mark.
-  While live, Voice's controls say "asks before passing on to @ultimate" (`CONFIRM` in `relay.ts`).
 - **Sidebar**: Voice is a row under @ultimate, beside open side chats (`sidebar.under-ultimate`), with its state (live,
   muted, paused, answer waiting, off); a click toggles it in front, or opens it while off. It names Voice to
   `sidebar.unlisted`, so no other section lists it.
