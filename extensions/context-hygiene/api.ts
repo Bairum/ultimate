@@ -12,12 +12,16 @@ export type Thresholds = {
   suffixSavings: number
   pressureRatio: number
   pressureSavings: number
+  maskProtectTokens: number
+  maskMinTokens: number
 }
 export type GateInput = {
   now: number
   lastAssistant?: number
   newContext: boolean
   suffixTokens: number
+  /** Anthropic content positions through the issuing assistant; other APIs omit this bound. */
+  suffixPositions?: number
   savings: number
   requestTokens: number
   contextWindow: number

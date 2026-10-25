@@ -10,11 +10,13 @@ export const defaults: Thresholds = {
   suffixSavings: 2_000,
   pressureRatio: 0.6,
   pressureSavings: 8_000,
+  maskProtectTokens: 40_000,
+  maskMinTokens: 500,
 }
 export const estimate = estimateMessageTokens
-const text = (message: Extract<Message, { role: 'toolResult' }>) =>
+export const text = (message: Extract<Message, { role: 'toolResult' }>) =>
   message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n')
-const safe = (message: Extract<Message, { role: 'toolResult' }>) =>
+export const safe = (message: Extract<Message, { role: 'toolResult' }>) =>
   !message.isError && message.content.every((part) => part.type === 'text')
 
 export function gateOpen(input: GateInput, thresholds: Thresholds): boolean {
@@ -22,14 +24,48 @@ export function gateOpen(input: GateInput, thresholds: Thresholds): boolean {
     input.newContext ||
     (input.lastAssistant !== undefined &&
       input.now - input.lastAssistant > thresholds.cacheTtlMs) ||
-    (input.suffixTokens <= thresholds.suffixTokens && input.savings >= thresholds.suffixSavings) ||
+    (input.suffixTokens <= thresholds.suffixTokens &&
+      (input.suffixPositions === undefined || input.suffixPositions + 6 <= 20) &&
+      input.savings >= thresholds.suffixSavings) ||
     (input.contextWindow > 0 &&
       input.requestTokens > thresholds.pressureRatio * input.contextWindow &&
       input.savings >= thresholds.pressureSavings)
   )
 }
-function placeholder(decision: Decision): string {
+/** Count cache positions independently of tokens: adjacent tool blocks share a position. */
+export function suffixPositions(messages: readonly Message[], callId: string): number {
+  const start = messages.findIndex(
+    (m) =>
+      m.role === 'assistant' && m.content.some((p) => p.type === 'toolCall' && p.id === callId),
+  )
+  if (start < 0) return Infinity
+  let positions = 0
+  let previous = ''
+  for (const message of messages.slice(start)) {
+    const blocks =
+      message.role === 'toolResult'
+        ? ['toolResult']
+        : typeof message.content === 'string'
+          ? message.content.trim()
+            ? ['text']
+            : []
+          : message.content.flatMap((p) => {
+              if (p.type === 'text') return p.text.trim() ? ['text'] : []
+              if (p.type === 'thinking')
+                return p.thinking.trim() || p.thinkingSignature?.trim() ? ['thinking'] : []
+              return [p.type]
+            })
+    for (const block of blocks) {
+      if (!['toolCall', 'toolResult'].includes(block) || block !== previous) positions++
+      previous = block
+    }
+  }
+  return positions
+}
+export function placeholder(decision: Decision): string {
   switch (decision.reason) {
+    case 'masked':
+      return `[Older output masked to save context (~${decision.tokens} tokens). Full text: ${decision.path}. Read or grep it if you need it again.]`
     case 'superseded':
       return `[Elided from context: superseded by a later read of ${decision.path}. Read it again if you need it.]`
     case 'empty':

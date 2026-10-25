@@ -5,6 +5,8 @@ import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { OpenAction } from './refs.ts'
 import { defaults, offload, openOutput, outputText, pruneOutputs, spillPath } from './store.ts'
 import type { Options } from './store.ts'
+import { ContextOffload } from './api.ts'
+import { saveOutput } from './store.ts'
 
 export const reloadOnSettings = true
 export const userActions = ['open']
@@ -17,6 +19,9 @@ export const actions = {
 }
 
 export default function contextOffload(host: ExtensionHost) {
+  host.implement(ContextOffload, {
+    save: (conversation, callId, text) => saveOutput(host.home, conversation, callId, text),
+  })
   host.onOpen(() => pruneOutputs(host.home))
   async function options(): Promise<Options> {
     const user = await readSettings(userSettingsPath(host.userHome))

@@ -45,6 +45,7 @@ it.each(['success', 'timeout', 'long lines'])(
     registry.install(
       contextOffload({
         home,
+        implement: () => {},
         userHome: home,
         projectSettings: async () => ({}),
         onOpen: () => {},
@@ -102,10 +103,10 @@ it.each(['success', 'timeout', 'long lines'])(
       const output = stored[0].content[0]
       expect(output.type).toBe('text')
       if (output.type !== 'text') throw new Error('Missing text')
-      expect(Buffer.byteLength(output.text)).toBeLessThan(22000)
+      expect(Buffer.byteLength(output.text)).toBeLessThanOrEqual(8192)
       expect(output.text).toContain(outcome === 'long lines' ? 'warn row 1:' : 'row 1 ')
       expect(output.text).toContain(outcome === 'long lines' ? 'warn row 8:' : 'row 6000 ')
-      expect(output.text).toContain(outcome === 'long lines' ? 'chars]' : '5,880 lines')
+      expect(output.text).toContain(outcome === 'long lines' ? 'chars]' : 'lines omitted')
       expect(output.text).not.toContain('row 3000 ')
       expect(output.text.slice(-2000)).toContain('Full output: ')
       expect(output.text).not.toContain(spill)
@@ -127,6 +128,7 @@ it('skips settings for empty results, caches settings, and notices invalid setti
   const notice = vi.fn<ExtensionHost['notice']>()
   const extension = contextOffload({
     home,
+    implement: () => {},
     userHome: home,
     projectSettings,
     notice,
@@ -159,6 +161,7 @@ it('honors settings below the default threshold and refreshes with a new install
   }))
   const host = {
     home,
+    implement: () => {},
     userHome: home,
     projectSettings,
     onOpen: () => {},

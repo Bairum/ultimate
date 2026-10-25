@@ -16,6 +16,7 @@ it('opens the new-context gate for a compaction head retaining warm assistants',
   const extension = hygiene({
     harness: () => harness,
     implement: () => {},
+    want: () => undefined,
     notice: (notice) => notices.push(notice),
     projectSettings: async () => ({}),
     projectRoot: '/nonexistent',

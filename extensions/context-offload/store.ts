@@ -17,6 +17,19 @@ export const maxOpenBytes = 4 * 1024 * 1024
 export type Options = { thresholdBytes: number; exclude: readonly string[] }
 export const defaults: Options = { thresholdBytes: 16 * 1024, exclude: [] }
 
+/** Preserve existing full output, including bash text saved before request masking. */
+export async function saveOutput(home: string, conversation: number, callId: string, text: string) {
+  const folder = join(home, 'outputs', String(conversation))
+  await mkdir(folder, { recursive: true })
+  const id = callId.replace(/[^a-zA-Z0-9_-]/g, '_')
+  if (!id) throw new Error('Empty tool call id')
+  const path = join(folder, `${id}.txt`)
+  await writeFile(path, text, { mode: 0o600, flag: 'wx' }).catch((error: NodeJS.ErrnoException) => {
+    // A retry or earlier offload already saved the full text at this stable path.
+    if (error.code !== 'EEXIST') throw error
+  })
+  return path
+}
 export function formatBytes(bytes: number) {
   return `${Math.ceil(bytes / 1024).toLocaleString('en-US')} KB`
 }
@@ -51,8 +64,8 @@ function excerptRows(rows: { text: string; index: number }[], budget: number) {
   for (const row of rows) {
     const points = Array.from(row.text)
     const text =
-      points.length > 500
-        ? `${points.slice(0, 500).join('')}…[+${points.length - 500} chars]`
+      points.length > 300
+        ? `${points.slice(0, 300).join('')}…[+${points.length - 300} chars]`
         : row.text
     const bytes = Buffer.byteLength(text) + 1
     if (used + bytes > budget) break
@@ -60,7 +73,7 @@ function excerptRows(rows: { text: string; index: number }[], budget: number) {
     kept.push({
       text,
       index: row.index,
-      sourceBytes: Buffer.byteLength(points.slice(0, 500).join('')),
+      sourceBytes: Buffer.byteLength(points.slice(0, 300).join('')),
     })
   }
   return kept
@@ -90,20 +103,16 @@ export async function offload(
     const rows = full.split('\n')
     if (rows.at(-1) === '') rows.pop()
     const lines = rows.length
-    const folder = join(home, 'outputs', String(conversation))
-    await mkdir(folder, { recursive: true })
-    const id = call.id.replace(/[^a-zA-Z0-9_-]/g, '_')
-    if (!id) throw new Error('Empty tool call id')
-    const path = join(folder, `${id}.txt`)
+    const path = await saveOutput(home, conversation, call.id, full)
     const indexed = rows.map((row, index) => ({ text: row, index }))
-    const head = excerptRows(indexed.slice(0, 60), 8000)
+    const head = excerptRows(indexed.slice(0, 60), 1900)
     const tail = excerptRows(
       indexed.slice(Math.max(head.length, lines - 60)).toReversed(),
-      8000,
+      3800,
     ).toReversed()
     const matches = excerptRows(
       indexed.filter((row) => /error|fail|panic|warn/i.test(row.text)).slice(0, 20),
-      4000,
+      1400,
     )
     const hidden = lines - head.length - tail.length
     const shown = new Map([...head, ...tail, ...matches].map((row) => [row.index, row.sourceBytes]))
@@ -122,8 +131,7 @@ export async function offload(
         : []),
       marker,
     ].join('\n')
-    if (Buffer.byteLength(excerpt) >= bytes) return undefined
-    await writeFile(path, full, { mode: 0o600 })
+    if (Buffer.byteLength(excerpt) >= bytes || Buffer.byteLength(excerpt) > 8192) return undefined
     return {
       ...result,
       output: [

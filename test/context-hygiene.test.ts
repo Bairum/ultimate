@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { JsonObject } from '@earendil-works/pi-durable'
@@ -11,6 +11,9 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { candidates, defaults, gateOpen, rewrite } from '../extensions/context-hygiene/rewrite.ts'
 import hygiene from '../extensions/context-hygiene/server.ts'
 import { Ledger } from '../extensions/context-hygiene/api.ts'
+import { saveOutput } from '../extensions/context-offload/store.ts'
+import { ContextOffload } from '../extensions/context-offload/api.ts'
+import { suffixPositions } from '../extensions/context-hygiene/rewrite.ts'
 
 const read = (
   id: string,
@@ -126,6 +129,7 @@ async function fixture(
   fail = false,
   contextWindow = 128000,
   settings: { userHome: string; project: JsonObject } = { userHome: '/nonexistent', project: {} },
+  outputHome?: string,
 ) {
   const models = createModels(),
     faux = fauxProvider({
@@ -145,6 +149,13 @@ async function fixture(
       return harness
     },
     implement: () => {},
+    want: (token) =>
+      (token === ContextOffload && outputHome
+        ? {
+            save: (conversation: number, id: string, text: string) =>
+              saveOutput(outputHome, conversation, id, text),
+          }
+        : undefined) as never,
     notice: (message) => notices.push(message),
     projectSettings: async () => settings.project,
     projectRoot: '/nonexistent',
@@ -341,3 +352,68 @@ it('applies cold decisions durably, sends identical retry bytes after restart, a
     await f.harness.close(context)
   }
 })
+it('bounds cheap Anthropic suffixes by positions rather than just tokens', () => {
+  const messages = [
+    ...read('old'),
+    ...Array.from({ length: 8 }, (_, i) => read(`next-${i}`, { path: `${i}` }, 'tiny')).flat(),
+  ]
+  const positions = suffixPositions(messages, 'old')
+  expect(positions).toBeGreaterThan(14)
+  const input = {
+    now: 1,
+    lastAssistant: 1,
+    newContext: false,
+    suffixTokens: 100,
+    savings: 3000,
+    requestTokens: 5000,
+    contextWindow: 200000,
+  }
+  expect(gateOpen({ ...input, suffixPositions: positions }, defaults)).toBe(false)
+  expect(gateOpen(input, defaults)).toBe(true)
+  expect(gateOpen({ ...input, suffixPositions: positions, newContext: true }, defaults)).toBe(true)
+})
+
+it.each(['pressure', 'no-pressure', 'no-store', 'save-fails'] as const)(
+  'masks only old large results with a recoverable output file: %s',
+  async (mode) => {
+    const home = await mkdtemp(join(tmpdir(), 'hygiene-mask-'))
+    const broken = join(home, 'not-a-directory')
+    await writeFile(broken, 'blocked')
+    const f = await fixture(
+      false,
+      mode === 'no-pressure' ? 1000000 : 100000,
+      { userHome: '/nonexistent', project: {} },
+      mode === 'no-store' ? undefined : mode === 'save-fails' ? broken : home,
+    )
+    const original = 'old output\n'.repeat(8000)
+    const recent = 'recent output\n'.repeat(20000)
+    const old = read('old-mask', { path: 'old' }, original)
+    if (old[1].role === 'toolResult') old[1].details = { offloadExempt: true }
+    try {
+      await f.seed(false, [...old, ...read('recent-mask', { path: 'recent' }, recent)])
+      await f.submit()
+      const ledger = await f.harness.snapshot(Ledger, f.root.id, context)
+      const sent = f.sent[0].find((m) => m.role === 'toolResult' && m.toolCallId === 'old-mask')
+      expect(
+        f.sent[0].find((m) => m.role === 'toolResult' && m.toolCallId === 'recent-mask'),
+      ).toMatchObject({ content: [{ type: 'text', text: recent }] })
+      const decision = ledger?.decisions['old-mask']
+      expect(decision?.reason).toBe(mode === 'pressure' ? 'masked' : undefined)
+      expect(decision?.state).toBe(mode === 'pressure' ? 'applied' : undefined)
+      const saved = decision?.path ? await readFile(decision.path, 'utf8') : undefined
+      expect(saved).toBe(mode === 'pressure' ? original : undefined)
+      expect(sent).toEqual(mode === 'pressure' ? rewrite(old, ledger!.decisions)[1] : old[1])
+      expect(JSON.stringify(sent).includes('Full text:')).toBe(mode === 'pressure')
+      expect(f.notices.join('\n').includes('masking skipped')).toBe(
+        ['no-store', 'save-fails'].includes(mode),
+      )
+      await f.submit()
+      expect(f.sent[1].find((m) => m.role === 'toolResult' && m.toolCallId === 'old-mask')).toEqual(
+        sent,
+      )
+    } finally {
+      await f.harness.close(context)
+      await rm(home, { recursive: true, force: true })
+    }
+  },
+)

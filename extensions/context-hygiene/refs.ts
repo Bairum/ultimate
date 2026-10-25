@@ -2,7 +2,7 @@
 import { docRef } from '../../shared/extension-api.ts'
 
 export type Decision = {
-  reason: 'superseded' | 'empty' | 'duplicate'
+  reason: 'superseded' | 'empty' | 'duplicate' | 'masked'
   by?: string
   path?: string
   tokens: number

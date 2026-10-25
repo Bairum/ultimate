@@ -10,9 +10,15 @@ The stored result contains up to the first 60 lines, the last 60 lines, and up t
 and existing details are preserved; `details.offload` records `{ path, bytes, lines }`.
 Use `read` with offset/limit or `grep`/`rg` on that file to drill in. Reads, nested codemode calls and excluded tools
 are untouched. A write or spill-read failure preserves the original output and adds a warning diagnostic.
-Each kept line is capped at 500 characters with an omitted-character note. Head and tail each have an 8,000-byte
-budget; matches have a 4,000-byte budget. The path marker is last so it survives bash's tail retention. Results are
-only offloaded when the excerpt is smaller than the full text.
+Each kept line is capped at 300 characters with an omitted-character note. Head, tail and matches have
+1,900-, 3,800- and 1,400-byte budgets (about 2 KB, 4 KB and 1.5 KB). Including notes, numbering and the path,
+the entire excerpt is at most 8 KB, below the default 16 KB threshold, and must be smaller than the full text.
+The path marker is last so it survives bash's tail retention.
+
+`api.ts` exposes `ContextOffload.save(conversation, callId, text)` for optional consumers such as context-hygiene.
+It saves full text once at the same stable path, preserving an existing full output on retries or later masking.
+Save failures throw; callers must retain the original text. Hygiene can mask old bounded reads even though the
+immediate offload hook leaves reads and `details.offloadExempt` outputs untouched.
 
 ## Settings
 

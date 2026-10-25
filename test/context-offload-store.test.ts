@@ -40,7 +40,7 @@ it('stores full text, excerpts head/tail and numbered matching lines, preserving
   const text = shortened?.output?.[0]
   expect(text?.type).toBe('text')
   if (text?.type !== 'text') throw new Error('Missing excerpt')
-  expect(text.text).toContain('… 4,880 lines')
+  expect(text.text).toContain('lines omitted')
   expect(text.text).toContain(
     `Full output: ${path}. Use read with offset/limit or grep on that file.`,
   )
@@ -195,3 +195,18 @@ it('prefers the structured spill path and removes only the redundant full_output
     { code: 'exit_code', severity: 'error', message: 'Command exited with code 1' },
   ])
 })
+it.each([20 * 1024, 300 * 1024])(
+  'caps the entire excerpt of a %i-byte result at 8 KB',
+  async (bytes) => {
+    const home = await temp()
+    const source = 'WARN long output abcdefghijklmnopqrstuvwxyz\n'
+      .repeat(Math.ceil(bytes / 42))
+      .slice(0, bytes)
+    const shortened = await offload(home, 1, call, { output: [{ type: 'text', text: source }] })
+    const excerpt = shortened?.output?.[0]
+    expect(excerpt?.type).toBe('text')
+    if (excerpt?.type !== 'text') throw new Error('Missing excerpt')
+    expect(Buffer.byteLength(excerpt.text)).toBeLessThanOrEqual(8192)
+    expect(Buffer.byteLength(excerpt.text)).toBeLessThan(bytes)
+  },
+)

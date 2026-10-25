@@ -1,15 +1,27 @@
 import { defineExtension, GenerationTask, hook } from '@earendil-works/pi-durable'
+import { estimateTextTokens } from '@earendil-works/pi-ai/utils/estimate'
+import { ContextOffload } from '../context-offload/api.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { ContextHygiene, Ledger } from './api.ts'
 import type { Thresholds } from './api.ts'
-import { candidates, defaults, estimate, gateOpen, rewrite } from './rewrite.ts'
+import {
+  candidates,
+  defaults,
+  estimate,
+  gateOpen,
+  rewrite,
+  safe,
+  text,
+  suffixPositions,
+  placeholder,
+} from './rewrite.ts'
 
 export const docs = [Ledger]
 export default function contextHygiene(
   host: Pick<
     ExtensionHost,
-    'harness' | 'implement' | 'notice' | 'projectRoot' | 'userHome' | 'projectSettings'
+    'harness' | 'implement' | 'want' | 'notice' | 'projectRoot' | 'userHome' | 'projectSettings'
   >,
 ) {
   host.implement(ContextHygiene, { gateOpen, rewrite })
@@ -47,6 +59,73 @@ export default function contextHygiene(
               now,
               previous?.decisions,
             )
+            const masked: NonNullable<typeof previous>['decisions'] = {}
+            const before = rewrite(messages, previous?.decisions ?? {})
+            const maskSuffix = Array.from({ length: before.length + 1 }, () => 0)
+            for (let i = before.length - 1; i >= 0; i--)
+              maskSuffix[i] = maskSuffix[i + 1] + estimate(before[i])
+            if (
+              model &&
+              model.contextWindow > 0 &&
+              maskSuffix[0] > thresholds.pressureRatio * model.contextWindow
+            ) {
+              const old = messages.flatMap((message, index) => {
+                if (
+                  message.role !== 'toolResult' ||
+                  !safe(message) ||
+                  !message.toolCallId ||
+                  previous?.decisions[message.toolCallId] ||
+                  found[message.toolCallId] ||
+                  maskSuffix[index + 1] < thresholds.maskProtectTokens ||
+                  messages.filter(
+                    (m) => m.role === 'toolResult' && m.toolCallId === message.toolCallId,
+                  ).length !== 1 ||
+                  !Number.isFinite(suffixPositions(messages, message.toolCallId))
+                )
+                  return []
+                const tokens = estimateTextTokens(text(message))
+                return tokens >= thresholds.maskMinTokens ? [{ message, tokens }] : []
+              })
+              if (
+                old.length &&
+                old.reduce((sum, item) => sum + item.tokens, 0) >= thresholds.pressureSavings
+              ) {
+                const store = host.want(ContextOffload)
+                if (!store)
+                  host.notice('Context hygiene masking skipped: context-offload is not enabled')
+                else {
+                  for (const { message, tokens } of old) {
+                    try {
+                      const path = await store.save(
+                        api.conversationId,
+                        message.toolCallId,
+                        text(message),
+                      )
+                      masked[message.toolCallId] = {
+                        reason: 'masked',
+                        path,
+                        tokens,
+                        state: 'applied',
+                        at: now,
+                      }
+                      const decision = masked[message.toolCallId]
+                      decision.tokens = Math.max(
+                        0,
+                        tokens - estimateTextTokens(placeholder(decision)),
+                      )
+                    } catch (error) {
+                      // A failed save must leave this result recoverable in the request itself.
+                      host.notice(`Context hygiene masking skipped: ${String(error)}`)
+                    }
+                  }
+                  if (
+                    Object.values(masked).reduce((sum, d) => sum + d.tokens, 0) <
+                    thresholds.pressureSavings
+                  )
+                    for (const id of Object.keys(masked)) delete masked[id]
+                }
+              }
+            }
             const decisions = await host.harness().commit(async (tx) => {
               const ledger = await tx.doc(Ledger, api.conversationId)
               if (view.head?.kind === 'pi.compaction') {
@@ -59,15 +138,24 @@ export default function contextHygiene(
                   if (!present.has(id)) delete ledger.decisions[id]
               }
               for (const [id, decision] of Object.entries(found)) ledger.decisions[id] ??= decision
+              let applied = false
+              for (const [id, decision] of Object.entries(masked)) {
+                if (ledger.decisions[id]) continue
+                ledger.decisions[id] = decision
+                ledger.stats.appliedTokens += decision.tokens
+                applied = true
+              }
               // Gate costs describe the bytes already shortened by earlier applied decisions.
               const current = rewrite(messages, ledger.decisions)
               const suffix = Array.from({ length: current.length + 1 }, () => 0)
               for (let i = current.length - 1; i >= 0; i--)
                 suffix[i] = suffix[i + 1] + estimate(current[i])
               const pending = messages.flatMap((message, index) => {
-                const decision =
-                  message.role === 'toolResult' ? ledger.decisions[message.toolCallId] : undefined
-                return decision?.state === 'pending' ? [{ decision, index }] : []
+                if (message.role !== 'toolResult') return []
+                const decision = ledger.decisions[message.toolCallId]
+                return decision?.state === 'pending'
+                  ? [{ decision, index, id: message.toolCallId }]
+                  : []
               })
               // The compaction/reset head is an entry, not a provider-specific summary string.
               // Retained pre-compaction assistants have smaller entry ids than the head marker.
@@ -88,6 +176,10 @@ export default function contextHygiene(
                   lastAssistant,
                   newContext,
                   suffixTokens: suffix[pending[0].index + 1],
+                  suffixPositions:
+                    model?.api === 'anthropic-messages'
+                      ? Math.max(...pending.map(({ id }) => suffixPositions(current, id)))
+                      : undefined,
                   savings: pending.reduce((sum, item) => sum + item.decision.tokens, 0),
                   requestTokens: suffix[0],
                   contextWindow: model?.contextWindow ?? 0,
@@ -106,13 +198,14 @@ export default function contextHygiene(
                     thresholds,
                   )
                 ) {
-                  if (eligible.length) ledger.stats.requests++
+                  if (eligible.length) applied = true
                   for (const { decision } of eligible) {
                     decision.state = 'applied'
                     ledger.stats.appliedTokens += decision.tokens
                   }
                 }
               }
+              if (applied) ledger.stats.requests++
               return Object.fromEntries(
                 Object.entries(ledger.decisions).map(([id, decision]) => [id, { ...decision }]),
               )

@@ -6,16 +6,22 @@ Decisions are discovered on the first `beforeRequest` seeing eligible results. T
 
 New context detection uses the context head entry: no assistant entry newer than the compaction/reset marker means this is its first request. Retained older assistants do not prevent this gate. A request with no assistant messages is also new. Pending decisions absent from a request are ignored. On requests with a compaction head, decisions absent from the remaining request are pruned because compaction removes a prefix. Applied decisions still present remain monotonic. Empty or non-unique call/result ids are excluded from detection; rewrites require a nonempty id identifying exactly one result. The ledger checkpoints after 64 deltas.
 
+On `anthropic-messages` models the cheap-suffix gate also requires at most 14 content positions through the issuing assistant, reserving six of Anthropic's 20-position cache lookback for the next input. Consecutive tool-use blocks count once, consecutive tool-result blocks once, and other nonempty blocks individually. Other model APIs skip this bound; cold-cache, new-context and pressure gates are unchanged.
+
+Under pressure, old text-only non-error results of at least `maskMinTokens` are masked if their combined estimated savings reach `pressureSavings`. The newest `maskProtectTokens` are untouched. Masking requires the optional `context-offload` store: full text is saved before committing an applied `masked` decision, whose placeholder records the stable recovery path. Missing storage or save failures keep the result and publish a notice. `details.offloadExempt` results (including hashline's bounded reads) can still be masked, since the saved file permits recovery. Existing offload files are preserved, not overwritten with their excerpts. Masks apply only under pressure, never from the cold/new/cheap gates.
+
 Settings under `contextHygiene` in machine/project `.ultimate/settings.json` (trusted project settings override machine settings per key, via `host.projectSettings()`):
 
-| Key               | Default |
-| ----------------- | ------- |
-| `cacheTtlMs`      | 300000  |
-| `protectTokens`   | 16000   |
-| `suffixTokens`    | 8000    |
-| `suffixSavings`   | 2000    |
-| `pressureRatio`   | 0.6     |
-| `pressureSavings` | 8000    |
+| Key                 | Default |
+| ------------------- | ------- |
+| `cacheTtlMs`        | 300000  |
+| `protectTokens`     | 16000   |
+| `suffixTokens`      | 8000    |
+| `suffixSavings`     | 2000    |
+| `pressureRatio`     | 0.6     |
+| `pressureSavings`   | 8000    |
+| `maskProtectTokens` | 40000   |
+| `maskMinTokens`     | 500     |
 
 Values must be finite nonnegative numbers. Pressure uses the selected model's context window. Stats count estimated applied savings and requests that apply new decisions, not every rewritten request or retry. They are not provider-measured savings or cache usage.
 
@@ -27,6 +33,6 @@ Deliberate design deviations: pressure is measured against the model's context w
 
 `api.ts` exports the ledger and `ContextHygiene` service contract; consumers use `host.need(ContextHygiene)` for `gateOpen` and `rewrite`. Pure implementations live in `rewrite.ts`, in keeping with the repository's contract-only API convention.
 
-Credits: inspired by oh-my-pi's superseded/useless pruning (MIT), https://github.com/can1357/oh-my-pi. No code copied.
+Credits: inspired by oh-my-pi's superseded/useless pruning and `cacheLookbackFloor` (MIT, `packages/agent/src/compaction/pruning.ts`), https://github.com/can1357/oh-my-pi. Independently implemented; no code copied.
 
 Tests: `pnpm vitest run test/context-hygiene*.test.ts test/extension-enablement.test.ts` runs the fast faux-provider and enablement checks.
