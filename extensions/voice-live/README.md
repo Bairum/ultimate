@@ -18,7 +18,9 @@ agent uses `openai-codex/gpt-6-luna` through Pi's existing ChatGPT login, low th
 3. `Relay` joins transcript fragments after 1,200 ms quiet when the line ends a sentence, 2,800 ms when it trails
    off, so a breath mid-thought does not split it. The transcriber's `[unintelligible]` and `[inaudible]` markers
    become "…". GPT-Live has no transcription, language or turn-detection settings; this is the only place to tune
-   it. The line being said shows live in the dock under "Hearing you…". Every finished user line goes through `heard` as a
+   it. The line being said grows at the end of Voice's transcript (`transcript.end`) word by word, its start fading
+   out toward the top, and stays until its `voice.heard` entry arrives. A spoken Voice line fills in word by word as
+   GPT-Live's `output_transcript.delta` reads it out. Every finished user line goes through `heard` as a
    `voice.heard` input to Voice (`whenBusy: 'steer'`). GPT-Live's own speech can be logged as `live` lines;
    commentary output is not logged twice. Delegation events are ignored.
 4. `extensions/voice-live/agents/voice.md` configures the standing agent with three deferred tools and codemode:

@@ -29,6 +29,8 @@ export class Relay {
   private outputAt?: number
   private activityAt: number
   private speaking = false
+  /** What GPT-Live has said aloud of the commentary it is speaking now. */
+  private said = ''
 
   constructor(now: number) {
     this.activityAt = now
@@ -37,6 +39,7 @@ export class Relay {
   /** Commentary is already logged by Voice's say tool; do not log it a second time. */
   spoke() {
     this.speaking = true
+    this.said = ''
     this.output = ''
     this.outputAt = undefined
   }
@@ -48,7 +51,8 @@ export class Relay {
       this.inputAt = now
       this.activityAt = now
     } else if (event.type === 'session.output_transcript.delta' && event.delta) {
-      if (!this.speaking) this.output += event.delta
+      if (this.speaking) this.said += event.delta
+      else this.output += event.delta
       this.outputAt = now
       this.activityAt = now
     }
@@ -78,6 +82,11 @@ export class Relay {
   /** The words of the line the user is saying now, before it is finished; empty when none. */
   partial(): string {
     return this.inputAt === undefined ? '' : heard(this.input)
+  }
+
+  /** Words of the current commentary spoken so far: how far its line has been read out. */
+  spokenWords(): number {
+    return this.said.split(/\s+/).filter(Boolean).length
   }
 
   /** The user is mid-sentence: words came in that are not a finished line yet. */

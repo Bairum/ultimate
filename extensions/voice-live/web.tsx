@@ -347,7 +347,7 @@ function SpeakNew({ voice }: { voice: number }) {
     for (const entry of entries) {
       if (entry.id <= seen.current || entry.kind !== 'voice.line') continue
       const line = entry.data as unknown as VoiceLine
-      if (line.role === 'ultimate' && line.speech) live.hear(line.text)
+      if (line.role === 'ultimate' && line.speech) live.hear(line.text, entry.id)
       else if (line.role === 'note') live.note(line.text)
     }
     seen.current = Math.max(seen.current, last)
@@ -615,25 +615,9 @@ function StepText({ step, mode }: { step: Step; mode: VoiceMode }) {
           </span>
         )}
       </div>
-      {step.step === 'hearing' && mode.partial ? (
-        <p
-          className="mt-1 line-clamp-2 text-[14px] leading-snug break-words text-foreground/85"
-          data-voice-partial
-        >
-          {tail(mode.partial)}
-        </p>
-      ) : (
-        <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{detail}</div>
-      )}
+      <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{detail}</div>
     </div>
   )
-}
-
-/** The newest words of a long line, so the two lines in view keep up with speech. */
-const tail = (text: string) => {
-  if (text.length <= 140) return text
-  const cut = text.slice(-140)
-  return `…${cut.slice(cut.indexOf(' ') + 1)}`
 }
 
 /** The step's mark: the live level while the user talks, a calm spinner while something works, else the mic. */
@@ -867,7 +851,9 @@ function LineRow({ entry }: { entry: EntryRecord }) {
     <div className="mt-2 flex gap-2 first:mt-0" data-voice-line="ultimate">
       <Volume2Icon className="mt-[3px] size-3 shrink-0 text-muted-foreground/60" />
       <div className="min-w-0 flex-1">
-        <p className="text-[13px] leading-relaxed break-words text-muted-foreground">{line.text}</p>
+        <p className="text-[13px] leading-relaxed break-words text-muted-foreground">
+          <Spoken entry={entry.id} text={line.text} />
+        </p>
         {source && (
           <button
             className="mt-1 flex cursor-pointer items-center gap-1 font-mono text-[11px] text-muted-foreground hover:text-foreground"
@@ -906,11 +892,13 @@ function RequestCard({ entry, line }: { entry: EntryRecord; line: VoiceLine }) {
       (e.kind === 'voice.line' || e.kind === 'voice.answer') &&
       (e.data as { re?: number }).re === entry.id,
   )
-  const data = (kind: string, role?: VoiceLine['role']) =>
+  const find = (kind: string, role?: VoiceLine['role']) =>
     replies.find(
       (e) => e.kind === kind && (!role || (e.data as unknown as VoiceLine).role === role),
-    )?.data as unknown
-  const spoken = data('voice.line', 'ultimate') as VoiceLine | undefined
+    )
+  const data = (kind: string, role?: VoiceLine['role']) => find(kind, role)?.data as unknown
+  const spokenEntry = find('voice.line', 'ultimate')
+  const spoken = spokenEntry?.data as unknown as VoiceLine | undefined
   const notice = data('voice.line', 'notice') as VoiceLine | undefined
   const answer = data('voice.answer') as VoiceAnswer | undefined
   const state = notice ? 'failed' : answer || spoken ? 'answered' : 'working'
@@ -929,7 +917,7 @@ function RequestCard({ entry, line }: { entry: EntryRecord; line: VoiceLine }) {
         ) : state === 'failed' ? (
           <Failed notice={notice!} spoken={spoken} />
         ) : (
-          <Answer answer={answer} entry={entry} spoken={spoken} />
+          <Answer answer={answer} entry={entry} spoken={spoken} spokenId={spokenEntry?.id} />
         )}
       </Bubble>
     </div>
@@ -982,10 +970,12 @@ function Working({ main, since }: { main: number; since?: number }) {
 function Answer({
   answer,
   spoken,
+  spokenId,
   entry,
 }: {
   answer?: VoiceAnswer
   spoken?: VoiceLine
+  spokenId?: number
   entry: EntryRecord
 }) {
   const [open, setOpen] = useState(false)
@@ -996,7 +986,13 @@ function Answer({
   return (
     <>
       <div className={cn(!open && !spoken && 'line-clamp-4')}>
-        <Body text={full ? answer.text : (spoken?.text ?? '')} />
+        {!full && spoken && spokenId !== undefined && mode.speaking?.entry === spokenId ? (
+          <p className="min-w-0 px-3 py-3 text-[13px] leading-relaxed break-words">
+            <Spoken entry={spokenId} text={spoken.text} />
+          </p>
+        ) : (
+          <Body text={full ? answer.text : (spoken?.text ?? '')} />
+        )}
       </div>
       {(answer || source) && (
         <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
@@ -1118,6 +1114,65 @@ function HeardRow({ entry }: { entry: EntryRecord }) {
   )
 }
 
+/**
+ * A Voice line as GPT-Live reads it out: the words said so far in full, the rest still faint, so it fills in with the
+ * voice and the layout never jumps. Any other line shows whole.
+ */
+function Spoken({ entry, text }: { entry: number; text: string }) {
+  const { speaking } = useMode()
+  if (speaking?.entry !== entry) return text
+  const words = text.split(' ')
+  return words.map((word, index) => (
+    <span
+      className={cn('transition-opacity duration-300', index >= speaking.words && 'opacity-25')}
+      key={index}
+    >
+      {index ? ' ' : ''}
+      {word}
+    </span>
+  ))
+}
+
+/**
+ * The turn the user is saying now, at the end of Voice's transcript: it grows as words are heard, each new word fading
+ * in, and stays as the line on its way to Voice until its heard entry takes its place. A long turn keeps its newest
+ * words in full view while its start fades out toward the top.
+ */
+function LiveTurn() {
+  const id = useConversation((conversation) => conversation.id)
+  const transcript = useTranscript()
+  const { voice } = useIds()
+  const { partial, sending } = useMode()
+  if (id === undefined || id !== voice) return null
+  const last = transcript.findLast((entry) => entry.kind === 'voice.heard')
+  const arrived = sending && (last?.data as { text?: string } | undefined)?.text === sending.text
+  const text = partial ?? (arrived ? undefined : sending?.text)
+  if (!text) return null
+  return (
+    <Message className="mt-4" data-voice-line="hearing" from="user">
+      <MessageContent className="group-[.is-user]:bg-secondary/50 group-[.is-user]:text-[13px] group-[.is-user]:text-foreground/80">
+        <p
+          className="flex max-h-[13.5rem] flex-col justify-end overflow-hidden break-words whitespace-pre-wrap [mask-image:linear-gradient(to_bottom,transparent,black_4.5rem)]"
+          data-voice-partial
+        >
+          <span>
+            {text.split(' ').map((word, index) => (
+              // Index keys keep the words already shown in place; only new ones mount and fade in.
+              <span className="animate-fade-in" key={index}>
+                {index ? ' ' : ''}
+                {word}
+              </span>
+            ))}
+            {partial !== undefined && (
+              <span className="ml-1 inline-block size-1.5 rounded-full bg-brand align-middle motion-safe:animate-pulse" />
+            )}
+          </span>
+        </p>
+      </MessageContent>
+    </Message>
+  )
+}
+
 /** Normal agent bookkeeping stays out of the spoken transcript; speech already has its own line. */
 const AgentRow: EntryRenderer = ({ core }) => {
   const id = useConversation((conversation) => conversation.id)
@@ -1134,6 +1189,7 @@ export default defineWebExtension({
     'composer.actions': [StartButton],
     'titlebar.right': [LiveIndicator],
     'conversation.overlay': [Stage],
+    'transcript.end': [LiveTurn],
     overlay: [Relay],
   },
   composer: VoiceDock,

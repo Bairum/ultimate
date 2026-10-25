@@ -19,6 +19,7 @@ export type SlotName =
   | 'composer.actions'
   | 'conversation.overlay'
   | 'transcript.start'
+  | 'transcript.end'
   | 'overlay'
 
 /**

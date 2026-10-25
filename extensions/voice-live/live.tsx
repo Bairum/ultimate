@@ -32,12 +32,16 @@ export type VoiceMode = {
   floor?: 'user' | 'voice'
   /** The words of the line the user is saying now, before a pause finishes it. */
   partial?: string
+  /** A line just finished and on its way to Voice: shown until its `voice.heard` entry arrives. */
+  sending?: { text: string; at: number }
+  /** The Voice line GPT-Live is reading out now, and how many of its words it has said so far. */
+  speaking?: { entry: number; words: number; at: number }
 }
 
 let mode: VoiceMode = { phase: 'off', muted: false, front: false }
 let session: LiveSession | undefined
-/** Answers to speak once the session starting now is live. */
-let queued: string[] = []
+/** Answers to speak once the session starting now is live, with the Voice line each one is. */
+let queued: { text: string; entry?: number }[] = []
 let cancelled = false
 let closing: Promise<void> | undefined
 let ticker: ReturnType<typeof setInterval> | undefined
@@ -183,6 +187,7 @@ function release(next: VoiceMode['phase'], problem?: string) {
     since: undefined,
     floor: undefined,
     partial: undefined,
+    speaking: undefined,
     ...(problem ? { problem } : {}),
   })
   if (!current) return
@@ -204,6 +209,7 @@ function tick() {
       since: undefined,
       floor: undefined,
       partial: undefined,
+      speaking: undefined,
       problem: mode.problem ?? 'The session closed',
     })
     return
@@ -211,7 +217,21 @@ function tick() {
   const now = Date.now()
   const floor = session.relay.hearing() ? 'user' : session.relay.talking() ? 'voice' : undefined
   const partial = session.relay.partial() || undefined
-  if (floor !== mode.floor || partial !== mode.partial) set({ floor, partial })
+  if (floor !== mode.floor || partial !== mode.partial)
+    set({
+      floor,
+      partial,
+      sending: partial ? undefined : mode.partial ? { text: mode.partial, at: now } : mode.sending,
+    })
+  else if (mode.sending && now - mode.sending.at > 6000) set({ sending: undefined })
+  // Follow the line being read out word by word; once GPT-Live falls quiet after it, show it whole.
+  if (mode.speaking) {
+    const words = session.relay.spokenWords()
+    // GPT-Live may never read it (it was interrupted, or paraphrased into silence): then show it whole after 8 s.
+    const silent = words === 0 && now - mode.speaking.at > 8000
+    if ((words > 0 && !session.relay.talking()) || silent) set({ speaking: undefined })
+    else if (words !== mode.speaking.words) set({ speaking: { ...mode.speaking, words } })
+  }
   // A forwarded request still unanswered: a short spoken "still on it", first after 20 s, then every 45 s.
   if (asked !== undefined && now - asked >= (nudged ? 45_000 : 20_000)) {
     asked = now
@@ -239,8 +259,8 @@ function onEvent(event: LiveEvent) {
 }
 
 /** Start a session, from a user gesture or for an answer that arrived while paused. Never two at once. */
-export async function open(speech?: string): Promise<void> {
-  if (speech) queued.push(speech)
+export async function open(speech?: string, entry?: number): Promise<void> {
+  if (speech) queued.push({ text: speech, entry })
   if (mode.phase === 'starting' || mode.phase === 'live' || mode.phase === 'ending') return
   const from = mode.phase
   cancelled = false
@@ -262,7 +282,7 @@ export async function open(speech?: string): Promise<void> {
       onError: (error) => set({ problem: describe(error) }),
     })
   } catch (error) {
-    const waiting = queued.at(-1)
+    const waiting = queued.at(-1)?.text
     queued = []
     if (cancelled) return set({ phase: 'off', problem: undefined, front: false })
     // An answer that could not wake the session waits for a tap; a failed first start leaves voice mode.
@@ -281,7 +301,7 @@ export async function open(speech?: string): Promise<void> {
   set({ phase: 'live', since: Date.now() })
   try {
     if (mode.muted) started.mute()
-    for (const text of queued) started.speak(text)
+    for (const item of queued) say(started, item.text, item.entry)
   } catch (error) {
     set({ problem: describe(error) })
   }
@@ -310,20 +330,26 @@ export function note(text: string) {
   }
 }
 
+/** Read a line out, following it word by word when it is a Voice line on screen. */
+function say(live: LiveSession, text: string, entry?: number) {
+  live.speak(text)
+  set({ speaking: entry === undefined ? undefined : { entry, words: 0, at: Date.now() } })
+}
+
 /** An answer to speak: now while live, after the start in flight, or by waking a paused session. */
-export function hear(text: string) {
+export function hear(text: string, entry?: number) {
   if (mode.phase === 'live' && session) {
     try {
-      session.speak(text)
+      say(session, text, entry)
     } catch (error) {
       set({ problem: describe(error) })
     }
-  } else if (mode.phase === 'starting') queued.push(text)
+  } else if (mode.phase === 'starting') queued.push({ text, entry })
   else if (mode.phase === 'paused') {
     // Without an earlier gesture on this page the browser keeps the microphone and audio shut: ask for a tap.
     if (navigator.userActivation && !navigator.userActivation.hasBeenActive) set({ waiting: text })
     // oxlint-disable-next-line typescript/no-floating-promises -- open never rejects: its failures become `problem`.
-    else void open(text)
+    else void open(text, entry)
   }
 }
 
