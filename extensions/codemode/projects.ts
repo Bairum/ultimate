@@ -3,14 +3,12 @@
  * through lib/remote.ts. Nothing falls back to a copy.
  */
 import type { JsonValue } from '@earendil-works/chord'
-import { locate, postAction, REMOTE_BYTES } from '../../lib/remote.ts'
+import { locate, postAction } from '../../lib/remote.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
 /** What `codemode.read` answers: the same reads codemode offers for its own project. */
 export const READS = ['conversations', 'entries', 'search', 'trace', 'traceTree', 'doc'] as const
 export type Read = (typeof READS)[number]
-/** At most this much JSON comes back from another project; a larger answer asks for a smaller `limit`. */
-export const READ_BYTES = REMOTE_BYTES
 
 /** Run read `op` in `project`: undefined when it is this project, so the caller reads its own storage. */
 export async function readProject(
