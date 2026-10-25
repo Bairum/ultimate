@@ -28,8 +28,8 @@ type Goals = ConversationDocToken<{ next: number; goals: Goal[] }>
 export function reminderTask(host: ExtensionHost, Goals: Goals) {
   const find = async (tx: Tx, id: number) =>
     (await tx.doc(Goals, ROOT_CONVERSATION_ID)).goals.find((item) => item.id === id)
-  /** One look: the change it made, or undefined once the automation matches the goal. */
-  async function step(id: number) {
+  /** One look: true when it changed something and must look again, false once the automation matches the goal. */
+  async function step(id: number): Promise<boolean> {
     const automations = host.need(AutomationsApi)
     const { goal, ultimate } = await host.harness().commit(
       async (tx) => ({
@@ -47,29 +47,37 @@ export function reminderTask(host: ExtensionHost, Goals: Goals) {
       null,
       new AbortController().signal,
     )) as Automation[]
+    // The linked one by its id, whatever the user renamed it to; the name only adopts an unlinked one after a crash.
+    const linked = goal?.reminder ? list.find((item) => item.id === goal.reminder) : undefined
     const named = list.filter((item) => item.name === reminderName(id) && !item.prompt)
     const open = goal && !goal.ended
-    const own = open
-      ? (named.find((item) => item.id === goal.reminder) ?? (goal.reminder ? undefined : named[0]))
-      : undefined
-    const extra = named.find((item) => item !== own)
-    if (extra) return automations.delete(extra.id)
+    const own = open ? (linked ?? (goal.reminder ? undefined : named[0])) : undefined
+    const extra = [...named, ...(linked ? [linked] : [])].find((item) => item !== own)
+    if (extra) {
+      await automations.delete(extra.id)
+      return true
+    }
     // One the user deleted in the Automations panel stays deleted.
-    if (open && !own && !goal.reminder && ultimate !== undefined)
-      return automations.create({
+    if (open && !own && !goal.reminder && ultimate !== undefined) {
+      await automations.create({
         name: reminderName(id),
         schedule: SCHEDULE,
         subscribers: [ultimate],
       })
-    if (!own || !goal) return undefined
-    if (goal.reminder !== own.id)
-      return host.harness().commit(async (tx) => {
+      return true
+    }
+    if (!own || !goal) return false
+    if (goal.reminder !== own.id) {
+      await host.harness().commit(async (tx) => {
         const current = await find(tx, id)
         if (current) current.reminder = own.id
       }, context)
-    if (own.enabled === !!goal.waiting)
-      return goal.waiting ? automations.pause(own.id) : automations.resume(own.id)
-    return undefined
+      return true
+    }
+    if (own.enabled !== !!goal.waiting) return false
+    if (goal.waiting) await automations.pause(own.id)
+    else await automations.resume(own.id)
+    return true
   }
   return defineTask<{ goal: number }, { phase: 'sync' }, null>({
     name: 'goal.reminder',
@@ -77,7 +85,7 @@ export function reminderTask(host: ExtensionHost, Goals: Goals) {
     initial: () => ({ phase: 'sync' }),
     phases: {
       sync: async (task, runtime, ctx) => {
-        for (let i = 0; i < STEPS; i++) if ((await step(task.input.goal)) === undefined) break
+        for (let i = 0; i < STEPS; i++) if (!(await step(task.input.goal))) break
         await runtime.commit(
           () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
           ctx,

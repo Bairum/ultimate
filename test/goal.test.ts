@@ -217,13 +217,21 @@ it('keeps a reminder while the goal is open: paused while waiting on the user, g
       undefined as never,
     )
   await actions.start({ text: 'Make it fast' }, { host } as never)
-  // A crash after the create, before the link: the rerun adopts that automation instead of making a second.
+  // Crashes after creating, before linking, left two; and the goal was paused meanwhile. One task run adopts one,
+  // deletes the other and pauses it.
   await service.create({ name: 'Goal reminder · goal 1', subscribers: [ULTIMATE] })
+  await service.create({ name: 'Goal reminder · goal 1', subscribers: [ULTIMATE] })
+  ;(await openGoal(tx))!.waiting = { reason: 'Which account?', at: 0 }
   await sync()
   expect([...ledger.values()]).toEqual([
-    { id: 'A1', name: 'Goal reminder · goal 1', subscribers: [ULTIMATE], enabled: true },
+    { id: 'A1', name: 'Goal reminder · goal 1', subscribers: [ULTIMATE], enabled: false },
   ])
   expect((await openGoal(tx))!.reminder).toBe('A1')
+  await run({ action: 'resume' })
+  await sync()
+  expect(ledger.get('A1')!.enabled).toBe(true)
+  // The user renamed it: it stays linked by its id.
+  ledger.get('A1')!.name = 'Night check'
 
   // Its fire tells @ultimate what to check; other inputs do not.
   const hooks = extension.hooks![0].handlers as GenerationHooks
