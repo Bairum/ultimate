@@ -1,6 +1,84 @@
 import { isAbsolute, relative, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { parse } from 'unbash'
+import type { Command, Word } from 'unbash'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { textOf } from './render.ts'
+
+const cleanupPattern = /\brm\s+-rf\b|\bclean\s+-fd\b/g
+
+function cleanupPath(word: Word) {
+  let value = word.value
+  if (!word.text.startsWith("'")) value = value.replace(/^\$(?:TMPDIR\b|\{TMPDIR\})/, tmpdir())
+  // Unknown expansions, command substitutions and brace alternatives are not proven temp-only.
+  return /[$`{}]/.test(value) ? undefined : value
+}
+function tempPath(word: Word, cwd: string | undefined) {
+  const value = cleanupPath(word)
+  if (value === undefined || (!isAbsolute(value) && cwd === undefined)) return false
+  const path = isAbsolute(value) ? resolve(value) : resolve(cwd!, value)
+  return inTemp(path)
+}
+function inTemp(path: string) {
+  return ['/tmp', tmpdir()].some((temp) => {
+    const suffix = relative(resolve(temp), path)
+    return suffix !== '' && suffix !== '..' && !suffix.startsWith('../') && !isAbsolute(suffix)
+  })
+}
+
+function tempCleanup(command: Command, cwd: string | undefined, position: number) {
+  if (command.prefix.length || command.args.some((a) => a.type !== 'Word')) return false
+  const words = command.args as readonly Word[]
+  let args = words
+  if (command.name?.value === 'git') {
+    const clean = words.findIndex((w) => w.value === 'clean' && w.pos === position)
+    if (clean < 0) return false
+    // Only -C changes the checkout here; unknown global options keep the signal.
+    for (let i = 0; i < clean; i += 2) {
+      if (words[i]?.value !== '-C' || !words[i + 1]) return false
+      const directory = cleanupPath(words[i + 1])
+      if (directory === undefined || (!isAbsolute(directory) && cwd === undefined)) return false
+      cwd = isAbsolute(directory) ? resolve(directory) : resolve(cwd!, directory)
+    }
+    args = words.slice(clean + 1)
+  } else if (command.name?.value !== 'rm' || command.name.pos !== position) return false
+  let options = true
+  const targets: Word[] = []
+  for (const arg of args) {
+    if (options && arg.value === '--') {
+      options = false
+      continue
+    }
+    if (options && arg.value.startsWith('-')) continue
+    targets.push(arg)
+  }
+  if (!targets.length) return command.name?.value === 'git' && cwd !== undefined && inTemp(cwd)
+  return targets.every((target) => tempPath(target, cwd))
+}
+
+function destructiveShell(source: string, root: string) {
+  if (/\bgit\s+push\b[^\n]*(?:--force\b|(?:^|\s)-f\b)|\breset\s+--hard\b/.test(source)) return true
+  const cleanups = [...source.matchAll(cleanupPattern)]
+  if (!cleanups.length) return false
+  if (/\b(?:TMPDIR|TMP|TEMP)=/.test(source) && /\$(?:TMPDIR\b|\{TMPDIR\})/.test(source)) return true
+  const script = parse(source)
+  if (script.errors?.length) return true
+  const commands: Command[] = []
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== 'object') return
+    if ((node as { type?: string }).type === 'Command') commands.push(node as Command)
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) child.forEach(visit)
+      else if (child && typeof child === 'object') visit(child)
+    }
+  }
+  visit(script)
+  // Every risky occurrence must be an understood cleanup with only temp targets.
+  const cwd = /\b(?:cd|pushd|popd)\b/.test(source) ? undefined : root
+  return cleanups.some(
+    (match) => !commands.some((command) => tempCleanup(command, cwd, match.index)),
+  )
+}
 
 /** Deterministic hints, not verdicts: the reviewer decides whether they matter. */
 export function signals(entries: readonly EntryRecord[], root: string, final = '') {
@@ -21,9 +99,7 @@ export function signals(entries: readonly EntryRecord[], root: string, final = '
     if (counts.get(key)! >= 3) found.add('repeated tool call')
     if (
       c.name === 'bash' &&
-      /\bgit\s+push\b[^\n]*(?:--force\b|(?:^|\s)-f\b)|\breset\s+--hard\b|\brm\s+-rf\b|\bclean\s+-fd\b/.test(
-        typeof c.arguments.command === 'string' ? c.arguments.command : '',
-      )
+      destructiveShell(typeof c.arguments.command === 'string' ? c.arguments.command : '', root)
     )
       found.add('destructive shell command')
     if (['edit', 'write'].includes(c.name)) {

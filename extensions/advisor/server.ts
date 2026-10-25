@@ -262,20 +262,6 @@ export default function advisor(host: ExtensionHost) {
     tasks: [ReviewTask],
     hooks: [
       hook(GenerationTask, {
-        beforeInput: async (entry, api) => {
-          const view = await config(false)
-          if (
-            !ROLES.some((r) => view.effective.roles?.[r]?.enabled) ||
-            entry.kind === 'advisor.note'
-          )
-            return
-          // User and inter-conversation inputs both suppress intervention. Passive parent notes are checked from history too.
-          const state = await api.tx.doc(Runs, ROOT_CONVERSATION_ID)
-          state.conversations[api.conversationId] ??= { rounds: 0, signals: [] }
-          const row = state.conversations[api.conversationId]
-          row.lastInput = Date.now()
-          row.lastActivity = row.lastInput
-        },
         afterTools: async (_assistant, _results, api, context) => {
           const target = await enabled(api.conversationId, context)
           if (!target) return

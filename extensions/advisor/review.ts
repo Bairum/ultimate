@@ -92,25 +92,37 @@ function ledgerChanges(
 }
 
 async function lastIntervention(host: ExtensionHost, id: ConversationId, context: Context) {
+  const first = (await host.harness().snapshot(LiveDoc, id, context))?.run?.inputs[0]
+  if (first === undefined) return 0
+  const submission = await host.harness().submission(first, context)
+  const start = await submission?.status(context)
+  if (start?.entry === undefined) return 0
   const parent = host.conversations().find((c) => c.id === id)?.parentConversationId
   const ultimate = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))
     ?.ultimate
   const conversation = await host.harness().conversation(id, context)
-  const page = await conversation?.entries({ order: 'descending' }, 64, undefined, context)
+  if (!conversation) return 0
+  let cursor: Cursor | undefined
   let at = 0
-  for (const entry of page?.items ?? []) {
-    const data =
-      entry.data && typeof entry.data === 'object' && !Array.isArray(entry.data)
-        ? entry.data
-        : undefined
-    const parentMessage =
-      ['board.message', 'board.reply'].includes(entry.kind) &&
-      typeof data?.from === 'number' &&
-      (data.from === parent || data.from === ultimate)
-    if (entry.kind !== 'pi.user' && !parentMessage) continue
-    for (const message of entry.model ?? [])
-      if (message.role === 'user') at = Math.max(at, message.timestamp)
-  }
+  do {
+    const page = await conversation.entries({ order: 'descending' }, 64, cursor, context)
+    for (const entry of page.items) {
+      // Entry order, not timestamps: the brief itself and every earlier run are excluded.
+      if (entry.id <= start.entry) return at
+      const data =
+        entry.data && typeof entry.data === 'object' && !Array.isArray(entry.data)
+          ? entry.data
+          : undefined
+      const parentMessage =
+        ['board.message', 'board.reply'].includes(entry.kind) &&
+        typeof data?.from === 'number' &&
+        (data.from === parent || data.from === ultimate)
+      if (entry.kind !== 'pi.user' && !parentMessage) continue
+      for (const message of entry.model ?? [])
+        if (message.role === 'user') at = Math.max(at, message.timestamp)
+    }
+    cursor = page.next
+  } while (cursor !== undefined)
   return at
 }
 
@@ -353,7 +365,8 @@ export async function review(
       const activity = current.conversations[id]
       runs.conversations[id] ??= { rounds: 0, signals: [] }
       const row = runs.conversations[id]
-      if (intervention) row.lastInput = Math.max(row.lastInput ?? 0, intervention)
+      if (intervention) row.lastInput = intervention
+      else delete row.lastInput
       const live = await tx.doc(LiveDoc, id)
       if (
         input.point === 'answer' &&

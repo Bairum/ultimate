@@ -8,6 +8,7 @@ import {
   MemoryStorage,
   createRegistry,
   LiveDoc,
+  InboxDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import type { GenerationHooks, HookApi } from '@earendil-works/pi-durable'
@@ -234,3 +235,56 @@ it('offers checkout tools on the first turn and replays model steps and read res
   )
   expect(f.stream).toHaveBeenCalledTimes(2)
 })
+it.each(['brief', 'steer', 'parent note'] as const)(
+  'only mid-run intervention suppresses continuation: %s',
+  async (intervention) => {
+    const f = await fixture()
+    f.config.roles!.worker!.quietMs = 600_000
+    await writeFile(
+      join(f.host.userHome, '.ultimate/settings.json'),
+      JSON.stringify({ advisor: f.config }),
+    )
+    const now = Date.now()
+    const brief = await f.harness.commit(async (tx) => {
+      const first = await tx.appendEntry(f.id, {
+        kind: 'pi.user',
+        model: [
+          {
+            role: 'user',
+            content: 'Implement the task',
+            timestamp: now - (intervention === 'brief' ? 60_000 : 120_000),
+          },
+        ],
+      })
+      if (intervention !== 'brief')
+        await tx.appendEntry(f.id, {
+          kind: intervention === 'steer' ? 'pi.user' : 'board.message',
+          ...(intervention === 'parent note' ? { data: { from: 1 } } : {}),
+          model: [
+            { role: 'user', content: 'Use the corrected requirement', timestamp: now - 60_000 },
+          ],
+        })
+      // An earlier run's quiet marker must not suppress the new brief either.
+      const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
+      runs.conversations[f.id] = { run: 99, rounds: 0, signals: [], lastInput: now - 30_000 }
+      ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = 1 as never
+      return first
+    }, context)
+    const submission = vi.spyOn(f.harness, 'submission').mockResolvedValue({
+      status: async () => ({ type: 'input', status: 'placed', entry: brief.id }),
+    } as never)
+    try {
+      const yielded = await f.hooks.onYield(fauxAssistantMessage('Finished'), f.api(), context)
+      expect(yielded !== undefined).toBe(intervention === 'brief')
+      const inbox = await f.harness.snapshot(InboxDoc, f.id, context)
+      expect(
+        inbox?.items.some(
+          (item) =>
+            item.mode === 'write' && (item.entry.data as AdvisorNoteEntry)?.delivered === 'note',
+        ),
+      ).toBe(intervention !== 'brief')
+    } finally {
+      submission.mockRestore()
+    }
+  },
+)

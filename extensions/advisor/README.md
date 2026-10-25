@@ -36,7 +36,7 @@ Use a model available in your configured providers; the model above is an exampl
 - `delivery`: `note` (default: passive user-model context) or `card` (display only, no model context).
 - `continueOn`: `nit`, `concern`, `blocker` (default), or `never`. A held final answer may continue once per run.
 - `steerOn`: the same thresholds, default `never`, for mid-run advice.
-- `quietMs`: nonnegative milliseconds after user/parent/@ultimate input during which intervention becomes a passive note; default 600000.
+- `quietMs`: nonnegative milliseconds after a user/parent/@ultimate steer, message or passive note arrives during the current run; intervention becomes a passive note for this period. The initial brief does not count. Default 600000.
 - `idleMs`: nonnegative idle duration, default 1800000. Scanned every five minutes; one review per last activity, never waking a conversation.
 - Profile `dayUsd`: optional nonnegative role-specific daily USD limit, in addition to the global limit.
 
@@ -57,7 +57,7 @@ Rubrics resolve from this extension's `rubrics/`, then `~/.ultimate/advisors/`, 
 
 The model returns JSON notes (`severity`, `note` ≤500 characters, `evidence` nonempty ≤300). Only @ultimate can update the promise/question ledger (`add`, `resolve`). @ultimate receives passive model notes only when an unanswered question or overdue promise is open; everything else is a card. The user can resolve/dismiss notes or give thumbs feedback.
 
-Deterministic signals name repeated identical tool calls, three consecutive tool errors, force-push/hard-reset/destructive deletion commands, writes outside the checkout, completion claims immediately after a failed check, and runs over 40 tool rounds. Signals request a review, not a safety decision.
+Deterministic signals name repeated identical tool calls, three consecutive tool errors, force-push/hard-reset/destructive deletion commands, writes outside the checkout, completion claims immediately after a failed check, and runs over 40 tool rounds. Cleanup targets confined to descendants of `/tmp`, `$TMPDIR` or the OS temp directory are excluded; mixed, non-temp or uncertain targets still signal. Signals request a review, not a safety decision.
 
 ## Safety and cost
 
