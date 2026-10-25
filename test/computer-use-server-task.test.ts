@@ -6,10 +6,10 @@ import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-dura
 import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ClassifyService, ClassifyResult } from '../extensions/classify/api.ts'
-import type { Observation } from '../extensions/computer-use/types.ts'
+import type { Observation, TaskSpec } from '../extensions/computer-use/types.ts'
 import { afterEach, expect, it, vi } from 'vitest'
 import computerUse, { actions, userActions } from '../extensions/computer-use/server.ts'
-import { readSession, updateSession } from '../extensions/computer-use/session.ts'
+import { readSession, updateSession, wake } from '../extensions/computer-use/session.ts'
 import { createDriver } from '../extensions/computer-use/driver.ts'
 import { createFakeDriver } from './computer-use-fake-driver.ts'
 import { removeTemp, temp } from './helpers.ts'
@@ -20,7 +20,7 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).toReversed()) await close()
   vi.useRealTimers()
 })
-const spec = () => ({
+const spec = (): Omit<TaskSpec, 'stop'> => ({
   id: 'T1',
   intent: 'Use Calculator to show 42',
   goal: 'Show 42 in Calculator',
@@ -61,6 +61,7 @@ async function fixture() {
     userHome: home,
     projectSettings: async () => ({}),
     harness: () => harness,
+    conversations: () => [{ id: 1 }],
     resource: (key: string, create: () => unknown) => {
       if (!resources.has(key)) {
         const value = create()
@@ -356,7 +357,7 @@ it('refuses invented intent and accepts verbatim whitespace-normalised user inte
   expect((await readSession(f.host, f.root.id)).task?.spec.intent).toBe(intent)
 })
 
-it('does not let an arbitrary expect reset loops or complete a subgoal; linked verification can complete explicitly', async () => {
+it('does not let arbitrary expect plus a criterion tag reset loops or complete predicate criteria', async () => {
   const f = await fixture()
   await f.start()
   await f.grant()
@@ -375,6 +376,7 @@ it('does not let an arbitrary expect reset loops or complete a subgoal; linked v
     app: 'Calculator',
     actions: [{ kind: 'click', element: `${view.snapshot}:7` }],
     expect: [{ arbitrary: true }],
+    criterion: 'C1',
   })
   expect((await readSession(f.host, f.root.id)).task?.recent.actions).toHaveLength(1)
   expect(data(await f.task({ action: 'complete', subgoal: 'S1' })).status).toBe('evidence_required')
@@ -402,4 +404,96 @@ it('resets the conversation budget on a new task and user resume', async () => {
   await actions.stop({ conversation: f.root.id }, f.ctx)
   await actions.resume({ conversation: f.root.id }, f.ctx)
   expect((await readSession(f.host, f.root.id)).budget).toEqual({ steps: 0, startedAt: 0 })
+})
+
+it('accepts evidence tags only for evidence criteria without resetting the loop detector', async () => {
+  const f = await fixture()
+  const input = {
+    ...spec(),
+    criteria: [{ id: 'C1', text: 'User-reviewed desktop evidence', check: 'evidence' as const }],
+  }
+  await f.start(input)
+  await actions.confirmTask({ conversation: f.root.id }, f.ctx)
+  await f.grant()
+  const call = f.driver.call.bind(f.driver)
+  f.driver.call = (tool, args, signal) =>
+    tool === 'verify_state'
+      ? Promise.resolve({ ok: true, text: '', structured: { verdict: 'satisfied' }, images: [] })
+      : call(tool, args, signal)
+  const view = (await f.observe()).structuredOutput as unknown as Observation
+  await f.invoke('computer_act', {
+    app: 'Calculator',
+    actions: [{ kind: 'click', element: `${view.snapshot}:7` }],
+    expect: [{ arbitrary: true }],
+    criterion: 'C1',
+  })
+  expect((await readSession(f.host, f.root.id)).task?.recent.actions).toHaveLength(1)
+  expect(data(await f.task({ action: 'complete', subgoal: 'S1' })).status).toBe('completed')
+})
+
+it('requires whole user or subagent-instruction sentences or lines, excluding wake and note messages', async () => {
+  const f = await fixture()
+  await f.root.submit(
+    { type: 'input', content: 'Never delete all emails. Leave the mailbox untouched.' },
+    context,
+  )
+  await wake(f.host, f.root.id, 'The extension generated this wake sentence.')
+  await f.root.submit(
+    {
+      type: 'input',
+      content: 'The extension generated this note sentence.',
+      entry: { kind: 'computer.note' },
+    },
+    context,
+  )
+  await f.harness.waitForIdle(context)
+  for (const intent of [
+    'delete all emails',
+    'delete',
+    'The extension generated this wake sentence.',
+    'The extension generated this note sentence.',
+  ])
+    expect(data(await f.task({ action: 'start', spec: { ...spec(), intent } })).status).toBe(
+      'intent_required',
+    )
+  const intent = 'Check the Calculator title.'
+  await f.root.submit(
+    {
+      type: 'input',
+      content: `Parent instructions.\n${intent}\nThen report.`,
+      entry: {
+        kind: 'subagents.instruction',
+        data: { sender: 1, kind: 'instruction', agent: 'computer-operator', body: intent },
+      },
+    },
+    context,
+  )
+  await f.harness.waitForIdle(context)
+  await f.task({ action: 'start', spec: { ...spec(), intent, goal: intent } })
+  expect((await readSession(f.host, f.root.id)).task?.spec.intent).toBe(intent)
+  expect(
+    (await f.root.entries({}, 100, undefined, context)).items.some(
+      (e) => e.kind === 'subagents.instruction',
+    ),
+  ).toBe(true)
+})
+
+it('clears unused confirmations on task start, finish and Stop', async () => {
+  const f = await fixture()
+  const seed = () =>
+    updateSession(f.host, f.root.id, (doc) => {
+      doc.confirmed = [{ key: 'unused', at: Date.now(), task: 'T1' }]
+    })
+  await seed()
+  await f.start()
+  expect((await readSession(f.host, f.root.id)).confirmed).toEqual([])
+  await seed()
+  await f.task({ action: 'finish', outcome: 'partial', summary: 'Testing confirmation lifecycle' })
+  expect((await readSession(f.host, f.root.id)).confirmed).toEqual([])
+  await seed()
+  await f.start({ ...spec(), id: 'T2' })
+  expect((await readSession(f.host, f.root.id)).confirmed).toEqual([])
+  await seed()
+  await actions.stop({ conversation: f.root.id }, f.ctx)
+  expect((await readSession(f.host, f.root.id)).confirmed).toEqual([])
 })

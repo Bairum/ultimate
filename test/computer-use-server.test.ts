@@ -31,6 +31,7 @@ async function fixture(classify?: ClassifyService) {
     stopCommand,
   })
   const resources = new Map<string, unknown>()
+  const conversationIds: number[] = []
   const closes: (() => Promise<void>)[] = []
   const models = createModels()
   const faux = fauxProvider({ tokensPerSecond: 0 })
@@ -43,6 +44,7 @@ async function fixture(classify?: ClassifyService) {
     userHome: home,
     projectSettings: async () => ({}),
     harness: () => harness,
+    conversations: () => conversationIds.map((id) => ({ id })),
     resource: (key: string, create: () => unknown) => {
       if (!resources.has(key)) {
         const value = create()
@@ -61,6 +63,7 @@ async function fixture(classify?: ClassifyService) {
   const root = await harness.root(context, {
     agent: { model: { provider: 'faux', modelId: 'faux-1' } },
   })
+  conversationIds.push(root.id)
   await harness.commit(async (tx) => {
     ;(await tx.doc(Profile, root.id)).definition = 'computer-operator'
   }, context)
@@ -149,6 +152,7 @@ async function fixture(classify?: ClassifyService) {
     grant,
     run,
     resources,
+    conversationIds,
     stopCommand,
   }
 }
@@ -237,7 +241,7 @@ it('requires confirmation for an exact consequential action before dispatch', as
   await f.observe()
   identityNext(f.fake)
   expect(data(await f.run([step])).outcomes[0].status).toBe('delivered')
-  expect((await readSession(f.host, f.root.id)).confirmed).not.toContain(key)
+  expect((await readSession(f.host, f.root.id)).confirmed.some((c) => c.key === key)).toBe(false)
   expect(data(await f.run([step])).status).toBe('confirm_required')
 })
 it('refuses frontmost typing, and requires a user takeover plus foreground flag', async () => {
@@ -479,6 +483,7 @@ async function otherConversation(f: Awaited<ReturnType<typeof fixture>>) {
   await updateSession(f.host, other.id, (doc) => {
     doc.task = JSON.parse(JSON.stringify(state))
   })
+  f.conversationIds.push(other.id)
   return other
 }
 
@@ -894,4 +899,114 @@ it('keeps parameter values and their normalised forms out of risk requests and t
   expect(journal).not.toContain('bob@x.com')
   expect(journal).not.toContain('bob x com')
   expect(journal).toContain('[param]')
+})
+
+it('requires pixel confirmation when a downscaled capture disagrees with its reported scale', async () => {
+  const f = await fixture()
+  labelButton(f, 13, 'Send')
+  const call = f.driver.call.bind(f.driver)
+  f.driver.call = async (tool, args, signal) => {
+    const reply = await call(tool, args, signal)
+    if (tool === 'get_window_state') {
+      Object.assign(reply.structured!, {
+        window_bounds: { x: 0, y: 0, width: 1000, height: 100 },
+        screenshot_width: 1000,
+        screenshot_height: 100,
+        screenshot_scale: 2,
+      })
+      const elements = reply.structured!.elements as unknown as {
+        element_index: number
+        frame: { x: number; y: number; w: number; h: number }
+      }[]
+      elements.find((e) => e.element_index === 13)!.frame = { x: 360, y: 80, w: 28, h: 28 }
+    }
+    return reply
+  }
+  await f.grant()
+  const view = await f.observe()
+  // Using the reported 2x scale would hit harmless button 6 at (185,45), not Send at (370,90).
+  expect(
+    data(await f.run([{ kind: 'click', x: 370, y: 90, capture: view.capture!.id }])).status,
+  ).toBe('confirm_required')
+  expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
+})
+
+it('expires unused confirmations after five minutes and refuses another task’s confirmation', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  const now = Date.now()
+  const f = await fixture()
+  await f.grant()
+  await f.observe()
+  const step: Step = { kind: 'menu', path: ['File', 'Delete'] }
+  await f.run([step])
+  const key = (await readSession(f.host, f.root.id)).pending[0].key!
+  await actions.confirm({ conversation: f.root.id, key }, f.ctx)
+  expect((await readSession(f.host, f.root.id)).confirmed).toEqual([{ key, at: now, task: 'T1' }])
+  vi.setSystemTime(now + 5 * 60_000)
+  await f.observe()
+  expect(data(await f.run([step])).status).toBe('confirm_required')
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.confirmed = [{ key, at: Date.now(), task: 'other-task' }]
+    doc.pending = []
+  })
+  expect(data(await f.run([step])).status).toBe('confirm_required')
+  expect(f.fake.calls.some((c) => c.tool === 'invoke_menu')).toBe(false)
+})
+
+it('clears unused confirmations in dormant conversations on project Stop and blocks every desktop read', async () => {
+  const f = await fixture()
+  const other = await otherConversation(f)
+  await updateSession(f.host, other.id, (doc) => {
+    doc.confirmed = [{ key: 'unused', at: Date.now(), task: 'T1' }]
+  })
+  await actions.stop({ conversation: f.root.id }, f.ctx)
+  expect((await readSession(f.host, other.id)).confirmed).toEqual([])
+  const before = f.fake.calls.length
+  for (const args of [{}, { app: 'Calculator' }, { app: 'Calculator', window: 456 }])
+    expect(data(await f.invoke('computer_observe', args, other)).status).toBe('stopped')
+  expect(data(await f.invoke('computer_apps', {}, other)).status).toBe('stopped')
+  expect(
+    data(
+      await f.invoke(
+        'computer_task',
+        { action: 'finish', outcome: 'partial', summary: 'Stopped' },
+        other,
+      ),
+    ).status,
+  ).toBe('stopped')
+  expect(f.fake.calls).toHaveLength(before)
+})
+
+it('refuses an operator override that adds bash despite its trusted definition name', async () => {
+  const f = await fixture()
+  const agent = await f.root.agent(context)
+  const api = {
+    conversationId: f.root.id,
+    callId: 'unsafe-override',
+    output: () => {},
+    agent: async () => ({ ...agent, tools: [...agent.tools, { name: 'bash' }] }),
+  } as unknown as ToolExecutionApi
+  const tool = f.tools.find((t) => t.name === 'computer_observe')!
+  expect(data(await tool.execute({}, api, context)).status).toBe('operator_required')
+  expect(f.fake.calls).toEqual([])
+  expect(f.tools.map((t) => t.name)).toEqual([
+    'computer_task',
+    'computer_observe',
+    'computer_act',
+    'computer_apps',
+  ])
+})
+
+it('masks sensitive-field confirmation payloads rather than persisting typed passwords', async () => {
+  const f = await fixture()
+  labelButton(f, 1, 'Password')
+  await f.grant()
+  const view = await f.observe()
+  const text = 'private-password\nsecond-line'
+  expect(data(await f.run([{ kind: 'type', element: `${view.snapshot}:1`, text }])).status).toBe(
+    'confirm_required',
+  )
+  const state = await readSession(f.host, f.root.id)
+  expect(state.pending[0].payload).toBe(`••• (${text.length} chars)`)
+  expect(JSON.stringify(state)).not.toContain('private-password')
 })

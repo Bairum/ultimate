@@ -14,7 +14,8 @@ import {
   StopAction,
   TakeoverAction,
 } from './refs.ts'
-import { plainTask, activatePending, runtime } from './runtime.ts'
+import { plainTask, activatePending } from './tool-helpers.ts'
+import { runtime } from './runtime.ts'
 import { stopDriver } from './driver.ts'
 import * as task from './task.ts'
 
@@ -57,8 +58,10 @@ export async function stop(host: ExtensionHost, conversation: number) {
   }
   await updateSession(host, 1, (doc) => {
     doc.stopped = true
+    doc.confirmed = []
   })
-  for (const id of affected) await interrupt(host, id)
+  for (const id of new Set([...host.conversations().map((c) => c.id), ...affected]))
+    await interrupt(host, id, affected.has(id))
   state.observations.clear()
   state.zoomed.clear()
   if (previous.stopped) await hardStop(host)
@@ -71,8 +74,11 @@ export async function hardStop(host: ExtensionHost) {
   const updates: Promise<void>[] = [
     updateSession(host, 1, (doc) => {
       doc.stopped = true
+      doc.confirmed = []
     }),
-    ...[...affected].map((id) => interrupt(host, id)),
+    ...[...new Set([...host.conversations().map((c) => c.id), ...affected])].map((id) =>
+      interrupt(host, id, affected.has(id)),
+    ),
   ]
   clearTimeout(state.idle)
   for (const active of state.active.values()) {
@@ -93,10 +99,13 @@ export async function hardStop(host: ExtensionHost) {
   return { stopped: true as const }
 }
 
-async function interrupt(host: ExtensionHost, conversation: number) {
+async function interrupt(host: ExtensionHost, conversation: number, markStopped: boolean) {
   await updateSession(host, conversation, (doc) => {
-    doc.stopped = true
-    if (doc.task) doc.task = task.markInterrupted(plainTask(doc.task), 'stop', [], Date.now())
+    if (markStopped) doc.stopped = true
+    doc.confirmed = []
+    doc.pending = doc.pending.filter((p) => p.kind !== 'confirm')
+    if (markStopped && doc.task)
+      doc.task = task.markInterrupted(plainTask(doc.task), 'stop', [], Date.now())
     doc.takeovers = []
   })
 }
@@ -188,9 +197,14 @@ export const actions = {
     if (typeof args.key !== 'string') throw new Error('key must be a string')
     const key = args.key
     await updateSession(host, args.conversation, (doc) => {
-      if (!doc.pending.some((p) => p.kind === 'confirm' && p.key === args.key))
+      if (
+        !doc.task ||
+        !doc.pending.some(
+          (p) => p.kind === 'confirm' && p.key === key && p.task === doc.task!.spec.id,
+        )
+      )
         throw new Error('key must name an exact pending confirmation')
-      doc.confirmed.push(key)
+      doc.confirmed.push({ key, at: Date.now(), task: doc.task.spec.id })
       doc.pending = doc.pending.filter((p) => p.key !== args.key)
     })
     await wake(

@@ -6,17 +6,9 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { ClassifyApi } from '../classify/api.ts'
 import type { Verdict } from './types.ts'
 import { readSession, updateSession } from './session.ts'
-import {
-  result,
-  anchored,
-  plainTask,
-  activatePending,
-  runtime,
-  setup,
-  cacheKey,
-  object,
-  predicates,
-} from './runtime.ts'
+import { result, anchored, plainTask, activatePending, object } from './tool-helpers.ts'
+import { runtime, setup, cacheKey } from './runtime.ts'
+import { predicates } from './schemas.ts'
 
 import * as task from './task.ts'
 
@@ -69,7 +61,7 @@ export async function taskTool(
         result({
           status: 'intent_required',
           message:
-            'intent must appear verbatim in this conversation’s user input or operator brief.',
+            'intent must equal a whole message, sentence or line from this conversation’s user input or operator brief.',
         }),
       )
     signal.throwIfAborted()
@@ -86,8 +78,9 @@ export async function taskTool(
       )
         throw new Error('Finish the current task before starting another')
       doc.task = started.state
+      doc.confirmed = []
       doc.budget = { steps: 0, startedAt: 0 }
-      doc.pending = doc.pending.filter((p) => p.kind !== 'task' && p.kind !== 'change')
+      doc.pending = doc.pending.filter((p) => p.kind === 'consent')
       if (started.needsConfirmation.length)
         doc.pending.push({
           kind: 'task',
@@ -182,6 +175,8 @@ export async function taskTool(
         for (const item of evidence)
           finished.state = task.addEvidence(finished.state, active.id, item)
       await updateSession(host, conversation, (doc) => {
+        doc.confirmed = []
+        doc.pending = doc.pending.filter((p) => p.kind !== 'confirm')
         // Stop can arrive during verification; completion must never overwrite it.
         if (doc.task?.status === state.status) doc.task = finished.state
         else if (doc.task) finished.state = plainTask(doc.task)
@@ -320,7 +315,8 @@ export async function intentInConversation(
   do {
     const page = await target.entries({}, 64, cursor, context)
     for (const entry of page.items) {
-      if (entry.kind !== 'pi.user' && !entry.kind.includes('brief')) continue
+      // The subagents reporter submits its task brief as subagents.instruction, not pi.user.
+      if (entry.kind !== 'pi.user' && entry.kind !== 'subagents.instruction') continue
       for (const message of entry.model ?? []) {
         if (message.role !== 'user') continue
         const text =
@@ -329,7 +325,13 @@ export async function intentInConversation(
             : message.content
                 .flatMap((block) => (block.type === 'text' ? [block.text] : []))
                 .join(' ')
-        if (normalized(text).includes(normalized(intent))) return true
+        const whole = normalized(text)
+        const candidates = [
+          whole,
+          ...text.split(/\r?\n/).map(normalized),
+          ...whole.split(/(?<=[.!?])\s+/),
+        ]
+        if (candidates.includes(normalized(intent))) return true
       }
     }
     cursor = page.next

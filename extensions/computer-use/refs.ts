@@ -6,11 +6,12 @@ import type { Grant } from './types.ts'
 export type Session = {
   task?: TaskState
   grants: Grant[]
-  confirmed: string[]
+  confirmed: { key: string; at: number; task: string }[]
   pending: {
     kind: 'consent' | 'confirm' | 'task' | 'change'
     app: string
     step?: number
+    task?: string
     key?: string
     at: number
     window?: string

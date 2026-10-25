@@ -3,11 +3,11 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { ClassifyApi } from '../classify/api.ts'
 import { confirmationKey, consequential, consentFor, consume, denyList } from './policy.ts'
 import type { Driver, Element, Observation, Step } from './types.ts'
-import { readSession } from './session.ts'
+import { readSession, isStopped, hasConfirmation } from './session.ts'
 import type { Session } from './session.ts'
-import { json, message, object } from './runtime.ts'
+import { json, message, object } from './tool-helpers.ts'
 import type { Active } from './runtime.ts'
-import { path, confirmationLocation } from './observation.ts'
+import { path, confirmationLocation } from './parse-observation.ts'
 import * as task from './task.ts'
 import { redactor } from './content.ts'
 
@@ -48,6 +48,7 @@ export function consumeCanonical(identity: Identity, grants: Session['grants']) 
 }
 export type GateContext = {
   session: Session
+  conversation: number
   grants: Session['grants']
   app: string
   step: Step
@@ -64,6 +65,7 @@ export type GateContext = {
   driver: Driver
   stepKinds?: Step['kind'][]
   confirmation?: string
+  confirmationUsed?: boolean
   params?: string[]
 }
 export type Refusal = {
@@ -98,10 +100,11 @@ export const preflightGates: Gate[] = [
   (ctx) => task.checkpointGate(ctx.session.task!),
   (ctx) => task.budgetGate(ctx.session.task!, Date.now()),
   async (ctx) =>
-    ctx.session.stopped ||
-    (await readSession(ctx.host, 1)).stopped ||
-    ctx.active.stopped ||
-    ctx.signal.aborted
+    (await isStopped(ctx.host, ctx.conversation, {
+      session: ctx.session,
+      active: ctx.active,
+      signal: ctx.signal,
+    }))
       ? { refuse: 'stopped', message: 'Computer use is stopped; ask the user to resume.' }
       : undefined,
   async (ctx) => {
@@ -116,11 +119,8 @@ export const preflightGates: Gate[] = [
             message: `User consent required for ${ctx.app}.`,
           }
     }
-    const listed = await ctx.driver.call('list_apps', {}, ctx.signal)
-    const apps = listed.structured?.apps
-    const app = (Array.isArray(apps) ? apps : [])
-      .map(object)
-      .find((a) => a.pid === ctx.observation?.pid)
+    const { apps } = await listApps(ctx.driver, ctx.signal)
+    const app = apps.find((a) => a.pid === ctx.observation?.pid)
     if (!app || typeof app.name !== 'string')
       return {
         refuse: 'app_identity',
@@ -157,10 +157,9 @@ export async function frontmostGate(ctx: GateContext): Promise<Refusal | undefin
     ctx.foreground && ctx.session.takeovers.some((t) => matchesApp(ctx.identity!, t.app))
   if (ctx.foreground && !takeover)
     return { refuse: 'user_active', message: 'Foreground delivery requires a user takeover.' }
-  const listed = await ctx.driver.call('list_apps', {}, ctx.signal)
-  const apps = listed.structured?.apps
-  const active = (Array.isArray(apps) ? apps : []).map(object).filter((a) => a.active === true)
-  if (!listed.ok || active.length !== 1)
+  const { apps } = await listApps(ctx.driver, ctx.signal)
+  const active = apps.filter((a) => a.active === true)
+  if (active.length !== 1)
     return { refuse: 'user_active', message: 'Frontmost app is unknown; refusing input.' }
   ctx.frontmost = active[0].pid === ctx.observation?.pid
   if (ctx.frontmost && !takeover)
@@ -173,14 +172,13 @@ export async function frontmostGate(ctx: GateContext): Promise<Refusal | undefin
 export const dispatchGates: Gate[] = [
   frontmostGate,
   async (ctx) => {
-    const key = confirmationKey(
-      ctx.app,
-      ctx.step,
-      ctx.target,
-      confirmationLocation(ctx.target, ctx.observation),
-    )
+    const refusal = confirmRefusal(ctx.app, ctx.step, ctx.target, ctx.observation)
+    const key = refusal.key
     ctx.confirmation = key
-    if (ctx.session.confirmed.includes(key)) return undefined
+    if (hasConfirmation(ctx.session, key)) {
+      ctx.confirmationUsed = true
+      return undefined
+    }
     let risky = consequential(ctx.step, ctx.target).hit
     const classify = ctx.host.want(ClassifyApi)
     if (!risky && classify) {
@@ -215,26 +213,7 @@ export const dispatchGates: Gate[] = [
         return { refuse: 'risk_unavailable', message: `Risk check failed: ${message(error)}` }
       }
     }
-    if (risky)
-      return {
-        refuse: 'confirm_required',
-        message: 'The user must confirm this exact action.',
-        key,
-        window: ctx.observation?.title ?? '',
-        label:
-          ctx.target?.label ??
-          (ctx.step.kind === 'menu' ? ctx.step.path.join(' / ') : ctx.step.kind),
-        payload: (ctx.step.kind === 'type'
-          ? ctx.step.text
-          : ctx.step.kind === 'set_value'
-            ? ctx.step.value
-            : ctx.step.kind === 'key'
-              ? [...(ctx.step.modifiers ?? []), ctx.step.key].join('+')
-              : ctx.step.kind === 'menu'
-                ? ctx.step.path.join(' / ')
-                : ''
-        ).slice(0, 200),
-      }
+    if (risky) return refusal
     return undefined
   },
   (ctx) =>
@@ -265,19 +244,16 @@ export async function resolveIdentity(
   app: string,
   signal?: AbortSignal,
 ): Promise<Identity | undefined> {
-  const listed = await driver.call('list_apps', {}, signal)
-  const apps = listed.structured?.apps
-  const matches = (Array.isArray(apps) ? apps : [])
-    .map(object)
-    .filter(
-      (a) =>
-        typeof a.name === 'string' &&
-        matchesApp(
-          { name: a.name, bundle: typeof a.bundle_id === 'string' ? a.bundle_id : undefined },
-          app,
-        ),
-    )
-  if (!listed.ok || matches.length !== 1) return undefined
+  const { apps } = await listApps(driver, signal)
+  const matches = apps.filter(
+    (a) =>
+      typeof a.name === 'string' &&
+      matchesApp(
+        { name: a.name, bundle: typeof a.bundle_id === 'string' ? a.bundle_id : undefined },
+        app,
+      ),
+  )
+  if (matches.length !== 1) return undefined
   return {
     name: matches[0].name as string,
     ...(typeof matches[0].bundle_id === 'string' ? { bundle: matches[0].bundle_id } : {}),
@@ -288,4 +264,39 @@ export function readConsent(identity: Identity, grants: Session['grants']) {
   return denyList.some((name) => matchesApp(identity, name))
     ? canonicalConsent(identity, grants)
     : 'granted'
+}
+
+export async function listApps(driver: Driver, signal?: AbortSignal) {
+  const reply = await driver.call('list_apps', {}, signal)
+  const apps = reply.structured?.apps
+  return { reply, apps: reply.ok && Array.isArray(apps) ? apps.map(object) : [] }
+}
+
+export function confirmRefusal(
+  app: string,
+  step: Step,
+  target?: Element,
+  observation?: Observation,
+) {
+  const payload =
+    step.kind === 'type'
+      ? step.text
+      : step.kind === 'set_value'
+        ? step.value
+        : step.kind === 'key'
+          ? [...(step.modifiers ?? []), step.key].join('+')
+          : step.kind === 'menu'
+            ? step.path.join(' / ')
+            : ''
+  return {
+    refuse: 'confirm_required',
+    message: 'The user must confirm this exact action.',
+    key: confirmationKey(app, step, target, confirmationLocation(target, observation)),
+    window: observation?.title ?? '',
+    label: target?.label ?? (step.kind === 'menu' ? step.path.join(' / ') : step.kind),
+    payload:
+      consequential(step, target).reason === 'Sensitive field'
+        ? `••• (${payload.length} chars)`
+        : payload.slice(0, 200),
+  }
 }

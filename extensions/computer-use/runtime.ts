@@ -1,17 +1,10 @@
-import { Type } from '@earendil-works/pi-ai'
-import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import type { ToolExecutionApi } from '@earendil-works/pi-durable'
-import { Profile } from '../subagents/api.ts'
-import { normalizeArguments } from './policy.ts'
-import { untrusted } from './content.ts'
-import type { JsonValue } from '@earendil-works/chord'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { createDriver } from './driver.ts'
-import { runGoal } from './jev.ts'
+import type { runGoal } from './jev.ts'
 import type { Driver, Observation } from './types.ts'
-import { readSession, updateSession } from './session.ts'
-import * as task from './task.ts'
+import { result, message, anchored, ObservationUnavailable } from './tool-helpers.ts'
+import { isStopped } from './session.ts'
 
 export type Settings = {
   driverVersion?: string
@@ -25,50 +18,6 @@ export async function settings(host: ExtensionHost): Promise<Settings> {
     ...(user.computerUse as Settings | undefined),
     ...(project.computerUse as Settings | undefined),
   }
-}
-export const json = (value: unknown): JsonValue => JSON.parse(JSON.stringify(value)) as JsonValue
-export const result = (value: unknown) => ({
-  output: [{ type: 'text' as const, text: untrusted(value) }],
-  structuredOutput: json(value),
-})
-export const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
-// Keep the original result (including its first block) intact; grounding always comes last.
-export async function anchored<T extends { output: { type: string }[] }>(
-  host: ExtensionHost,
-  conversation: number,
-  value: T,
-) {
-  const state = (await readSession(host, conversation)).task
-  return {
-    ...value,
-    output: [
-      ...value.output,
-      {
-        type: 'text' as const,
-        text: state
-          ? task.anchor(state)
-          : "No active task: call computer_task start with the user's words before acting.",
-      },
-    ],
-  }
-}
-// Durable document overlays are proxies, not structured-cloneable plain objects.
-export const plainTask = (state: task.TaskState) =>
-  JSON.parse(JSON.stringify(state)) as task.TaskState
-export async function changeTask(
-  host: ExtensionHost,
-  conversation: number,
-  change: (state: task.TaskState) => task.TaskState,
-) {
-  await updateSession(host, conversation, (doc) => {
-    if (doc.task) doc.task = change(plainTask(doc.task))
-  })
-}
-export function activatePending(state: task.TaskState) {
-  const firstPending = state.subgoals.find((s) => s.status === 'pending')
-  return !state.subgoals.some((s) => s.status === 'active') && firstPending
-    ? task.activate(state, firstPending.id, Date.now())
-    : state
 }
 export type Active = {
   stopped: boolean
@@ -141,6 +90,8 @@ export async function setup<T extends { output: { type: string }[] }>(
   conversation: number,
   work: (driver: Driver) => Promise<T>,
 ) {
+  if (await isStopped(host, conversation))
+    return anchored(host, conversation, result({ status: 'stopped' }))
   return anchored(host, conversation, await setupWork(host, work))
 }
 export async function setupWork<T>(host: ExtensionHost, work: (driver: Driver) => Promise<T>) {
@@ -165,34 +116,3 @@ export async function setupWork<T>(host: ExtensionHost, work: (driver: Driver) =
 }
 export const cacheKey = (conversation: number, app: string) =>
   `${conversation}:${app.toLowerCase()}`
-export const object = (value: JsonValue | undefined): Record<string, JsonValue> =>
-  value && typeof value === 'object' && !Array.isArray(value) ? value : {}
-
-export class ObservationUnavailable extends Error {
-  status: string
-  constructor(status: string, reason: string) {
-    super(reason)
-    this.status = status
-  }
-}
-
-export const windowSchema = Type.Optional(Type.Union([Type.String(), Type.Integer()]))
-
-export const predicates = Type.Array(Type.Record(Type.String(), Type.Any()))
-
-export function prepare(raw: unknown) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return normalizeArguments(raw)
-  const args = raw as Record<string, unknown>
-  return {
-    ...args,
-    ...(Array.isArray(args.actions) ? { actions: args.actions.map(normalizeArguments) } : {}),
-  }
-}
-
-export async function operatorOnly(host: ExtensionHost, api: ToolExecutionApi) {
-  await api.agent(context)
-  const profile = await host.harness().snapshot(Profile, api.conversationId, context)
-  return profile?.definition === 'computer-operator'
-    ? undefined
-    : result({ status: 'operator_required', message: 'delegate to the computer-operator agent' })
-}

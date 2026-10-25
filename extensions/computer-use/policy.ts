@@ -80,6 +80,12 @@ function modifier(key: string): string {
   )
 }
 
+const labelWords = (text: string) =>
+  text
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1 $2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replaceAll('_', ' ')
+
 export function consequential(
   step: Step,
   target: Element | undefined,
@@ -87,25 +93,42 @@ export function consequential(
 ): { hit: boolean; reason?: string } {
   if (['click', 'double_click', 'right_click'].includes(step.kind) && !target?.label?.trim())
     return { hit: true, reason: 'Unlabelled click' }
+  if (
+    (step.kind === 'type' || step.kind === 'set_value') &&
+    /password|passcode|secret|token/i.test(labelWords(target?.label ?? ''))
+  )
+    return { hit: true, reason: 'Sensitive field' }
   if (step.kind === 'type' && /[\r\n]/.test(step.text))
     return { hit: true, reason: 'Text may submit a form' }
   const label = [
     target?.label ?? '',
     ...(menuPath ?? (step.kind === 'menu' ? step.path : [])),
   ].join(' / ')
-  const match = consequentialWords.exec(label)
+  const match = consequentialWords.exec(labelWords(label))
   if (match) return { hit: true, reason: `Consequential label: ${match[0]}` }
-  if (
-    (step.kind === 'type' || step.kind === 'set_value') &&
-    /password|passcode|secret|token/i.test(target?.label ?? '')
-  ) {
-    return { hit: true, reason: 'Sensitive field' }
-  }
   if (step.kind === 'key') {
     const parts = step.key.toLowerCase().split('+')
     const key = parts.pop()!
     const mods = [...(step.modifiers ?? []), ...parts].map(modifier)
-    if (['enter', 'return', 'space', 'spacebar', ' '].includes(key))
+    if (
+      [
+        'enter',
+        'return',
+        'space',
+        'spacebar',
+        ' ',
+        'kp_enter',
+        'kp_return',
+        'keypad_enter',
+        'keypad enter',
+        'keypadenter',
+        'keypadreturn',
+        'keypad_return',
+        'keypad return',
+        '\n',
+        '\r',
+      ].includes(key)
+    )
       return { hit: true, reason: 'Committing key' }
     if (
       mods.includes('cmd') &&
@@ -200,9 +223,20 @@ export function normalizeArguments(raw: unknown): unknown {
 export function hitTest(step: Step, observation: Observation): Element | undefined {
   if (!('x' in step) || step.x === undefined || step.y === undefined) return undefined
   const { capture, bounds } = observation
-  if (!capture || !bounds || capture.scale <= 0) return undefined
-  const x = bounds.x + step.x / capture.scale
-  const y = bounds.y + step.y / capture.scale
+  if (!capture || !bounds || capture.scale <= 0 || bounds.w <= 0 || bounds.h <= 0) return undefined
+  const sx = capture.width / bounds.w
+  const sy = capture.height / bounds.h
+  if (
+    ![sx, sy, capture.scale].every(Number.isFinite) ||
+    sx <= 0 ||
+    sy <= 0 ||
+    Math.abs(sx / capture.scale - 1) > 0.02 ||
+    Math.abs(sy / capture.scale - 1) > 0.02 ||
+    Math.abs(sx / sy - 1) > 0.02
+  )
+    return undefined
+  const x = bounds.x + step.x / sx
+  const y = bounds.y + step.y / sy
   return observation.elements
     .filter((e) => {
       const f = e.frame
@@ -212,10 +246,7 @@ export function hitTest(step: Step, observation: Observation): Element | undefin
 }
 
 export function effectiveLabel(element: Element, observation: Observation): string {
-  const own = [element.label, element.identifier, element.help, element.description].find((s) =>
-    s?.trim(),
-  )
-  if (own) return own
+  if (element.label?.trim()) return element.label
   const descendants = new Set([element.index])
   const text: string[] = []
   for (let depth = 0; depth < 12 && text.join(' ').length < 500; depth++) {
@@ -228,7 +259,11 @@ export function effectiveLabel(element: Element, observation: Observation): stri
     }
     if (!added) break
   }
-  return text.join(' ').slice(0, 500)
+  return labelWords(
+    [element.identifier, element.help, element.description, text.join(' ').slice(0, 500)]
+      .filter(Boolean)
+      .join(' '),
+  ).trim()
 }
 
 export function stepTarget(step: Step, observation: Observation): Element | undefined {

@@ -1,27 +1,18 @@
-import {
-  ObservationUnavailable,
-  json,
-  result,
-  plainTask,
-  runtime,
-  setup,
-  cacheKey,
-  object,
-  windowSchema,
-  prepare,
-} from './runtime.ts'
+import { ObservationUnavailable, json, result, plainTask, object } from './tool-helpers.ts'
+import { runtime, setup, cacheKey } from './runtime.ts'
+import { windowSchema, prepare } from './schemas.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import { resizeImage } from '@earendil-works/pi-coding-agent'
 import { defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { parseObservation, ancestry } from './observation.ts'
+import { parseObservation, ancestry } from './parse-observation.ts'
 import type { Driver, Observation } from './types.ts'
 import { updateSession } from './session.ts'
 import * as task from './task.ts'
 import { untrusted } from './content.ts'
-import { readSession } from './session.ts'
-import { allGrants, resolveIdentity, readConsent } from './gates.ts'
+import { readSession, isStopped } from './session.ts'
+import { allGrants, resolveIdentity, readConsent, listApps } from './gates.ts'
 
 export async function windowFor(
   driver: Driver,
@@ -160,6 +151,8 @@ export function observeTool(host: ExtensionHost) {
       zoom: Type.Optional(Type.Tuple([Type.Number(), Type.Number(), Type.Number(), Type.Number()])),
     }),
     async execute(args, api, ctx) {
+      if (await isStopped(host, api.conversationId, { signal: ctx.abortSignal }))
+        return result({ status: 'stopped' })
       return setup(host, api.conversationId, async (driver) => {
         const state = runtime(host)
         if (state.busy) return result({ status: 'busy' })
@@ -181,11 +174,9 @@ export function observeTool(host: ExtensionHost) {
           }
           if (args.window === undefined)
             return result(
-              await driver.call(
-                args.app ? 'list_windows' : 'list_apps',
-                args.app ? { app: args.app } : {},
-                ctx.abortSignal,
-              ),
+              args.app
+                ? await driver.call('list_windows', { app: args.app }, ctx.abortSignal)
+                : (await listApps(driver, ctx.abortSignal)).reply,
             )
           if (!args.app)
             return result({

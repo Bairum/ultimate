@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createDriver } from '../extensions/computer-use/driver.ts'
-import { parseObservation } from '../extensions/computer-use/observation.ts'
+import { parseObservation } from '../extensions/computer-use/parse-observation.ts'
 import { createFakeDriver } from './computer-use-fake-driver.ts'
 import * as driverModule from '../extensions/computer-use/driver.ts'
 import { hardStop } from '../extensions/computer-use/actions.ts'
@@ -224,6 +224,7 @@ it('hard-stops directly without spawning a Driver when no connection exists', as
       return resources.get(key)
     },
     onClose: () => {},
+    conversations: () => [],
     harness: () => ({
       commit: async (change: (tx: unknown) => Promise<void>) =>
         change({ doc: async () => session }),

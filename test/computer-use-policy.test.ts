@@ -175,3 +175,48 @@ it('uses descendant labels for pixel hits, confirms unlabelled clicks, and separ
     stepTarget(step, { ...observation, elements: [{ ...button, identifier: 'Delete' }] })?.label,
   ).toBe('Delete')
 })
+
+it('checks identifier, help, description and descendant text together, including camelCase and snake_case', () => {
+  const button = {
+    ...target,
+    label: '',
+    identifier: '_NS:42',
+    help: 'Helper text',
+    description: 'More context',
+  }
+  const view: Observation = {
+    app: 'App',
+    pid: 1,
+    windowId: 1,
+    title: '',
+    snapshot: 's1',
+    tree: '',
+    truncated: false,
+    elements: [
+      button,
+      { ...target, index: 2, parent: button.index, depth: 1, role: 'AXStaticText', label: 'Send' },
+    ],
+  }
+  const hit = stepTarget({ kind: 'click', element: button.token }, view)!
+  for (const text of ['NS:42', 'Helper text', 'More context', 'Send'])
+    expect(hit.label).toContain(text)
+  expect(consequential({ kind: 'click' }, hit).hit).toBe(true)
+  for (const label of ['sendButton', 'SENDButton', 'send_button'])
+    expect(consequential({ kind: 'click' }, { ...target, label }).hit).toBe(true)
+})
+
+it('confirms keypad and newline committing key aliases', () => {
+  for (const key of [
+    'kp_enter',
+    'kp_return',
+    'keypad_enter',
+    'keypad enter',
+    'keypadenter',
+    'keypadreturn',
+    'keypad_return',
+    'keypad return',
+    '\n',
+    '\r',
+  ])
+    expect(consequential({ kind: 'key', key }, undefined).hit).toBe(true)
+})

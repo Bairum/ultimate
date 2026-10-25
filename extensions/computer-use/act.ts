@@ -1,31 +1,19 @@
-import {
-  windowSchema,
-  predicates,
-  prepare,
-  settings,
-  json,
-  result,
-  anchored,
-  plainTask,
-  changeTask,
-  runtime,
-  driverFor,
-  setup,
-  cacheKey,
-} from './runtime.ts'
+import { windowSchema, predicates, prepare } from './schemas.ts'
+import { settings, runtime, driverFor, setup, cacheKey } from './runtime.ts'
+import { json, result, anchored, plainTask, changeTask } from './tool-helpers.ts'
 import type { JsonValue } from '@earendil-works/chord'
 import { Type } from '@earendil-works/pi-ai'
 import { defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ClassifyApi } from '../classify/api.ts'
-import { confirmationKey, stepTarget } from './policy.ts'
+import { stepTarget } from './policy.ts'
 import { redactor } from './content.ts'
-import { path, confirmationLocation } from './observation.ts'
-import { ObservationUnavailable } from './runtime.ts'
+import { path } from './parse-observation.ts'
+import { ObservationUnavailable } from './tool-helpers.ts'
 import { runGoal } from './jev.ts'
 import type { Candidate } from './jev.ts'
 import type { Driver, Goal, Observation, Predicate, Step, StepOutcome, Verdict } from './types.ts'
-import { readSession, updateSession } from './session.ts'
+import { readSession, updateSession, isStopped, hasConfirmation } from './session.ts'
 import type { Active } from './runtime.ts'
 import { observeWindow, observedOutput } from './observe.ts'
 import {
@@ -39,6 +27,8 @@ import {
   preflightGates,
   frontmostGate,
   resolveIdentity,
+  listApps,
+  confirmRefusal,
 } from './gates.ts'
 import type { GateContext, Refusal } from './gates.ts'
 import * as task from './task.ts'
@@ -71,6 +61,7 @@ export async function pending(
       session.pending.push({
         kind: refusal.refuse === 'consent_required' ? 'consent' : 'confirm',
         app,
+        ...(refusal.key && session.task ? { task: session.task.spec.id } : {}),
         ...(step === undefined ? {} : { step }),
         ...(refusal.key ? { key: refusal.key } : {}),
         ...(refusal.payload === undefined ? {} : { payload: refusal.payload }),
@@ -177,6 +168,7 @@ export async function act(
     // Do not contact the Driver (including reads) until stopped and consent gates passed.
     const initial: GateContext = {
       session,
+      conversation,
       grants: await allGrants(host, conversation, session),
       params: values,
       app: args.app,
@@ -221,12 +213,7 @@ export async function act(
       if (!identity)
         throw new ObservationUnavailable('app_identity', 'Could not resolve the app identity.')
       const consent = canonicalConsent(identity, await allGrants(host, conversation, latest))
-      if (
-        latest.stopped ||
-        (await readSession(host, 1)).stopped ||
-        active.stopped ||
-        signal.aborted
-      )
+      if (await isStopped(host, conversation, { session: latest, active, signal }))
         throw new ObservationUnavailable('stopped', 'Computer use is stopped.')
       if (args.goal && consent !== 'granted')
         throw new ObservationUnavailable(
@@ -278,7 +265,7 @@ export async function act(
             app: observation!.app,
             ...(args.criterion ? { criterion: args.criterion } : {}),
           }
-          linkedProgress = task.linkedEvidence(state, evidence)
+          linkedProgress = task.predicateEvidence(state, evidence)
           return task.addEvidence(state, subgoal!, evidence)
         })
       return verified
@@ -418,19 +405,12 @@ export async function act(
         const takeover =
           args.foreground && latest.takeovers.some((t) => matchesApp(ctx.identity!, t.app))
         const stillTakenOver = !focusRefusal && ((!ctx.frontmost && !args.foreground) || takeover)
-        const projectStopped = (await readSession(host, 1)).stopped
-        if (
-          active.stopped ||
-          latest.stopped ||
-          projectStopped ||
-          signal.aborted ||
-          !stillConsented ||
-          !stillTakenOver
-        ) {
+        const stopped = await isStopped(host, conversation, { session: latest, active, signal })
+        if (stopped || !stillConsented || !stillTakenOver) {
           await updateSession(host, conversation, (doc) => {
             doc.journal.findLast((j) => j.call === call && j.step === index)!.status = 'refused'
           })
-          return active.stopped || latest.stopped || projectStopped || signal.aborted
+          return stopped
             ? { status: 'not_run' }
             : {
                 status: 'refused',
@@ -440,8 +420,16 @@ export async function act(
                   : 'Consent was revoked before dispatch.',
               }
         }
+        if (ctx.confirmationUsed && !hasConfirmation(latest, ctx.confirmation!)) {
+          const refusal = confirmRefusal(ctx.app, next, ctx.target, observation)
+          await pending(host, conversation, ctx.app, refusal, count)
+          await updateSession(host, conversation, (doc) => {
+            doc.journal.findLast((j) => j.call === call && j.step === index)!.status = 'refused'
+          })
+          return { status: 'refused', code: refusal.refuse, message: refusal.message }
+        }
         await updateSession(host, conversation, (doc) => {
-          doc.confirmed = doc.confirmed.filter((key) => key !== ctx.confirmation)
+          doc.confirmed = doc.confirmed.filter((c) => c.key !== ctx.confirmation)
           doc.grants = consumeCanonical(ctx.identity!, doc.grants)
         })
         active.inFlight = true
@@ -542,22 +530,9 @@ export async function act(
           const next = candidateStep(c)
           const target = stepTarget(next, observation!)
           const app = observation!.app
-          const key = confirmationKey(app, next, target, confirmationLocation(target, observation))
-          if ((await readSession(host, conversation)).confirmed.includes(key)) return true
-          await pending(
-            host,
-            conversation,
-            app,
-            {
-              refuse: 'confirm_required',
-              message: 'The user must confirm this exact action.',
-              key,
-              window: observation!.title,
-              label: target?.label ?? next.kind,
-              payload: (next.kind === 'set_value' ? next.value : '').slice(0, 200),
-            },
-            count,
-          )
+          const refusal = confirmRefusal(app, next, target, observation)
+          if (hasConfirmation(await readSession(host, conversation), refusal.key)) return true
+          await pending(host, conversation, app, refusal, count)
           return false
         },
         stopped: () => active.stopped,
@@ -729,6 +704,8 @@ export function appsTool(host: ExtensionHost) {
     prepareArguments: (raw) => prepare(raw) as { launch?: string },
     parameters: Type.Object({ launch: Type.Optional(Type.String()) }),
     async execute(args, api, ctx) {
+      if (await isStopped(host, api.conversationId, { signal: ctx.abortSignal }))
+        return result({ status: 'stopped' })
       if (args.launch) {
         if (
           (await readSession(host, api.conversationId)).journal.some((j) => j.call === api.callId)
@@ -751,9 +728,9 @@ export function appsTool(host: ExtensionHost) {
           )
       }
       return setup(host, api.conversationId, async (driver) => {
-        if (!args.launch) return result(await driver.call('list_apps', {}))
+        if (!args.launch) return result((await listApps(driver, ctx.abortSignal)).reply)
         const session = await readSession(host, api.conversationId)
-        if (session.stopped || (await readSession(host, 1)).stopped)
+        if (await isStopped(host, api.conversationId, { session, signal: ctx.abortSignal }))
           return result({ status: 'stopped' })
         const identity = await resolveIdentity(driver, args.launch, ctx.abortSignal)
         if (!identity) return result({ status: 'app_identity' })
@@ -791,10 +768,13 @@ export function appsTool(host: ExtensionHost) {
             })
           })
           const latest = await readSession(host, api.conversationId)
+          const stopped = await isStopped(host, api.conversationId, {
+            session: latest,
+            active,
+            signal: ctx.abortSignal,
+          })
           if (
-            active.stopped ||
-            latest.stopped ||
-            (await readSession(host, 1)).stopped ||
+            stopped ||
             canonicalConsent(identity, await allGrants(host, api.conversationId, latest)) !==
               'granted'
           ) {
@@ -802,7 +782,7 @@ export function appsTool(host: ExtensionHost) {
               doc.journal.findLast((j) => j.call === api.callId)!.status = 'refused'
             })
             return result({
-              status: active.stopped || latest.stopped ? 'stopped' : 'consent_required',
+              status: stopped ? 'stopped' : 'consent_required',
             })
           }
           await updateSession(host, api.conversationId, (doc) => {

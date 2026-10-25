@@ -67,8 +67,9 @@ function ask(on_task = 0.9, progressing = 0.9): ClassifyService['ask'] {
   }))
 }
 const evidence = {
-  kind: 'capture' as const,
-  captureId: 'P1',
+  kind: 'verify' as const,
+  verdict: 'satisfied' as const,
+  predicates: [{ file: 'report.pdf' }],
   ref: 'J1',
   app: 'Numbers',
   criterion: 'C1',

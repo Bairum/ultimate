@@ -178,15 +178,21 @@ export function markInterrupted(
   log(next, 'interrupted', event, now)
   return next
 }
+/** Only matching Driver predicates prove objective progress; a model-selected tag never does. */
+export function predicateEvidence(state: TaskState, evidence: Evidence): boolean {
+  return (
+    evidence.kind === 'verify' &&
+    evidence.verdict === 'satisfied' &&
+    state.spec.criteria.some(
+      (c) => c.check !== 'evidence' && isDeepStrictEqual(c.check, evidence.predicates),
+    )
+  )
+}
 export function linkedEvidence(state: TaskState, evidence: Evidence): boolean {
   if (evidence.kind === 'verify' && evidence.verdict !== 'satisfied') return false
-  return state.spec.criteria.some(
-    (c) =>
-      evidence.criterion === c.id ||
-      (c.check !== 'evidence' &&
-        evidence.kind === 'verify' &&
-        evidence.verdict === 'satisfied' &&
-        isDeepStrictEqual(c.check, evidence.predicates)),
+  return (
+    predicateEvidence(state, evidence) ||
+    state.spec.criteria.some((c) => c.check === 'evidence' && c.id === evidence.criterion)
   )
 }
 /** Driver results only: do not accept Evidence from tool/model arguments. */
