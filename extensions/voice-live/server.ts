@@ -16,7 +16,7 @@ import { Messages, MessagesApi } from '../messages/api.ts'
 import type { Question } from '../messages/api.ts'
 import { Standing, SubagentsApi } from '../subagents/api.ts'
 import { EndAction, HeardAction, LogAction, StartAction, StatusAction } from './refs.ts'
-import type { VoiceLine, VoiceSession } from './refs.ts'
+import type { VoiceAnswer, VoiceLine, VoiceSession } from './refs.ts'
 
 const SECRET = 'OPENAI_API_KEY'
 const NO_KEY = `Live voice needs an OpenAI API key: add ${SECRET} in ⌘K → Secrets`
@@ -60,7 +60,10 @@ const Forwarded = defineDoc<{ scheduled: boolean }>({
   initial: () => ({ scheduled: false }),
 })
 export const userActions = ['status', 'start', 'heard', 'log', 'end']
-const terminal = { status: 'terminal', outcome: { status: 'completed', result: null } } as const
+const terminal = {
+  status: 'terminal',
+  outcome: { status: 'completed', result: null },
+} as const
 
 async function voiceId(host: ExtensionHost) {
   const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context)
@@ -117,21 +120,30 @@ function questionsText(questions: Question[]) {
     .join('\n\n')
 }
 
+/** Both writers share one request id, so the first write's time is the one kept. */
 const danielLine = (input: { text: string }): VoiceLine => ({
   role: 'daniel',
   text: input.text,
   forwarded: true,
+  at: Date.now(),
 })
 
 /** A stable input request id makes answer delivery safe if the task resumes after submitting it. */
-async function answerVoice(host: ExtensionHost, voice: number, line: number, text: string) {
+async function answerVoice(
+  host: ExtensionHost,
+  voice: number,
+  line: number,
+  text: string,
+  source?: VoiceAnswer['source'],
+) {
   const conversation = (await host.harness().conversation(voice as ConversationId, context))!
+  const data: VoiceAnswer = { text, re: line, ...(source ? { source } : {}) }
   await conversation.submit(
     {
       type: 'input',
       requestId: `voice:answer:${line}`,
       whenBusy: 'steer',
-      entry: { kind: 'voice.answer', data: { text, re: line } },
+      entry: { kind: 'voice.answer', data },
       content: `@ultimate answered (to forwarded line ${line}):\n${text}`,
     },
     context,
@@ -235,7 +247,10 @@ export function answerTask(host: ExtensionHost) {
               type: 'input',
               requestId: `voice:${line}`,
               whenBusy: 'steer',
-              entry: { kind: 'voice.utterance', data: { text: input.text, line } },
+              entry: {
+                kind: 'voice.utterance',
+                data: { text: input.text, line },
+              },
               content: `Daniel, by voice (live transcript, may contain mistakes):\n${input.text}`,
             },
             ctx,
@@ -310,7 +325,16 @@ export function answerTask(host: ExtensionHost) {
             ? `${sent.text}${sent.questions?.length ? `\n\nQuestions:\n${questionsText(sent.questions)}` : ''}`
             : plain
         }, ctx)
-        await answerVoice(host, input.voice, line, source || 'Ultimate finished without an answer.')
+        await answerVoice(
+          host,
+          input.voice,
+          line,
+          source || 'Ultimate finished without an answer.',
+          {
+            conversation: main,
+            entry: settled.answer,
+          },
+        )
         await runtime.commit(() => terminal, ctx)
       },
     },
@@ -347,7 +371,10 @@ export const actions = {
       }))
     const response = await fetch('https://api.openai.com/v1/live/sessions', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({
         session: {
           model: 'gpt-live-1',
@@ -486,7 +513,10 @@ export default (host: ExtensionHost) => {
             },
             `voice:say:${api.taskId}`,
           )
-          return { output: [{ type: 'text', text: 'Spoken.' }], control: { terminate: true } }
+          return {
+            output: [{ type: 'text', text: 'Spoken.' }],
+            control: { terminate: true },
+          }
         },
       }),
       defineTool({
@@ -534,7 +564,10 @@ export default (host: ExtensionHost) => {
           )
           return {
             output: [
-              { type: 'text', text: 'Passed to @ultimate. Its answer will arrive as input.' },
+              {
+                type: 'text',
+                text: 'Passed to @ultimate. Its answer will arrive as input.',
+              },
             ],
           }
         },
@@ -556,7 +589,10 @@ export default (host: ExtensionHost) => {
             { role: 'note', text },
             `voice:note:${api.taskId}`,
           )
-          return { output: [{ type: 'text', text: 'Noted.' }], control: { terminate: true } }
+          return {
+            output: [{ type: 'text', text: 'Noted.' }],
+            control: { terminate: true },
+          }
         },
       }),
     ],

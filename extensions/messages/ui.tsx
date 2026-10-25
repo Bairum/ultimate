@@ -13,5 +13,5 @@ export {
 export type { ConversationState } from './data.tsx'
 export { MessagesDoc, MessageSent } from './refs.ts'
 export { accentOf } from './accent.tsx'
-export { Address, useAccentOf } from './cards.tsx'
+export { Address, Body, Bubble, useAccentOf } from './cards.tsx'
 export { MessageAnswers } from './points.tsx'

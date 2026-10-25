@@ -1,7 +1,7 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
-  ArrowRightIcon,
   AudioLinesIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   LoaderCircleIcon,
   MicIcon,
@@ -26,8 +26,10 @@ import {
   formatKeys,
   formatTime,
   provide,
+  Provided,
   useAction,
   useConversation,
+  useConversations,
   useDocOf,
   useEvent,
   useNow,
@@ -38,13 +40,15 @@ import {
   UserView,
 } from '@/sdk'
 import type { EntryRenderer, UltimateActions } from '@/sdk'
+import { ConversationPhase } from '../conversations/ui.tsx'
+import { Body, Bubble } from '../messages/ui.tsx'
 import { SideChatsDoc, useSideChatFront } from '../side-chat/ui.tsx'
 import { UnderUltimate, Unlisted } from '../sidebar/ui.tsx'
 import { openAgentSource, StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import * as live from './live.tsx'
 import type { VoiceMode } from './live.tsx'
 import { StatusAction } from './refs.ts'
-import type { VoiceLine, VoiceSession, VoiceUtterance } from './refs.ts'
+import type { VoiceAnswer, VoiceLine, VoiceSession, VoiceUtterance } from './refs.ts'
 
 const KEYS = 'alt+v'
 const useMode = () => useSyncExternalStore(live.subscribe, live.voiceMode)
@@ -497,101 +501,234 @@ function Stage() {
 
 // ---- Voice's composer: the controls, since Daniel talks ------------------------------------------------------------
 
-/** In place of Voice's composer: what the relay is doing, Mute and End; or the way to start it again. */
+/**
+ * Where the pipeline is, read from the relay and the transcript: who has the floor, whether Voice is deciding, which
+ * request @ultimate works on, an answer on its way to speech. A request in flight outranks a quiet session.
+ */
+type Step =
+  | {
+      step: 'off' | 'connecting' | 'ending' | 'paused' | 'waiting' | 'muted' | 'listening'
+    }
+  | { step: 'hearing' | 'speaking' | 'deciding' | 'answer' }
+  | { step: 'working'; request: string; since?: number }
+
+function useStep(mode: VoiceMode): Step {
+  const deciding = useConversation((conversation) => conversation.busy)
+  const transcript = useTranscript()
+  if (mode.phase === 'off') return { step: 'off' }
+  if (mode.phase === 'starting') return { step: 'connecting' }
+  if (mode.phase === 'ending') return { step: 'ending' }
+  const settled = new Map<number, { answered: boolean; spoken: boolean; failed: boolean }>()
+  for (const entry of transcript) {
+    const re = (entry.data as { re?: number } | undefined)?.re
+    if (re === undefined) continue
+    const state = settled.get(re) ?? {
+      answered: false,
+      spoken: false,
+      failed: false,
+    }
+    if (entry.kind === 'voice.answer') state.answered = true
+    const role = entry.kind === 'voice.line' && (entry.data as unknown as VoiceLine).role
+    if (role === 'ultimate') state.spoken = true
+    if (role === 'notice') state.failed = true
+    settled.set(re, state)
+  }
+  const open = transcript.findLast(
+    (entry) =>
+      entry.kind === 'voice.line' &&
+      (entry.data as unknown as VoiceLine).forwarded &&
+      !settled.get(entry.id)?.answered &&
+      !settled.get(entry.id)?.failed,
+  )
+  const unspoken = [...settled.values()].some((state) => state.answered && !state.spoken)
+  if (mode.phase === 'paused') return { step: mode.waiting ? 'waiting' : 'paused' }
+  if (mode.floor === 'daniel') return { step: 'hearing' }
+  if (mode.floor === 'voice') return { step: 'speaking' }
+  if (unspoken) return { step: 'answer' }
+  if (deciding) return { step: 'deciding' }
+  if (open) {
+    const line = open.data as unknown as VoiceLine
+    return { step: 'working', request: line.text, since: line.at }
+  }
+  return { step: mode.muted ? 'muted' : 'listening' }
+}
+
+/** The step in large words and one quiet line under it, readable from across the room. */
+function StepText({ step, mode }: { step: Step; mode: VoiceMode }) {
+  const { main } = useIds()
+  const busy = useConversations().find((conversation) => conversation.id === main)?.busy
+  const now = useNow(1000, step.step === 'working' || mode.phase === 'live')
+  const session =
+    mode.phase === 'live' && mode.since !== undefined ? clock(now - mode.since) : undefined
+  const [title, detail]: [ReactNode, ReactNode] =
+    step.step === 'off'
+      ? ['Voice is off', 'Start it to talk to @ultimate']
+      : step.step === 'connecting'
+        ? ['Connecting…', 'Opening the microphone and the voice session']
+        : step.step === 'ending'
+          ? ['Ending…', 'Closing the session']
+          : step.step === 'paused'
+            ? ['Listening paused', 'Closed after two quiet minutes · an answer wakes it']
+            : step.step === 'waiting'
+              ? ['Answer ready', 'Tap Hear it to hear it']
+              : step.step === 'hearing'
+                ? ['Hearing you…', 'Keep talking · a pause sends it']
+                : step.step === 'speaking'
+                  ? ['Speaking', 'Interrupt any time']
+                  : step.step === 'deciding'
+                    ? ['Thinking it over', 'Voice decides whether this goes to @ultimate']
+                    : step.step === 'answer'
+                      ? ['Answer ready', 'Putting it into words']
+                      : step.step === 'working'
+                        ? [
+                            <span className="flex min-w-0 items-baseline gap-2" key="working">
+                              <span className="shrink-0">@ultimate is on it</span>
+                              {step.since !== undefined && (
+                                <span className="font-mono text-[13px] font-normal text-muted-foreground tabular-nums">
+                                  {clock(now - step.since)}
+                                </span>
+                              )}
+                            </span>,
+                            <span className="flex min-w-0 items-center gap-1" key="request">
+                              <Provided input={busy ? main : undefined} point={ConversationPhase}>
+                                {(phase) =>
+                                  phase && (
+                                    <span className="shrink-0 text-brand">
+                                      {phase.word[0].toUpperCase() + phase.word.slice(1)} ·
+                                    </span>
+                                  )
+                                }
+                              </Provided>
+                              <span className="truncate">{step.request}</span>
+                            </span>,
+                          ]
+                        : step.step === 'muted'
+                          ? ['Muted', '@ultimate keeps working · unmute to talk']
+                          : ['Listening', 'Talk · requests go to @ultimate']
+  return (
+    <div className="min-w-0 flex-1" aria-live="polite" data-voice-step={step.step}>
+      <div className="flex min-w-0 items-baseline gap-2 text-[17px] leading-tight font-semibold sm:text-[19px]">
+        <span className="min-w-0 truncate">{title}</span>
+        {session && step.step !== 'working' && (
+          <span className="shrink-0 font-mono text-[11px] font-normal text-muted-foreground tabular-nums">
+            {session}
+          </span>
+        )}
+      </div>
+      <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{detail}</div>
+    </div>
+  )
+}
+
+/** The step's mark: the live level while Daniel talks, a calm spinner while something works, else the mic. */
+function StepMark({ step, mode }: { step: Step; mode: VoiceMode }) {
+  const busy = ['connecting', 'ending', 'deciding', 'working', 'answer'].includes(step.step)
+  const hot = mode.phase === 'live' && !mode.muted
+  return (
+    <span
+      className={cn(
+        'flex size-11 shrink-0 items-center justify-center rounded-full transition-colors',
+        busy
+          ? 'bg-brand/12 text-brand'
+          : step.step === 'speaking'
+            ? 'bg-brand/12 text-brand'
+            : hot
+              ? 'bg-error/12 text-error'
+              : 'bg-muted text-muted-foreground',
+      )}
+    >
+      {busy ? (
+        <LoaderCircleIcon className="size-5 motion-safe:animate-spin motion-safe:[animation-duration:1.6s]" />
+      ) : step.step === 'speaking' ? (
+        <Volume2Icon className="size-5" />
+      ) : mode.muted && mode.phase === 'live' ? (
+        <MicOffIcon className="size-5" />
+      ) : hot ? (
+        <Level bar="bg-error" className="h-5" />
+      ) : (
+        <MicIcon className="size-5" />
+      )}
+    </span>
+  )
+}
+
+/** In place of Voice's composer: what is happening right now, Mute and End; or the way to start it again. */
 function VoiceDock({ core }: { core: ReactNode }) {
   const id = useConversation((conversation) => conversation.id)
   const { voice } = useIds()
   const mode = useMode()
-  const now = useNow(1000, mode.phase === 'live')
+  const step = useStep(mode)
   if (id === undefined || id !== voice) return core
   const off = mode.phase === 'off'
-  const hot = mode.phase === 'live' && !mode.muted
   const asleep = mode.phase === 'paused'
   return (
     <div className="mx-auto w-full max-w-[46rem] px-3 pt-1 pb-3 sm:px-6" data-voice-live-dock>
       {mode.problem && (
-        <p className="pb-2 font-mono text-[11px] break-words text-error" role="alert">
-          {mode.problem}
+        <p
+          className="mb-2 flex items-start gap-1.5 rounded-md border border-error/30 bg-error/5 px-2.5 py-1.5 font-mono text-[11px] break-words text-error"
+          role="alert"
+        >
+          <CircleAlertIcon className="mt-px size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1">{mode.problem}</span>
+          <button
+            aria-label="Dismiss"
+            className="shrink-0 cursor-pointer rounded-sm hover:text-foreground"
+            onClick={live.clearProblem}
+            type="button"
+          >
+            <XIcon className="size-3.5" />
+          </button>
         </p>
       )}
       <div
         className={cn(
-          'flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors',
-          hot ? 'border-error/30 bg-error/5' : 'border-border bg-muted/20',
+          'flex flex-wrap items-center gap-x-3 gap-y-2.5 rounded-xl border px-3 py-3 transition-colors',
+          step.step === 'working' || step.step === 'answer' || step.step === 'waiting'
+            ? 'border-brand/35 bg-brand/5'
+            : 'border-border bg-muted/20',
         )}
       >
-        <span
-          className={cn(
-            'flex size-9 shrink-0 items-center justify-center rounded-full',
-            hot ? 'bg-error/15 text-error' : 'bg-muted text-muted-foreground',
-          )}
-        >
-          {mode.phase === 'starting' || mode.phase === 'ending' ? (
-            <LoaderCircleIcon className="size-4 motion-safe:animate-spin" />
-          ) : mode.muted ? (
-            <MicOffIcon className="size-4" />
-          ) : hot ? (
-            <Level bar="bg-error" className="h-4" />
-          ) : (
-            <MicIcon className="size-4" />
-          )}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className={cn('text-[13px] font-medium', hot && 'text-error')}>
-            {off ? 'Voice relay is off' : stateLabel(mode)}
-            {mode.phase === 'live' && mode.since !== undefined && (
-              <span className="ml-2 font-mono text-[11px] font-normal text-muted-foreground tabular-nums">
-                {clock(now - mode.since)}
-              </span>
-            )}
-          </div>
-          <div className="truncate font-mono text-[11px] text-muted-foreground">
-            {off
-              ? 'Start it to talk to @ultimate'
-              : asleep
-                ? mode.waiting
-                  ? 'An answer arrived · tap to hear it'
-                  : 'Closed after two quiet minutes · an answer wakes it'
-                : mode.muted
-                  ? '@ultimate keeps working · unmute to talk'
-                  : 'Talk · requests go straight to @ultimate'}
-          </div>
+        <div className="flex min-w-0 flex-[1_1_16rem] items-center gap-3">
+          <StepMark mode={mode} step={step} />
+          <StepText mode={mode} step={step} />
         </div>
-        {off || asleep ? (
-          <button
-            className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-brand/50 px-3 text-[13px] hover:border-brand focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-            onClick={() => void (off ? start() : live.open(mode.waiting))}
-            type="button"
-          >
-            <AudioLinesIcon className="size-4 text-brand" />
-            {off ? 'Start' : mode.waiting ? 'Hear it' : 'Resume'}
-          </button>
-        ) : (
-          <button
-            aria-pressed={mode.muted}
-            className={cn(
-              'flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-3 text-[13px] hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50',
-              mode.muted && 'border-warning/50 text-warning',
-            )}
-            disabled={mode.phase !== 'live'}
-            onClick={() => live.setMuted(!mode.muted)}
-            type="button"
-          >
-            {mode.muted ? <MicIcon className="size-4" /> : <MicOffIcon className="size-4" />}
-            {mode.muted ? 'Unmute' : 'Mute'}
-          </button>
-        )}
-        {!off && (
-          <button
-            aria-label="End voice relay"
-            className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg bg-error px-3 text-[13px] text-white hover:bg-error/90 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-            onClick={live.end}
-            type="button"
-          >
-            <PhoneOffIcon className="size-4" />
-            <span className="max-sm:hidden">End</span>
-          </button>
-        )}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {off || asleep ? (
+            <button
+              className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-brand/50 px-3 text-[13px] hover:border-brand focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+              onClick={() => void (off ? start() : live.open(mode.waiting))}
+              type="button"
+            >
+              <AudioLinesIcon className="size-4 text-brand" />
+              {off ? 'Start' : mode.waiting ? 'Hear it' : 'Resume'}
+            </button>
+          ) : (
+            <button
+              aria-pressed={mode.muted}
+              className={cn(
+                'flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-3 text-[13px] hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50',
+                mode.muted && 'border-warning/50 text-warning',
+              )}
+              disabled={mode.phase !== 'live'}
+              onClick={() => live.setMuted(!mode.muted)}
+              type="button"
+            >
+              {mode.muted ? <MicIcon className="size-4" /> : <MicOffIcon className="size-4" />}
+              {mode.muted ? 'Unmute' : 'Mute'}
+            </button>
+          )}
+          {!off && (
+            <button
+              aria-label="End voice relay"
+              className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg bg-error px-3 text-[13px] text-white hover:bg-error/90 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+              onClick={live.end}
+              type="button"
+            >
+              <PhoneOffIcon className="size-4" />
+              <span className="max-sm:hidden">End</span>
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -670,27 +807,21 @@ function useVoiceIds(): ReadonlySet<number> {
 // ---- transcript ----------------------------------------------------------------------------------------------------
 
 /**
- * A line of the relay. Daniel's words are turns of his; the request passed on to @ultimate is marked as such. Spoken
- * lines are prose under who spoke: @ultimate's answer with its source, the voice assistant's own words quieter.
+ * A line of the relay. Daniel's words are turns of his; a request passed on to @ultimate is one card that follows it
+ * to its answer, so the spoken answer and a failure notice for it live in that card. Other spoken lines are prose
+ * under who spoke: @ultimate's answer with its source, the voice assistant's own words quieter.
  */
 function LineRow({ entry }: { entry: EntryRecord }) {
   const line = entry.data as unknown as VoiceLine
   const actions = useUltimate()
   const mode = useMode()
   if (line.role === 'note') return null
+  if (line.role === 'daniel' && line.forwarded) return <RequestCard entry={entry} line={line} />
+  if ((line.role === 'ultimate' || line.role === 'notice') && line.re !== undefined) return null
   if (line.role === 'daniel')
     return (
-      <Message
-        className="mt-3 first:mt-0"
-        data-voice-line={line.forwarded ? 'forwarded' : 'daniel'}
-        from="user"
-      >
-        <MessageContent
-          className={cn(
-            line.forwarded && 'group-[.is-user]:border-brand/45 group-[.is-user]:bg-brand/5',
-          )}
-        >
-          {line.forwarded && <Forwarded id={entry.id} />}
+      <Message className="mt-3 first:mt-0" data-voice-line="daniel" from="user">
+        <MessageContent>
           <UserText text={line.text} />
         </MessageContent>
       </Message>
@@ -707,23 +838,20 @@ function LineRow({ entry }: { entry: EntryRecord }) {
     )
   if (line.role === 'live')
     return (
-      <div className="mt-3 flex gap-2.5 first:mt-0" data-voice-line="live">
-        <AudioLinesIcon className="mt-[3px] size-3.5 shrink-0 text-muted-foreground/60" />
-        <div className="min-w-0 flex-1">
-          <span className="font-mono text-[10.5px] text-muted-foreground/70">voice assistant</span>
-          <p className="text-[13px] leading-relaxed break-words text-muted-foreground">
-            {line.text}
-          </p>
-        </div>
+      <div className="mt-2 flex gap-2 first:mt-0" data-voice-line="live">
+        <AudioLinesIcon className="mt-[3px] size-3 shrink-0 text-muted-foreground/50" />
+        <p className="min-w-0 flex-1 text-[12.5px] leading-relaxed break-words text-muted-foreground/70">
+          {line.text}
+        </p>
       </div>
     )
+  // Voice's own words, not an answer to a request: small talk, an acknowledgement, a clarifying question.
   const source = line.source
   return (
-    <div className="mt-3 flex gap-2.5 first:mt-0" data-voice-line="ultimate">
-      <Volume2Icon className="mt-[3px] size-3.5 shrink-0 text-brand" />
+    <div className="mt-2 flex gap-2 first:mt-0" data-voice-line="ultimate">
+      <Volume2Icon className="mt-[3px] size-3 shrink-0 text-muted-foreground/60" />
       <div className="min-w-0 flex-1">
-        <span className="font-mono text-[10.5px] text-brand">@ultimate</span>
-        <p className="text-[14px] leading-relaxed break-words">{line.text}</p>
+        <p className="text-[13px] leading-relaxed break-words text-muted-foreground">{line.text}</p>
         {source && (
           <button
             className="mt-1 flex cursor-pointer items-center gap-1 font-mono text-[11px] text-muted-foreground hover:text-foreground"
@@ -749,36 +877,163 @@ function LineRow({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/** Where a request passed to @ultimate stands: sent and being worked on, answered, or not answered. */
-function Forwarded({ id }: { id: number }) {
-  const entries = useTranscript()
-  const reply = entries.find(
-    (e) => e.kind === 'voice.line' && (e.data as unknown as VoiceLine).re === id,
+/**
+ * A request passed to @ultimate, as @ultimate's message card: what Daniel asked on top, then @ultimate working on it
+ * (its phase, how long), then its answer. Folded, the answer is what Voice said aloud; unfolded, @ultimate's full
+ * answer, with a way to it in @ultimate's conversation. A notice instead of an answer marks it failed.
+ */
+function RequestCard({ entry, line }: { entry: EntryRecord; line: VoiceLine }) {
+  const transcript = useTranscript()
+  const { main } = useIds()
+  const replies = transcript.filter(
+    (e) =>
+      (e.kind === 'voice.line' || e.kind === 'voice.answer') &&
+      (e.data as { re?: number }).re === entry.id,
   )
-  const failed = reply && (reply.data as unknown as VoiceLine).role === 'notice'
+  const data = (kind: string, role?: VoiceLine['role']) =>
+    replies.find(
+      (e) => e.kind === kind && (!role || (e.data as unknown as VoiceLine).role === role),
+    )?.data as unknown
+  const spoken = data('voice.line', 'ultimate') as VoiceLine | undefined
+  const notice = data('voice.line', 'notice') as VoiceLine | undefined
+  const answer = data('voice.answer') as VoiceAnswer | undefined
+  const state = notice ? 'failed' : answer || spoken ? 'answered' : 'working'
+  if (main === undefined) return null
   return (
-    <span
-      className={cn(
-        '-mb-1 flex items-center gap-1 font-mono text-[10.5px]',
-        failed ? 'text-warning' : 'text-brand',
-      )}
-      data-forwarded={reply ? (failed ? 'failed' : 'answered') : 'working'}
-    >
-      <ArrowRightIcon className="size-3" />
-      passed to @ultimate
-      <span className="text-muted-foreground">
-        {' · '}
-        {reply ? (
-          failed ? (
-            'no answer'
-          ) : (
-            'answered'
-          )
+    <div className="mt-3 first:mt-0" data-voice-line="forwarded" data-forwarded={state}>
+      <Bubble
+        at={line.at}
+        from={main}
+        lead={<Asked text={line.text} />}
+        message={undefined}
+        running={false}
+      >
+        {state === 'working' ? (
+          <Working main={main} since={line.at} />
+        ) : state === 'failed' ? (
+          <Failed notice={notice!} spoken={spoken} />
         ) : (
-          <span className="animate-pulse">working…</span>
+          <Answer answer={answer} entry={entry} spoken={spoken} />
         )}
-      </span>
-    </span>
+      </Bubble>
+    </div>
+  )
+}
+
+/** Daniel's request, as Voice passed it on: his side of the pair, in his colour. */
+function Asked({ text }: { text: string }) {
+  return (
+    <div className="px-3 pt-2">
+      <div className="flex items-center gap-1.5 font-mono text-[11px] text-brand">
+        <MicIcon className="size-3 shrink-0" />
+        <span className="font-semibold">You asked</span>
+        <span className="text-muted-foreground">by voice</span>
+      </div>
+      <UserText
+        className="mt-1.5 rounded-md border border-border/70 bg-secondary/60 px-3 py-2 text-[13px] leading-relaxed"
+        text={text}
+      />
+    </div>
+  )
+}
+
+/** @ultimate on it: the phase the sidebar shows for it (else working, or waiting its turn) and the time so far. */
+function Working({ main, since }: { main: number; since?: number }) {
+  const busy = useConversations().find((conversation) => conversation.id === main)?.busy
+  const now = useNow(1000, since !== undefined)
+  return (
+    <div
+      className="flex items-center gap-2 px-3 py-3 font-mono text-[11px] text-muted-foreground"
+      role="status"
+    >
+      <LoaderCircleIcon className="size-3.5 shrink-0 text-brand motion-safe:animate-spin" />
+      <Provided input={busy ? main : undefined} point={ConversationPhase}>
+        {(phase) => (
+          <span className="min-w-0 truncate text-brand">
+            {phase?.label ?? (busy ? 'Working' : 'Waiting for @ultimate')}
+          </span>
+        )}
+      </Provided>
+      {since !== undefined && <span className="ml-auto tabular-nums">{clock(now - since)}</span>}
+    </div>
+  )
+}
+
+/**
+ * The answer: folded to what Voice said aloud, unfolded to @ultimate's full answer. Until Voice speaks, the full answer
+ * shows clipped. The link opens @ultimate's conversation at the answer.
+ */
+function Answer({
+  answer,
+  spoken,
+  entry,
+}: {
+  answer?: VoiceAnswer
+  spoken?: VoiceLine
+  entry: EntryRecord
+}) {
+  const [open, setOpen] = useState(false)
+  const actions = useUltimate()
+  const mode = useMode()
+  const source = answer?.source
+  const full = answer && (open || !spoken)
+  return (
+    <>
+      <div className={cn(!open && !spoken && 'line-clamp-4')}>
+        <Body text={full ? answer.text : (spoken?.text ?? '')} />
+      </div>
+      {(answer || source) && (
+        <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+          {answer && spoken && (
+            <button
+              aria-expanded={open}
+              className="flex cursor-pointer items-center gap-1 hover:text-foreground"
+              onClick={() => setOpen(!open)}
+              type="button"
+            >
+              <ChevronRightIcon
+                className={cn('size-3 transition-transform', open && 'rotate-90')}
+              />
+              {open ? 'Spoken version' : 'Full answer'}
+            </button>
+          )}
+          {answer && !spoken && <span>speaking…</span>}
+          {source && (
+            <button
+              className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground"
+              onClick={() => {
+                // In front of @ultimate, the answer is right behind: step back and reveal it there.
+                const behind = mode.front && actions.conversationId === source.conversation
+                live.setFront(false)
+                openAgentSource(
+                  actions.switchConversation,
+                  source,
+                  behind ? source : { conversation: entry.conversationId, entry: entry.id },
+                )
+              }}
+              title="Open @ultimate's conversation at this answer"
+              type="button"
+            >
+              <SquareArrowOutUpRightIcon className="size-3" />
+              Open in @ultimate
+            </button>
+          )}
+        </footer>
+      )}
+    </>
+  )
+}
+
+/** No answer came: why, and what Voice told Daniel about it. */
+function Failed({ notice, spoken }: { notice: VoiceLine; spoken?: VoiceLine }) {
+  return (
+    <>
+      {spoken && <Body text={spoken.text} />}
+      <footer className="flex items-center gap-1.5 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-destructive">
+        <CircleAlertIcon className="size-3 shrink-0" />
+        {notice.text}
+      </footer>
+    </>
   )
 }
 
@@ -832,12 +1087,15 @@ function UtteranceRow({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/** Daniel's actual heard input, distinct from the cleaned request Voice passes on. */
+/**
+ * Daniel's actual heard input, distinct from the cleaned request Voice passes on: his words as he said them, quieter
+ * than the request cards they may become.
+ */
 function HeardRow({ entry }: { entry: EntryRecord }) {
   const { text } = entry.data as { text: string }
   return (
-    <Message className="mt-3 first:mt-0" data-voice-line="daniel" from="user">
-      <MessageContent>
+    <Message className="mt-4 first:mt-0" data-voice-line="daniel" from="user">
+      <MessageContent className="group-[.is-user]:bg-secondary/50 group-[.is-user]:text-[13px] group-[.is-user]:text-foreground/80">
         <UserText text={text} />
       </MessageContent>
     </Message>
@@ -864,7 +1122,11 @@ export default defineWebExtension({
   },
   composer: VoiceDock,
   provides: [provide(UnderUltimate, useVoiceRow), provide(Unlisted, useVoiceIds)],
-  tools: { voice_say: () => null, voice_ask_ultimate: () => null, voice_note: () => null },
+  tools: {
+    voice_say: () => null,
+    voice_ask_ultimate: () => null,
+    voice_note: () => null,
+  },
   entries: {
     'voice.line': LineRow,
     'voice.heard': HeardRow,

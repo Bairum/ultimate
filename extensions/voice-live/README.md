@@ -31,13 +31,18 @@ agent uses `openai-codex/gpt-6-luna` through Pi's existing ChatGPT login, low th
 ## Browser and transcript
 
 `Standing.voice` is the only Voice conversation index. Its `Unlisted` provider removes it from other sidebar lists;
-the Voice row nests under @ultimate. Daniel's heard inputs are plain bubbles, forwarded requests have working,
-answered and failed states, and speech has its own line. Tool cards are hidden and ordinary agent prose is quiet.
+the Voice row nests under @ultimate. The dock under the transcript says what is happening now in large words: connecting,
+listening, hearing Daniel, Voice deciding, @ultimate on a request (its phase and time), an answer ready, speaking.
+Each forwarded request is one @ultimate message card (`Bubble` from messages): what was asked, then working (the
+sidebar's phase and elapsed time), then the spoken answer, unfolding to @ultimate's full answer (`voice.answer`, whose
+`source` is the answer entry) with Open in @ultimate; a notice turns it failed. Heard lines and Voice's own small
+talk stay quiet, tool cards are hidden and ordinary agent prose is quiet.
 
 Voice mode outlasts individual sessions. After two quiet minutes the session closes and listening pauses; an answer
 wakes it (or waits for a tap if browser activation blocks it). A pending forwarded request gets a short “Still on it”
 after 20 seconds, then every 45 seconds. Acknowledgements do not clear that pending state. Mute, End, the level meter,
-front/back sheet and ready/pause/end tones remain browser-side. Closing waits for `session.closed`, records usage
+front/back sheet and tones remain browser-side: a quiet pulsing hum while connecting, stopped by any phase change
+(the ready tone, a low failed tone, End, page hide), and ready/pause/end tones. Closing waits for `session.closed`, records usage
 seconds and releases the microphone even on failure. No session survives its page.
 
 `test/voice-live.test.ts` exercises the agent/Ultimate round trip with faux models, including spoken question answers.

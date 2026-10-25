@@ -28,6 +28,8 @@ export type VoiceMode = {
   waiting?: string
   /** The Voice conversation sits in front of @ultimate's. Not durable: voice mode ends with its page. */
   front: boolean
+  /** Who has the floor in the live session: Daniel mid-sentence, or GPT-Live talking. */
+  floor?: 'daniel' | 'voice'
 }
 
 let mode: VoiceMode = { phase: 'off', muted: false, front: false }
@@ -41,9 +43,10 @@ const listeners = new Set<() => void>()
 
 /**
  * Cues for the ear, softer and shorter than the notification bells: ready rises a fourth (G5, C6), paused falls back
- * (C6, G5), ended steps down to rest (G5, E5, C5). Part of using voice, so the sounds switch does not mute them.
+ * (C6, G5), ended steps down to rest (G5, E5, C5), failed drops low (E4, C♯4). Part of using voice, so the sounds
+ * switch does not mute them.
  */
-const cues: Record<'ready' | 'paused' | 'ended', Note[]> = {
+const cues: Record<'ready' | 'paused' | 'ended' | 'failed', Note[]> = {
   ready: [
     [0, 783.99, 0.25],
     [0.1, 1046.5, 0.45],
@@ -57,6 +60,10 @@ const cues: Record<'ready' | 'paused' | 'ended', Note[]> = {
     [0.11, 659.25, 0.22],
     [0.22, 523.25, 0.6],
   ],
+  failed: [
+    [0, 329.63, 0.25],
+    [0.14, 277.18, 0.5],
+  ],
 }
 
 /** The cue a phase change sounds: going live, an idle or dropped session pausing, voice mode ending. */
@@ -68,8 +75,68 @@ function cueOf(from: Phase, to: Phase) {
   return undefined
 }
 
-function set(next: Partial<VoiceMode>) {
-  const cue = next.phase && cueOf(mode.phase, next.phase)
+/**
+ * The connecting cue: a quiet hum, G4 under its fifth, breathing at 0.8 Hz until the session is live. Its own audio
+ * context, created inside the tap that starts voice so the browser lets it play; closing it silences everything.
+ */
+let hum: { context: AudioContext; out: GainNode } | undefined
+
+function startHum() {
+  if (hum) return
+  const context = new AudioContext()
+  const now = context.currentTime
+  const out = context.createGain()
+  // Fades in, so it never clicks.
+  out.gain.setValueAtTime(0, now)
+  out.gain.linearRampToValueAtTime(0.05, now + 0.4)
+  out.connect(context.destination)
+  // The pulse: a slow oscillator swings the swell between near silence and full.
+  const swell = context.createGain()
+  swell.gain.value = 0.5
+  const lfo = context.createOscillator()
+  const depth = context.createGain()
+  lfo.frequency.value = 0.8
+  depth.gain.value = 0.45
+  lfo.connect(depth).connect(swell.gain)
+  swell.connect(out)
+  for (const [frequency, level] of [
+    [392, 1],
+    [587.33, 0.35],
+  ]) {
+    const oscillator = context.createOscillator()
+    const gain = context.createGain()
+    oscillator.frequency.value = frequency
+    gain.gain.value = level
+    oscillator.connect(gain).connect(swell)
+    oscillator.start(now)
+  }
+  lfo.start(now)
+  hum = { context, out }
+  // Without a gesture behind it (an answer waking a paused session) the browser may keep it shut: silence is fine.
+  if (context.state === 'suspended')
+    context.resume().catch((error: unknown) => console.warn('Connecting hum blocked', error))
+}
+
+/** Fades the hum out in 80 ms and releases its audio context; nothing happens when none plays. */
+function stopHum() {
+  const current = hum
+  hum = undefined
+  if (!current) return
+  const { context, out } = current
+  const now = context.currentTime
+  out.gain.cancelScheduledValues(now)
+  out.gain.setValueAtTime(out.gain.value, now)
+  out.gain.linearRampToValueAtTime(0, now + 0.08)
+  setTimeout(() => {
+    context.close().catch((error: unknown) => console.warn('Connecting hum close failed', error))
+  }, 120)
+}
+
+function set(next: Partial<VoiceMode>, failed = false) {
+  const cue = failed ? cues.failed : next.phase && cueOf(mode.phase, next.phase)
+  // The connecting hum lasts exactly as long as `starting`: it hands over to the ready, failed or no cue.
+  if (next.phase === 'starting' && mode.phase !== 'starting') startHum()
+  else if (next.phase && next.phase !== 'starting') stopHum()
   mode = { ...mode, ...next }
   // The indicator already shows the phase; a cue the browser refuses is only worth a warning.
   if (cue) playNotes(cue, 0.08).catch((error: unknown) => console.warn('Voice cue failed', error))
@@ -109,7 +176,12 @@ function release(next: VoiceMode['phase'], problem?: string) {
   const current = session
   session = undefined
   clearInterval(ticker)
-  set({ phase: next, since: undefined, ...(problem ? { problem } : {}) })
+  set({
+    phase: next,
+    since: undefined,
+    floor: undefined,
+    ...(problem ? { problem } : {}),
+  })
   if (!current) return
   closing = current
     .close()
@@ -117,17 +189,24 @@ function release(next: VoiceMode['phase'], problem?: string) {
     .finally(() => (closing = undefined))
 }
 
-/** Each second: notice a session that closed under us (expiry, a dropped peer), and close one gone idle. */
+/** Each tick: follow who has the floor, notice a session that closed under us (expiry, a dropped peer), and close one gone idle. */
 function tick() {
   if (!session) return
   if (session.analyser.context.state === 'closed') {
     // startLive already released it and recorded the end; the mode sleeps, as after idling.
     session = undefined
     clearInterval(ticker)
-    set({ phase: 'paused', since: undefined, problem: mode.problem ?? 'The session closed' })
+    set({
+      phase: 'paused',
+      since: undefined,
+      floor: undefined,
+      problem: mode.problem ?? 'The session closed',
+    })
     return
   }
   const now = Date.now()
+  const floor = session.relay.hearing() ? 'daniel' : session.relay.talking() ? 'voice' : undefined
+  if (floor !== mode.floor) set({ floor })
   // A forwarded request still unanswered: a short spoken "still on it", first after 20 s, then every 45 s.
   if (asked !== undefined && now - asked >= (nudged ? 45_000 : 20_000)) {
     asked = now
@@ -140,6 +219,8 @@ function tick() {
   }
   if (session.relay.idleFor(now) >= IDLE_MS) release('paused')
 }
+/** Often enough that who has the floor follows speech; the relay itself joins lines every 100 ms. */
+const TICK_MS = 250
 
 /** When the open forwarded request went out (or was last nudged about), until its answer is heard. */
 let asked: number | undefined
@@ -147,7 +228,9 @@ let nudged = false
 
 function onEvent(event: LiveEvent) {
   if (event.type === 'session.closed' && session && mode.phase === 'live')
-    set({ problem: event.reason ? `Session closed: ${event.reason}` : 'The session closed' })
+    set({
+      problem: event.reason ? `Session closed: ${event.reason}` : 'The session closed',
+    })
 }
 
 /** Start a session, from a user gesture or for an answer that arrived while paused. Never two at once. */
@@ -178,15 +261,18 @@ export async function open(speech?: string): Promise<void> {
     queued = []
     if (cancelled) return set({ phase: 'off', problem: undefined, front: false })
     // An answer that could not wake the session waits for a tap; a failed first start leaves voice mode.
-    return set({
-      phase: from === 'paused' ? 'paused' : 'off',
-      problem: describe(error),
-      ...(waiting ? { waiting } : {}),
-    })
+    return set(
+      {
+        phase: from === 'paused' ? 'paused' : 'off',
+        problem: describe(error),
+        ...(waiting ? { waiting } : {}),
+      },
+      true,
+    )
   }
   session = started
   if (cancelled) return release('off')
-  ticker = setInterval(tick, 1000)
+  ticker = setInterval(tick, TICK_MS)
   set({ phase: 'live', since: Date.now() })
   try {
     if (mode.muted) started.mute()
@@ -209,7 +295,11 @@ export function working(pending: boolean) {
 export function note(text: string) {
   if (!session) return
   try {
-    session.send({ type: 'session.thinking.append', event_id: crypto.randomUUID(), content: text })
+    session.send({
+      type: 'session.thinking.append',
+      event_id: crypto.randomUUID(),
+      content: text,
+    })
   } catch (error) {
     set({ problem: describe(error) })
   }
@@ -258,6 +348,7 @@ export function end() {
 
 // A session never outlives its page; on a hot reload of this module the old copy closes its own.
 const leave = () => {
+  stopHum()
   if (session) release('off')
 }
 addEventListener('pagehide', leave)

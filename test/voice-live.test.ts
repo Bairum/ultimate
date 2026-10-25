@@ -10,7 +10,7 @@ import { Messages } from '../extensions/messages/api.ts'
 import { Standing } from '../extensions/subagents/api.ts'
 import { Summaries, setAutomaticSummaries } from '../extensions/conversations/summary.ts'
 import { liveInstructions } from '../extensions/voice-live/server.ts'
-import type { VoiceLine } from '../extensions/voice-live/refs.ts'
+import type { VoiceAnswer, VoiceLine } from '../extensions/voice-live/refs.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
 import { fauxServer, held, post, sourceCopy, temp, until } from './helpers.ts'
 
@@ -203,6 +203,7 @@ it('forwards the cleaned request and feeds the actual answer back to Voice to sp
     role: 'daniel',
     forwarded: true,
     text: 'Please check the tests.',
+    at: expect.any(Number),
   })
   expect((await f.entries(f.main)).find((e) => e.kind === 'voice.utterance')?.data).toEqual({
     text: 'Please check the tests.',
@@ -211,6 +212,11 @@ it('forwards the cleaned request and feeds the actual answer back to Voice to sp
   expect(f.answers).toEqual([
     `@ultimate answered (to forwarded line ${forwarded.id}):\nThe tests pass.`,
   ])
+  // The card's "Open in @ultimate" lands on the answer itself.
+  const answer = (await f.entries(f.voice)).find((e) => e.kind === 'voice.answer')!
+  const source = (answer.data as VoiceAnswer).source!
+  expect(source.conversation).toBe(f.main)
+  expect((await f.entries(f.main)).find((e) => e.id === source.entry)?.kind).toBe('pi.assistant')
   expect(spoken.data).toEqual({
     role: 'ultimate',
     text: 'The spoken answer. Details are on screen.',

@@ -2,21 +2,32 @@
 import { actionRef } from '../../shared/extension-api.ts'
 
 export type VoiceStatus = { available: true } | { available: false; reason: string }
-export type VoiceSession = { phase: 'started' | 'ended'; at: number; seconds?: number }
+export type VoiceSession = {
+  phase: 'started' | 'ended'
+  at: number
+  seconds?: number
+}
 /**
  * One line of the Voice transcript. `daniel`: the cleaned request forwarded to @ultimate;
  * `live`: GPT-Live's backchannels; `ultimate`: Voice's speech, `re` the forwarded line it answers;
- * `notice`: an unanswered request; `note`: quiet context sent to GPT-Live.
+ * `notice`: an unanswered request; `note`: quiet context sent to GPT-Live. `at`: when a forwarded line went out.
  */
 export type VoiceLine = {
   role: 'daniel' | 'live' | 'ultimate' | 'notice' | 'note'
   text: string
   forwarded?: true
+  at?: number
   re?: number
   source?: { conversation: number; entry: number }
   speech?: true
 }
 export type VoiceUtterance = { text: string; line: number }
+/** @ultimate's full answer to forwarded line `re`, as Voice received it; `source` is the answer in @ultimate. */
+export type VoiceAnswer = {
+  text: string
+  re: number
+  source?: { conversation: number; entry: number }
+}
 
 /** No arguments → API key availability, or a reason explaining how to enable it. */
 export const StatusAction = actionRef<null, VoiceStatus>('voice-live', 'status')

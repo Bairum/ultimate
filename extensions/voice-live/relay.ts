@@ -64,6 +64,16 @@ export class Relay {
     return out
   }
 
+  /** Daniel is mid-sentence: words came in that are not a finished line yet. */
+  hearing(): boolean {
+    return this.inputAt !== undefined
+  }
+
+  /** GPT-Live is talking: its words, spoken commentary included, came in the last quiet window. */
+  talking(): boolean {
+    return this.outputAt !== undefined
+  }
+
   idleFor(now: number): number {
     return Math.max(0, now - this.activityAt)
   }
