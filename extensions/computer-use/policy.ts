@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { Element, Step } from './types.ts'
 
 export type Grant = {
@@ -116,13 +117,31 @@ export function consequential(
   return { hit: false }
 }
 
-export function confirmationKey(app: string, step: Step, target: Element | undefined): string {
+/** Stable across snapshots; payloads are hashed, never retained in confirmation keys. */
+export function confirmationKey(
+  app: string,
+  step: Step,
+  target: Element | undefined,
+  location: { window: string; ancestors: string[] },
+): string {
+  const payload =
+    step.kind === 'type'
+      ? step.text
+      : step.kind === 'set_value'
+        ? step.value
+        : step.kind === 'key'
+          ? JSON.stringify([step.key, step.modifiers ?? []])
+          : step.kind === 'menu'
+            ? JSON.stringify(step.path)
+            : ''
   return JSON.stringify([
     app.toLowerCase(),
-    Object.entries(step).toSorted(([a], [b]) => a.localeCompare(b)),
-    target?.token,
-    target?.role,
-    target?.label,
+    location.window,
+    step.kind,
+    target?.role ?? '',
+    target?.label ?? '',
+    location.ancestors,
+    createHash('sha256').update(payload).digest('hex').slice(0, 16),
   ])
 }
 

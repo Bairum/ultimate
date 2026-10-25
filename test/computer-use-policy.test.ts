@@ -93,14 +93,30 @@ describe('consequential gate', () => {
     expect(consequential({ kind: 'key', key: 's', modifiers: ['cmd'] }, undefined).hit).toBe(false)
   })
 
-  it('binds confirmation to the exact step and target', () => {
-    const step: Step = { kind: 'type', element: target.token, text: 'hello' }
-    const key = confirmationKey('Preview', step, target)
+  it('keeps confirmations across fresh snapshots but binds window, label path and payload', () => {
+    const step: Step = { kind: 'type', element: target.token, text: 'private payload' }
+    const location = { window: 'Draft', ancestors: ['Compose'] }
+    const key = confirmationKey('Preview', step, target, location)
     expect(
-      confirmationKey('Preview', { text: 'hello', element: target.token, kind: 'type' }, target),
+      confirmationKey(
+        'Preview',
+        { ...step, element: 's2:7' },
+        { ...target, token: 's2:7' },
+        location,
+      ),
     ).toBe(key)
-    expect(confirmationKey('Preview', { ...step, text: 'bye' }, target)).not.toBe(key)
-    expect(confirmationKey('Preview', step, { ...target, token: 's2:1' })).not.toBe(key)
+    expect(confirmationKey('Preview', { ...step, text: 'different' }, target, location)).not.toBe(
+      key,
+    )
+    expect(confirmationKey('Preview', step, { ...target, label: 'Delete' }, location)).not.toBe(key)
+    expect(
+      confirmationKey('Preview', step, target, { ...location, window: 'Other draft' }),
+    ).not.toBe(key)
+    expect(
+      confirmationKey('Preview', step, target, { ...location, ancestors: ['Other form'] }),
+    ).not.toBe(key)
+    expect(key).not.toContain('private payload')
+    expect(key).not.toContain('s1:1')
   })
 })
 
