@@ -14,6 +14,8 @@ import type {
 } from '../../../shared/protocol.ts'
 import type { ActionRef } from '../../../shared/extension-api.ts'
 import { errorMessage } from './format.ts'
+import { refusedForPairing } from './pairing.ts'
+import type { Whoami } from './pairing.ts'
 import type { Store } from './store.ts'
 
 /** Per-call options of `api.action`. */
@@ -56,8 +58,14 @@ export class HttpError extends Error {
   }
 }
 
-/** Commands as `fetch` POSTs. Conversation commands default to the shown conversation. */
-export function createApi(store: Store, options: { fetch?: typeof fetch } = {}) {
+/**
+ * Commands as `fetch` POSTs. Conversation commands default to the shown conversation. `onRefused` hears of every call
+ * the server refused because this browser is not paired.
+ */
+export function createApi(
+  store: Store,
+  options: { fetch?: typeof fetch; onRefused?: () => void } = {},
+) {
   const request = options.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args))
   async function post<T>(
     path: string,
@@ -78,7 +86,9 @@ export function createApi(store: Store, options: { fetch?: typeof fetch } = {}) 
         data && typeof data === 'object' && 'error' in data && typeof data.error === 'string'
           ? data.error
           : `${response.status} ${response.statusText}`
-      throw new HttpError(response.status, error)
+      const failure = new HttpError(response.status, error)
+      if (refusedForPairing(failure)) options.onRefused?.()
+      throw failure
     }
     return data as T
   }
@@ -140,6 +150,16 @@ export function createApi(store: Store, options: { fetch?: typeof fetch } = {}) 
     createConversation: (create: CreateConversationRequest = {}) =>
       post<CreateConversationResponse>('/api/conversations', create),
     restart: () => post<unknown>('/api/restart'),
+    /** Whether this browser is paired (`host`) and may act as the user (`user`). */
+    whoami: async (): Promise<Whoami> => {
+      const response = await request('/api/whoami')
+      if (!response.ok) throw new HttpError(response.status, 'Could not read pairing')
+      return (await response.json()) as Whoami
+    },
+    /** Ask the server to open a pairing link in this machine's browser; 429 within 10 s, 403 from another device. */
+    pair: () => post<{ ok: true }>('/api/pair'),
+    /** A single-use link that pairs another device within 10 minutes, at `origin` (default: this server's). */
+    pairLink: (origin?: string) => post<{ url: string }>('/api/pair/link', { origin }),
     /**
      * Call the action `ref` names (`export const actions` in its extension's `server.ts`, typed in its `refs.ts`)
      * with JSON `args`, on behalf of the shown conversation, and resolve with its result. Rejects

@@ -30,10 +30,22 @@
 
 ## Pairing
 
-Each browser and the app window pairs once: ask Ultimate to open a local pairing link, which sets an HttpOnly
-cookie only when visited. Page loads alone never pair (including agent browser tools). Remote devices pair with a
-link created by an already paired browser. The shared `~/.ultimate/user-key` is private (0600); a same-user process
-can still read it. An OS sandbox for agent bash is planned phase 2, not a protection this cookie provides.
+Each browser and the app window pairs once. An unpaired browser shows a notice (the `pairing` extension) as soon as it
+loads and again when a click is refused; its **Pair this browser** button asks the server to open a single-use local
+pairing link in this machine's browser, which sets an HttpOnly cookie only when visited, and the original tab is paired
+from then on. Page loads alone never pair (including agent browser tools, whose pages show no notice). Remote devices,
+such as a phone on Tailscale, pair with a link from ⌘K **Pair a device…** in an already paired browser (a QR code,
+valid 10 minutes, once).
+
+Limits:
+
+- Browsers do not scope cookies by port: the cookie goes to every port on that hostname, so a local dev server on
+  `127.0.0.1` sees it.
+- To revoke every pairing, delete `~/.ultimate/user-key` and restart every host.
+- Any local process can make the server open a pairing tab (one per 10 s), and the code briefly appears in the
+  opener's process arguments.
+- The shared `~/.ultimate/user-key` is private (0600); a same-user process can still read it. An OS sandbox for agent
+  bash is planned phase 2, not a protection this cookie provides.
 
 ## Starting fresh
 

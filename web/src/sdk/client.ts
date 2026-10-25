@@ -1,4 +1,5 @@
 import { ActionError, actionMessage, createApi } from './api.ts'
+import { createPairing, driven, refusedForPairing } from './pairing.ts'
 import { createRegistry } from './registry.ts'
 import { createStore } from './store.ts'
 import { createTestHook } from './test-hook.ts'
@@ -40,7 +41,9 @@ export const store = createStore({
   },
 })
 /** Server commands; conversation commands default to the shown conversation. */
-export const api = createApi(store)
+export const api = createApi(store, { onRefused: () => pairing.refused() })
+/** Whether this browser is paired, read from `GET /api/whoami`; the `pairing` extension shows and fixes it. */
+export const pairing = createPairing(api, store)
 /**
  * A page an agent drives (the `screenshot` and `browser` tools mark it) looks at the UI without steering the user's
  * tabs: it reads the shared state once, then its selection and panels are its own, never written or followed.
@@ -134,10 +137,12 @@ addEventListener('popstate', () => {
   }
 })
 addEventListener('pagehide', () => uiState.flush())
-// An action failure no caller handled: show it rather than lose it in the console.
+// An action failure no caller handled: show it rather than lose it in the console. A refusal for want of pairing
+// shows as the pairing notice instead, except on a driven page, which hides that notice.
 addEventListener('unhandledrejection', (event) => {
   if (!(event.reason instanceof ActionError)) return
   event.preventDefault()
+  if (refusedForPairing(event.reason) && !driven()) return
   store.notify({ level: 'error', message: actionMessage(event.reason) })
 })
 
