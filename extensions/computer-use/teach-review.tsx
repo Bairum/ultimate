@@ -32,10 +32,33 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { api, cn, errorMessage, formatTime, useSystem } from '@/sdk'
 import { TeachEditAction, TeachRejectAction, TeachSaveAction } from './refs.ts'
-import type { FrameMeta, TaughtStep, Teach } from './refs.ts'
+import type { ComputerDetails, FrameMeta, TaughtStep, Teach, UntrustedText } from './refs.ts'
 import { ScreenMark } from './shared.tsx'
 import { dropped } from './teach-live.tsx'
 import type { Segment } from './teach-live.tsx'
+
+/** A step as the server's `teachDetails` shows it: every saved string as `UntrustedText`. */
+export type ShownStep = NonNullable<ComputerDetails['teach']>['steps'][number]
+const untrusted = (text: string): UntrustedText => ({ text, untrusted: true })
+/**
+ * The live document's step in the `teachDetails` shape, so the review renders exactly what a draft result carries.
+ * `teachDetails` itself is server code (`teach.ts`); this mirrors its mapping for the steps the user edits live.
+ */
+export const shown = (s: TaughtStep): ShownStep => ({
+  n: s.n,
+  action: s.action,
+  label: untrusted(s.target.label),
+  anchors: s.target.anchors.map(untrusted),
+  expect: {
+    ...s.expect,
+    appears: s.expect.appears?.map(untrusted),
+    disappears: s.expect.disappears?.map(untrusted),
+  },
+  wait: s.wait ? { ...s.wait, until: untrusted(s.wait.until) } : undefined,
+  pitfalls: s.pitfalls?.map(untrusted),
+  approved: s.approved,
+  consequential: !!s.consequential,
+})
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`
 const actions: TaughtStep['action'][] = [
@@ -75,13 +98,13 @@ const numbered = (steps: TaughtStep[]) => steps.map((step, index) => ({ ...step,
 
 // ---- reading a step ------------------------------------------------------------------------------------------------
 
-/** Screen text, quoted, plain, with the marker once at the end of the row. */
-function Quoted({ items }: { items: readonly string[] }) {
+/** Screen text, quoted, plain: never Markdown, never a link. */
+function Quoted({ items }: { items: readonly UntrustedText[] }) {
   return (
     <>
       {items.map((item, index) => (
         <span key={index}>
-          {index > 0 && <span className="text-muted-foreground/50"> · </span>}“{item}”
+          {index > 0 && <span className="text-muted-foreground/50"> · </span>}“{item.text}”
         </span>
       ))}
     </>
@@ -99,24 +122,24 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * Every field a step saves, always shown, so approving means having seen all of it. Values are untrusted: plain text,
- * quoted, in the same colour as any other value; nothing here is styled as if it were an instruction from us.
- * teachDetails: once the server's `ComputerDetails.teach.steps` carries anchors, expects, wait and pitfalls as
- * `UntrustedText`, read them from there (`.text`) instead of the document's raw strings.
+ * Every field a step saves, always shown, so approving means having seen all of it. Every string is `UntrustedText`
+ * from the `teachDetails` contract: plain text, quoted, styled like any other value, never like our own words.
+ * `param` is a validated name, not screen text.
  */
-function StepFields({ step }: { step: TaughtStep }) {
+export function StepFields({ step, param }: { step: ShownStep; param?: string }) {
   const appears = step.expect.appears ?? []
   const gone = step.expect.disappears ?? []
+  const within = step.expect.timeoutSeconds
   return (
     <div className="space-y-0.5 text-[11.5px]">
-      {step.target.anchors.length > 0 && (
+      {step.anchors.length > 0 && (
         <Field label="near">
-          <Quoted items={step.target.anchors} />
+          <Quoted items={step.anchors} />
         </Field>
       )}
-      {step.value && (
+      {param && (
         <Field label="value">
-          <span className="text-brand">{`{${step.value.param}}`}</span>
+          <span className="text-brand">{`{${param}}`}</span>
           <span className="text-muted-foreground">
             {step.action === 'type_secret'
               ? ' · a secret, asked for at run time'
@@ -127,22 +150,22 @@ function StepFields({ step }: { step: TaughtStep }) {
       {appears.length > 0 && (
         <Field label="appears">
           <Quoted items={appears} />
-          {step.expect.timeoutSeconds !== undefined && (
-            <span className="text-muted-foreground"> · within {step.expect.timeoutSeconds}s</span>
+          {within !== undefined && (
+            <span className="text-muted-foreground"> · within {within}s</span>
           )}
         </Field>
       )}
       {gone.length > 0 && (
         <Field label="goes away">
           <Quoted items={gone} />
-          {!appears.length && step.expect.timeoutSeconds !== undefined && (
-            <span className="text-muted-foreground"> · within {step.expect.timeoutSeconds}s</span>
+          {!appears.length && within !== undefined && (
+            <span className="text-muted-foreground"> · within {within}s</span>
           )}
         </Field>
       )}
       {step.wait && (
         <Field label="wait">
-          until “{step.wait.until}”
+          until “{step.wait.until.text}”
           <span className="text-muted-foreground"> · up to {step.wait.timeoutSeconds}s</span>
         </Field>
       )}
@@ -152,7 +175,7 @@ function StepFields({ step }: { step: TaughtStep }) {
             {step.pitfalls.map((pitfall, index) => (
               <li className="flex gap-1.5" key={index}>
                 <span className="shrink-0 text-muted-foreground/60">–</span>
-                <span className="min-w-0">“{pitfall}”</span>
+                <span className="min-w-0">“{pitfall.text}”</span>
               </li>
             ))}
           </ul>
@@ -524,6 +547,7 @@ function StepItem({
   change: (next: (steps: TaughtStep[]) => TaughtStep[]) => Promise<void>
 }) {
   const frame = segment.frames.find((f) => f.id === step.frame)
+  const view = shown(step)
   const [inserting, setInserting] = useState(false)
   const rejected = step.approved === false
   const review = (approved: boolean | undefined) =>
@@ -580,7 +604,7 @@ function StepItem({
                   rejected && 'line-through decoration-muted-foreground/60',
                 )}
               >
-                “{step.target.label}”
+                “{view.label.text}”
               </span>
               <ScreenMark />
               {step.consequential && (
@@ -614,7 +638,7 @@ function StepItem({
           ) : (
             <>
               <div className={cn('pl-12 max-sm:pl-0', rejected && 'opacity-55')}>
-                <StepFields step={step} />
+                <StepFields param={step.value?.param} step={view} />
               </div>
               <div className="flex flex-wrap items-center gap-1.5 pt-1 pl-12 max-sm:pl-0">
                 <span className="flex rounded-md border border-border">
@@ -902,7 +926,7 @@ function SaveBar({
   const [busy, setBusy] = useState(false)
   const [discarding, setDiscarding] = useState(false)
   const root = scope === 'project' ? (system?.project.root ?? '<project>') : '~'
-  const shown = scope === 'project' ? '' : '~/'
+  const prefix = scope === 'project' ? '' : '~/'
   const pending = steps
     .filter((s) => s.approved === undefined)
     .map((s) => s.n)
@@ -922,6 +946,7 @@ function SaveBar({
     setRefusal(undefined)
     api
       .action(TeachSaveAction, { conversation, scope, name, ...(overwrite ? { overwrite } : {}) })
+      // Missing frames come back as notes and as `frame_missing` drops; the Saved card shows them from the document.
       .catch((failure: unknown) => {
         const message = errorMessage(failure)
         if (message.includes('overwrite')) {
@@ -976,17 +1001,21 @@ function SaveBar({
           />
         </label>
       </div>
-      <p
-        className="font-mono text-[11px] leading-[1.6] break-all text-muted-foreground"
-        title={`${root}/.ultimate/skills/${name}/SKILL.md`}
-      >
-        → {shown}.ultimate/skills/{name || '…'}/SKILL.md
-        <span className="break-normal">
-          {scope === 'project'
-            ? ' · in this project; loads only while it is trusted'
-            : ' · for you, in every project'}
-        </span>
-      </p>
+      <div className="space-y-0.5 font-mono text-[11px] leading-[1.6] text-muted-foreground">
+        <p className="break-all" title={`${root}/.ultimate/skills/${name}/SKILL.md`}>
+          → {prefix}.ultimate/skills/{name || '…'}/SKILL.md
+          <span className="break-normal">
+            {scope === 'project'
+              ? ' · in this project; loads only while it is trusted'
+              : ' · for you, in every project'}
+          </span>
+        </p>
+        <p className="text-muted-foreground/80" data-teach-saves-as>
+          Saves as: an untrusted-data notice first, numbered steps with only the action and value
+          names, and all screen text inside a JSON data block, plus procedure.json and one frame per
+          step.
+        </p>
+      </div>
       {exists && (
         <label className="flex items-center gap-2 text-[12px] text-warning">
           <Checkbox checked={overwrite} onCheckedChange={(value) => setOverwrite(value === true)} />
@@ -1079,6 +1108,7 @@ function Saved({
   const kept = steps.filter((s) => s.approved)
   const left = steps.length - kept.length
   const risky = kept.filter((s) => s.consequential).length
+  const missing = segment.dropped.filter((d) => d.reason === 'frame_missing').length
   return (
     <Frame
       header={
@@ -1098,9 +1128,16 @@ function Saved({
           {plural(segment.frames.length, 'frame')} recorded
           {segment.startedAt ? ` · ${formatTime(segment.startedAt)}` : ''}
         </p>
+        {missing > 0 && (
+          <p className="text-warning">
+            {plural(missing, 'frame')} had expired and {missing === 1 ? 'was' : 'were'} saved
+            without {missing === 1 ? 'its' : 'their'} picture
+          </p>
+        )}
         <p className="font-sans text-[12px] leading-relaxed text-muted-foreground">
-          Agents now load it as instructions. Its screen text stays marked as data, never commands;
-          values such as passwords are asked for by name at run time.
+          Agents now load it as instructions. It opens with a notice that its screen text is data,
+          never commands, and keeps that text in a JSON data block; values such as passwords are
+          asked for by name at run time.
         </p>
       </div>
     </Frame>
