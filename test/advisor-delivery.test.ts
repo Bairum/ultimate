@@ -24,7 +24,7 @@ import { review, runEntries } from '../extensions/advisor/review.ts'
 import { renderInput } from '../extensions/advisor/render.ts'
 import { Standing, Profile } from '../extensions/subagents/api.ts'
 import type { AdvisorNoteEntry, Role } from '../extensions/advisor/refs.ts'
-import { closeOut } from '../extensions/advisor/lifecycle.ts'
+import { closeOut, expireNotes } from '../extensions/advisor/lifecycle.ts'
 vi.mock('../lib/exec.ts', () => ({
   exec: async () => {
     throw Object.assign(new Error('not ignored'), { code: 1 })
@@ -690,6 +690,13 @@ it('skips a pending delivery dismissed by the user', async () => {
   expect(
     (await conversation.entries({ order: 'ascending' }, 100, undefined, context)).items,
   ).toHaveLength(before)
+  await expireNotes(f.host, f.config, new Set([f.id]), context)
+  const retained = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0]
+  expect(retained).not.toHaveProperty('delivered')
+  expect(retained).not.toHaveProperty('response')
+  expect(await actions.stats(null, { host: f.host } as never)).toMatchObject({
+    roles: { worker: { delivered: 0, read: 0, dismissed: 1, late: 0, unread: 0, pending: 0 } },
+  })
 })
 it('manages explicit notes or all matching filters, archives only closed notes, and reopens cleanly', async () => {
   const f = await fixture()
@@ -772,4 +779,77 @@ it('starts only one durable close-out after the final answer, not the advisor co
     response: { source: 'judged', status: 'ignored' },
   })
   expect(notices).not.toHaveBeenCalledWith(expect.stringContaining('close-out'))
+})
+
+it.each(['no model', 'provider error', 'timeout', 'invalid JSON'] as const)(
+  'closes every remaining read note when close-out fails: %s',
+  async (failure) => {
+    const f = await fixture()
+    const note = await lifecycleNote(f)
+    await f.hooks.beforeRequest(
+      {
+        messages: [
+          { role: 'user', content: `<advisory id="${note.ref}">data</advisory>`, timestamp: 0 },
+        ],
+      },
+      f.api(),
+      context,
+    )
+    await f.harness.commit(async (tx) => {
+      const state = await tx.doc(State, ROOT_CONVERSATION_ID)
+      state.notes.push({ ...state.notes[0], id: 'second', ref: 'secnd' })
+      ;(await tx.doc(Runs, ROOT_CONVERSATION_ID)).readRuns!.second = 100
+    }, context)
+    const api = f.api()
+    if (failure === 'no model') vi.spyOn(api.models, 'getModel').mockReturnValue(undefined)
+    else if (failure === 'invalid JSON') f.response.content = [fauxText('not JSON')]
+    else
+      f.stream.mockImplementation(
+        () =>
+          ({
+            result: async () => {
+              throw new Error(failure)
+            },
+          }) as never,
+      )
+    await closeOut(f.host, api, { run: 100, latest: 'done' }, f.config, context)
+    const state = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
+    for (const current of state.notes) {
+      expect(current).toMatchObject({
+        status: 'resolved',
+        closedBy: 'auto',
+        response: { status: 'ignored', source: 'auto', reason: expect.any(String) },
+      })
+    }
+    expect((await f.harness.snapshot(Runs, ROOT_CONVERSATION_ID, context))!.readRuns).toEqual({})
+  },
+)
+it('expires read notes on the tick when a run stops without yielding', async () => {
+  const interval = vi.spyOn(globalThis, 'setInterval')
+  const f = await fixture()
+  const tick = interval.mock.calls.at(-1)![0] as () => void
+  interval.mockRestore()
+  const note = await lifecycleNote(f)
+  await f.hooks.beforeRequest(
+    {
+      messages: [
+        { role: 'user', content: `<advisory id="${note.ref}">data</advisory>`, timestamp: 0 },
+      ],
+    },
+    f.api(),
+    context,
+  )
+  await f.harness.commit(async (tx) => {
+    delete (await tx.doc(LiveDoc, f.id)).run
+  }, context)
+  tick()
+  await until(
+    async () =>
+      !!(await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0].response,
+  )
+  expect((await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0]).toMatchObject({
+    status: 'resolved',
+    response: { status: 'ignored', source: 'auto', reason: 'run ended without close-out' },
+  })
+  expect((await f.harness.snapshot(Runs, ROOT_CONVERSATION_ID, context))!.readRuns).toEqual({})
 })

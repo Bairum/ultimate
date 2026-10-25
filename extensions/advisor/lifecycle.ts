@@ -1,9 +1,10 @@
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { copyJson } from '@earendil-works/chord'
-import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type { ConversationId, TaskId } from '@earendil-works/pi-durable'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { AdvisorConfig, NoteResponse } from './refs.ts'
+import type { AdvisorConfig, NoteResponse, StoredNote } from './refs.ts'
 import { parseModel } from './config.ts'
 import { budgetExceeded, Runs, State, utcDay } from './state.ts'
 import { renderInput } from './render.ts'
@@ -17,6 +18,21 @@ import { autoResolve } from './manage.ts'
 export type CloseInput = { run: number; latest: string }
 type Receipt = { response?: NoteResponse; message?: AssistantMessage; error?: string }
 export async function closeOut(
+  host: ExtensionHost,
+  runtime: ReviewRuntime,
+  input: CloseInput,
+  config: AdvisorConfig,
+  context: Context,
+) {
+  try {
+    await judgeCloseOut(host, runtime, input, config, context)
+  } catch (error) {
+    // A failed judge closes every remaining read note without failing the agent's run.
+    await failCloseOut(host, runtime.conversationId, input.run, String(error), context)
+    host.notice(`Advisor close-out: ${String(error)}`)
+  }
+}
+async function judgeCloseOut(
   host: ExtensionHost,
   runtime: ReviewRuntime,
   input: CloseInput,
@@ -158,7 +174,7 @@ function judged(message: AssistantMessage): Receipt {
     return { response: judgment(message), message }
   } catch (error) {
     // Fail open on invalid output, but keep its receipt so the call is charged once and never repeated.
-    return { message, error: String(error) }
+    return { response: ignored(String(error)), message, error: String(error) }
   }
 }
 function judgment(message: AssistantMessage): NoteResponse {
@@ -181,6 +197,31 @@ function judgment(message: AssistantMessage): NoteResponse {
     at: Date.now(),
   }
 }
+function ignored(reason: string): NoteResponse {
+  return { status: 'ignored', source: 'auto', reason: reason.slice(0, 500), at: Date.now() }
+}
+function closeIgnored(note: StoredNote, reason: string) {
+  note.response ??= ignored(reason)
+  autoResolve(note, Date.now())
+}
+export async function failCloseOut(
+  host: ExtensionHost,
+  id: ConversationId,
+  run: number,
+  reason: string,
+  context: Context,
+) {
+  await host.harness().commit(async (tx) => {
+    const state = await tx.doc(State, ROOT_CONVERSATION_ID)
+    const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
+    for (const note of state.notes) {
+      if (note.conversation !== id || runs.readRuns?.[note.id] !== run) continue
+      closeIgnored(note, reason)
+      delete runs.readRuns[note.id]
+      stored(host, id, [note], false)
+    }
+  }, context)
+}
 export async function expireNotes(
   host: ExtensionHost,
   config: AdvisorConfig,
@@ -191,9 +232,28 @@ export async function expireNotes(
   const summaries = host.conversations()
   await host.harness().commit(async (tx) => {
     const state = await tx.doc(State, ROOT_CONVERSATION_ID)
+    const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
     for (const note of state.notes) {
-      if (!note.ref || note.delivered === 'card' || note.response || note.readAt !== undefined)
+      if (!note.ref || !note.delivered || note.delivered === 'card') continue
+      if (note.readAt !== undefined) {
+        const run = runs.readRuns?.[note.id]
+        if (note.response && run === undefined) continue
+        const live = await tx.doc(LiveDoc, note.conversation as ConversationId)
+        if (
+          !concluded.has(note.conversation) &&
+          live.run &&
+          (run === undefined || live.run.inputs[0] === run)
+        )
+          continue
+        const task = run === undefined ? undefined : runs.closeouts?.[`${note.conversation}:${run}`]
+        const record = task === undefined ? undefined : await tx.task(task as TaskId)
+        if (record && record.state.status !== 'terminal') continue
+        closeIgnored(note, 'run ended without close-out')
+        if (runs.readRuns) delete runs.readRuns[note.id]
+        stored(host, note.conversation, [note], false)
         continue
+      }
+      if (note.response) continue
       const summary = summaries.find((s) => s.id === note.conversation)
       const ended = concluded.has(note.conversation)
       const late =

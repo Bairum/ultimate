@@ -50,10 +50,21 @@ export async function deliver(
     const placed = await tx.submissionByRequest(id, requestId)
     if (placed) return { placed, notes: entry.notes }
     const state = await tx.doc(State, ROOT_CONVERSATION_ID)
-    const notes = entry.notes.filter(
-      (n) => !state.notes.some((s) => s.id === n.id && s.status === 'dismissed'),
-    )
+    const notes = entry.notes.filter((n) => {
+      const note = state.notes.find((s) => s.id === n.id)
+      if (note?.status !== 'dismissed') return true
+      delete note.delivered
+      stored(host, id, [note], false)
+      return false
+    })
     const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
+    if (entry.delivered === 'continue') {
+      runs.conversations[id] ??= { rounds: 0, signals: [] }
+      const row = runs.conversations[id]
+      const original = advisory(entry.advisor, entry.notes)
+      row.continuations = (row.continuations ?? []).filter((text) => text !== original)
+      if (notes.length) row.continuations.push(advisory(entry.advisor, notes))
+    }
     if (runs.deliveries[entry.review]) {
       if (notes.length) runs.deliveries[entry.review] = { ...entry, notes }
       else delete runs.deliveries[entry.review]

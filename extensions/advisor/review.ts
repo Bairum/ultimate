@@ -22,7 +22,7 @@ import type {
 } from './refs.ts'
 import { Reviewed } from './refs.ts'
 import { State, Runs, Ledger, budgetExceeded, utcDay } from './state.ts'
-import { advisory, isContinuation, parseNotes, renderInput } from './render.ts'
+import { isContinuation, parseNotes, renderInput } from './render.ts'
 import { deliver, route } from './deliver.ts'
 import { reviewTools, toolDefinitions, scopedPath } from './tools.ts'
 
@@ -463,10 +463,6 @@ export async function review(
             const ref = runs.nextRef.toString(36).padStart(5, '0')
             return { ...n, id: noteId, ref }
           }),
-        }
-        if (delivered === 'continue') {
-          row.continuations ??= []
-          row.continuations.push(advisory(advisor, entry.notes))
         }
         for (const n of entry.notes) {
           current.notes.push({

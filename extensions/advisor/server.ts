@@ -35,7 +35,7 @@ import { review, runEntries } from './review.ts'
 import type { ReviewInput } from './review.ts'
 import { signals, initialSignals } from './signals.ts'
 import { acknowledge, trackRead, stats, invalidate } from './tracking.ts'
-import { closeOut, expireNotes } from './lifecycle.ts'
+import { closeOut, expireNotes, failCloseOut } from './lifecycle.ts'
 import type { CloseInput } from './lifecycle.ts'
 import { pruneNotes, selected, setStatus, validateSelection, validReason } from './manage.ts'
 
@@ -260,6 +260,7 @@ export default function advisor(host: ExtensionHost) {
           await closeOut(host, runtime, task.input, (await config(false)).effective, context)
         } catch (error) {
           // Lifecycle judgments are advisory and must never fail the conversation.
+          await failCloseOut(host, runtime.conversationId, task.input.run, String(error), context)
           host.notice(`Advisor close-out: ${String(error)}`)
         }
         return runtime.commit(

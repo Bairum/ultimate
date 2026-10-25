@@ -6,7 +6,8 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import type { AdvisorStateDoc, Role, RoleStats } from './refs.ts'
 import { Runs, State } from './state.ts'
 
-const indexes = new WeakMap<ExtensionHost, Map<number, Map<string, string>>>()
+type Pending = { refs: Map<string, string>; changed?: Set<string>; loading?: Promise<void> }
+const indexes = new WeakMap<ExtensionHost, Map<number, Pending>>()
 export function invalidate(host: ExtensionHost, id: number) {
   indexes.get(host)?.delete(id)
 }
@@ -16,35 +17,47 @@ export function stored(
   notes: { id: string; ref?: string }[],
   unread: boolean,
 ) {
-  const refs = indexes.get(host)?.get(id)
-  if (!refs) return
+  const row = indexes.get(host)?.get(id)
+  if (!row) return
   for (const note of notes) {
     if (!note.ref) continue
-    if (unread) refs.set(note.ref, note.id)
-    else refs.delete(note.ref)
+    row.changed?.add(note.ref)
+    if (unread) row.refs.set(note.ref, note.id)
+    else row.refs.delete(note.ref)
   }
 }
 async function pending(host: ExtensionHost, id: ConversationId, context: Context) {
   let index = indexes.get(host)
   if (!index) indexes.set(host, (index = new Map()))
-  let refs = index.get(id)
-  if (!refs) {
-    const state = await host.harness().snapshot(State, ROOT_CONVERSATION_ID, context)
-    refs = new Map(
-      (state?.notes ?? [])
-        .filter(
-          (n) =>
-            n.conversation === id &&
-            n.ref &&
-            n.delivered !== 'card' &&
-            n.readAt === undefined &&
-            !n.response,
+  let row = index.get(id)
+  if (!row) {
+    const initial: Pending = { refs: new Map(), changed: new Set() }
+    index.set(id, initial)
+    initial.loading = (async () => {
+      const state = await host.harness().snapshot(State, ROOT_CONVERSATION_ID, context)
+      for (const note of state?.notes ?? []) {
+        if (
+          note.conversation === id &&
+          note.ref &&
+          note.delivered &&
+          note.delivered !== 'card' &&
+          note.readAt === undefined &&
+          !note.response &&
+          !initial.changed?.has(note.ref)
         )
-        .map((n) => [n.ref!, n.id]),
-    )
-    index.set(id, refs)
+          initial.refs.set(note.ref, note.id)
+      }
+      delete initial.changed
+    })()
+    row = initial
   }
-  return refs
+  try {
+    await row.loading
+  } catch (error) {
+    if (index.get(id) === row) index.delete(id)
+    throw error
+  }
+  return row.refs
 }
 export async function trackRead(
   host: ExtensionHost,
@@ -55,6 +68,7 @@ export async function trackRead(
   const refs = await pending(host, api.conversationId, context)
   if (!refs.size) return undefined
   const text = messages
+    .filter((m) => m.role === 'user')
     .flatMap((m) =>
       typeof m.content === 'string'
         ? [m.content]
@@ -71,7 +85,8 @@ export async function trackRead(
     const run = (await tx.doc(LiveDoc, api.conversationId)).run?.inputs[0]
     for (const [, id] of found) {
       const note = state.notes.find((n) => n.id === id)
-      if (!note || note.readAt !== undefined) continue
+      if (!note || !note.delivered || note.delivered === 'card' || note.readAt !== undefined)
+        continue
       note.readAt = Date.now()
       if (run !== undefined) {
         runs.readRuns ??= {}
