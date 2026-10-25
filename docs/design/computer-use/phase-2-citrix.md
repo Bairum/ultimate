@@ -14,14 +14,14 @@ phase 1 live check ([spike.md](spike.md)).
 1. **Pixel grounding (1a):** the frontier model reads the screenshot and gives coordinates. Every pixel click carries an
    **expected label**, and OCR checks that label at the click point before dispatch (`label_mismatch` otherwise). The
    native Anthropic toolset can come later, once Pi supports client toolsets.
-2. **OCR (2b): cua's PP-OCR, not macOS Vision.** It may be used only without the AGPL OmniParser detector (see "OCR
-   engine" below: the cua bundle cannot do that). Installing needs the user's OK.
+2. **OCR: cua-perception as is, installed (decided after the AGPL finding below).** The user accepts the AGPL
+   OmniParser detector for private local use. Installed 2026-10-25: see "OCR engine".
 3. **Pre-approval (3a):** the user approves a scope once per task (app and window, pixel actions, allowed kinds, a step
    and time budget, and a foreground takeover for the run). Label-checked pixel steps inside that scope need no card.
    Consequential steps still need one, unless their label is listed verbatim in `scope.consequential`.
-4. **Where runs happen (4a):** this Mac, in a foreground "operator mode" with the Citrix window visible. The user
-   steps away, and Stop stays on the status line. In parallel, USG IT is asked about running the Driver inside the
-   Citrix session.
+4. **Where runs happen (4a): this Mac only.** A foreground "operator mode" keeps the Citrix window visible while the
+   user steps away; Stop stays on the status line. Nothing can be installed on USG's remote desktop, so the in-session
+   Driver option is dropped: it is pixels plus OCR throughout.
 5. **Results (5b): free-form prompts, no scenario-file runner.** Each task keeps a results and evidence summary
    through `computer_task` (criteria, sub-goals, evidence screenshots and OCR excerpts) and the report card.
 6. **Order (6a):** the 2.0 probe with the user comes first.
@@ -35,7 +35,7 @@ phase 1 live check ([spike.md](spike.md)).
 | `wait`                | No wait tool. `run_steps` steps take `wait_for`/`expect` checks: tree text including static text, `gone`, at most 10 s, a batch at most 60 s, and not cancellable.                            | Our own cancellable `wait {until: text \| gone \| stable, timeout}`, built on screenshots, OCR and frame stability.                                                                                          |
 | Focus                 | Background delivery covers native apps. Screen Sharing forwards physical keycodes, so it needs `delivery_mode: "foreground"` with a `window_id`.                                              | Citrix Viewer probably behaves the same (the probe confirms this). The run takes a foreground takeover, approved with the scope.                                                                             |
 | Stage Manager         | Not addressed. Background windows report thumbnail bounds and thumbnail screenshots (phase 1 live check).                                                                                     | Detect it (window bounds don't match the AX frame, or the window is off-screen) and refuse with `window_not_visible` and guidance: show the window, or turn Stage Manager off for the run.                   |
-| Remote session        | The Driver runs on the machine it drives. For a remote machine, MCP goes over SSH. On Windows the daemon must run in the interactive session.                                                 | If USG IT allows it, the Driver inside the Citrix Windows session would give a full UIA tree, and Jev works natively there.                                                                                  |
+| Remote session        | The Driver runs on the machine it drives. For a remote machine, MCP goes over SSH. On Windows the daemon must run in the interactive session.                                                 | Not available: nothing can be installed on USG's remote desktop. The Citrix session is driven from this Mac as pixels.                                                                                       |
 | Display sleep         | The Driver keeps the display awake for 10 minutes after each call.                                                                                                                            | `caffeinate -d -w <pid>` while a long wait runs.                                                                                                                                                             |
 | Credentials           | None.                                                                                                                                                                                         | `type_secret {name}` from Secrets, never shown to the model. Screenshots taken after secret entry are not kept.                                                                                              |
 
@@ -54,15 +54,31 @@ The archive also carries ONNX Runtime and the worker. It installs into the Drive
 Its install-check parse took about 4 s.
 
 The verified bundle cannot be installed without the AGPL detector. Removing that model breaks hash verification, and
-the parse option `kinds` only limits what is returned. **Per the user's condition, nothing is installed.** Options:
+the parse option `kinds` only limits what is returned. We offered the user three options: the bundle as is, the same
+Apache-2.0 PP-OCR models run ourselves through `onnxruntime-node`, or macOS Vision. **The user chose the bundle as is**
+and accepted the AGPL detector for private local use.
 
-- **(a)** Install cua-perception as is: 426 MB, no Python, AGPL detector present. Private local use triggers no AGPL
-  source obligation, but the user asked to avoid it.
-- **(b)** Run the same PP-OCR v5 mobile models (Apache-2.0; PaddleOCR is Apache-2.0) ourselves with `onnxruntime-node`
-  (MIT; about 300 MB unpacked on npm for all platforms). This needs about 300 lines of pre/post-processing (DB text
-  detection, CTC decoding). No Python, no AGPL. The models are a few MB each and would be downloaded at setup, with
-  the user's OK.
-- **(c)** macOS Vision (`VNRecognizeTextRequest`) through a small Swift helper: nothing to install, macOS only.
+**Installed 2026-10-25:**
+
+- Downloaded and checked: the release `SHA256SUMS` matched.
+- `cua-driver extension inspect`, then `install`: publisher-verified.
+- `extension status`: healthy, integrity and publisher checks passed.
+- Location: `~/.cua-driver/extensions/cua-perception/versions/0.2.1`, **451 MB** on disk. The download was deleted.
+- Remove it with `cua-driver extension remove cua-perception`.
+
+**First measurements** (this Mac, no Citrix yet):
+
+| Capture      | Size               | Capture time | Parse time | Regions found                                  |
+| ------------ | ------------------ | ------------ | ---------- | ---------------------------------------------- |
+| Full desktop | 1366×887           | ≈370 ms      | ≈1.5–1.7 s | 99 text, 101 icon; median text confidence 0.62 |
+| Full desktop | 2400×1559          | —            | ≈1.6 s     | 84 text; median confidence 0.68, 11 at ≥ 0.8   |
+| Full desktop | 3600×2338 (native) | —            | ≈2.0 s     | 77 text; median confidence 0.68, 7 at ≥ 0.8    |
+
+- **A capture can be parsed more than once.** Only a click consumes it.
+- **A Stage Manager thumbnail window yields 0 regions.** The window has to be visible.
+- **Confidences on real screens run lower than the 0.8 floor assumed for Jev candidates.** The probe tunes the floor
+  against Citrix screens. The expected-label check matches text, so it does not depend on the floor.
+- **Each OCR'd step costs about 1.5–2 s.** Crop to the window or a region of interest before parsing.
 
 ## Design
 
@@ -70,7 +86,8 @@ the parse option `kinds` only limits what is returned. **Per the user's conditio
    `{kind, x, y, capture, expect_label}`. Before dispatch, the extension OCRs a crop around the point. The step goes
    ahead only if `expect_label` matches a text box under the point (normalised, unique). Otherwise it is refused with
    `label_mismatch` and the boxes found. Zoom crops serve small text. Coordinates stay bound to the capture.
-2. **Jev over OCR boxes** (goal mode on pixel surfaces). Candidates are OCR boxes with confidence ≥ 0.8 and unique
+2. **Jev over OCR boxes** (goal mode on pixel surfaces). Candidates are OCR boxes with a confidence floor the probe sets
+   (real-screen medians are about 0.6–0.7, so likely 0.6) and unique text, at most 24. Jev uses the same thresholds, risk question, verification and escalation as phase 1. A click goes
    text, at most 24. Jev uses the same thresholds, risk question, verification and escalation as phase 1. A click goes
    to the box centre, bound to its capture. Icon-only controls escalate to the planner.
 3. **Scoped pre-approval** in the task spec: `approval {app, window, pixel: true, actions, steps, minutes, foreground}`,
@@ -104,19 +121,20 @@ It measures, for the Workspace app and, if available, the browser client:
 6. clipboard redirection (Mac → remote paste);
 7. whether the remote upload dialog shows mapped client drives;
 8. whether the display stays awake;
-9. zoom readability of small text.
+9. zoom readability of small text;
+10. OCR (cua-perception) on Citrix screens: parse time, confidence distribution, and whether labels read correctly.
 
 All inputs are harmless: a click on a blank area or a navigation link the user names, and typing `probe-123` into a
 field the user names, never submitted. The user types every credential.
 
 ## Phases
 
-| Phase | Size | Scope                                                                                                                    |
-| ----- | ---- | ------------------------------------------------------------------------------------------------------------------------ |
-| 2.0   | S    | Citrix probe; question to USG IT about running the Driver in the session                                                 |
-| 2.1   | M    | OCR engine (per the decision above), label-checked pixel steps, zoom, `wait`, settle and verify, Stage Manager detection |
-| 2.2   | S–M  | Scoped pre-approval in the task spec, OCR-based consequential check, run-level foreground takeover                       |
-| 2.3   | S–M  | Jev picking among OCR boxes                                                                                              |
-| 2.4   | S–M  | Results and evidence summary in `computer_task` and the report card, long-run keep-awake                                 |
-| 2.5   | S    | `type_secret`, clipboard and file-transfer helpers (after the probe)                                                     |
-| 2.6   | S    | USG packaging, in the USG project                                                                                        |
+| Phase | Size | Scope                                                                                                                                         |
+| ----- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2.0   | S    | Citrix probe (this Mac only; nothing can be installed on the remote desktop)                                                                  |
+| 2.1   | M    | `parse_visual_regions` client (cua-perception installed), label-checked pixel steps, zoom, `wait`, settle and verify, Stage Manager detection |
+| 2.2   | S–M  | Scoped pre-approval in the task spec, OCR-based consequential check, run-level foreground takeover                                            |
+| 2.3   | S–M  | Jev picking among OCR boxes                                                                                                                   |
+| 2.4   | S–M  | Results and evidence summary in `computer_task` and the report card, long-run keep-awake                                                      |
+| 2.5   | S    | `type_secret`, clipboard and file-transfer helpers (after the probe)                                                                          |
+| 2.6   | S    | USG packaging, in the USG project                                                                                                             |
