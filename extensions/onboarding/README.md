@@ -78,7 +78,8 @@ same idempotent setting and admits exactly one input. Only the matching typed ch
 as **Chosen: …**, never the current settings or a local success flag. A quiet input card displays the summary.
 
 The status line keeps **project setup** while the project decision is open and **set up git** while isolation is
-unavailable. Clicking calls `help { card: 'project' | 'git' }`, which submits "Help me decide whether to use this
+unavailable, until Start here is dismissed: then both stay quiet, and ⌘K **Get ready…** and the Extensions panel
+still reach the decision. Clicking calls `help { card: 'project' | 'git' }`, which submits "Help me decide whether to use this
 project's setup." or "Help me set up git for this folder." directly in @ultimate's standing conversation and returns
 its id. The browser opens that conversation on the Agent surface. First-run Continue also selects the Agent surface.
 The Extensions panel's About this setup routes there too rather than opening a setup dialog.
