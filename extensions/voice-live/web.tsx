@@ -615,9 +615,25 @@ function StepText({ step, mode }: { step: Step; mode: VoiceMode }) {
           </span>
         )}
       </div>
-      <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{detail}</div>
+      {step.step === 'hearing' && mode.partial ? (
+        <p
+          className="mt-1 line-clamp-2 text-[14px] leading-snug break-words text-foreground/85"
+          data-voice-partial
+        >
+          {tail(mode.partial)}
+        </p>
+      ) : (
+        <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{detail}</div>
+      )}
     </div>
   )
+}
+
+/** The newest words of a long line, so the two lines in view keep up with speech. */
+const tail = (text: string) => {
+  if (text.length <= 140) return text
+  const cut = text.slice(-140)
+  return `…${cut.slice(cut.indexOf(' ') + 1)}`
 }
 
 /** The step's mark: the live level while the user talks, a calm spinner while something works, else the mic. */

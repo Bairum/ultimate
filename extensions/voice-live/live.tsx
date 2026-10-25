@@ -30,6 +30,8 @@ export type VoiceMode = {
   front: boolean
   /** Who has the floor in the live session: the user mid-sentence, or GPT-Live talking. */
   floor?: 'user' | 'voice'
+  /** The words of the line the user is saying now, before a pause finishes it. */
+  partial?: string
 }
 
 let mode: VoiceMode = { phase: 'off', muted: false, front: false }
@@ -180,6 +182,7 @@ function release(next: VoiceMode['phase'], problem?: string) {
     phase: next,
     since: undefined,
     floor: undefined,
+    partial: undefined,
     ...(problem ? { problem } : {}),
   })
   if (!current) return
@@ -200,13 +203,15 @@ function tick() {
       phase: 'paused',
       since: undefined,
       floor: undefined,
+      partial: undefined,
       problem: mode.problem ?? 'The session closed',
     })
     return
   }
   const now = Date.now()
   const floor = session.relay.hearing() ? 'user' : session.relay.talking() ? 'voice' : undefined
-  if (floor !== mode.floor) set({ floor })
+  const partial = session.relay.partial() || undefined
+  if (floor !== mode.floor || partial !== mode.partial) set({ floor, partial })
   // A forwarded request still unanswered: a short spoken "still on it", first after 20 s, then every 45 s.
   if (asked !== undefined && now - asked >= (nudged ? 45_000 : 20_000)) {
     asked = now
@@ -219,8 +224,8 @@ function tick() {
   }
   if (session.relay.idleFor(now) >= IDLE_MS) release('paused')
 }
-/** Often enough that who has the floor follows speech; the relay itself joins lines every 100 ms. */
-const TICK_MS = 250
+/** Often enough that the words on screen follow speech; the relay itself joins lines every 100 ms. */
+const TICK_MS = 150
 
 /** When the open forwarded request went out (or was last nudged about), until its answer is heard. */
 let asked: number | undefined
