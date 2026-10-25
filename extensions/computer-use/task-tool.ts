@@ -5,12 +5,17 @@ import { defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ClassifyApi } from '../classify/api.ts'
 import type { Verdict } from './types.ts'
-import { readSession, updateSession } from './session.ts'
+import { readSession, updateSession, isStopped } from './session.ts'
 import { result, anchored, plainTask, activatePending, object } from './tool-helpers.ts'
-import { runtime, setup, cacheKey } from './runtime.ts'
+import { runtime, setup, cacheKey, settings } from './runtime.ts'
 import { predicates } from './schemas.ts'
 
 import * as task from './task.ts'
+import { pixelDefaults } from './perception.ts'
+import { observeWindow } from './observe.ts'
+import { verifyOcr, ocrEvidence } from './verify-ocr.ts'
+import { allGrants, resolveIdentity, readConsent } from './gates.ts'
+import { redactor } from './content.ts'
 
 export type TaskArgs =
   | { action: 'start'; spec: Parameters<typeof task.startTask>[0] }
@@ -138,6 +143,52 @@ export async function taskTool(
             const windows = listed.structured?.windows
             if (!listed.ok || !Array.isArray(windows) || !windows.length) verdict = 'unknown'
             for (const window of Array.isArray(windows) ? windows.map(object) : []) {
+              if (preds.some((p) => p.ocr)) {
+                if (await isStopped(host, conversation, { signal })) return 'unknown'
+                const identity = await resolveIdentity(driver, app, signal)
+                if (
+                  !identity ||
+                  readConsent(
+                    identity,
+                    await allGrants(host, conversation, await readSession(host, conversation)),
+                  ) !== 'granted'
+                ) {
+                  verdict = 'unknown'
+                  continue
+                }
+                const observed = await observeWindow(
+                  driver,
+                  app,
+                  Number(window.window_id),
+                  'always',
+                  undefined,
+                  1568,
+                  signal,
+                )
+                const checked = await verifyOcr(
+                  driver,
+                  observed,
+                  preds,
+                  { ...pixelDefaults, ...(await settings(host)).pixel },
+                  signal,
+                  redactor(Object.values(state.spec.scope.params)),
+                )
+                if (checked.verdict === 'satisfied') {
+                  evidence.push(
+                    await ocrEvidence(
+                      host.home,
+                      conversation,
+                      observed,
+                      preds,
+                      call,
+                      checked.excerpt,
+                    ),
+                  )
+                  return 'satisfied'
+                }
+                if (checked.verdict === 'unknown') verdict = 'unknown'
+                continue
+              }
               const checked = await driver.call(
                 'verify_state',
                 { pid: window.pid!, window_id: window.window_id!, expect: preds, timeout_ms: 0 },

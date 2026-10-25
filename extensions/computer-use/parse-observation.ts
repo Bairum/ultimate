@@ -67,6 +67,8 @@ export function parseObservation(result: DriverResult, app: string): Observation
     tree: string(data.tree_markdown, 'tree_markdown'),
     truncated: boolean(data.truncated, 'truncated'),
     elements,
+    ...(typeof data.degraded === 'boolean' ? { degraded: data.degraded } : {}),
+    ...(typeof data.is_on_screen === 'boolean' ? { isOnScreen: data.is_on_screen } : {}),
     ...(data.window_bounds ? { bounds: windowBounds(data.window_bounds) } : {}),
     ...(data.capture_id != null
       ? {

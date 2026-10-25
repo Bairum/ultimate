@@ -2,7 +2,7 @@
 
 Computer use operates native macOS apps through Cua Driver, with TypeSafe Jev driving routine sub-goals behind user consent and per-step safety gates.
 
-Off by default; phase 1 controls this Mac only. Enable in user or project settings:
+Off by default; controls this Mac only, including pixel-only remote desktops shown locally. Enable in user or project settings:
 
 ```json
 {
@@ -10,7 +10,17 @@ Off by default; phase 1 controls this Mac only. Enable in user or project settin
   "computerUse": {
     "driverVersion": "0.37.0",
     "idleStopMinutes": 5,
-    "jev": { "act": 0.8, "margin": 0.25, "done": 0.85, "risk": 0.3, "maxCandidates": 24 }
+    "jev": { "act": 0.8, "margin": 0.25, "done": 0.85, "risk": 0.3, "maxCandidates": 24 },
+    "pixel": {
+      "requireLabel": true,
+      "labelRadius": 12,
+      "minConfidence": 0.5,
+      "settleMs": 3000,
+      "maxWaitSeconds": 120,
+      "foregroundForDegraded": "takeover",
+      "clipboard": false,
+      "fileTransfer": false
+    }
   }
 }
 ```
@@ -38,7 +48,7 @@ One lazy MCP stdio connection is shared per host. The daemon holds a display-awa
   Start creates an active `S1` from the goal text; an explicit nonempty sub-goal list replaces it and activates its first pending entry. Replans and approved changes keep that active-sub-goal invariant. Finish evidence belongs to the active sub-goal, or the most recently completed one.
 
 - **`computer_observe {app?, window?, screenshot?, query?, zoom?, evidence?}`**: replay-safe. Without `app`, list apps; with an app but no window, list its windows. Select a window by id or unique title substring to read its full-output accessibility tree (250 elements, depth 12, 16,000 text characters; truncation is noted). `screenshot` is `auto` (default), `always` or `never`: auto captures only empty/chrome-only trees. Returns the snapshot/capture identity, bounded tree in an `untrusted_screen_content` block, and optional image. `evidence: true` keeps a bounded AX excerpt with app, snapshot and call reference on the active sub-goal. `zoom: [x0,y0,x1,y1]` requests a **read-only** crop: pixel actions grounded on zoom images are refused as `zoom_read_only`; observe a full capture first. Images are limited to a 1568-pixel long edge, or 2576 for Claude Opus 4.7+/5.x.
-- **`computer_act {app, window?, actions?, goal?, expect?, foreground?}`**: not replay-safe. Exactly one of `actions` or `goal`. Explicit actions are `click`, `double_click`, `right_click`, `type`, `set_value`, `key`, `scroll`, `menu` and `wait`. Target elements by tokens from the latest observation; pixel clicks require `x`, `y` and the latest `capture`. Text always names an element. Driver 0.37.0 has no wait tool: a `wait` step returns `unsupported_step` without dispatch. Steps are sent individually, stopping at the first non-delivered outcome; later steps are `not_run`. `expect` goes through `verify_state`, followed by a fresh tree. Goal mode uses `goal: {text, params?, steps?, done_when?, budget?}`: Jev picks extension-built candidates, verifies effects and returns `done` only when Driver predicates satisfy `done_when`. Otherwise it escalates with a reason. Routine goals default to 8 steps / 30 seconds. On escalation, narrow the goal or act explicitly; do not repeat blindly.
+- **`computer_act {app, window?, actions?, goal?, expect?, foreground?}`**: not replay-safe. Exactly one of `actions` or `goal`. Explicit actions are `click`, `double_click`, `right_click`, `type`, `set_value`, `key`, `scroll`, `menu` and `wait`. Target elements by tokens from the latest observation; pixel clicks require `x`, `y`, the latest `capture` and `expect_label` by default. Text always names an element. `wait {until: {text?, gone?, stable?}, seconds}` polls captures and OCR (or native tree text), is cancellable, and returns a `wait` outcome with `satisfied` or `timeout` and what was seen. Seconds is at most 120 (or the lower configured maximum); waits over 60 seconds hold `caffeinate -d -w <pid>` only while running. Steps stop at the first non-delivered outcome or wait timeout; later steps are `not_run`. Native `expect` predicates go through `verify_state`. OCR predicates can be included as `[{ocr: {appears?: string[], disappears?: string[]}}]` or as the single object `{ocr: ...}`; they use a fresh capture. Goal mode uses `goal: {text, params?, steps?, done_when?, budget?}`: Jev picks extension-built candidates, verifies effects and returns `done` only when Driver predicates satisfy `done_when`. Otherwise it escalates with a reason. Routine goals default to 8 steps / 30 seconds. On escalation, narrow the goal or act explicitly; do not repeat blindly.
   `subgoal?: string` defaults to the active sub-goal. Each delivered explicit step gets a fresh observation; later tokens in the same batch are remapped only by a unique role/label path from that batch's initial observation.
 - **`computer_apps {launch?}`**: list apps or launch a consented app in the background. The tool is replay-safe for listing; a durable call-id journal prevents re-sending a launch after interruption (returns `observe_first` instead).
   Launching also requires an active task and an app in its scope; listing remains read-only without a task.
@@ -46,6 +56,20 @@ One lazy MCP stdio connection is shared per host. The daemon holds a display-awa
 `computer-operator` is the bounded native-app subagent: these four tools plus `read`, without bash or web access. Execution checks the definition name and all three resolved tool sets (offered, callable and deferred). Its brief must include the user's verbatim intent, allowed apps and desired evidence. Every tool result ends with a redacted task anchor; each input while active gets a `computer.note`, never a changing system prompt.
 
 Every tool result also carries `details` for cards (`ComputerDetails` in `refs.ts`), without changing `output` or `structuredOutput`. `details.task` is the structured task footer or null. `details.act` contains mode, per-step outcomes and effective labels (never input payloads), escalation reason, redacted Jev decisions and verification verdict. Step roles/labels and `decisions[].top[].label` are `UntrustedText` (`{text, untrusted:true}`). `details.observe` contains app/window/snapshot/capture metadata, explicitly untrusted title/tree text, truncation and the zero-based image block index in `output`. All `details.summary` values, including task/apps and read-only listings, are wrapped as `{value, untrusted:true}`. Details redact task parameters and current action/goal values; cards must not parse model text or the anchor line.
+
+Pixel steps add `expectLabel` and `ocrMatch` (`UntrustedText`) to each step's details. Wait steps add `wait: {status: 'satisfied' | 'timeout', seen: UntrustedText[]}`. These are additive renderer inputs; the `.tsx` facet is unchanged.
+
+## Pixel surfaces
+
+Install cua-perception 0.2.1 in the Driver's extension store. It runs locally; its mixed-license archive includes an AGPL-3.0-only detector (accepted for this private local use). OCR generally takes 1.5–2 seconds; the default confidence floor is 0.5, reflecting measured text medians around 0.62–0.68.
+
+Before input, OCR parses the click's own capture. A unique text region must contain the normalized expected label and contain the point or be within `labelRadius` screenshot pixels. Labels normalize case, punctuation, whitespace and invisible direction marks. A mismatch or ambiguity returns `label_mismatch` with explicitly untrusted nearby labels. The Driver's returned coordinate metadata maps action coordinates to OCR screenshot pixels; missing metadata is no hit and still requires confirmation. Verified OCR text supplies consequential checks, confirmation keys and redacted journal labels. Consequential labels still require exact one-shot confirmation; an OCR match is not pre-approval.
+
+Degraded windows still require labels even with `requireLabel: false`. They require user takeover plus `foreground: true` by default; `foregroundForDegraded: 'background'` opts out only of that additional degraded-window rule, not the ordinary frontmost gate. Invisible windows, thumbnail bounds much smaller than the AX root, and captures narrower than 300 pixels with a larger AX frame return `window_not_visible` before OCR/input. Show the window, disable Stage Manager, or obtain foreground takeover and observe again.
+
+After delivered pixel input, two equal small captures (at most 800 pixels) establish stability, bounded by `settleMs`, followed by a fresh capture. Satisfied OCR expectations create server-written PNG evidence and parameter-redacted OCR excerpts linked with the same exact-predicate criterion rules as native verification. Finish rechecks OCR criteria against fresh captures. Evidence lives under `<instance home>/computer-use/<conversation>/`, is pruned on observe/act and writes after 30 days, and each conversation is capped at 200 MB (oldest first). Screen captures remain private local files; only excerpts/details/journal labels redact named parameter values.
+
+`clipboard: false` and `fileTransfer: false` are placeholders, not implemented features. A live supervised teach session must validate clipboard and file-transfer behavior before those features are built.
 
 ## Actions and document
 

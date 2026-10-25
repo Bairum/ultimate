@@ -24,6 +24,10 @@ import { Type } from '@earendil-works/pi-ai'
 import { createChild } from '../extensions/subagents/children.ts'
 import { discoverAgents } from '../lib/agents.ts'
 import { Metadata } from '../server/metadata.ts'
+import { runtime } from '../extensions/computer-use/runtime.ts'
+import { matchLabel } from '../extensions/computer-use/perception.ts'
+import type { Region } from '../extensions/computer-use/perception.ts'
+import { readFile } from 'node:fs/promises'
 
 vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@earendil-works/pi-coding-agent')>()
@@ -54,6 +58,7 @@ async function fixture(classify?: ClassifyService, extraTools: ToolRegistration[
   const home = await temp()
   const host = {
     userHome: home,
+    home,
     projectSettings: async () => ({}),
     harness: () => harness,
     conversations: () => conversationIds.map((id) => ({ id })),
@@ -522,6 +527,7 @@ function labelButton(f: Awaited<ReturnType<typeof fixture>>, index: number, labe
 
 it('hit-tests pixel clicks before consequence checks and confirms no-hit clicks', async () => {
   const f = await fixture()
+  f.host.projectSettings = async () => ({ computerUse: { pixel: { requireLabel: false } } })
   labelButton(f, 7, 'Send')
   const call = f.driver.call.bind(f.driver)
   f.driver.call = async (tool, args, signal) => {
@@ -933,6 +939,7 @@ it('keeps parameter values and their normalised forms out of risk requests and t
 
 it('requires pixel confirmation when a downscaled capture disagrees with its reported scale', async () => {
   const f = await fixture()
+  f.host.projectSettings = async () => ({ computerUse: { pixel: { requireLabel: false } } })
   labelButton(f, 13, 'Send')
   const call = f.driver.call.bind(f.driver)
   f.driver.call = async (tool, args, signal) => {
@@ -1376,6 +1383,7 @@ it('accepts the real computer-operator definition resolved by the subagents chil
 
 it('fails closed on capture dimensions that disagree with the PNG header and records screenshot-pixel confirmation coordinates', async () => {
   const f = await fixture()
+  f.host.projectSettings = async () => ({ computerUse: { pixel: { requireLabel: false } } })
   const call = f.driver.call.bind(f.driver)
   f.driver.call = async (tool, args, signal) => {
     const reply = await call(tool, args, signal)
@@ -1392,4 +1400,214 @@ it('fails closed on capture dimensions that disagree with the PNG header and rec
     y: 90,
   })
   expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
+})
+
+const textRegion = (label: string, id = 'r1'): Region => ({
+  id,
+  kind: 'text',
+  label,
+  confidence: 0.65,
+  bounds: { x: 100, y: 80, width: 90, height: 20 },
+  interactive: true,
+})
+async function pixelFixture(takeover = true) {
+  const f = await fixture()
+  vi.mocked(resizeImage).mockResolvedValue(null)
+  f.fake.surface.degraded = true
+  f.fake.surface.regions = [textRegion('Continue')]
+  let now = 0
+  runtime(f.host).clock = {
+    now: () => now,
+    sleep: async (ms) => {
+      now += ms
+    },
+  }
+  await f.grant()
+  if (takeover) await actions.takeover({ conversation: f.root.id, app: 'Calculator' }, f.ctx)
+  const view = await f.observe()
+  return {
+    ...f,
+    view,
+    pixel: {
+      kind: 'click',
+      x: 120,
+      y: 90,
+      capture: view.capture!.id,
+      expect_label: 'Continue',
+    } as Step,
+  }
+}
+
+it('delivers a label-checked degraded pixel click, settles and uses its OCR label in details and journal', async () => {
+  const f = await pixelFixture()
+  const result = await f.run([f.pixel], true)
+  expect(data(result).status).toBe('delivered')
+  expect(f.fake.calls.filter((c) => c.tool === 'click')).toHaveLength(1)
+  expect(
+    ('details' in result ? (result.details as ComputerDetails) : undefined)?.act?.steps[0],
+  ).toMatchObject({
+    expectLabel: { text: 'Continue', untrusted: true },
+    ocrMatch: { text: 'Continue', untrusted: true },
+  })
+  expect((await readSession(f.host, f.root.id)).journal[0].label).toBe('Continue')
+  const small = f.fake.calls.filter(
+    (c) => c.tool === 'get_window_state' && c.args.max_image_dimension === 800,
+  )
+  expect(small).toHaveLength(2)
+})
+
+it.each(['wrong', 'ambiguous'] as const)(
+  'refuses a %s expected pixel label without sending a click',
+  async (mode) => {
+    const f = await pixelFixture()
+    f.fake.surface.regions =
+      mode === 'wrong'
+        ? [textRegion('Cancel')]
+        : [textRegion('Continue'), textRegion('Continue', 'r2')]
+    const view = await f.observe()
+    const result = await f.run([{ ...f.pixel, capture: view.capture!.id } as Step], true)
+    expect(data(result).status).toBe('label_mismatch')
+    expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
+  },
+)
+
+it('requires confirmation for OCR Delete and binds it to the verified screen label', async () => {
+  const f = await pixelFixture()
+  f.fake.surface.regions = [textRegion('Delete')]
+  const view = await f.observe()
+  expect(
+    data(
+      await f.run(
+        [{ ...f.pixel, capture: view.capture!.id, expect_label: 'Delete' } as Step],
+        true,
+      ),
+    ).status,
+  ).toBe('confirm_required')
+  expect((await readSession(f.host, f.root.id)).pending[0]).toMatchObject({ label: 'Delete' })
+  expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
+})
+
+it('requires an existing takeover for degraded input by default', async () => {
+  const f = await pixelFixture(false)
+  expect(data(await f.run([f.pixel])).status).toBe('takeover_required')
+  expect(f.fake.calls.some((c) => ['click', 'parse_visual_regions'].includes(c.tool))).toBe(false)
+})
+
+it('refuses a Stage Manager thumbnail before parsing or clicking', async () => {
+  const f = await pixelFixture()
+  f.fake.surface.degraded = false
+  f.fake.surface.thumbnail = true
+  const view = await f.observe()
+  expect(data(await f.run([{ ...f.pixel, capture: view.capture!.id } as Step], true)).status).toBe(
+    'window_not_visible',
+  )
+  expect(f.fake.calls.some((c) => ['click', 'parse_visual_regions'].includes(c.tool))).toBe(false)
+})
+
+it('waits for OCR text to appear with an injected clock', async () => {
+  const f = await pixelFixture()
+  runtime(f.host).clock!.sleep = async () => {
+    f.fake.surface.regions = [textRegion('Ready')]
+  }
+  const result = await f.run([{ kind: 'wait', until: { text: 'Ready' }, seconds: 2 }])
+  expect(data(result).status).toBe('satisfied')
+  expect(
+    ('details' in result ? (result.details as ComputerDetails) : undefined)?.act?.steps[0].wait,
+  ).toMatchObject({
+    status: 'satisfied',
+    seen: [{ text: 'Ready', untrusted: true }],
+  })
+})
+
+it('returns a wait timeout with what was seen, without real sleeps', async () => {
+  const f = await pixelFixture()
+  const result = await f.run([{ kind: 'wait', until: { text: 'Missing' }, seconds: 2 }])
+  expect(data(result).status).toBe('timeout')
+  expect(
+    ('details' in result ? (result.details as ComputerDetails) : undefined)?.act?.steps[0].wait
+      ?.seen,
+  ).toEqual([{ text: 'Continue', untrusted: true }])
+})
+
+it('cancels a wait through Stop between polls', async () => {
+  const f = await pixelFixture()
+  runtime(f.host).clock!.sleep = async () => {
+    await actions.stop({ conversation: f.root.id }, f.ctx)
+  }
+  const result = await f.run([{ kind: 'wait', until: { text: 'Missing' }, seconds: 2 }])
+  expect(data(result).status).toBe('stopped')
+  expect(data(result).outcomes).toEqual([{ status: 'not_run' }])
+})
+
+async function checkOcr(matched: boolean) {
+  const f = await pixelFixture()
+  const predicates = [{ ocr: { appears: ['Continue'] } }]
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.task!.spec.criteria[0].check = predicates
+  })
+  f.fake.surface.regions = [textRegion(matched ? 'Continue' : 'Cancel')]
+  const result = await act(
+    f.host,
+    f.driver,
+    f.root.id,
+    'ocr-evidence',
+    {
+      app: 'Calculator',
+      window: 456,
+      actions: [f.pixel],
+      foreground: true,
+      expect: predicates,
+      criterion: 'C1',
+    },
+    new AbortController().signal,
+  )
+  const evidence = (await readSession(f.host, f.root.id)).task!.subgoals[0].evidence
+  const finished = await f.invoke('computer_task', {
+    action: 'finish',
+    outcome: 'done',
+    summary: 'OCR verification',
+  })
+  return { f, result, evidence, finished }
+}
+it('records server-verified OCR PNG evidence and satisfies a criterion', async () => {
+  const { f, result, evidence, finished } = await checkOcr(true)
+  expect(data(result).verdict).toBe('satisfied')
+  expect(evidence).toHaveLength(1)
+  expect(evidence[0]).toMatchObject({ kind: 'verify', excerpt: 'Continue', verdict: 'satisfied' })
+  if (evidence[0].kind !== 'verify') throw new Error('Missing verify evidence')
+  expect(evidence[0].path).toContain(`/computer-use/${f.root.id}/`)
+  expect((await readFile(evidence[0].path!)).subarray(1, 4).toString()).toBe('PNG')
+  expect(data(finished).status).toBe('done')
+  expect((await readSession(f.host, f.root.id)).task!.criteriaMet).toEqual(['C1'])
+})
+it('does not record evidence or satisfy an unmet OCR criterion', async () => {
+  const { f, result, evidence, finished } = await checkOcr(false)
+  expect(data(result).verdict).toBe('unsatisfied')
+  expect(evidence).toEqual([])
+  expect(data(finished).status).toBe('criteria_unmet')
+  expect((await readSession(f.host, f.root.id)).task!.criteriaMet ?? []).toEqual([])
+})
+
+it('keeps parameter values out of expected labels, OCR details and the journal', async () => {
+  const f = await pixelFixture()
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.task!.spec.scope.params = { customer: 'private-customer' }
+  })
+  f.fake.surface.regions = [textRegion('Continue private-customer')]
+  const view = await f.observe()
+  const result = await f.run(
+    [{ ...f.pixel, capture: view.capture!.id, expect_label: 'Continue private-customer' } as Step],
+    true,
+  )
+  expect(data(result).status).toBe('delivered')
+  expect(JSON.stringify('details' in result ? result.details : null)).not.toContain(
+    'private-customer',
+  )
+  expect(JSON.stringify((await readSession(f.host, f.root.id)).journal)).not.toContain(
+    'private-customer',
+  )
+})
+
+it('normalizes invisible marks and punctuation when grounding OCR labels', () => {
+  expect(matchLabel([textRegion('\u2066Hello,  WORLD!\u2069')], 'hello world').match).toBeDefined()
 })

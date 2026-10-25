@@ -50,6 +50,9 @@ export type ActStepDetails = {
   message?: string
   role?: UntrustedText
   label?: UntrustedText
+  expectLabel?: UntrustedText
+  ocrMatch?: UntrustedText
+  wait?: { status: 'satisfied' | 'timeout'; seen: UntrustedText[] }
 }
 export type JevDecisionDetails = Omit<JevDecision, 'chose' | 'top'> & {
   chose?: string

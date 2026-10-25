@@ -5,11 +5,14 @@ import type { runGoal } from './jev.ts'
 import type { Driver, Observation } from './types.ts'
 import { result, message, anchored, ObservationUnavailable } from './tool-helpers.ts'
 import { isStopped } from './session.ts'
+import { pixelDefaults } from './perception.ts'
+import type { PixelSettings, Clock } from './perception.ts'
 
 export type Settings = {
   driverVersion?: string
   idleStopMinutes?: number
   jev?: Parameters<typeof runGoal>[1]['thresholds']
+  pixel?: Partial<PixelSettings>
 }
 export async function settings(host: ExtensionHost): Promise<Settings> {
   const user = await readSettings(userSettingsPath(host.userHome))
@@ -17,6 +20,11 @@ export async function settings(host: ExtensionHost): Promise<Settings> {
   return {
     ...(user.computerUse as Settings | undefined),
     ...(project.computerUse as Settings | undefined),
+    pixel: {
+      ...pixelDefaults,
+      ...(user.computerUse as Settings | undefined)?.pixel,
+      ...(project.computerUse as Settings | undefined)?.pixel,
+    },
   }
 }
 export type Active = {
@@ -33,6 +41,7 @@ export type Runtime = {
   observations: Map<string, Observation>
   zoomed: Set<string>
   busy: boolean
+  clock?: Clock
   calls: Map<AbortController, number>
 }
 export function runtime(host: ExtensionHost) {

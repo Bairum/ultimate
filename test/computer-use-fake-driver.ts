@@ -3,6 +3,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import type { JsonValue } from '@earendil-works/chord'
+import type { Region } from '../extensions/computer-use/perception.ts'
 
 export type FakeCall = { tool: string; args: Record<string, JsonValue> }
 type Reply = CallToolResult | ((call: FakeCall) => CallToolResult | Promise<CallToolResult>)
@@ -20,6 +21,15 @@ export function pngHeader(width: number, height: number) {
 export function createFakeDriver(options: { version?: string; name?: string } = {}) {
   const calls: FakeCall[] = []
   const scripts: { tool?: string; reply: Reply | 'drop' }[] = []
+  const surface = {
+    degraded: false,
+    isOnScreen: true,
+    thumbnail: false,
+    regions: [] as Region[],
+    hashes: ['unchanged'],
+  }
+  const captures = new Map<string, Region[]>()
+  const consumed = new Set<string>()
   let frontmostPid: number | undefined = 999
   const labels = [
     ...Array.from({ length: 10 }, (_, i) => String(i)),
@@ -44,6 +54,8 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
       tree_markdown: `AXWindow Calculator\n${labels.map((label) => `  AXButton ${label}`).join('\n')}\n  AXStaticText ${display}`,
       truncated: false,
       window_bounds: { x: 0, y: 0, width: 400, height: 100 },
+      degraded: surface.degraded,
+      is_on_screen: surface.isOnScreen,
       capture_id: `capture${snapshot}`,
       screenshot_width: 800,
       screenshot_height: 200,
@@ -56,6 +68,7 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
           role: 'AXWindow',
           label: 'Calculator',
           actions: [],
+          frame: { x: 0, y: 0, w: 400, h: 100 },
         },
         ...labels.map((label, i) => ({
           element_token: `s${snapshot}:${i + 1}`,
@@ -95,8 +108,51 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
   function calculate(call: FakeCall): CallToolResult {
     const { tool, args } = call
     let structured: Record<string, JsonValue> = { status: 'ok' }
-    if (tool === 'get_window_state') structured = state()
+    if (tool === 'get_window_state' || tool === 'get_desktop_state') {
+      structured = state()
+      if (surface.degraded) {
+        structured.elements = []
+        structured.tree_markdown = ''
+      }
+      if (surface.thumbnail) {
+        structured.window_bounds = { x: 0, y: 0, width: 113, height: 50 }
+        structured.screenshot_width = 226
+        structured.screenshot_height = 100
+      }
+      captures.set(structured.capture_id as string, structuredClone(surface.regions))
+      if (args.include_screenshot || surface.degraded || tool === 'get_desktop_state') {
+        const hash = surface.hashes.length > 1 ? surface.hashes.shift()! : surface.hashes[0]
+        const png = pngHeader(
+          Number(structured.screenshot_width),
+          Number(structured.screenshot_height),
+        )
+        png.data = Buffer.concat([Buffer.from(png.data, 'base64'), Buffer.from(hash)]).toString(
+          'base64',
+        )
+        return { structuredContent: structured, content: [{ type: 'image', ...png }] }
+      }
+    }
+    if (tool === 'parse_visual_regions') {
+      const regions = captures.get(typeof args.capture_id === 'string' ? args.capture_id : '')
+      if (!regions) return refusal('stale_capture', 'Unknown capture')
+      structured = {
+        schema: 'cua.visual_regions_v1',
+        regions: regions.map(({ label, ...r }) => ({ ...r, text: label })),
+        capture: {
+          capture_id: args.capture_id,
+          action_coordinate_space: { kind: 'screenshot_pixels' },
+        },
+        parser: {},
+        timing: {},
+      }
+    }
     if (tool === 'click') {
+      if (typeof args.capture_id === 'string') {
+        if (!captures.has(args.capture_id) || consumed.has(args.capture_id))
+          return refusal('stale_capture', 'Capture consumed')
+        consumed.add(args.capture_id)
+        return { content: [], structuredContent: { status: 'ok' } }
+      }
       const token = typeof args.element_token === 'string' ? args.element_token : ''
       if (!token.startsWith(`s${snapshot}:`)) return refusal('stale_element_token', 'Observe again')
       const label = labels[Number(token.split(':')[1]) - 1]
@@ -149,6 +205,7 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
 
   return {
     calls,
+    surface,
     set frontmostPid(pid: number | undefined) {
       frontmostPid = pid
     },
@@ -188,6 +245,8 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
       server.server.setRequestHandler(ListToolsRequestSchema, async () => ({
         tools: [
           'get_window_state',
+          'get_desktop_state',
+          'parse_visual_regions',
           'click',
           'set_value',
           'type_text',
