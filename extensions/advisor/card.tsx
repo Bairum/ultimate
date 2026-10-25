@@ -27,6 +27,7 @@ import {
   feedback,
   openAdvisorPanel,
   outcomeOf,
+  judgeLabel,
   outcomes,
   reasons,
   SeverityDot,
@@ -270,11 +271,20 @@ export function Response({ note }: { note: StoredNote }) {
             title={
               response.source === 'ack'
                 ? `The agent's acknowledgement${note.ref ? ` of advisor ${note.ref}` : ''}`
-                : 'A judge read the entries after delivery'
+                : [
+                    'A judge read the entries after delivery',
+                    response.model,
+                    response.judge === 'sol' && response.confidence !== undefined
+                      ? 'Jev was below its confidence threshold, so the advisor model decided'
+                      : undefined,
+                  ]
+                    .filter(Boolean)
+                    .join('\n')
             }
           >
             {' '}
             · {sources[response.source]}
+            {judgeLabel(response) && ` by ${judgeLabel(response)}`}
           </span>
         )}
         {reason && !response?.reason && (
