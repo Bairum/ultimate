@@ -40,6 +40,14 @@ again only as the seed carried it (`builtIn`; paused stays paused). As any condi
 below the threshold and waits an hour between fires. `@ultimate` resolves to @ultimate's conversation, so it follows
 @ultimate across chapters.
 
+Beside it dream ships **Dream after a pause** (`condition {metric: 'context', of: '@ultimate', above: 50, idleFor:
+8 h}`), kept the same way in `dream.after-pause` and carried as the seed's `builtInPause`. It dreams while the user is
+away: at 8 hours keep-warm has just renewed the prompt cache, so the handoff reads @ultimate's context instead of
+rewriting it, and the user's next message goes to a lean chapter instead of re-reading half a million tokens on every
+request. Its fire records the pause (`waiting.automation.pause`, then `beforeCompaction.pause`, ms); once its session
+settles it always asks (`result: 'ask'`, whatever `dream.asleepAfter` says), and the settled card leads with "A good
+moment for a fresh chapter" and "Dreamed while you were away 9 h". The user taps Fall asleep themselves.
+
 The automation from before this feature, **Dream after compaction** (an event on `conversations.compacted where
 conversation=@ultimate`), is migrated in place by `ensureAutomation` through automations' `update`, which may now
 switch a schedule, event or condition to another of these: same id, enabled state and subscribers. A lost

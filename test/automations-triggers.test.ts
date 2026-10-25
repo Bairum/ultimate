@@ -10,13 +10,14 @@ import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
 import { callTrace } from '../server/trace.ts'
 import { Metadata } from '../server/metadata.ts'
-import { defineEvent } from '../shared/events.ts'
+import { defineEvent, UserInputEvent } from '../shared/events.ts'
 import { ContextUsageDoc } from '../extensions/conversations/api.ts'
 import { Standing } from '../extensions/subagents/api.ts'
 import type { SubagentsService } from '../extensions/subagents/api.ts'
 import { createChild } from '../extensions/subagents/children.ts'
 import automations, { actions, Automations } from '../extensions/automations/server.ts'
 import type { Automation } from '../extensions/automations/types.ts'
+import { IDLE_TICK } from '../extensions/automations/triggers.ts'
 import { temp, eventHost, until, apis } from './helpers.ts'
 
 const closes: (() => Promise<void>)[] = []
@@ -331,6 +332,77 @@ it('uses context hysteresis and cooldown and catches a missed crossing on open o
   expect((await f.record(a.id)).fires).toBe(3)
   await f.opener()
   expect((await f.record(a.id)).fires).toBe(3)
+})
+
+it('fires an idle condition only after the pause, at the threshold, and re-arms below the line', async () => {
+  // The minute look is an interval: faked, so a tick runs when the test says.
+  vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+  const f = await fixture()
+  await f.harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = f.target
+  }, context)
+  const HOUR = 3600_000
+  const a = (await f.action('create', {
+    name: 'Pause',
+    condition: { metric: 'context', of: '@ultimate', above: 50, idleFor: 8 * HOUR, cooldownMs: 0 },
+  })) as Automation
+  const plain = (await f.action('create', {
+    name: 'Plain',
+    condition: { metric: 'context', of: '@ultimate', above: 90 },
+  })) as Automation
+  const input = () =>
+    f.harness.commit(
+      (tx) =>
+        f.host.emit(tx, UserInputEvent, { conversation: f.target, kind: 'prompt', length: 1 }),
+      context,
+    )
+  const tick = async () => {
+    // The minute look reads only the idle condition: it measures it again, and leaves the plain one as it was.
+    await f.harness.commit(async (tx) => {
+      const ledger = (await tx.doc(Automations)).automations
+      delete ledger[a.id].condition!.value
+      delete ledger[plain.id].condition!.value
+    }, context)
+    vi.advanceTimersByTime(IDLE_TICK)
+    await until(async () => (await f.record(a.id)).condition?.value !== undefined)
+    expect((await f.record(plain.id)).condition?.value).toBeUndefined()
+  }
+  // Above the threshold right away: no pause yet.
+  await f.usage(60)
+  await until(async () => (await f.record(a.id)).condition?.value === 60)
+  expect((await f.record(a.id)).fires).toBe(0)
+  // The user writes at 7 h; at 14 h (7 h after it) it is still silent, then time alone crosses 8 h.
+  vi.setSystemTime(Date.now() + 7 * HOUR)
+  await input()
+  await f.settle()
+  expect((await f.record(a.id)).condition?.inputAt).toBe(Date.now())
+  vi.setSystemTime(Date.now() + 7 * HOUR)
+  await tick()
+  expect((await f.record(a.id)).fires).toBe(0)
+  vi.setSystemTime(Date.now() + HOUR + 1)
+  await tick()
+  expect((await f.record(a.id)).fires).toBe(1)
+  expect((await f.record(a.id)).condition?.armed).toBe(false)
+  // Disarmed: further pauses and ticks above the line do not fire again; dropping to 45% does not re-arm.
+  vi.setSystemTime(Date.now() + 9 * HOUR)
+  await f.usage(45)
+  await until(async () => (await f.record(a.id)).condition?.value === 45)
+  await tick()
+  expect((await f.record(a.id)).condition?.armed).toBe(false)
+  // Below 40% re-arms; past the pause but under the threshold stays silent.
+  await f.usage(39)
+  await until(async () => (await f.record(a.id)).condition?.armed === true)
+  await tick()
+  expect((await f.record(a.id)).fires).toBe(1)
+  // Back over 50% after the pause: the second fire.
+  await f.usage(51)
+  await until(async () => (await f.record(a.id)).fires === 2)
+  // Retargeted: the old target's input no longer counts; the pause starts afresh from the update.
+  await f.action('update', {
+    id: a.id,
+    condition: { metric: 'context', of: `#${f.target}`, above: 50, idleFor: 8 * HOUR },
+  })
+  expect((await f.record(a.id)).condition?.inputAt).toBe(Date.now())
 })
 
 it('sees a re-arm and the crossing after it even when both commit before evaluation', async () => {
