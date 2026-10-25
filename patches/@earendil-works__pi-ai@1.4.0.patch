@@ -1,0 +1,35 @@
+diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+index 841da8964d2b403c45a18d4d1735c1fabc441a9a..89bbefcf3a85678de41e18b6dcd68be70500a418 100644
+--- a/dist/api/anthropic-messages.js
++++ b/dist/api/anthropic-messages.js
+@@ -972,6 +972,30 @@ function buildParams(model, context, isOAuthToken, options, disablePreferredStri
+             params.tools = convertToolDefinitions(tools, toolCacheControl);
+         }
+     }
++    // Keep rolling anchors at stable converted-message indices, even in long tool loops.
++    // Count actual markers (including OAuth's identity) before spending the four-block budget.
++    if (cacheControl) {
++        const blocks = [
++            ...(params.system ?? []),
++            ...(params.tools ?? []),
++            ...params.messages.flatMap(message => Array.isArray(message.content) ? message.content : []),
++        ];
++        let remaining = 4 - blocks.filter(block => block.cache_control).length;
++        for (let index = Math.floor((params.messages.length - 2) / 16) * 16; index >= 0 && remaining > 0; index -= 16) {
++            const message = params.messages[index];
++            if (message.role !== "user")
++                continue;
++            if (typeof message.content === "string") {
++                message.content = [{ type: "text", text: message.content }];
++            }
++            const block = message.content[message.content.length - 1];
++            if (block && !block.cache_control &&
++                ["text", "image", "tool_result", "tool_addition", "tool_removal"].includes(block.type)) {
++                block.cache_control = cacheControl;
++                remaining--;
++            }
++        }
++    }
+     if (thinkingDisabled) {
+         // No effort is sent, so the model default applies. Anthropic rejects `block_binding`
+         // with disabled thinking.
