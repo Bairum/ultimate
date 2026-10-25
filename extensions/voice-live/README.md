@@ -13,10 +13,20 @@ agent uses `openai-codex/gpt-6-luna` through Pi's existing ChatGPT login, low th
 1. The browser acquires the microphone, adds its track to a peer connection and creates `oai-events` before its
    offer. `start` looks up `subagents.standing('voice')` and exchanges SDP through OpenAI's live sessions endpoint
    (`gpt-live-1`, voice `marin`). It seeds at most ten recent Voice lines, each clipped to 200 characters.
-2. After `session.started`, remote audio plays through an autoplay element. GPT-Live only listens, backchannels,
+2. While the session connects, `start` also puts together Voice's **context brief** in code, without a model
+   (`brief.ts`): the project memory a branch starts from (`LineageApi.memoryBrief`), the user's last five requests
+   to @ultimate with the first line of each answer, and up to eight open branches with their state. It goes into
+   Voice's transcript as a `voice.context` write after the session divider, a quiet folded card ("Context · memory
+   N · N recent requests · N open branches") that opens to the text Voice was given. Every session start, a reopen
+   after the idle-close included, places a fresh one. Its edit omits the previous brief, so only the newest reaches
+   the model; earlier cards stay in the transcript, dimmed. A `heard` line waits for the brief still being put
+   together, and the dock says "Loading context…" meanwhile. Briefs are `transient`: lineage leaves them out of
+   compaction summaries, and when a compaction cut the newest one, Voice's next request places it again after the
+   summary. A brief that fails says so on its card; the session still starts.
+3. After `session.started`, remote audio plays through an autoplay element. GPT-Live only listens, backchannels,
    answers connection checks and greetings itself, and speaks received commentary. It never handles work questions
    or decides to delegate; Voice stays silent on the small talk GPT-Live already answered, so a line gets one answer.
-3. `Relay` joins transcript fragments after 1,200 ms quiet when the line ends a sentence, 2,800 ms when it trails
+4. `Relay` joins transcript fragments after 1,200 ms quiet when the line ends a sentence, 2,800 ms when it trails
    off, so a breath mid-thought does not split it. The transcriber's `[unintelligible]` and `[inaudible]` markers
    become "…". GPT-Live has no transcription, language or turn-detection settings; this is the only place to tune
    it. The line being said grows at the end of Voice's transcript (`transcript.end`) word by word, its start fading
@@ -24,7 +34,7 @@ agent uses `openai-codex/gpt-6-luna` through Pi's existing ChatGPT login, low th
    GPT-Live's `output_transcript.delta` reads it out. Every finished user line goes through `heard` as a
    `voice.heard` input to Voice (`whenBusy: 'steer'`). GPT-Live's own speech can be logged as `live` lines;
    commentary output is not logged twice. Delegation events are ignored.
-4. `extensions/voice-live/agents/voice.md` configures the standing agent with three deferred tools and codemode:
+5. `extensions/voice-live/agents/voice.md` configures the standing agent with three deferred tools and codemode:
    - `voice_say {text}` writes an `ultimate` `voice.line` with `speech: true`. The browser sends it as commentary.
    - `voice_ask_ultimate {request}` writes a forwarded user line and schedules the durable answer task. It answers
      @ultimate's newest open question through Messages, or submits a typed `voice.utterance` with the clean request.
@@ -35,7 +45,7 @@ agent uses `openai-codex/gpt-6-luna` through Pi's existing ChatGPT login, low th
      `ultimate.*` reads, then `voice_say`, without an @ultimate turn. It stays read-only by instruction, not by a
      code guard: the definition tells Voice never to start, change, message or write anything, and to pass
      anything that needs doing or judgement, or that it is unsure about, to @ultimate.
-5. The answer task sends @ultimate's full answer back as a `voice.answer` input to Voice. A tool-terminated message
+6. The answer task sends @ultimate's full answer back as a `voice.answer` input to Voice. A tool-terminated message
    uses its user-facing text and numbered questions/options. Voice speaks the conclusion in 2–4 short sentences,
    preserving decisions without reading Markdown, paths or code aloud. There is no summary-model speech rewrite.
    Failed/unanswered inputs leave a notice linked to the forwarded line and tell Voice to explain the failure.
