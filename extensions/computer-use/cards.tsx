@@ -24,14 +24,17 @@ import { SessionDoc, StopAction } from './refs.ts'
 import {
   AnchorLine,
   escalations,
+  headerState,
   liveSteps,
   Mark,
   parseResult,
   refusalText,
   predicate,
+  toneClass,
+  toneOf,
   useSession,
 } from './shared.tsx'
-import type { Journal, Outcome, Session, Window } from './shared.tsx'
+import type { Journal, Outcome, Session, Tone, Window } from './shared.tsx'
 
 type Image = ToolCallView['images'][number]
 type Step = Record<string, unknown> & { kind?: string }
@@ -167,13 +170,13 @@ function StopButton({ conversation }: { conversation?: number }) {
       disabled={busy}
       onClick={() => {
         setBusy(true)
-        // NEXT(server): Stop becomes project-wide (one flag on conversation 1); the argument may change then.
+        // Stop is project-wide: the server sets the flag on conversation 1 and interrupts every active call.
         api
           .action(StopAction, { conversation })
           .catch((error: unknown) => console.error(errorMessage(error)))
           .finally(() => setBusy(false))
       }}
-      title="Stop: no further step is sent"
+      title="Stop computer use in this project: no further step is sent"
       type="button"
     >
       {busy ? (
@@ -248,6 +251,8 @@ function Raised({
           grants={[
             ...(project?.grants.filter((g) => g.scope === 'project') ?? []),
             ...session.grants,
+            ...(project?.grants.filter((g) => g.scope === 'deny' && g.denyScope === 'project') ??
+              []),
           ]}
         />
       </ToolSection>
@@ -258,20 +263,8 @@ function Raised({
 /** Status for a header meta: delivered quietly, everything else coloured and in words. */
 function Verdict({ status }: { status?: string }) {
   if (!status) return null
-  const good = ['delivered', 'done', 'active', 'satisfied'].includes(status)
-  return (
-    <span
-      className={
-        good
-          ? 'text-success'
-          : status === 'escalated' || status === 'unknown' || status.endsWith('_required')
-            ? 'text-warning'
-            : 'text-error'
-      }
-    >
-      {good ? status : refusalText(status)}
-    </span>
-  )
+  const tone = toneOf(status)
+  return <span className={toneClass[tone]}>{tone === 'good' ? status : refusalText(status)}</span>
 }
 
 export function Observe({ call }: { call: ToolCallView }) {
@@ -303,7 +296,7 @@ export function Observe({ call }: { call: ToolCallView }) {
           </>
         }
         name="observe"
-        state={call.status}
+        state={headerState(call.status, failed ? toneOf(parsed.status) : 'good')}
         title={
           listing
             ? app
@@ -546,6 +539,22 @@ export function Act({ call }: { call: ToolCallView }) {
   const background = call.args.foreground !== true
   const refusedBeforeStart = status && !outcomes.length && !goal ? status : undefined
   const waiting = outcomes.find((o) => o.code && asks.includes(o.code))?.code
+  const expected = Array.isArray(call.args.expect) && call.args.expect.length > 0
+  const verified = !expected || text(parsed.summary.verdict) === 'satisfied'
+  // One tone for the whole call: the header icon and the summary on the right agree.
+  const tone: Tone = goal
+    ? status === 'done'
+      ? 'good'
+      : status === 'escalated'
+        ? 'wait'
+        : toneOf(status)
+    : outcomes.length
+      ? outcomes.some((o) => o.status === 'refused' || o.status === 'failed') && !waiting
+        ? 'bad'
+        : waiting || outcomes.some((o) => o.status !== 'delivered') || !verified
+          ? 'wait'
+          : 'good'
+      : toneOf(status)
   return (
     <Tool defaultOpen>
       <ToolHeader
@@ -563,7 +572,7 @@ export function Act({ call }: { call: ToolCallView }) {
             ) : outcomes.some((o) => o.status === 'unknown') ? (
               <span className="text-warning">outcome unknown</span>
             ) : outcomes.length ? (
-              <span className={delivered === steps.length ? 'text-success' : 'text-warning'}>
+              <span className={tone === 'good' ? 'text-success' : toneClass[tone]}>
                 {delivered}/{steps.length} delivered
               </span>
             ) : (
@@ -574,7 +583,7 @@ export function Act({ call }: { call: ToolCallView }) {
           </>
         }
         name={goal ? 'act · goal' : 'act'}
-        state={call.status}
+        state={headerState(call.status, tone)}
         title={
           goal
             ? `${app} · ${text(goal.text)}`
@@ -661,7 +670,7 @@ export function Apps({ call }: { call: ToolCallView }) {
           </>
         }
         name={launch ? 'launch' : 'apps'}
-        state={call.status}
+        state={headerState(call.status, launch ? toneOf(status) : 'good')}
         title={launch || 'running apps'}
       />
       <ToolContent>

@@ -130,7 +130,6 @@ function Consent({ request, conversation }: { request: Pending; conversation: nu
           <Act action={GrantAction} args={grant('project')} onError={setError}>
             This project
           </Act>
-          {/* NEXT(server): `deny` gains a scope; offer "Deny once" vs "Never in this project" then. */}
           <span className="flex-1" />
           <Act action={DenyAction} args={{ conversation, app: request.app }} onError={setError}>
             Deny
@@ -178,11 +177,18 @@ function Confirm({ request, conversation }: { request: Pending; conversation: nu
       {request.label !== undefined && (
         <Fact label="control">{request.label || '(unlabelled)'}</Fact>
       )}
-      {/* NEXT(server): pending confirmations carry a display payload (text, value, chord or menu path, ≤200 chars);
-          show it here as a `sends` fact so the user sees exactly what they confirm. */}
+      {request.payload ? (
+        <Fact label="sends">
+          <span className="rounded-sm bg-terminal px-1.5 py-0.5 whitespace-pre-wrap">
+            {request.payload}
+          </span>
+          {request.payload.length >= 200 && (
+            <span className="text-muted-foreground"> · first 200 characters</span>
+          )}
+        </Fact>
+      ) : null}
       <p className="text-[11px] text-muted-foreground">
-        {/* NEXT(server): confirmations become one-shot; drop "every identical step" then. */}
-        Confirming allows every identical step on this control in this window, not just this one.
+        Confirming allows this one step, once. A repeat asks again.
       </p>
     </Frame>
   )
@@ -416,12 +422,15 @@ export function Answered({ grants, app }: { grants: Session['grants']; app: stri
       )}
       <span>
         You {denied ? 'denied' : 'allowed'} <span className="text-foreground">{app}</span>
-        {!denied &&
-          (grant.scope === 'once'
+        {denied
+          ? grant.denyScope === 'project'
+            ? ' for this project'
+            : ' in this conversation'
+          : grant.scope === 'once'
             ? grant.used
               ? ' once · used'
               : ' once'
-            : ` for this ${grant.scope}`)}
+            : ` for this ${grant.scope}`}
       </span>
     </div>
   )

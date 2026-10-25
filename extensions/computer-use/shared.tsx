@@ -73,14 +73,18 @@ export function parseAnchor(text: string | undefined): Anchor | undefined {
   }
 }
 
+/** The observed window block: `<untrusted_screen_content>` around a metadata JSON line and the tree. */
 function parseWindow(text: string | undefined): Window | undefined {
-  if (!text?.includes('<untrusted_screen_content>')) return undefined
-  const [head, ...rest] = text.split('\n')
+  if (!text?.startsWith('<untrusted_screen_content>')) return undefined
+  const [head, ...rest] = text
+    .replace(/^<untrusted_screen_content>\n?/, '')
+    .replace(/\n?<\/untrusted_screen_content>$/, '')
+    .split('\n')
   const meta = json(head) ?? {}
   const tree = rest
     .join('\n')
-    .replace(/^<untrusted_screen_content>\n?/, '')
-    .replace(/\n?<\/untrusted_screen_content>$/, '')
+    .replace(/\n?\[tree truncated\]\s*$/, '')
+    .trimEnd()
   const capture = record(meta.capture)
   return {
     ...(typeof meta.app === 'string' ? { app: meta.app } : {}),
@@ -288,3 +292,25 @@ export function predicate(value: unknown) {
   if (typeof p.window_title === 'string') return `window “${p.window_title}”`
   return short(value, 60)
 }
+
+/** How a finished call went, for its header icon and summary: all good, waiting on someone, or failed. */
+export type Tone = 'good' | 'wait' | 'bad'
+export const toneClass: Record<Tone, string> = {
+  good: 'text-success',
+  wait: 'text-warning',
+  bad: 'text-error',
+}
+export const toneOf = (status?: string): Tone =>
+  !status || ['delivered', 'done', 'active', 'satisfied', 'completed'].includes(status)
+    ? 'good'
+    : ['escalated', 'unknown', 'incomplete', 'stopped', 'awaiting_confirmation'].includes(status) ||
+        status.endsWith('_required') ||
+        ['user_active', 'observe_first', 'checkpoint_due'].includes(status)
+      ? 'wait'
+      : 'bad'
+/**
+ * The header icon of a finished call follows its tone: a green check only when everything was delivered and verified,
+ * an amber mark when it waits (on the user, an escalation, an unknown outcome), a red cross when a step failed.
+ */
+export const headerState = (status: ToolCallView['status'], tone: Tone): ToolCallView['status'] =>
+  status !== 'done' ? status : tone === 'good' ? 'done' : tone === 'wait' ? 'interrupted' : 'error'

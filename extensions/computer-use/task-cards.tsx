@@ -25,7 +25,17 @@ import { cn, formatDuration, useToolDuration } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 import type { Evidence, Subgoal, TaskSpec, TaskState } from './types.ts'
 import { Requests } from './requests.tsx'
-import { AnchorLine, parseResult, predicate, refusalText, short, useSession } from './shared.tsx'
+import {
+  AnchorLine,
+  headerState,
+  parseResult,
+  predicate,
+  refusalText,
+  short,
+  toneClass,
+  toneOf,
+  useSession,
+} from './shared.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`
@@ -305,13 +315,17 @@ function Finish({ call }: { call: ToolCallView }) {
   const met = criteria.filter((c) => c.state === 'met').length
   const task = session?.task
   const checks = new Map(task?.spec.criteria.map((c) => [c.id, c.check]))
-  // NEXT(server): evidence gains `criterion`; then match on it instead of on the predicates.
+  // Each criterion carries all the task's evidence: show only what proves it, linked by `criterion` or, for a
+  // verified check, the same predicates (the server's own rule in task.ts `linkedEvidence`).
   const proofs = (criterion: Criterion) => {
     const check = checks.get(criterion.id)
-    return criterion.evidence.filter((e) =>
-      check === 'evidence' || check === undefined
-        ? e.kind !== 'verify'
-        : e.kind === 'verify' && JSON.stringify(e.predicates) === JSON.stringify(check),
+    return criterion.evidence.filter(
+      (e) =>
+        e.criterion === criterion.id ||
+        (check !== 'evidence' &&
+          check !== undefined &&
+          e.kind === 'verify' &&
+          JSON.stringify(e.predicates) === JSON.stringify(check)),
     )
   }
   return (
@@ -414,6 +428,7 @@ function Finish({ call }: { call: ToolCallView }) {
 /** Sub-goals, activate, checkpoint, replan and status: the change in one line, with the task anchor. */
 function Step({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
+  const { session } = useSession()
   const parsed = parseResult(call)
   const action = text(call.args.action)
   const list = (
@@ -423,36 +438,38 @@ function Step({ call }: { call: ToolCallView }) {
         ? call.args.subgoals
         : []
   ) as { id: string; text: string }[]
+  const named = (id: string) => {
+    const found = session?.task?.subgoals.find((s) => s.id === id)
+    return found ? `${id} · ${found.text}` : id
+  }
   const title =
     action === 'activate'
-      ? text(call.args.id)
-      : action === 'checkpoint'
-        ? text(call.args.assessment)
-        : action === 'replan'
-          ? text(call.args.reason)
-          : action === 'subgoals'
-            ? list.map((s) => s.text).join(' → ')
-            : ''
-  const ok = ['active', 'done', 'partial', 'blocked'].includes(parsed.status ?? '')
+      ? named(text(call.args.id))
+      : action === 'complete'
+        ? named(text(call.args.subgoal))
+        : action === 'checkpoint'
+          ? text(call.args.assessment)
+          : action === 'replan'
+            ? text(call.args.reason)
+            : action === 'subgoals'
+              ? list.map((s) => s.text).join(' → ')
+              : ''
+  const ok = ['active', 'done', 'partial', 'blocked', 'completed'].includes(parsed.status ?? '')
+  const tone = ok ? 'good' : toneOf(parsed.status)
   return (
     <Tool>
       <ToolHeader
         meta={
           <>
+            {parsed.status === 'completed' && <span className="text-success">sub-goal done</span>}
             {parsed.status && !ok && (
-              <span
-                className={
-                  parsed.status === 'awaiting_confirmation' ? 'text-warning' : 'text-error'
-                }
-              >
-                {refusalText(parsed.status)}
-              </span>
+              <span className={toneClass[tone]}>{refusalText(parsed.status)}</span>
             )}
             {duration && <span>{duration}</span>}
           </>
         }
         name={`task · ${action || '…'}`}
-        state={call.status}
+        state={headerState(call.status, tone)}
         title={title}
       />
       <ToolContent>
@@ -483,6 +500,5 @@ export function TaskCall({ call }: { call: ToolCallView }) {
   const action = text(call.args.action)
   if (action === 'start') return <Start call={call} />
   if (action === 'finish') return <Finish call={call} />
-  // NEXT(server): a `complete` action is coming; it lands in Step until it needs its own look.
   return <Step call={call} />
 }

@@ -26,16 +26,17 @@ import type { Session } from './shared.tsx'
 const statusButton =
   '-mx-1 flex cursor-pointer items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent'
 
-/** What a conversation's session means for the user right now, or `undefined` when there is nothing to show. */
-function phase(session: Session | null | undefined, busy: boolean) {
+/**
+ * What a conversation's session means for the user right now, or `undefined` when there is nothing to show. Stop is
+ * project-wide: `stopped` is the flag on conversation 1.
+ */
+function phase(session: Session | null | undefined, busy: boolean, stopped: boolean) {
   if (!session) return undefined
   const task = session.task
+  if (stopped) return 'stopped' as const
   if (session.pending.length) return 'needs' as const
-  // NEXT(server): Stop becomes one project-wide flag on conversation 1; read it there instead.
-  if (session.stopped && task && !['done', 'partial', 'blocked'].includes(task.status))
-    return 'stopped' as const
   if (task?.status === 'active' && busy) return 'running' as const
-  if (task && ['awaiting_confirmation', 'paused_by_user'].includes(task.status))
+  if (task && ['awaiting_confirmation', 'paused_by_user', 'stopped'].includes(task.status))
     return 'needs' as const
   return undefined
 }
@@ -90,13 +91,13 @@ function Action({
   )
 }
 
-function Item({ conversation }: { conversation: number }) {
+function Item({ conversation, stopped }: { conversation: number; stopped: boolean }) {
   const session = useDocOf(conversation, SessionDoc)
   const busy = useConversations().find((c) => c.id === conversation)?.busy ?? false
   const now = useNow(5000, !!session)
   const { switchConversation } = useUltimate()
   const shown = useConversation((c) => c.id)
-  const state = phase(session, busy)
+  const state = phase(session, busy, stopped)
   if (!session || !state) return null
   const app = appOf(session)
   const task = session.task
@@ -155,7 +156,9 @@ function Item({ conversation }: { conversation: number }) {
                     `: ${session.pending.map((p) => (p.kind === 'consent' ? `allow ${p.app}` : p.kind === 'confirm' ? 'confirm a step' : p.kind === 'task' ? 'check the task' : 'approve a change')).join(', ')}`}
                 </span>
               ) : (
-                <span className="text-error">Stopped · nothing is sent until you resume</span>
+                <span className="text-error">
+                  Stopped for this project · nothing is sent until you resume
+                </span>
               )}
             </p>
             {task && (
@@ -215,7 +218,8 @@ function Item({ conversation }: { conversation: number }) {
             )}
           </div>
           <p className="px-3 pb-2 text-[10.5px] leading-snug text-muted-foreground/80">
-            Stop blocks the next step. Force stop ends every Driver session on this Mac.
+            Stop blocks the next step in every conversation of this project. Force stop also ends
+            every Driver session on this Mac.
           </p>
         </PopoverContent>
       </Popover>
@@ -247,20 +251,24 @@ function Quick({ run }: { run: () => Promise<unknown> }) {
   )
 }
 
-/** The three newest computer operators; watching a session creates it, so ordinary conversations are left alone. */
+/**
+ * The three newest computer operators; watching a session creates it, so ordinary conversations are left alone. While
+ * the project is stopped, only the newest operator shows: one Stopped item with Resume, not one per conversation.
+ */
 export function ComputerStatus() {
   const conversations = useConversations()
+  const stopped = useDocOf(1, SessionDoc)?.stopped === true
   const key = conversations
     .filter((c) => c.label === 'computer-operator')
     .map((c) => c.id)
     .toSorted((a, b) => b - a)
-    .slice(0, 3)
+    .slice(0, stopped ? 1 : 3)
     .join(',')
   const watched = useMemo(() => (key ? key.split(',').map(Number) : []), [key])
   return (
     <>
       {watched.map((id) => (
-        <Item conversation={id} key={id} />
+        <Item conversation={id} key={id} stopped={stopped} />
       ))}
     </>
   )
