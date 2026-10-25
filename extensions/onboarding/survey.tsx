@@ -48,7 +48,7 @@ function StartHere({ dock }: { dock?: boolean }) {
         data-onboarding-start={root}
       >
         <CompassIcon className="size-4 shrink-0 text-brand" />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 basis-60">
           <p className="text-[13.5px] font-medium text-foreground">
             Let Ultimate get familiar with {project ?? 'the project'}
           </p>
