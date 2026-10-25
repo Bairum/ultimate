@@ -27,7 +27,8 @@ import type { EventData, EventRecord, EventToken } from '../../../shared/events.
 import type { ActionArgs, ActionError, ActionOptions } from './api.ts'
 import { actionRef, docRef } from '../../../shared/extension-api.ts'
 import type { ActionRef, DocRef } from '../../../shared/extension-api.ts'
-import { api, registry, store, uiState } from './client.ts'
+import { api, pairing, registry, store, uiState } from './client.ts'
+import { driven, refusedForPairing } from './pairing.ts'
 import { HOME, compactDocs, compactTools, documentItems, introOf } from './registry.ts'
 import type { State } from './store.ts'
 import { errorMessage, formatDuration } from './format.ts'
@@ -141,6 +142,15 @@ export const useModels = () => useStore((state) => state.models)
 /** Fetch `GET /api/models` again, such as after a login or logout changed which models are available. */
 export const refreshModels = () => store.refreshModels()
 export const useNotices = () => useStore((state) => state.notices)
+/**
+ * Whether this browser is paired (`whoami.host`) and may act as the user (`whoami.user`), undefined until read, and when
+ * a call last failed for want of pairing; it is read again when the tab comes back into view.
+ */
+export const usePairing = () => useSyncExternalStore(pairing.subscribe, pairing.get)
+/** The same outside React, such as in a command's `when`. */
+export const getPairing = () => pairing.get()
+/** Read whoami again now, such as after opening a pairing tab. */
+export const refreshPairing = () => pairing.refresh()
 /** Stream state: connecting, open, or reconnecting. */
 export const useConnection = () => useStore((state) => state.connection)
 
@@ -507,7 +517,9 @@ export function useAction<Args, T>(
       setState((previous) => ({ ...previous, key, error: failure, loading: false }))
       const { onError } = latest.current
       if (onError) onError(failure)
-      else store.notify({ level: 'error', message: actionMessage(failure) })
+      // The pairing notice says why, more usefully than a raw 403 (not on a driven page, which hides it).
+      else if (!refusedForPairing(failure) || driven())
+        store.notify({ level: 'error', message: actionMessage(failure) })
       return undefined
     }
     // `key` stands for args too, which are read through `latest`.
