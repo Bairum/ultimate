@@ -6,7 +6,9 @@ import type { Clock, Region } from './perception.ts'
 import { ObservationUnavailable } from './tool-helpers.ts'
 
 export const teachLimits = { frames: 150, bytes: 300 * 1024 * 1024 }
-const cue = /\b(password|passcode|pin|secret|token|one[- ]time|otp)\b|[•*●]{4,}/i
+const cue =
+  /\b(password|passcode|pin|secret|token|one[- ]time|otp|(?:verification|security|auth(?:entication)?|access)\s+code|mfa|2fa|passwort|kennwort|mot de passe|contraseña|senha)\b|[•*●]{4,}/i
+const loginCue = /\buser\s*name\b/i
 const signin = /\b(sign in|log in|login|submit)\b/
 const near = (a: Region, b: Region) =>
   Math.max(a.bounds.x - b.bounds.x - b.bounds.width, b.bounds.x - a.bounds.x - a.bounds.width, 0) <
@@ -148,9 +150,12 @@ export async function recordTeaching(options: {
             .filter((r) => signin.test(normalizeLabel(r.label)))
             .map((r) => normalizeLabel(r.label))
           const signedIn = priorLogin.some((label) => !logins.includes(label))
-          priorLogin = cues.length
+          const loginCues = regions.filter((r) => cue.test(r.label) || loginCue.test(r.label))
+          priorLogin = loginCues.length
             ? regions
-                .filter((r) => signin.test(normalizeLabel(r.label)) && cues.some((c) => near(c, r)))
+                .filter(
+                  (r) => signin.test(normalizeLabel(r.label)) && loginCues.some((c) => near(c, r)),
+                )
                 .map((r) => normalizeLabel(r.label))
             : []
           // Do not persist cue text or neighbouring field contents, even as OCR or diff metadata.

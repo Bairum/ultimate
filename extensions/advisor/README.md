@@ -65,7 +65,25 @@ Reviews receive a bounded request, the latest 25 clipped tool calls/results, lat
 
 Non-ultimate final-answer reviews share a 90-second deadline across model and tool calls, failing open. Other reviews use durable background tasks with memoized model steps and tool results so restart replay does not repeat completed calls. Delivery uses a persisted outbox and stable request ids; a steer is downgraded to a passive note when its reviewed run is no longer live. Consumed continuation deliveries are deleted, concluded conversation rows are pruned, and operational settlements are retained for 24 hours. Settings are cached by file mtime and tool-round signal scans are incremental. Provider errors never fail the agent's run. Pause gates apply to model calls.
 
-Spend comes from each response's `usage.cost.total`, attributed to the reviewed conversation and UTC day/role. Limits are checked before each review: an in-flight review can cross a budget, concurrent reviews can overlap, and missing provider cost estimates cannot be corrected here. Jev gating is separate classifier usage, not a priced chat response. Keep budgets small initially; each configured advisor is a separate review with potentially several model/tool turns. State retains 500 notes, dropping oldest resolved/dismissed notes first.
+Spend comes from each response's `usage.cost.total`, attributed to the reviewed conversation and UTC day/role. Limits are checked before each review or lifecycle judgment: an in-flight call can cross a budget, concurrent calls can overlap, and missing provider cost estimates cannot be corrected here. Jev gating is separate classifier usage, not a priced chat response. Keep budgets small initially; each configured advisor is a separate review with potentially several model/tool turns. Closed notes (archived or not) are pruned 90 days after closing. A 2,000-note safety cap drops oldest archived notes first; transcript entries are never removed.
+
+## Note lifecycle
+
+Each new note has a stable short ref. Model-visible deliveries ask the agent to acknowledge each one in its next reply:
+
+```text
+advisor 00001: addressed — reran the failing check
+advisor 00002: deferred — waiting on the user's decision
+advisor 00003: disputed — this check does not apply here
+```
+
+Acknowledgements are case-insensitive; the latest line replaces an earlier acknowledgement. A note becomes read when a model request contains its `<advisory id="ref">` tag, without changing the request. Continuations count as read at delivery. Cards never count as read or receive responses.
+
+At a final answer, after any advisor continuation of that run, acknowledged notes resolve without a model call. Other notes read in the run get a durable, tool-free judgment on their advisor's configured model, using bounded transcript evidence. Judgments cost money and count against the same global/role daily budgets; exhausted budgets record `ignored` with reason `budget`. A failed judgment records `ignored` with the error as its reason and surfaces a notice, without failing the agent's run. Every five minutes, read notes from stopped/failed runs without a close-out become `ignored`; never-read notes in concluded conversations become `unread`; notes arriving after the last final answer become `late` once concluded or idle beyond `idleMs` with no later run. Notes dismissed before delivery do not count as delivered and get no agent response. Automatic resolution never overrides a user close.
+
+Read-only `stats {days?: number}` (default 7) counts retained notes created within the window, per role: model-visible deliveries, reads, response statuses, pending responses and user dismissals. Archived notes still count until pruned.
+
+`feedback` also accepts a dismissal `reason` (`false-alarm`, `handled`, `wont-fix`) and `snoozeUntil` (a future timestamp at most 30 days ahead, or null to clear). User closes record who/when; reopening clears closure and archive metadata. User-only `manage {do, notes? | conversation?, role?, status?, olderThanDays?, reason?}` requires explicit note ids or at least one filter. Filters combine and exclude archived notes. Resolve/dismiss touch open notes; reopen touches closed notes; archive touches closed notes only. Dismissing a note before its pending outbox delivery removes it from that delivery, never from the transcript.
 
 ## Actions and documents
 

@@ -43,6 +43,9 @@ export const Runs = defineDoc<{
   settled: string[]
   settledAt?: Record<string, number>
   deliveries: Record<string, import('./refs.ts').AdvisorNoteEntry>
+  readRuns?: Record<string, number>
+  closeouts?: Record<string, number>
+  nextRef?: number
 }>({
   kind: 'advisor.runs',
   checkpointWhen: () => false,

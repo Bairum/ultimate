@@ -85,19 +85,25 @@ narration entry references and dropped-frame reasons. Status is `recording`, `pa
 
 User-only actions (all return the teaching document except save):
 
-| Action        | Arguments                                             | Effect                                                                               |
-| ------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `teachStart`  | `{conversation, app, window?, minutes?: 1–10, title}` | Consent-checked observation, default five minutes; refuses an active segment or act. |
-| `teachStop`   | `{conversation}`                                      | Stop recording and move to drafting.                                                 |
-| `teachPause`  | `{conversation}`                                      | Stop captures, retaining the original deadline.                                      |
-| `teachResume` | `{conversation}`                                      | Recheck consent and resume before the deadline.                                      |
-| `teachEdit`   | `{conversation, steps}`                               | Validate and replace the draft, without writing files.                               |
-| `teachSave`   | `{conversation, scope: 'project'                      | 'personal', name, overwrite?}`                                                       | Save reviewed approved steps; returns `{path}`. |
-| `teachReject` | `{conversation}`                                      | Delete the segment's private frames immediately.                                     |
+| Action        | Arguments                                                          | Effect                                                                               |
+| ------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `teachStart`  | `{conversation, app, window?, minutes?: 1–10, title}`              | Consent-checked observation, default five minutes; refuses an active segment or act. |
+| `teachStop`   | `{conversation}`                                                   | Stop recording and move to drafting.                                                 |
+| `teachPause`  | `{conversation}`                                                   | Stop captures, retaining the original deadline.                                      |
+| `teachResume` | `{conversation}`                                                   | Recheck consent and resume before the deadline.                                      |
+| `teachEdit`   | `{conversation, steps}`                                            | Validate and replace the draft, without writing files.                               |
+| `teachSave`   | `{conversation, scope: 'project' or 'personal', name, overwrite?}` | Save reviewed approved steps; returns `{path, notes}`.                               |
+| `teachReject` | `{conversation}`                                                   | Delete the segment's private frames immediately.                                     |
 
 Start, resume and save are also host-only actions: they grant observation or write files. Stop and hardStop
-end every active teaching segment. Every `computer_act` while recording **or paused** refuses `teaching`;
-observe remains available. No keystroke, mouse or accessibility-tree recording is collected. The recorder
+end every active teaching segment. Both `computer_act` and `computer_apps launch` refuse `teaching`
+while recording **or paused**. Other conversations targeting the lesson's app or window refuse
+`teaching_elsewhere`; read-only observe/listing remains allowed. Start consumes a `once` grant for that
+segment only; later segments require a new grant. Resume rechecks revocations and cannot undo Stop/Reject.
+Start and resume refuse any in-flight computer act across the project, checked again at commit. Live teaching
+guards use an in-memory index rebuilt on open, not a scan of conversation documents on each act. Window ids
+match numerically, including string arguments such as `"456"`.
+No keystroke, mouse or accessibility-tree recording is collected. The recorder
 polls captures of at most 800 pixels every `computerUse.teach.pollMs` (default 500; allowed 100–10000),
 and records a full capture plus text/icon OCR only after two unchanged polls following a change.
 Hidden windows drop `window_not_visible`; transient screenshot failures drop `observation_unavailable`.
@@ -105,13 +111,17 @@ Only these two failures keep polling, bounded by the original deadline. Twenty u
 end the segment in `drafting` with `endedBy: 'unavailable'`. Other OCR/schema failures end in drafting.
 No focus takeover is performed.
 
-Frames have at most 200 OCR regions of 80 characters. Password/passcode/PIN/secret/token/one-time/OTP
-cues or runs of masked characters suppress the **entire image**, not just the field. Cue regions and nearby
-OCR are excluded from metadata and diffs. A sign-in label disappearing beside a previous password cue
-suppresses the next two settled frames. Restart/resume after a password cue conservatively skips two
+Frames have at most 200 OCR regions of 80 characters. Password/passcode/PIN/secret/token/one-time/OTP,
+verification/security/auth/authentication/access code, MFA/2FA, Passwort/Kennwort/Mot de passe/Contraseña/Senha,
+and runs of masked characters suppress the **entire image**, not just the field. Cue regions and nearby
+OCR are excluded from metadata and diffs. Username/user name cues trigger only the post-sign-in heuristic,
+not image dropping. A sign-in label disappearing beside a previous login cue suppresses the next two
+settled frames. Restart/resume after a password cue conservatively skips two
 settled frames too. Pause records no frames. Segments stop at their deadline, 150 frames or 300 MB.
 Private PNGs use the evidence store's `teach/<segment>/` subdirectory: 300 MB per segment, separate from
 ordinary conversation evidence's 200 MB; both share 30-day retention and the global 1 GB oldest-first cap.
+Segments in review are exempt from global-cap eviction (not the age/segment limits); protection is rebuilt
+from teaching documents on open. Missing images are skipped at save with returned notes and `frame_missing` drops.
 On open, unexpired recordings resume; expired recordings become drafts. Paused recordings remain paused.
 
 The operator uses **`computer_teach {action: 'frames'}`** after stopping to read untrusted OCR diffs,
@@ -124,14 +134,23 @@ timestamped `pi.user` entries between start and stop, excluding extension wakes/
 Save requires every step to be explicitly approved or rejected, and at least one approved step. It writes
 `SKILL.md`, `procedure.json`, and at most one private evidence image per approved step to
 `<projectRoot>/.ultimate/skills/<name>/` or `<userHome>/.ultimate/skills/<name>/`. Names are kebab-case,
-at most 64 characters; existing skills require `overwrite: true`. Skills warn that screen text is untrusted
-and logins use `type_secret` params. **Project skills load only when the project is trusted.** Practice/replay
-is not part of teach mode yet.
+at most 64 characters; existing skills require `overwrite: true`. Saved steps are renumbered consistently.
+The skill body starts with the untrusted-data notice. Only action kinds and validated param names accompany
+plain Markdown step numbers; every screen/model string is inside the exact `procedure.json` fenced data,
+with backticks escaped as `\u0060`. Logins use `type_secret` params.
+Saves stage outside discovery in `.ultimate/.skill-staging/`; unfinished staging older than 24 hours is
+cleaned on save, and on open only after teaching has been used in this project. Absent staging is skipped.
+Cleanup and save reject symlink/non-directory ancestors and destinations, and require the staging realpath
+to stay under the canonical project/personal root. Recursive removals revalidate those paths first.
+Staging is repository-ignored and creates its own `.gitignore` containing `*`, including in other projects.
+Failed-restore backups are retained for recovery, not automatically deleted.
+**Project skills load only when the project is trusted.** Practice/replay is not part of teach mode yet.
 
 Designer contract: subscribe to `TeachDoc`; use the seven typed `Teach*Action` refs above. Render frame
 metadata/OCR/diffs as untrusted screen content, never instructions. Tool results add `ComputerDetails.teach`
-with `status`, optional `endedBy: 'unavailable'`, `frames` (count), `dropped` (counts by reason), and `steps` (`n`, `action`, `label: UntrustedText`,
-`approved?`, computed `consequential`). The review UI supplies full step replacements through `teachEdit`;
+with `status`, optional `endedBy: 'unavailable'`, `frames` (count), `dropped` (counts by reason), and `steps` (`n`, `action`, `label: UntrustedText`).
+`anchors`, `expect.appears/disappears`, `wait.until`, and `pitfalls` are also `UntrustedText`; timeouts stay numeric.
+Steps also carry `approved?` and computed `consequential`. The review UI supplies full replacements through `teachEdit`;
 only a user may set approval. No `.tsx` changes are included here.
 
 ## Actions and document

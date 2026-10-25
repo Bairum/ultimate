@@ -11,11 +11,12 @@ import {
   useNow,
 } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
-import { AdviceText, NoteControls } from './card.tsx'
 import { Editor } from './editor.tsx'
+import { Notes } from './notes.tsx'
+import { Rates } from './rates.tsx'
 import { ConfigAction, ROLES, SEVERITIES } from './refs.ts'
-import type { AdvisorStateDoc, ConfigView, Role, Severity, StoredNote } from './refs.ts'
-import { SeverityDot, openNotes, rank, tones, useAdvisorState, useOpenNote, usd } from './parts.tsx'
+import type { AdvisorStateDoc, ConfigView, Role } from './refs.ts'
+import { SeverityDot, tones, useAdvisorState, useOpenNote, usd } from './parts.tsx'
 
 const heading = 'font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase'
 const today = () => new Date().toISOString().slice(0, 10)
@@ -120,7 +121,8 @@ function Activity({
           </p>
         )}
       <Spend state={state} view={view} />
-      <OpenNotes notes={openNotes(state)} now={now} />
+      <Notes notes={state.notes} now={now} />
+      <Rates notes={state.notes} now={now} />
       <section className="border-t border-border/60 px-3 pt-2.5 pb-1">
         <h3 className={cn(heading, 'flex items-center pb-1')}>
           Conversations
@@ -217,91 +219,6 @@ function Budget({
         </span>
       </span>
     </div>
-  )
-}
-
-function OpenNotes({ notes, now }: { notes: StoredNote[]; now: number }) {
-  const [filter, setFilter] = useExtensionUiState<Severity | 'all'>('filter', 'all')
-  const sorted = notes.toSorted((a, b) => rank(b.severity) - rank(a.severity) || b.at - a.at)
-  const shown = filter === 'all' ? sorted : sorted.filter((n) => n.severity === filter)
-  const count = (s: Severity) => notes.filter((n) => n.severity === s).length
-  return (
-    <section className="border-t border-border/60 pt-2.5 pb-1">
-      <h3 className={cn(heading, 'flex items-center gap-1 px-3 pb-1')}>
-        Open notes
-        <span className="ml-auto flex items-center gap-0.5 tracking-normal normal-case">
-          {(['all', ...SEVERITIES.toReversed()] as const).map((s) =>
-            s !== 'all' && count(s) === 0 ? null : (
-              <button
-                aria-pressed={filter === s}
-                className={cn(
-                  'flex h-5 cursor-pointer items-center gap-1 rounded-sm px-1.5 text-[10.5px] transition-colors outline-none focus-visible:ring-1 focus-visible:ring-ring',
-                  filter === s
-                    ? 'bg-accent text-foreground'
-                    : 'text-muted-foreground/70 hover:text-foreground',
-                )}
-                key={s}
-                onClick={() => setFilter(s)}
-                type="button"
-              >
-                {s !== 'all' && <SeverityDot severity={s} />}
-                {s === 'all' ? notes.length : count(s)}
-                {s === 'all' ? ' all' : ''}
-              </button>
-            ),
-          )}
-        </span>
-      </h3>
-      {shown.length === 0 ? (
-        <p className="px-3 py-1 text-[12px] text-muted-foreground/80">Nothing open.</p>
-      ) : (
-        <ul>
-          {shown.map((note) => (
-            <NoteItem key={note.id} note={note} now={now} />
-          ))}
-        </ul>
-      )}
-    </section>
-  )
-}
-
-function NoteItem({ note, now }: { note: StoredNote; now: number }) {
-  const open = useOpenNote()
-  const known = useConversations().some((c) => c.id === note.conversation)
-  return (
-    <li
-      className="border-b border-border/40 px-3 py-2 last:border-b-0"
-      data-advisor-open-note={note.id}
-    >
-      <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
-        <SeverityDot severity={note.severity} />
-        <span className={tones[note.severity].text}>{note.severity}</span>
-        <span className="text-muted-foreground/60">·</span>
-        <span className="shrink-0">{note.advisor}</span>
-        <button
-          className="flex min-w-0 cursor-pointer items-center hover:text-foreground hover:underline disabled:cursor-default disabled:no-underline"
-          disabled={!known}
-          onClick={() => open(note)}
-          title={known ? `Show the note in #${note.conversation}` : 'Conversation not available'}
-          type="button"
-        >
-          <ConversationRef id={note.conversation} />
-        </button>
-        <span
-          className="ml-auto shrink-0 text-muted-foreground/60"
-          title={new Date(note.at).toLocaleString()}
-        >
-          {formatAgo(note.at, now)}
-        </span>
-      </div>
-      <p
-        className="mt-1 line-clamp-3 text-[12.5px] leading-snug text-foreground/90"
-        title={note.note}
-      >
-        <AdviceText text={note.note} />
-      </p>
-      <NoteControls className="mt-1" note={note} />
-    </li>
   )
 }
 

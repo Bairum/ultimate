@@ -83,6 +83,10 @@ export type ComputerDetails = {
       n: number
       action: string
       label: UntrustedText
+      anchors: UntrustedText[]
+      expect: { appears?: UntrustedText[]; disappears?: UntrustedText[]; timeoutSeconds?: number }
+      wait?: { until: UntrustedText; timeoutSeconds: number }
+      pitfalls?: UntrustedText[]
       approved?: boolean
       consequential: boolean
     }[]
@@ -190,6 +194,8 @@ export type Teach = {
   segment?: {
     id: string
     app: string
+    bundle?: string
+    onceGrantAt?: number
     window: number
     title: string
     startedAt: number
@@ -234,10 +240,10 @@ export const TeachEditAction = actionRef<{ conversation: number; steps: TaughtSt
   'computer-use',
   'teachEdit',
 )
-/** {conversation, scope, name, overwrite?} → {path}; saves reviewed skill files. */
+/** {conversation, scope, name, overwrite?} → {path, notes}; saves reviewed files, noting missing evidence. */
 export const TeachSaveAction = actionRef<
   { conversation: number; scope: 'project' | 'personal'; name: string; overwrite?: boolean },
-  { path: string }
+  { path: string; notes: string[] }
 >('computer-use', 'teachSave')
 /** {conversation} → rejected teaching document; deletes segment frames. */
 export const TeachRejectAction = actionRef<{ conversation: number }, Teach>(

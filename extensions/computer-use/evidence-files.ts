@@ -7,6 +7,18 @@ export const teachDirectory = (home: string, conversation: number, segment: stri
   if (!/^[a-zA-Z0-9-]+$/.test(segment)) throw new Error('Invalid segment id')
   return join(home, 'computer-use', String(conversation), 'teach', segment)
 }
+// Review protection is rebuilt from computer.teach on open; it contains no authority or screen data.
+const reviews = new Set<string>()
+export function protectTeachReview(
+  home: string,
+  conversation: number,
+  segment: string,
+  review: boolean,
+) {
+  const path = teachDirectory(home, conversation, segment)
+  if (review) reviews.add(path)
+  else reviews.delete(path)
+}
 async function directories(path: string) {
   return readdir(path, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
     if (missing(error)) return []
@@ -24,7 +36,7 @@ export async function pruneEvidence(
 ) {
   const root = join(home, 'computer-use')
   await mkdir(root, { recursive: true })
-  const all: { path: string; size: number; at: number }[] = []
+  const all: { path: string; size: number; at: number; review?: boolean }[] = []
   for (const folder of await directories(root)) {
     if (!folder.isDirectory() || !/^\d+$/.test(folder.name)) continue
     const directory = join(root, folder.name)
@@ -49,7 +61,7 @@ export async function pruneEvidence(
       let total = files.reduce((n, f) => n + f.size, 0)
       for (const file of files.toSorted((a, b) => a.at - b.at)) {
         if (now - file.at <= 30 * 24 * 60 * 60 * 1000 && total <= group.limit) {
-          all.push(file)
+          all.push({ ...file, review: reviews.has(group.path) })
           continue
         }
         await rm(file.path, { force: true })
@@ -59,6 +71,7 @@ export async function pruneEvidence(
   }
   let total = all.reduce((n, file) => n + file.size, 0)
   for (const file of all.toSorted((a, b) => a.at - b.at)) {
+    if (file.review) continue
     if (total <= globalLimit) break
     await rm(file.path, { force: true })
     total -= file.size

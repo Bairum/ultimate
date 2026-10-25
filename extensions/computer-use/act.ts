@@ -140,9 +140,10 @@ export async function act(
   signal: AbortSignal,
   progress: (text: string) => void = () => {},
 ) {
-  if (await teachingBlocked(host, conversation))
+  const teachingStatus = await teachingBlocked(host, conversation, args)
+  if (teachingStatus)
     return result({
-      status: 'teaching',
+      status: teachingStatus,
       message: 'Teaching is watch-only; stop teaching before acting.',
     })
   if ((args.actions === undefined) === (args.goal === undefined))
@@ -162,9 +163,10 @@ export async function act(
   runtimeState.busy = true
   runtimeState.active.set(conversation, active)
   try {
-    if (await teachingBlocked(host, conversation))
+    const teachingAtDispatch = await teachingBlocked(host, conversation, args)
+    if (teachingAtDispatch)
       return result({
-        status: 'teaching',
+        status: teachingAtDispatch,
         message: 'Teaching is watch-only; stop teaching before acting.',
       })
     await pruneEvidence(host.home)
@@ -1016,6 +1018,8 @@ export function appsTool(host: ExtensionHost) {
       if (await isStopped(host, api.conversationId, { signal: ctx.abortSignal }))
         return result({ status: 'stopped' })
       if (args.launch) {
+        const teachingStatus = await teachingBlocked(host, api.conversationId, { app: args.launch })
+        if (teachingStatus) return result({ status: teachingStatus })
         if (
           (await readSession(host, api.conversationId)).journal.some((j) => j.call === api.callId)
         )
@@ -1066,6 +1070,8 @@ export function appsTool(host: ExtensionHost) {
         state.busy = true
         let sent = false
         try {
+          const teachingStatus = await teachingBlocked(host, api.conversationId, { app })
+          if (teachingStatus) return result({ status: teachingStatus })
           await updateSession(host, api.conversationId, (doc) => {
             doc.journal.push({
               call: api.callId,
