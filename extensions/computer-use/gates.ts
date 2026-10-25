@@ -76,6 +76,7 @@ export type GateContext = {
   confirmationUsed?: boolean
   params?: string[]
   ocrMatch?: string
+  unlabelledPixel?: boolean
 }
 export type Refusal = {
   refuse: string
@@ -200,7 +201,7 @@ export const dispatchGates: Gate[] = [
     const config = { ...pixelDefaults, ...(await settings(ctx.host)).pixel }
     if (
       ctx.observation.degraded &&
-      config.foregroundForDegraded === 'takeover' &&
+      config.foregroundForDegraded !== 'background' &&
       !(ctx.foreground && ctx.session.takeovers.some((t) => matchesApp(ctx.identity!, t.app)))
     )
       return {
@@ -212,7 +213,7 @@ export const dispatchGates: Gate[] = [
     if (!step.expect_label && (ctx.observation.degraded || config.requireLabel))
       return { refuse: 'label_mismatch', message: 'Pixel actions require expect_label.' }
     if (!step.expect_label) return undefined
-    const parsed = await parseRegions(ctx.driver, step.capture!, { kinds: ['text'] }, ctx.signal)
+    const parsed = await parseRegions(ctx.driver, step.capture!, {}, ctx.signal)
     const point = screenshotPoint(parsed.coordinateSpace, { x: step.x, y: step.y })
     // A label the agent named but OCR cannot place is unverified: refuse rather than fall back to a blind confirmation.
     if (!point)
@@ -235,29 +236,31 @@ export const dispatchGates: Gate[] = [
         message: `Expected label did not match uniquely. Nearest labels: ${untrusted(checked.candidates.map((r) => redact(r.label)))}`,
       }
     }
-    ctx.target = {
+    const target = ctx.target ?? {
       token: '',
       index: -1,
       depth: 0,
       role: 'OCRText',
-      label: checked.match.label,
       enabled: true,
       actions: [],
     }
-    const atPoint = parsed.regions.filter(
-      (r) =>
-        r.kind === 'text' &&
-        r.confidence >= config.minConfidence &&
-        point.x >= r.bounds.x &&
-        point.x <= r.bounds.x + r.bounds.width &&
-        point.y >= r.bounds.y &&
-        point.y <= r.bounds.y + r.bounds.height,
-    )
+    const containsPoint = (r: (typeof parsed.regions)[number]) =>
+      point.x >= r.bounds.x &&
+      point.x <= r.bounds.x + r.bounds.width &&
+      point.y >= r.bounds.y &&
+      point.y <= r.bounds.y + r.bounds.height
+    const atPoint = parsed.regions.filter(containsPoint)
     const riskyLabels = atPoint
-      .filter((r) => consequential(step, { ...ctx.target!, label: r.label }).hit)
+      .filter((r) => r.kind === 'text' && consequential(step, { ...target, label: r.label }).hit)
       .map((r) => r.label)
-    ctx.target.label = [...new Set([checked.match.label, ...riskyLabels])].join(' / ')
-    ctx.ocrMatch = ctx.target.label
+    ctx.unlabelledPixel = !containsPoint(checked.match) || atPoint.some((r) => r.kind === 'icon')
+    ctx.target = {
+      ...target,
+      label: [
+        ...new Set([ctx.target?.label, checked.match.label, ...riskyLabels].filter(Boolean)),
+      ].join(' / '),
+    }
+    ctx.ocrMatch = [...new Set([checked.match.label, ...riskyLabels])].join(' / ')
     return undefined
   },
   async (ctx) => {
@@ -268,7 +271,7 @@ export const dispatchGates: Gate[] = [
       ctx.confirmationUsed = true
       return undefined
     }
-    let risky = consequential(ctx.step, ctx.target).hit
+    let risky = ctx.unlabelledPixel || consequential(ctx.step, ctx.target).hit
     const classify = ctx.host.want(ClassifyApi)
     if (!risky && classify) {
       const redact = redactor([

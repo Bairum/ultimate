@@ -108,6 +108,16 @@ export const normalizeLabel = (label: string) =>
     .replace(/[\u200e\u200f\u2066-\u2069]/g, '')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
+/** Whole normalized token sequences; a negated state is not a positive label match. */
+export function containsLabel(text: string, label: string) {
+  const actual = normalizeLabel(text)
+  const expected = normalizeLabel(label)
+  return (
+    Boolean(expected) &&
+    ` ${actual} `.includes(` ${expected} `) &&
+    !(actual.split(' ').includes('not') && !expected.split(' ').includes('not'))
+  )
+}
 const distance = (r: Region, p: { x: number; y: number }) =>
   Math.hypot(
     Math.max(r.bounds.x - p.x, 0, p.x - r.bounds.x - r.bounds.width),
@@ -127,10 +137,7 @@ export function matchLabel(
     )
   const expected = normalizeLabel(label)
   const matches = candidates.filter(
-    (r) =>
-      expected &&
-      normalizeLabel(r.label).includes(expected) &&
-      (!point || distance(r, point) <= radius),
+    (r) => expected && containsLabel(r.label, label) && (!point || distance(r, point) <= radius),
   )
   return {
     match: matches.length === 1 ? matches[0] : undefined,
@@ -143,6 +150,12 @@ export function visibleWindow(observation: Observation) {
   const b = observation.bounds
   if (
     observation.isOnScreen === false ||
+    // Degraded captures have no AX root to compare. Require explicit visibility and usable pixels instead.
+    (observation.degraded &&
+      (observation.isOnScreen !== true ||
+        !observation.capture ||
+        observation.capture.width < 300 ||
+        observation.capture.height < 200)) ||
     (root && b && (b.w < root.w * 0.5 || b.h < root.h * 0.5)) ||
     (root && observation.capture && observation.capture.width < 300 && root.w > 300)
   )

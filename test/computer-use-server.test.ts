@@ -28,6 +28,7 @@ import { runtime } from '../extensions/computer-use/runtime.ts'
 import { matchLabel } from '../extensions/computer-use/perception.ts'
 import type { Region } from '../extensions/computer-use/perception.ts'
 import { readFile } from 'node:fs/promises'
+import { waitFor } from '../extensions/computer-use/wait.ts'
 
 vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@earendil-works/pi-coding-agent')>()
@@ -1552,13 +1553,17 @@ it('cancels a wait through Stop between polls', async () => {
   expect(data(result).outcomes).toEqual([{ status: 'not_run' }])
 })
 
-async function checkOcr(matched: boolean) {
+async function checkOcr(
+  matched: boolean,
+  observedText = matched ? 'Continue' : 'Cancel',
+  ocr: { appears?: string[]; disappears?: string[] } = { appears: ['Continue'] },
+) {
   const f = await pixelFixture()
-  const predicates = [{ ocr: { appears: ['Continue'] } }]
+  const predicates = [{ ocr }]
   await updateSession(f.host, f.root.id, (doc) => {
     doc.task!.spec.criteria[0].check = predicates
   })
-  f.fake.surface.regions = [textRegion(matched ? 'Continue' : 'Cancel')]
+  f.fake.surface.regions = [textRegion(observedText)]
   const result = await act(
     f.host,
     f.driver,
@@ -1623,4 +1628,223 @@ it('keeps parameter values out of expected labels, OCR details and the journal',
 
 it('normalizes invisible marks and punctuation when grounding OCR labels', () => {
   expect(matchLabel([textRegion('\u2066Hello,  WORLD!\u2069')], 'hello world').match).toBeDefined()
+})
+
+it('keeps an AX Send label when OCR reads Archive, including confirmation and journal identity', async () => {
+  const f = await pixelFixture()
+  f.fake.surface.degraded = false
+  f.fake.surface.regions = [textRegion('Archive')]
+  labelButton(f, 3, 'Send')
+  const call = f.driver.call.bind(f.driver)
+  f.driver.call = async (tool, args, signal) => {
+    const reply = await call(tool, args, signal)
+    if (tool === 'get_window_state') reply.images = [pngHeader(800, 200)]
+    return reply
+  }
+  const view = await f.observe()
+  const step: Step = {
+    kind: 'click',
+    x: 120,
+    y: 90,
+    capture: view.capture!.id,
+    expect_label: 'Archive',
+  }
+  expect(data(await f.run([step], true)).status).toBe('confirm_required')
+  const pending = (await readSession(f.host, f.root.id)).pending[0]
+  expect(pending.label).toBe('Send / Archive')
+  expect(JSON.parse(pending.key!)).toContain('AXButton')
+  expect(JSON.parse(pending.key!)).toContain('Send / Archive')
+  expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
+  await actions.confirm({ conversation: f.root.id, key: pending.key! }, f.ctx)
+  const fresh = await f.observe()
+  expect(data(await f.run([{ ...step, capture: fresh.capture!.id }], true)).status).toBe(
+    'delivered',
+  )
+  expect((await readSession(f.host, f.root.id)).journal.at(-1)).toMatchObject({
+    role: 'AXButton',
+    label: 'Send / Archive',
+  })
+})
+
+it('requires takeover for a misspelled foregroundForDegraded setting', async () => {
+  const f = await pixelFixture(false)
+  f.host.projectSettings = async () => ({
+    computerUse: { pixel: { foregroundForDegraded: 'Takeover' } },
+  })
+  expect(data(await f.run([f.pixel])).status).toBe('takeover_required')
+  expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
+})
+
+it('refuses a degraded thumbnail even when is_on_screen is true and AX is empty', async () => {
+  const f = await pixelFixture()
+  f.fake.surface.thumbnail = true
+  const view = await f.observe()
+  expect(view.tree).toBe('')
+  expect(view.isOnScreen).toBe(true)
+  expect(data(await f.run([{ ...f.pixel, capture: view.capture!.id } as Step], true)).status).toBe(
+    'window_not_visible',
+  )
+  expect(f.fake.calls.some((c) => ['click', 'parse_visual_regions'].includes(c.tool))).toBe(false)
+})
+
+it.each(['outside text', 'inside icon', 'low-confidence Delete'] as const)(
+  'requires confirmation for a pixel click %s',
+  async (kind) => {
+    const f = await pixelFixture()
+    f.fake.surface.regions =
+      kind === 'outside text'
+        ? [{ ...textRegion('Continue'), bounds: { x: 130, y: 80, width: 90, height: 20 } }]
+        : [
+            textRegion('Continue'),
+            {
+              ...textRegion(kind === 'inside icon' ? '' : 'Delete', 'r2'),
+              kind: kind === 'inside icon' ? 'icon' : 'text',
+              confidence: 0.1,
+            },
+          ]
+    const view = await f.observe()
+    expect(
+      data(await f.run([{ ...f.pixel, capture: view.capture!.id } as Step], true)).status,
+    ).toBe('confirm_required')
+    expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
+    expect((await readSession(f.host, f.root.id)).pending[0].label).toBe(
+      kind === 'low-confidence Delete' ? 'Continue / Delete' : 'Continue',
+    )
+  },
+)
+
+it.each([
+  ['Not installed', 'installed'],
+  ['Uninstalled', 'installed'],
+  ['Undone', 'done'],
+])('does not ground label %s as %s', async (actual, expected) => {
+  const f = await pixelFixture()
+  f.fake.surface.regions = [textRegion(actual)]
+  const view = await f.observe()
+  expect(
+    data(
+      await f.run(
+        [{ ...f.pixel, capture: view.capture!.id, expect_label: expected } as Step],
+        true,
+      ),
+    ).status,
+  ).toBe('label_mismatch')
+  expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
+})
+
+it.each([
+  ['Not installed', 'installed'],
+  ['Uninstalled', 'installed'],
+  ['installed failed', 'installed'],
+  ['Undone', 'done'],
+])('does not record positive evidence for %s as %s', async (actual, expected) => {
+  const { result, evidence, finished } = await checkOcr(false, actual, { appears: [expected] })
+  expect(data(result).verdict).toBe('unsatisfied')
+  expect(evidence).toEqual([])
+  expect(data(finished).status).toBe('criteria_unmet')
+})
+
+it('uses whole tokens for wait text and gone conditions', async () => {
+  const f = await pixelFixture()
+  f.fake.surface.regions = [textRegion('Not installed')]
+  expect(
+    data(await f.run([{ kind: 'wait', until: { text: 'installed' }, seconds: 0 }])).status,
+  ).toBe('timeout')
+  expect(
+    data(await f.run([{ kind: 'wait', until: { gone: 'installed' }, seconds: 0 }])).status,
+  ).toBe('satisfied')
+})
+
+it('uses whole tokens for OCR disappears evidence', async () => {
+  const { result, evidence, finished } = await checkOcr(true, 'Uninstalled', {
+    disappears: ['installed'],
+  })
+  expect(data(result).verdict).toBe('satisfied')
+  expect(evidence).toHaveLength(1)
+  expect(data(finished).status).toBe('done')
+})
+
+it('inverts affine action coordinates before grounding a click', async () => {
+  const f = await pixelFixture()
+  f.fake.surface.coordinateSpace = { kind: 'affine', m11: 2, m12: 0, m21: 0, m22: 1, tx: 10, ty: 0 }
+  expect(data(await f.run([{ ...f.pixel, x: 250, y: 90 } as Step], true)).status).toBe('delivered')
+  expect(f.fake.calls.find((c) => c.tool === 'click')?.args).toMatchObject({ x: 250, y: 90 })
+})
+
+it('finishes OCR verification through a visible window after a hidden window returns unknown', async () => {
+  const f = await pixelFixture()
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.task!.spec.criteria[0].check = [{ ocr: { appears: ['Continue'] } }]
+  })
+  f.fake.surface.isOnScreen = false
+  const hidden = await f.invoke('computer_task', {
+    action: 'finish',
+    outcome: 'done',
+    summary: 'Hidden window is unknown',
+  })
+  expect(data(hidden)).toMatchObject({ status: 'criteria_unmet', criteria: [{ state: 'unknown' }] })
+  f.fake.surface.isOnScreen = true
+  const call = f.driver.call.bind(f.driver)
+  f.driver.call = async (tool, args, signal) => {
+    const reply = await call(tool, args, signal)
+    if (tool === 'list_windows')
+      reply.structured!.windows = [455, 456].map((window_id) => ({
+        window_id,
+        pid: 123,
+        title: 'Calculator',
+      }))
+    if (tool === 'get_window_state') {
+      reply.structured!.window_id = args.window_id
+      reply.structured!.is_on_screen = args.window_id === 456
+    }
+    return reply
+  }
+  const result = await f.invoke('computer_task', {
+    action: 'finish',
+    outcome: 'done',
+    summary: 'Check visible window',
+  })
+  expect(data(result).status).toBe('done')
+  expect(f.fake.calls.filter((c) => c.tool === 'parse_visual_regions')).toHaveLength(1)
+})
+
+it('bounds wait seen output without truncating the text condition search', async () => {
+  const f = await pixelFixture()
+  const elements = Array.from({ length: 25 }, (_, index) => ({
+    token: `s:${index}`,
+    index,
+    depth: 0,
+    role: 'AXStaticText',
+    label: index === 24 ? 'Ready' : 'x'.repeat(100),
+    enabled: true,
+    actions: [],
+  }))
+  const result = await waitFor({
+    driver: f.driver,
+    capture: async () => ({ ...f.view, degraded: false, elements }),
+    until: { text: 'Ready' },
+    seconds: 0,
+    signal: new AbortController().signal,
+    stopped: async () => false,
+    time: runtime(f.host).clock,
+  })
+  if (result.status !== 'delivered') throw new Error('Wait did not complete')
+  expect(result.wait?.status).toBe('satisfied')
+  expect(result.wait?.seen).toHaveLength(20)
+  expect(result.wait?.seen.every((s) => s.length === 60)).toBe(true)
+})
+
+it('redacts parameter values before bounding wait seen labels', async () => {
+  const f = await pixelFixture()
+  const secret = 'private-parameter-'.repeat(8)
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.task!.spec.scope.params = { value: secret }
+  })
+  f.fake.surface.regions = [textRegion(`Ready ${secret}`)]
+  const result = await f.run([{ kind: 'wait', until: { text: 'Ready' }, seconds: 0 }])
+  expect(data(result).status).toBe('satisfied')
+  expect(JSON.stringify('details' in result ? result.details : null)).not.toContain(
+    'private-parameter',
+  )
+  expect(data(result).outcomes).toMatchObject([{ wait: { seen: ['Ready [param]'] } }])
 })

@@ -27,6 +27,7 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
     thumbnail: false,
     regions: [] as Region[],
     hashes: ['unchanged'],
+    coordinateSpace: { kind: 'screenshot_pixels' } as Record<string, JsonValue>,
   }
   const captures = new Map<string, Region[]>()
   const consumed = new Set<string>()
@@ -140,7 +141,7 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
         regions: regions.map(({ label, ...r }) => ({ ...r, text: label })),
         capture: {
           capture_id: args.capture_id,
-          action_coordinate_space: { kind: 'screenshot_pixels' },
+          action_coordinate_space: surface.coordinateSpace,
         },
         parser: {},
         timing: {},

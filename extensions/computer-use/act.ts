@@ -483,9 +483,8 @@ export async function act(
           stopped: () => isStopped(host, conversation, { active, signal }),
           time: runtimeState.clock,
           minConfidence: config.minConfidence,
+          redact,
         })
-        if (waited.status === 'delivered' && waited.wait)
-          waited.wait.seen = waited.wait.seen.map(redact)
         if (waited.status === 'delivered') {
           const index = count++
           await updateSession(host, conversation, (doc) => {

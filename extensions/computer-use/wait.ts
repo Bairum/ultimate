@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { exec } from '../../lib/exec.ts'
 import type { Driver, Observation, StepOutcome } from './types.ts'
-import { clock, normalizeLabel, parseRegions, requireVisible } from './perception.ts'
+import { clock, containsLabel, parseRegions, requireVisible } from './perception.ts'
 import type { Clock } from './perception.ts'
 
 function keepAwake() {
@@ -24,6 +24,7 @@ export async function waitFor(options: {
   stopped(): Promise<boolean>
   time?: Clock
   minConfidence?: number
+  redact?: (text: string) => string
   awake?: () => () => Promise<void>
 }): Promise<StepOutcome> {
   const time = options.time ?? clock
@@ -31,6 +32,14 @@ export async function waitFor(options: {
   const release = options.seconds > 60 ? (options.awake ?? keepAwake)() : undefined
   let seen: string[] = []
   let previous: string | undefined
+  const outcome = (status: 'satisfied' | 'timeout'): StepOutcome => ({
+    status: 'delivered',
+    text: '',
+    wait: {
+      status,
+      seen: seen.slice(0, 20).map((s) => (options.redact ? options.redact(s) : s).slice(0, 60)),
+    },
+  })
   try {
     do {
       if (options.signal.aborted || (await options.stopped())) return { status: 'not_run' }
@@ -50,8 +59,7 @@ export async function waitFor(options: {
           .map((r) => r.label)
       } else
         seen = observation.elements.flatMap((e) => [e.label ?? '', e.value ?? '']).filter(Boolean)
-      const contains = (text: string) =>
-        seen.some((s) => normalizeLabel(s).includes(normalizeLabel(text)))
+      const contains = (text: string) => seen.some((s) => containsLabel(s, text))
       const hash = observation.image
         ? createHash('sha256').update(observation.image.data).digest('hex')
         : undefined
@@ -61,12 +69,12 @@ export async function waitFor(options: {
         (!until.gone || !contains(until.gone)) &&
         (!until.stable || (hash !== undefined && hash === previous))
       previous = hash
-      if (satisfied) return { status: 'delivered', text: '', wait: { status: 'satisfied', seen } }
+      if (satisfied) return outcome('satisfied')
       if (time.now() >= deadline) break
       await time.sleep(Math.min(500, deadline - time.now()), options.signal)
     } while (!options.signal.aborted)
     if (options.signal.aborted || (await options.stopped())) return { status: 'not_run' }
-    return { status: 'delivered', text: '', wait: { status: 'timeout', seen } }
+    return outcome('timeout')
   } catch (error) {
     if (options.signal.aborted || (await options.stopped())) return { status: 'not_run' }
     throw error

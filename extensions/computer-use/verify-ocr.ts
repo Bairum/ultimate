@@ -1,6 +1,6 @@
 import { saveEvidence } from './evidence-files.ts'
 import type { Driver, Observation, Predicate, Evidence } from './types.ts'
-import { parseRegions, matchLabel, requireVisible } from './perception.ts'
+import { parseRegions, matchLabel, visibleWindow, normalizeLabel } from './perception.ts'
 import type { PixelSettings } from './perception.ts'
 
 /** OCR proof is produced only from the Driver's capture, never from planner claims. */
@@ -12,7 +12,7 @@ export async function verifyOcr(
   signal: AbortSignal,
   redact: (text: string) => string,
 ) {
-  requireVisible(observation)
+  if (visibleWindow(observation)) return { verdict: 'unknown' as const }
   if (!observation.capture || !observation.image || observation.image.mimeType !== 'image/png')
     return { verdict: 'unknown' as const }
   const { regions } = await parseRegions(
@@ -38,6 +38,9 @@ export async function verifyOcr(
     for (const label of appears as string[]) {
       const matched = regions.find(
         (region) =>
+          !normalizeLabel(region.label)
+            .split(' ')
+            .some((token) => token === 'not' || token === 'failed') &&
           matchLabel([region], label, undefined, config.labelRadius, config.minConfidence).match,
       )
       if (!matched) return { verdict: 'unsatisfied' as const }
