@@ -14,10 +14,10 @@ A project is a forest of conversation trees, like commit histories.
   calls a tally **context** and shows it as the read-only **History** page, whose only control is **Back to
   @ultimate**; the sidebar's Memory row shows the memory's estimated tokens (what a branch starts from) and opens the
   Memory panel, and each root heads its tree with its last three events (landings, notes, branches, compactions).
-  Start a project with @ultimate: Continue on Get ready, or **Set up with @ultimate** on the Start here card in
-  @ultimate's empty conversation. It handles setup
-  cards, reads the project and writes its first memories with `remember`; optional focus becomes instructions,
-  kept verbatim as a memory. The tally then builds up from branches and landings. @ultimate maintains memory with
+  Start a project with @ultimate: Continue on Get ready, or **Set up with @ultimate** on the Start here card that
+  @ultimate's conversation shows until onboarding has run. It walks the user through Ultimate, handles setup
+  cards, reads the project and writes its first memories with `remember`; the user's answer about the project
+  becomes instructions, kept verbatim as a memory. The tally then builds up from branches and landings. @ultimate maintains memory with
   `remember` and the memory review (`extensions/lineage/README.md`); the user can compact a tally with ⌘K
   Compact while it is shown. A project has one root: independent work goes into branches.
   Roots and standing agents are never concluded or cleared, only compacted.

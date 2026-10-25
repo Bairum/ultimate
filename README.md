@@ -126,7 +126,7 @@ stays docked on every surface, and the choice is durable: reloads, other tabs, a
 
 ## What to try
 
-- Start a new project with **Set up with @ultimate** on Start here in @ultimate's conversation (or Continue on the first-run Get ready page).
+- Start a new project with **Set up with @ultimate** on the Start here card in @ultimate's conversation (or Continue on the first-run Get ready page).
   Choose setup on the inline cards, steer its reading, then start your first coordinator branch from the project's context.
 - Ask it anything about this repository; watch tool calls, diffs, and thinking stream in.
 - "Build a surface for …" — a whole app with its UI, server actions, and the agent docked beside it; switch to it while

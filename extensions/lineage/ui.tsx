@@ -4,8 +4,7 @@
  */
 import type { ReactNode } from 'react'
 import { definePoint, getState, useDocOf, useUiState, useUltimate } from '@/sdk'
-import { emptyRoot } from './empty-root.ts'
-import { MemoryDoc, RootsDoc, TallyDoc } from './refs.ts'
+import { RootsDoc } from './refs.ts'
 
 export {
   Branched,
@@ -46,15 +45,6 @@ const keeper = 1
 /** The project's roots, live in every client; undefined until the stream delivers them. */
 export function useRoots() {
   return useDocOf(keeper, RootsDoc)?.roots
-}
-
-/** The project's root while it is new (no tally and no memories), so setup can offer to start; else undefined. */
-export function useNewRoot() {
-  const root = useRoots()?.[0]
-  const tally = useDocOf(root ?? keeper, TallyDoc)
-  const memories = useDocOf(root ?? keeper, MemoryDoc)
-  if (root === undefined || tally === undefined || memories === undefined) return undefined
-  return emptyRoot(tally, memories) ? root : undefined
 }
 
 /** The roots as last streamed, for synchronous readers such as a command's `when`; a mounted `useRoots` keeps them. */

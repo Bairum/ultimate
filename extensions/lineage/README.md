@@ -207,7 +207,7 @@ A root is the project's read-only History page. Through the SDK's `composer` ren
 its composer with one banner, "You're reading the project's history", and **Back to @ultimate** (`talkToUltimate`,
 like mod+0). There is no text input, memory list or compact button on the page: memory lives in the sidebar's Memory
 row and the Memory panel, and the palette's Compact on a root runs lineage `compact` while its composer-focus command
-is hidden. A new project starts in @ultimate's empty conversation instead, from onboarding's Start here card.
+is hidden. A new project starts in @ultimate's conversation instead, from onboarding's Start here card.
 @ultimate maintains standing decisions in memory with `remember` and the memory review. A root's transcript shows no
 summary or assessment lines.
 

@@ -1,83 +1,63 @@
 import { CompassIcon, LoaderCircleIcon } from 'lucide-react'
 import { useState } from 'react'
+import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { Kbd } from '@/components/ui/kbd'
-import { api, errorMessage, touchKeyboard, useSystem, useUltimate } from '@/sdk'
-import { useNewRoot } from '../lineage/ui.tsx'
-import { StartAction } from './refs.ts'
+import { api, errorMessage, useConversation, useDocOf, useSystem } from '@/sdk'
+import { column, MemoryDoc, useRoots } from '../lineage/ui.tsx'
+import { StandingDoc } from '../subagents/ui.tsx'
+import { onboarded } from './onboarded.ts'
+import { StartAction, StartsDoc } from './refs.ts'
 
-/**
- * Under @ultimate's empty state while the project's root is new: @ultimate's setup and reading, toward optional
- * instructions; what it learns becomes the project memory every branch starts from.
- */
-export function Familiarize() {
-  const root = useNewRoot()
-  return root === undefined ? null : <StartHere root={root} />
+/** Above @ultimate's composer until onboarding has run for the project: one click starts it. */
+export function StartComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
+  const id = useConversation((conversation) => conversation.id)
+  const ultimate = useDocOf(1, StandingDoc)?.ultimate
+  if (id === undefined || id !== ultimate) return core
+  return (
+    <>
+      <StartHere dock={dock} />
+      {core}
+    </>
+  )
 }
 
-function StartHere({ root }: { root: number }) {
+function StartHere({ dock }: { dock?: boolean }) {
+  const root = useRoots()?.[0]
+  const starts = useDocOf(1, StartsDoc)
+  const memories = useDocOf(root ?? 1, MemoryDoc)
   const project = useSystem()?.project.name
-  const ui = useUltimate()
-  const [focus, setFocus] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string>()
+  if (root === undefined || starts === undefined || memories === undefined) return null
+  if (onboarded(starts?.roots[String(root)], memories)) return null
   const begin = async () => {
-    if (sending) return
     setSending(true)
     setError(undefined)
     try {
-      const result = await api.action(StartAction, {
-        root,
-        ...(focus.trim() ? { instructions: focus } : {}),
-      })
-      ui.switchConversation(result.id)
-      ui.showSurface('agent')
+      await api.action(StartAction, { root })
     } catch (failure) {
       setError(errorMessage(failure))
+    } finally {
       setSending(false)
     }
   }
   return (
-    <div
-      className="rounded-lg border border-brand/30 bg-brand/5 px-4 py-3.5 font-sans"
-      data-onboarding-start={root}
-    >
-      <div className="flex items-center gap-1.5 font-mono text-[11px] font-semibold tracking-[0.25em] text-brand uppercase">
-        <CompassIcon className="size-3.5" />
-        Start here
-      </div>
-      <p className="mt-2 text-[15px] font-medium text-foreground">
-        Let Ultimate get familiar with {project ?? 'the project'}
-      </p>
-      <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
-        @ultimate walks you through how it works, helps you choose your setup and reads the project.
-        What it learns becomes the memory every branch starts from.
-      </p>
-      <textarea
-        aria-label="Focus"
-        autoFocus={!touchKeyboard()}
-        className="mt-3 field-sizing-content max-h-40 min-h-16 w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-[13px] outline-none placeholder:text-muted-foreground/70 focus-visible:border-brand/50"
-        disabled={sending}
-        onChange={(event) => setFocus(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
-          if (touchKeyboard()) return
-          event.preventDefault()
-          // oxlint-disable-next-line typescript/no-floating-promises -- begin catches setup failures and displays them with setError.
-          void begin()
-        }}
-        placeholder="Optional instructions: what this project is for and how to read it, e.g. focus on the API…"
-        value={focus}
-      />
-      <div className="mt-2.5 flex items-center gap-3">
-        {error ? (
-          <span className="min-w-0 truncate font-mono text-[11px] text-error">{error}</span>
-        ) : (
-          <span className="hidden font-mono text-[11px] whitespace-nowrap text-muted-foreground/70 sm:inline pointer-coarse:hidden">
-            <Kbd>↵</Kbd> start · <Kbd>⇧↵</Kbd> new line
-          </span>
-        )}
-        <Button className="ml-auto" disabled={sending} onClick={() => void begin()} size="sm">
+    <div className={`${column(dock)} pb-2`}>
+      <div
+        className="flex flex-wrap items-center gap-x-3 gap-y-2.5 rounded-lg border border-brand/30 bg-brand/5 px-3.5 py-3"
+        data-onboarding-start={root}
+      >
+        <CompassIcon className="size-4 shrink-0 text-brand" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[13.5px] font-medium text-foreground">
+            Let Ultimate get familiar with {project ?? 'the project'}
+          </p>
+          <p className="text-[12.5px] leading-snug text-muted-foreground">
+            {error ??
+              '@ultimate walks you through how it works, helps you choose your setup and reads the project.'}
+          </p>
+        </div>
+        <Button className="ml-auto" disabled={sending} onClick={() => void begin()}>
           {sending ? <LoaderCircleIcon className="motion-safe:animate-spin" /> : <CompassIcon />}
           Set up with @ultimate
         </Button>

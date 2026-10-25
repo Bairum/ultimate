@@ -19,9 +19,11 @@ project setup, Git isolation reason (if any), root id and emptiness. Model text 
 and preserves the instructions. Request id `onboarding:<root>` ensures one input per root; repeated calls return
 `{ id }` without sending again: the root conversation's `onboarding.starts` document maps roots to that standing id.
 
-Start here is the `intro` card of @ultimate's empty conversation (`survey.tsx`), shown while the project's root has
-no tally and no memories: an optional focus and **Set up with @ultimate**. Once onboarding starts, the conversation
-is no longer empty and the card goes with the empty state. The History page (the root) takes no input.
+Start here is a card above @ultimate's composer (`survey.tsx`, through the SDK's `composer` renderer) until
+onboarding has run for the project's root: `onboarding.starts` names the root, or the root carries memories (a new
+chapter's root, set up long ago; `onboarded.ts`). Its one button, **Set up with @ultimate**, calls `start { root }`,
+like Get ready's Continue; once that records the root, the card is gone for good. The History page (the root) takes
+no input.
 
 @ultimate greets and first walks the user through how Ultimate works with the `how-ultimate-works` skill
 (`skills/how-ultimate-works/SKILL.md`): five short beats, each a message with one question card and a Skip the rest
