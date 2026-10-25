@@ -691,10 +691,10 @@ function RoleRow({
               {ultimate ? (
                 <span
                   className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground"
-                  title="@ultimate is never held, continued or steered"
+                  title="Fixed for @ultimate: it is never held, sent back or steered"
                 >
                   <LockIcon className="size-3" />
-                  off · never for @ultimate
+                  off
                 </span>
               ) : (
                 <Segmented
@@ -705,7 +705,7 @@ function RoleRow({
                     label: t === 'never' ? 'off' : t,
                     title:
                       t === 'never'
-                        ? 'Never'
+                        ? 'Off'
                         : `On a ${t} or worse${key === 'continueOn' ? ', once per run' : ''}`,
                   }))}
                   value={value(key)}
