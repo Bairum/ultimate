@@ -46,8 +46,6 @@ import {
   BusyDot,
   Dot,
   Heading,
-  GrantBadge,
-  GrantEditor,
   KindIcon,
   RunIcon,
   Tag,
@@ -418,7 +416,6 @@ function AutomationRow({
           </div>
           <div className="pl-[18px]">
             <Trigger automation={automation} now={now} />
-            <GrantBadge automation={automation} />
           </div>
         </div>
         <span className="mt-0.5">
@@ -461,7 +458,7 @@ function AutomationRow({
           <ChevronRightIcon
             className={cn('size-3 transition-transform', expanded && 'rotate-90')}
           />
-          {automation.runs.length} run{automation.runs.length === 1 ? '' : 's'} · permissions
+          {automation.runs.length} run{automation.runs.length === 1 ? '' : 's'}
           {running && <BusyDot className="ml-0.5" />}
         </Button>
         <span className="min-w-0 truncate pl-1 font-mono text-[10.5px] text-muted-foreground/60">
@@ -578,14 +575,7 @@ function AutomationRow({
         </div>
       )}
       <ErrorLine error={error} />
-      {expanded && (
-        <>
-          <div className="px-3 pb-2">
-            <GrantEditor automation={automation} />
-          </div>
-          <Runs now={now} runs={automation.runs} />
-        </>
-      )}
+      {expanded && <Runs now={now} runs={automation.runs} />}
     </li>
   )
 }
@@ -799,7 +789,6 @@ function ScriptDetail({
           </span>
           <Toggle act={act} automation={automation} now={now} />
         </div>
-        <GrantBadge automation={automation} />
         <h2 className="mt-1 line-clamp-2 text-[13.5px] leading-snug font-medium">
           {automation.name}
         </h2>
@@ -813,9 +802,6 @@ function ScriptDetail({
           <span className="truncate">{actions(automation)}</span>
         </p>
       </header>
-      <div className="px-3 pb-2">
-        <GrantEditor automation={automation} />
-      </div>
       <ErrorLine error={error} />
       <Script act={act} automation={automation} live={live} now={now} />
     </div>

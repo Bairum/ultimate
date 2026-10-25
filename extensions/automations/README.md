@@ -18,24 +18,6 @@ One background root-owned scheduler per enabled schedule automation commits plan
 
 A script trigger uses `ask` instead of `schedule`. A `watcher` agent writes an executable `run`, briefly tests it, then calls `automation resume {id}`. Stdout `FIRE [text]` fires the automation; stderr and other stdout are progress. `once` defaults to true: its first FIRE atomically makes it done and disabled, then terminates the group. A recurring script may print `DONE [text]` and exit 0 to stop cleanly without a wake or failure. Resume keeps its persistent state. Any other unplanned exit, including a one-shot that never fired, wakes only the watcher to repair or escalate.
 
-## Grants
-
-A grant lets the agent an automation wakes do things for the user without asking. It holds a list of named actions:
-`dream` (start a dream session), `compact` (compact the watched conversation, else the woken one; a root's tally
-through lineage) and `asleep` (Fall asleep into a new chapter). Each is granted on its own: `dream` never implies
-`asleep`. Only the user sets one, through the user-only action `grant {id, actions, source?}`; empty `actions` withdraws
-it. The record keeps `grant: {actions, source, at, used}`, where `source` is the user's words or where it was set.
-
-A subscriber the automation woke acts with the tool's `act {id, do}`; prompt runs have no automation tool and never act
-on a grant. It is refused without a grant for `do`, on a paused automation, when the automation has not fired in the
-last six hours, from a conversation that is not a subscriber, and a second time on one fire. The check, the effect (a
-manual compaction task, a dream session, a granted Fall asleep task) and the record in `acted` commit in one
-transaction with `automations.acted {id, action, fire, by}`: a crash leaves all or nothing, and a replay of the same
-tool call returns the recorded result without acting again. `acted` is kept apart from the grant, so editing the grant
-never allows a second act on the same fire. Dream and Fall asleep go through the `automations.dream` extension point,
-which dream provides with its own refusals and every gate of the user's Fall asleep (`extensions/dream/README.md`).
-Granted dreams and sleeps record the automation, and their cards say so.
-
 An event trigger skips events from its own prompt runs: the event's trace conversation, or the conversation its data
 names (`conversation`, `conversationId`), owned by one of its run tasks, however old the run. Its `sinceEvent` is the
 newest event when the creating or resuming transaction commits. Context conditions evaluate each commit's

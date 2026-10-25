@@ -17,7 +17,7 @@ errors are found in conversation entries.
 
 A dream starts with your **handoff**. The user pressed Dream (a `dream.handoff` input asks for it), or the built-in
 "Dream before compaction" automation fired because your context passed its threshold (70% by default; a `dream.handoff`
-entry beside the fire carries the same ask, and the fire's turn is the one to write it in; never `act` on the fire).
+entry beside the fire carries the same ask, and the fire's turn is the one to write it in).
 Write it in that same turn, while your context
 still holds everything: what you worked on, what is still open (branches, questions, to-dos) and how far each got,
 the decisions and why, the user's corrections, the lessons, and what you would do next. Plain Markdown, at most
@@ -26,7 +26,7 @@ line to the user. A second call replaces the first while the dream still waits. 
 handoff is recorded and no other conversation works; after 30 minutes without one it starts without it and says so.
 The dream reads the handoff first, and a new chapter wakes up from it.
 
-A `dream.started` input means the session began (after your handoff, or under a granted automation's `act`). Start one
+A `dream.started` input means the session began after your handoff. Start one
 branch with `branch`, prompt:
 
 > Dream session N. Follow "For the dream branch" in the clone's extensions/dream/DREAM.md.
@@ -34,10 +34,9 @@ branch with `branch`, prompt:
 Name the memory slugs the user cares about most in it, always including the memory about the user (`about-<name>`).
 The branch answers you with the journal's proposals as a `Decisions:` block; its card is already in your conversation.
 Relay the decisions to the user as one message with structured `questions`; at night they wait for the morning. Only
-when the `dream.started` input says the user granted "dream" on the automation that started it are you hands-off:
-decide each proposal yourself, as the user would (keep what is evidenced and small; skip what is risky or vague), and
-record it with `decide {…, reason}`, one line on why; then tell the user what you decided in one message with
-reply: false. Never decide hands-off otherwise. For each decision:
+during a hands-off goal do you decide them in the user's place: decide each proposal as the user would (keep what is
+evidenced and small; skip what is risky or vague), and record it with `decide {…, reason}`, one line on why. For each
+decision:
 
 - **Approved code, prompt or doc change:** start a branch for it (it is ordinary work: assess or build, review, land),
   then `decide {status: 'approved', branch}`. The dream marks it landed when that branch lands. A `project` proposal
@@ -51,9 +50,8 @@ The session ends by itself once every proposal is settled; the user can also end
 
 When the built-in automation's dream settles, a `dream.settled` entry says whether it was worth a fresh chapter (landed and
 applied changes against the `dream.asleepAfter` setting, default 5). Below it, carry on in this chapter. At or above
-it, either the automation's `asleep` grant falls asleep by itself (every gate still runs; nothing to do), or the input
-asks you to ask the user: send one message with a `choice` question (Fall asleep now / Later) and point at the card's
-Fall asleep button, which only they press. Never call `asleep` or `automation act {do: 'asleep'}` for it yourself.
+it, the input asks you to ask the user: send one message with a `choice` question (Fall asleep now / Later) and point
+at the card's Fall asleep button, which only they press. Never call `asleep` for it yourself.
 
 ## For the dream branch
 

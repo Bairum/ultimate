@@ -33,10 +33,10 @@ import {
   useNow,
   useUltimate,
 } from '@/sdk'
-import { GrantEditor, GrantSwitches, clock, full, until, words } from './parts.tsx'
+import { clock, full, until, words } from './parts.tsx'
 import { DefinitionsAction } from '../subagents/ui.tsx'
-import { CreateAction, DescribeAction, EventsAction, GrantRef, UpdateAction } from './refs.ts'
-import type { Automation, GrantAction } from './refs.ts'
+import { CreateAction, DescribeAction, EventsAction, UpdateAction } from './refs.ts'
+import type { Automation } from './refs.ts'
 
 type Mode = 'cron' | 'at' | 'every'
 interface Draft {
@@ -420,9 +420,6 @@ export function AutomationForm({
 }) {
   const [draft, setDraft] = useState(() => draftOf(automation))
   const [saving, setSaving] = useState(false)
-  const [grants, setGrants] = useState<GrantAction[]>([])
-  // If granting fails after creation, retry the grant without creating a duplicate.
-  const created = useRef<Automation>(undefined)
   const eventChoices = useAction(EventsAction, null, { enabled: open, onError: () => {} })
   const [error, setError] = useState<string>()
   const ids = useId()
@@ -489,13 +486,12 @@ export function AutomationForm({
               }
           : { schedule }
       const fields = { name: draft.name.trim(), ...trigger, ...(prompt ? { prompt } : {}) }
-      const existing = automation ?? created.current
-      let saved = existing
+      const saved = automation
         ? await api.action(UpdateAction, {
-            id: existing.id,
+            id: automation.id,
             ...fields,
             // An empty prompt removes the run action the automation had.
-            ...(!prompt && existing.prompt ? { prompt: '' } : {}),
+            ...(!prompt && automation.prompt ? { prompt: '' } : {}),
             ...(prompt ? { agent: draft.agent } : {}),
           })
         : await api.action(CreateAction, {
@@ -506,23 +502,10 @@ export function AutomationForm({
               ? { subscribers: [conversationId] }
               : {}),
           })
-      if (!automation) created.current = saved
-      if (!automation && saved.subscribers.length && (grants.length || saved.grant)) {
-        saved = await api.action(GrantRef, {
-          id: saved.id,
-          actions: grants,
-          source: 'Set in Automations form',
-        })
-      }
       onSaved(saved)
       onOpenChange(false)
     } catch (failure) {
-      const message = errorMessage(failure).replace(/^automations\/\w+: /, '')
-      setError(
-        created.current
-          ? `Automation ${created.current.id} exists. Could not finish saving: ${message}`
-          : message,
-      )
+      setError(errorMessage(failure).replace(/^automations\/\w+: /, ''))
     } finally {
       setSaving(false)
     }
@@ -923,19 +906,6 @@ export function AutomationForm({
                   <AgentPicker onChange={(agent) => set({ agent })} value={draft.agent} />
                 </Field>
               </>
-            )}
-            {automation ? (
-              <GrantEditor automation={automation} />
-            ) : (
-              <GrantSwitches
-                // A new automation that wakes no one gets no grant: the switches show it, nothing is skipped silently.
-                actions={!prompt || (wakeable && draft.wake) ? grants : []}
-                busy={saving}
-                // Without a prompt the caller is woken; with one, only when "Wake this conversation" is on.
-                wakes={!prompt || (wakeable && draft.wake)}
-                onChange={setGrants}
-                source="Set in Automations form"
-              />
             )}
             {error && (
               <p className="flex items-start gap-1.5 font-mono text-[11.5px] leading-snug break-words text-error">

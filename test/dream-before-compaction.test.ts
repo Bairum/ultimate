@@ -185,9 +185,6 @@ async function fixture() {
     switching: () =>
       (resources.get('dream.switching') as { busy: boolean } | undefined)?.busy ?? false,
     start: vi.fn<(tx: Tx, origin: Origin) => Promise<{ session: number }>>(),
-    grantedSleep: vi.fn<(tx: Tx, by: unknown, input: { session?: number }) => Promise<unknown>>(
-      async () => ({ session: 1 }),
-    ),
   }
   return {
     host,
@@ -231,7 +228,6 @@ it('ships one enabled "Dream before compaction" automation that wakes @ultimate,
     subscribers: [f.ultimate],
   })
   expect(made.event).toBeUndefined()
-  expect(made.grant).toBeUndefined()
   // Opening again (a facet reload, a restart) makes no second one.
   await ensureAutomation(f.host)
   expect(Object.values((await f.harness.snapshot(Automations, context))!.automations)).toHaveLength(
@@ -246,10 +242,10 @@ it('ships one enabled "Dream before compaction" automation that wakes @ultimate,
   })
 })
 
-it('migrates the old "Dream after compaction" in place: same id, enabled state, grant and subscribers', async () => {
+it('migrates the old "Dream after compaction" in place: same id, enabled state and subscribers', async () => {
   const f = await fixture()
   const id = (await f.own())!
-  // The record as it was before this feature, paused and granted by the user.
+  // The record as it was before this feature, paused by the user.
   await f.harness.commit(async (tx) => {
     const a = (await tx.doc(Automations)).automations[id]
     a.name = 'Dream after compaction'
@@ -260,7 +256,6 @@ it('migrates the old "Dream after compaction" in place: same id, enabled state, 
       sinceEvent: 0,
     }
   }, context)
-  await automationActions.grant({ id, actions: ['dream', 'asleep'] }, f.call)
   await f.action('pause', { id })
   await ensureAutomation(f.host)
   const migrated = await f.record(id)
@@ -268,7 +263,6 @@ it('migrates the old "Dream after compaction" in place: same id, enabled state, 
     id,
     name: AUTOMATION_NAME,
     enabled: false,
-    grant: { actions: ['dream', 'asleep'] },
     subscribers: [f.ultimate],
     condition: { metric: 'context', of: '@ultimate', above: 70 },
   })
@@ -326,9 +320,7 @@ it('fires once at 70% and re-arms below 60%, asking for one handoff per fire', a
 it('starts the analysis once the handoff is recorded and nothing else works, carrying the handoff', async () => {
   const f = await fixture()
   const { look, request } = compactionDream(f.host, f.deps)
-  f.deps.start.mockImplementation((tx, origin) =>
-    startDreamIn(f.host, tx, undefined, undefined, origin),
-  )
+  f.deps.start.mockImplementation((tx, origin) => startDreamIn(f.host, tx, origin))
   const id = (await f.own())!
   const { task } = await f.harness.commit(
     (tx) => request(tx, 0, f.ultimate, { id, name: AUTOMATION_NAME }),
@@ -365,9 +357,7 @@ it('starts the analysis once the handoff is recorded and nothing else works, car
 it('starts without a handoff after 30 minutes and says so, and gives up after two hours with a quiet note', async () => {
   const f = await fixture()
   const { look, request } = compactionDream(f.host, f.deps)
-  f.deps.start.mockImplementation((tx, origin) =>
-    startDreamIn(f.host, tx, undefined, undefined, origin),
-  )
+  f.deps.start.mockImplementation((tx, origin) => startDreamIn(f.host, tx, origin))
   const first = await f.harness.commit((tx) => request(tx, 0, f.ultimate), context)
   expect(await look(first.task, HANDOFF_WAIT_MS - 1)).toBe('look')
   expect(await look(first.task, HANDOFF_WAIT_MS)).toBe('started')
@@ -449,27 +439,10 @@ it('starts nothing once its automation is paused or deleted', async () => {
   expect(f.deps.start).not.toHaveBeenCalled()
 })
 
-it('tells @ultimate to decide by itself only under a dream grant', async () => {
-  const f = await fixture()
-  const { look, request } = compactionDream(f.host, f.deps)
-  const id = (await f.own())!
-  f.deps.start.mockResolvedValue({ session: 1 })
-  const automation = { id, name: AUTOMATION_NAME }
-  const first = await f.harness.commit((tx) => request(tx, 0, f.ultimate, automation), context)
-  await actions.handoff({ text: 'Handoff' }, f.call)
-  await look(first.task, 10)
-  expect(f.deps.start.mock.calls[0][1].beforeCompaction).not.toHaveProperty('handsOff')
-  await automationActions.grant({ id, actions: ['dream'] }, f.call)
-  const second = await f.harness.commit((tx) => request(tx, 0, f.ultimate, automation), context)
-  await actions.handoff({ text: 'Handoff' }, f.call)
-  await look(second.task, 20)
-  expect(f.deps.start.mock.calls[1][1].beforeCompaction).toMatchObject({ handsOff: true })
-})
-
 /** A compaction's session with `applied` applied proposals and the rest rejected, all settled. */
 async function settledSession(f: Awaited<ReturnType<typeof fixture>>, applied: number) {
   await f.harness.commit(async (tx) => {
-    await startSession(tx, 1, undefined, {
+    await startSession(tx, 1, {
       beforeCompaction: { automation: (await f.own())!, name: AUTOMATION_NAME, at: 1 },
       handoff: { task: 9, missing: 'no handoff within 30 minutes of the request' },
     })
@@ -501,56 +474,29 @@ async function settledSession(f: Awaited<ReturnType<typeof fixture>>, applied: n
 }
 
 it.each([
-  [ASLEEP_AFTER - 1, false, 'stay'],
-  [ASLEEP_AFTER, false, 'ask'],
-  [ASLEEP_AFTER, true, 'asleep'],
-] as const)(
-  'settles %i changes with an asleep grant %s as %s, and never switches without one',
-  async (applied, grant, result) => {
-    const f = await fixture()
-    const id = (await f.own())!
-    if (grant) await automationActions.grant({ id, actions: ['asleep'] }, f.call)
-    const { settle } = compactionDream(f.host, f.deps)
-    await settledSession(f, applied)
-    const [found] = await f.sessions()
-    // The last decide settled the session and created its check exactly once.
-    expect(found.endedAt).toBeDefined()
-    expect(found.beforeCompaction?.settling).toBeTypeOf('number')
-    await settle(1)
-    const [after] = await f.sessions()
-    expect(after.beforeCompaction?.outcome).toMatchObject({
-      changes: applied,
-      threshold: ASLEEP_AFTER,
-      result,
-    })
-    // Only the grant falls asleep, and as the automation, for this session.
-    const asleep = [
-      [expect.objectContaining({ automation: id, name: AUTOMATION_NAME }), { session: 1 }],
-    ]
-    expect(f.deps.grantedSleep.mock.calls.map(([, by, input]) => [by, input])).toEqual(
-      result === 'asleep' ? asleep : [],
-    )
-    // Settling twice decides once.
-    await settle(1)
-    expect(f.deps.grantedSleep.mock.calls.length).toBe(result === 'asleep' ? 1 : 0)
-    // Only asking wakes @ultimate; the other outcomes are passive.
-    const submitted = () =>
-      f.harness.commit((tx) => tx.submissionByRequest(f.ultimate, 'dream.settled:1'), context)
-    await until(async () => (await submitted()) !== undefined)
-    expect((await submitted())?.type).toBe(result === 'ask' ? 'input' : 'write')
-  },
-)
-
-it('asks instead of sleeping once the granted automation is paused', async () => {
+  [ASLEEP_AFTER - 1, 'stay'],
+  [ASLEEP_AFTER, 'ask'],
+] as const)('settles %i changes as %s, and never switches by itself', async (applied, result) => {
   const f = await fixture()
-  const id = (await f.own())!
-  await automationActions.grant({ id, actions: ['asleep'] }, f.call)
-  await f.action('pause', { id })
   const { settle } = compactionDream(f.host, f.deps)
-  await settledSession(f, ASLEEP_AFTER)
+  await settledSession(f, applied)
+  const [found] = await f.sessions()
+  // The last decide settled the session and created its check exactly once.
+  expect(found.endedAt).toBeDefined()
+  expect(found.beforeCompaction?.settling).toBeTypeOf('number')
   await settle(1)
-  expect((await f.sessions())[0].beforeCompaction?.outcome?.result).toBe('ask')
-  expect(f.deps.grantedSleep).not.toHaveBeenCalled()
+  const [after] = await f.sessions()
+  expect(after.beforeCompaction?.outcome).toMatchObject({
+    changes: applied,
+    threshold: ASLEEP_AFTER,
+    result,
+  })
+  expect((await f.sessions())[0].sleep).toBeUndefined()
+  // Only asking wakes @ultimate; the other outcomes are passive.
+  const submitted = () =>
+    f.harness.commit((tx) => tx.submissionByRequest(f.ultimate, 'dream.settled:1'), context)
+  await until(async () => (await submitted()) !== undefined)
+  expect((await submitted())?.type).toBe(result === 'ask' ? 'input' : 'write')
 })
 
 it('never adopts a same-name automation that watches something else', async () => {
@@ -626,20 +572,6 @@ it('makes it in a chapter whose seed predates the feature', async () => {
   await writeJson(`${f.host.chapter.dir}/seed.json`, { session: 1 })
   await ensureAutomation(f.host)
   expect((await f.record((await f.own())!)).enabled).toBe(true)
-})
-
-it('asks the user when the asleep grant is refused', async () => {
-  const f = await fixture()
-  const id = (await f.own())!
-  await automationActions.grant({ id, actions: ['asleep'] }, f.call)
-  f.deps.grantedSleep.mockRejectedValue(new Error('Dream session 1 is already falling asleep'))
-  const { settle } = compactionDream(f.host, f.deps)
-  await settledSession(f, ASLEEP_AFTER)
-  await settle(1)
-  expect((await f.sessions())[0].beforeCompaction?.outcome).toMatchObject({
-    result: 'ask',
-    error: expect.stringContaining('already falling asleep'),
-  })
 })
 
 it('reads dream.asleepAfter from project over user settings, and rejects nonsense', async () => {

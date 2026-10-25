@@ -4,7 +4,7 @@
  * chapter only when it was worth it. The user's Dream button takes the same path: handoff first, then the dream.
  *
  * The trigger is an ordinary context automation, "Dream before compaction", that dream creates once per chapter, so the
- * user sees it in the Automations panel and can pause, delete, grant or re-threshold it like any other. It subscribes
+ * user sees it in the Automations panel and can pause, delete or re-threshold it like any other. It subscribes
  * @ultimate: its fire is the input that asks for the handoff. Its fires reach dream as `automations.fired`; only a fire
  * of this automation, checked by its id in dream's own document, records a `waiting` request and starts the wait, and
  * the wait starts a session only through `startDreamIn`'s own refusals. The user-only `start` stays user-only.
@@ -23,7 +23,6 @@ import { readJson } from '../../lib/json-file.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { AutomationsApi } from '../automations/api.ts'
-import type { GrantedBy } from '../automations/api.ts'
 import type { Automation } from '../automations/refs.ts'
 import { LineageApi } from '../lineage/api.ts'
 import { Standing } from '../subagents/api.ts'
@@ -105,8 +104,8 @@ export const changes = (found: Session) =>
 /**
  * Make sure this chapter has the built-in automation, unless the user deleted it. A new chapter makes it as its `seed`
  * carried it: paused stays paused, and one deleted before the switch is not made again. The automation from before
- * this feature ("Dream after compaction", on @ultimate's compaction) becomes this one in place: same id, enabled state,
- * grant and subscribers.
+ * this feature ("Dream after compaction", on @ultimate's compaction) becomes this one in place: same id, enabled state
+ * and subscribers.
  */
 export async function ensureAutomation(host: ExtensionHost) {
   // Every caller reads the chapter's own seed, so whichever runs first keeps its paused or deleted automation so.
@@ -206,7 +205,7 @@ function blocked(sessions: Session[], switching: boolean) {
 
 type SettleInput = { session: number }
 
-/** What started a session besides the user or a grant: the built-in automation, and the handoff request. */
+/** What started a session besides the user: the built-in automation, and the handoff request. */
 export type Origin = { beforeCompaction?: BeforeCompaction; handoff?: Handoff }
 
 export function compactionDream(
@@ -217,7 +216,6 @@ export function compactionDream(
     switching: () => boolean
     /** Start a session for a handoff request, as `origin` says. */
     start: (tx: Tx, origin: Origin) => Promise<{ session: number }>
-    grantedSleep: (tx: Tx, by: GrantedBy, input: { session?: number }) => Promise<unknown>
   },
 ) {
   const done = {
@@ -225,8 +223,8 @@ export function compactionDream(
     outcome: { status: 'completed' as const, result: null },
   }
   /**
-   * The automation `id` as `tx` sees it, only while it is enabled: a paused or deleted one does nothing and grants
-   * nothing. Read in the transaction of the effect it allows, as automations' own `act` does.
+   * The automation `id` as `tx` sees it, only while it is enabled: a paused or deleted one does nothing. Read in the
+   * transaction of the effect it allows.
    */
   const enabled = async (tx: Tx, id: string) => {
     const automation = await host.want(AutomationsApi)?.read(tx, id)
@@ -260,7 +258,6 @@ export function compactionDream(
       if (!waiting.handoff && now < waiting.at + HANDOFF_WAIT_MS) return 'look'
       if (blocked(doc.sessions, deps.switching())) return stop('done')
       if (busyElsewhere(host.conversations(), ultimate).length) return 'look'
-      const handsOff = !!automation && !!automation.grant?.actions.includes('dream')
       const handoff: Handoff = waiting.handoff
         ? { task, text: waiting.handoff.text, at: waiting.handoff.at }
         : {
@@ -272,12 +269,7 @@ export function compactionDream(
         handoff,
         ...(automation
           ? {
-              beforeCompaction: {
-                automation: automation.id,
-                name: automation.name,
-                at: now,
-                ...(handsOff ? { handsOff } : {}),
-              },
+              beforeCompaction: { automation: automation.id, name: automation.name, at: now },
             }
           : {}),
       })
@@ -382,9 +374,8 @@ export function compactionDream(
 
   /**
    * Once a built-in automation's session settles: below `dream.asleepAfter` changes it stays in this chapter; at or
-   * above, a grant of `asleep` on its automation falls asleep through the granted Fall asleep (every gate), else the
-   * user is asked on the card. Records the outcome on the session and leaves a `dream.settled` entry in @ultimate's
-   * conversation, an input only when the user must be asked.
+   * above, the user is asked on the card. Records the outcome on the session and leaves a `dream.settled` entry in
+   * @ultimate's conversation, an input only when the user must be asked.
    */
   async function settle(session: number) {
     const threshold = await asleepAfter(host).catch((error: unknown) => {
@@ -398,31 +389,9 @@ export function compactionDream(
       const before = found?.beforeCompaction
       const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
       if (!found || !before || before.outcome || ultimate === undefined) return
-      // The grant is read here, with the sleep it allows: a revoke, pause or delete committed before counts.
-      const automation = await enabled(tx, before.automation)
-      const granted = !!automation?.grant?.actions.includes('asleep')
       const count = changes(found)
-      let result: 'stay' | 'ask' | 'asleep' =
-        count < threshold ? 'stay' : granted ? 'asleep' : 'ask'
-      let error: string | undefined
-      if (result === 'asleep')
-        try {
-          await deps.grantedSleep(
-            tx,
-            { automation: automation!.id, name: automation!.name, at: Date.now() },
-            { session: found.id },
-          )
-        } catch (refused) {
-          result = 'ask'
-          error = String(refused)
-        }
-      before.outcome = {
-        changes: count,
-        threshold,
-        result,
-        ...(error ? { error } : {}),
-        at: Date.now(),
-      }
+      const result = count < threshold ? 'stay' : 'ask'
+      before.outcome = { changes: count, threshold, result, at: Date.now() }
       const words = `${count} change${count === 1 ? '' : 's'} landed or applied; a fresh chapter takes ${threshold}`
       await deliver(host, tx, ultimate, {
         type: result === 'ask' ? 'input' : 'write',
@@ -431,9 +400,7 @@ export function compactionDream(
         content:
           result === 'stay'
             ? `Dream session ${found.id} settled: ${words}. We stay in this chapter; carry on.`
-            : result === 'asleep'
-              ? `Dream session ${found.id} settled: ${words}. Automation ${automation!.id} "${automation!.name}" holds the user's Fall asleep grant, so Fall asleep runs by itself once nothing works, through every gate. Nothing to do.`
-              : `Dream session ${found.id} settled: ${words}. Ask the user whether to Fall asleep now or later: the card above has the Fall asleep button, which only they press. Never call asleep yourself.${error ? ` (The automation's Fall asleep grant was refused: ${error})` : ''}`,
+            : `Dream session ${found.id} settled: ${words}. Ask the user whether to Fall asleep now or later: the card above has the Fall asleep button, which only they press. Never call asleep yourself.`,
       })
     }, context)
     host.harness().resume()

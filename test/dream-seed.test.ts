@@ -521,11 +521,10 @@ it.each(['seeding', 'checking', 'backing up'] as const)(
   'fails a sleep a restart stopped in %s, so nothing stays stuck and a retry is allowed',
   async (phase) => {
     const f = await fixture()
-    const by = { automation: 'A4', name: 'Dream at 80%', at: 1 }
     await f.harness.commit(async (tx) => {
       await startSession(tx, 1)
       const sessions = (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions
-      sessions[0].sleep = { chapter: 'next', phase, at: 1, by }
+      sessions[0].sleep = { chapter: 'next', phase, at: 1 }
     }, context)
     await f.close()
     await f.open()
@@ -533,7 +532,6 @@ it.each(['seeding', 'checking', 'backing up'] as const)(
       .sleep
     expect(sleep).toMatchObject({
       phase: 'failed',
-      by,
       error: expect.stringContaining('nothing moved'),
     })
   },
