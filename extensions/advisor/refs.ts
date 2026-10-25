@@ -88,12 +88,35 @@ export type AdvisorNoteEntry = {
   point: ReviewPoint
   model: string
   delivered: 'card' | 'note' | 'steer' | 'continue'
-  notes: { id: string; severity: Severity; note: string; evidence: string }[]
+  notes: { id: string; ref?: string; severity: Severity; note: string; evidence: string }[]
 }
 export const NOTE_ENTRY = 'advisor.note'
 
+/**
+ * What the agent did with a note. `addressed`, `deferred` and `disputed` come from the agent's acknowledgement
+ * (`ack`) or, without one, from a judge over the entries after delivery (`judged`). `ignored`: read, no response by the
+ * end of the run. `unread`: never reached a request before the conversation finished. `late`: delivered after the
+ * agent's last run ended. Cards go to the user only and get no response.
+ */
+export const RESPONSES = ['addressed', 'deferred', 'disputed', 'ignored', 'unread', 'late'] as const
+export type ResponseStatus = (typeof RESPONSES)[number]
+export type NoteResponse = {
+  status: ResponseStatus
+  source: 'ack' | 'judged' | 'auto'
+  /** The agent's stated reason, or the judge's summary. */
+  reason?: string
+  /** Entry ids, commits or tool calls showing it. */
+  evidence?: string
+  at: number
+}
+
 export type StoredNote = {
   id: string
+  /**
+   * Short handle the agent cites in its acknowledgement: `advisor <ref>: addressed|deferred|disputed — reason`.
+   * Absent on notes stored before lifecycle tracking.
+   */
+  ref?: string
   conversation: number
   entry?: number
   advisor: string
@@ -105,7 +128,22 @@ export type StoredNote = {
   at: number
   status: NoteStatus
   feedback?: Feedback
+  delivered?: AdvisorNoteEntry['delivered']
+  /** When a model request first carried the note (a continuation counts as read at delivery). */
+  readAt?: number
+  response?: NoteResponse
 }
+
+/** Lifecycle counts for one role over a window. */
+export type RoleStats = { delivered: number; read: number } & Record<
+  ResponseStatus | 'pending',
+  number
+>
+/** Read-only `{ days? }` (default 7) → lifecycle counts per role, for the panel and audits. */
+export const StatsAction = actionRef<
+  { days?: number } | null,
+  { since: number; roles: Partial<Record<Role, RoleStats>> }
+>('advisor', 'stats')
 
 export type ConversationActivity = {
   role: Role
