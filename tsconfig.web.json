@@ -50,6 +50,8 @@
     "extensions/sidebar/label.ts",
     "extensions/sidebar/listed.ts",
     "extensions/side-chat/logic.ts",
+    "extensions/voice-live/relay.ts",
+    "extensions/voice-live/session.ts",
     "extensions/system/feed.ts",
     "extensions/system/layout.ts",
     "extensions/workspaces/types.ts",

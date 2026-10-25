@@ -2,8 +2,7 @@
 
 A browser voice relay sends Daniel's words to @ultimate and speaks its answers through OpenAI GPT-Live.
 
-This built-in is default-on by folder discovery; it does nothing billable until `start`. There is deliberately no
-`web.tsx` yet. It uses `OPENAI_API_KEY` from Secrets (⌘K → Secrets), or Pi's OpenAI **API key**, never its OAuth login.
+This built-in is default-on by folder discovery; it does nothing billable until `start`. It uses `OPENAI_API_KEY` from Secrets (⌘K → Secrets), or Pi's OpenAI **API key**, never its OAuth login.
 The key stays on the server. GPT-Live has no ephemeral browser keys.
 
 ## Flow
@@ -82,6 +81,34 @@ Use `onError` for visible failures. `send` supports quiet `session.thinking.appe
 `startLive` already drives this relay and submits its results. The UI should call `close()` when
 `session.relay.idleFor(Date.now()) >= IDLE_MS`; activity means input **or output** transcript fragments, not acknowledgements
 of protocol events. Also show session expiry/closure and prevent multiple local starts. Do not start from a render effect.
+
+## UI (`web.tsx`, `live.tsx`)
+
+- **Voice mode** lives in `live.tsx`, outside React, so a hot reload of `web.tsx` never orphans a session: `off`,
+  `starting`, `live`, `paused` (no session, listening paused) and `ending`, plus `muted`, `front`, a visible `problem`
+  and a `waiting` answer. One session at a time; starts come only from a click or a command. Every second it closes a
+  session idle for `IDLE_MS` and goes `paused`; a session that closed under it (expiry, a dropped peer) also goes
+  `paused` with the reason. End and `pagehide` close the session; a hot reload of `live.tsx` closes its own.
+- **Start**: the audio-lines button beside the dictation mic, in @ultimate's composer only, and ⌘K "Start voice
+  relay". Without a key it is dimmed and opens `OPENAI_API_KEY` in Secrets. While on, it is tinted and toggles Voice.
+- **Live indicator** (`titlebar.right`, on every surface and on phones): the state ("Live 1:14" with the mic level,
+  "Muted", "Listening paused", "Answer waiting"), the last problem, Mute/Unmute or Resume, and End. Its state label
+  brings Voice to the front or sends it back.
+- **Front view** (`conversation.overlay` in @ultimate): Voice as a sheet like side chat's depth view, @ultimate
+  receding behind it and still streaming. Alt+V (⌥V) toggles it from anywhere; minimize sends it back while the
+  session keeps listening. `front` is this tab's own, not durable UI state: voice mode ends with its page. Only one
+  sheet shows: Voice coming forward parks a side chat, and a side chat coming forward sends Voice back.
+- **Voice's composer** is replaced by the relay's controls: state, time, Mute and End; Start or Resume when no session
+  runs.
+- **Relay**: while voice mode is on, new `voice.line` entries with `role: 'ultimate', speech: true` are spoken, never
+  lines already there on mount. Their delegation is passed only if one of this session's own utterances carried it.
+  While `paused`, an answer starts a new session and speaks it with `null`; without an earlier gesture on the page
+  (`navigator.userActivation`) or when the start fails, it shows "Answer waiting · Tap to hear" instead.
+- **Transcript**: `voice.line` from Daniel is a user turn, from @ultimate a spoken line with a "full answer" link to
+  its `source` entry; `voice.session` is a dashed divider ("Live · 14:02", "Ended · 3 min"); `voice.utterance` in
+  @ultimate is Daniel's turn with a small "by voice" mark.
+- Voice has no row under @ultimate in the sidebar: `sidebar.under-ultimate` and `sidebar.unlisted` have one provider
+  each, and side chat is it. It shows as an ownerless conversation titled Voice.
 
 ## Costs and verification
 
