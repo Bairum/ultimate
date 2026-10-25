@@ -19,6 +19,8 @@ export type UpdateState = {
   root: string
   /** Its default branch, e.g. `main`. */
   branch?: string
+  /** The clone's HEAD commit. Absent on a preview, which never reads the clone. */
+  head?: string
   /** Commits on `origin/<branch>` that the clone lacks, as of the last fetch. */
   behind: number
   /** Commits of the clone's own that origin lacks. */

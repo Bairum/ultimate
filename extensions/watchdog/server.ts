@@ -24,7 +24,24 @@ import { rateLimited } from '../../lib/rate-limit.ts'
 import { Messages } from '../messages/api.ts'
 import { Standing, Subagents } from '../subagents/api.ts'
 import { idleNote } from './idle.ts'
+import { WatchdogApi } from './api.ts'
+import type { ReportedFailure } from './api.ts'
 import type { Failure } from './refs.ts'
+
+/** How long after a temporary failure its one retry starts. */
+const RETRY_AFTER = 60_000
+/** Reported failures kept for `failures()`; older ones drop off. */
+export const FAILURE_LIMIT = 20
+
+const Reported = defineDoc<{ failures: ReportedFailure[] }>({
+  kind: 'watchdog.reported',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  checkpointWhen: () => false,
+  initial: () => ({ failures: [] }),
+})
 
 const Receipts = defineDoc<{ highWater?: number; tasks: Record<string, true> }>({
   kind: 'watchdog.receipts',
@@ -223,6 +240,11 @@ export default function watchdog(host: ExtensionHost) {
           )
         }
         await runtime.commit(async (tx) => {
+          const reported = await tx.doc(Reported, ROOT_CONVERSATION_ID)
+          // Newest first by when the run failed: reports of older failures can finish later.
+          reported.failures.push({ ...data, at: task.input.until - RETRY_AFTER })
+          reported.failures.sort((a, b) => b.at - a.at)
+          reported.failures.splice(FAILURE_LIMIT)
           // Reporting ends the watchdog's hold on a subagent's provider failure: its action has given up.
           const actions = Object.values((await tx.doc(Subagents, recipient)).actions)
           const action = actions.findLast((candidate) => candidate.conversationId === conversation)
@@ -302,7 +324,7 @@ export default function watchdog(host: ExtensionHost) {
           ...(hint ? { hint } : {}),
           retried: runInputs.some((input) => input.requestId?.startsWith('watchdog-retry:')),
           temporary,
-          until: (task.endedAt ?? Date.now()) + 60_000,
+          until: (task.endedAt ?? Date.now()) + RETRY_AFTER,
         },
         { conversationId: recipient, ownership: { kind: 'conversation' }, background: true },
       )
@@ -318,6 +340,12 @@ export default function watchdog(host: ExtensionHost) {
   }
   host.onClose(close)
   host.onRelease(close)
+  host.implement(WatchdogApi, {
+    failures: async (since) =>
+      (
+        (await host.harness().snapshot(Reported, ROOT_CONVERSATION_ID, context))?.failures ?? []
+      ).filter((failure) => failure.at >= since),
+  })
   host.onOpen(async () => {
     unsubscribe?.()
     unsubscribe = host.harness().subscribeCommits((publication) => {

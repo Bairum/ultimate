@@ -28,6 +28,7 @@ import {
 } from './clone.ts'
 import { Applied, CheckAction, MergeAction, Refused, StateAction, UpdateAction } from './refs.ts'
 import type { UpdateResult, UpdateState } from './refs.ts'
+import { UpdateApi } from './api.ts'
 
 /** How often the clone is compared with origin locally; origin itself is fetched at most hourly (`FETCH_EVERY`). */
 export const TICK = 5 * 60_000
@@ -118,6 +119,7 @@ export default function update(host: ExtensionHost) {
   host.need(ConversationsApi)
   host.need(SubagentsApi)
   host.want(PauseApi)
+  host.implement(UpdateApi, { state: () => currentState(host) })
   const shared = state(host)
   // A preview never fetches: it must not race the host on the same clone.
   if (preview()) return defineExtension({ name: 'update' })
@@ -236,6 +238,7 @@ async function refresh(host: ExtensionHost, check: boolean, force = false) {
   const landingNow = rest.behind ? await landing(host) : undefined
   shared.latest = {
     root,
+    head,
     ...rest,
     ...(summary ? { summary } : {}),
     refused: rest.refused ?? landingNow,
@@ -247,6 +250,14 @@ async function refresh(host: ExtensionHost, check: boolean, force = false) {
     ...(shared.updated ? { updated: shared.updated } : {}),
   }
   if (!shared.latest.refused) delete shared.latest.refused
+}
+
+/** The clone's update state from the last check, read locally once when none was made yet; never fetches. */
+async function currentState(host: ExtensionHost) {
+  const shared = state(host)
+  if (preview()) return previewState(host.ultimateRoot)
+  if (!shared.latest) await refresh(host, false)
+  return shared.latest!
 }
 
 /**
@@ -353,12 +364,7 @@ export const userActions = ['merge']
 
 export const actions = {
   /** The clone's update state from the last check. */
-  state: implementAction(StateAction, async (_args, { host }) => {
-    const shared = state(host)
-    if (preview()) return previewState(host.ultimateRoot)
-    if (!shared.latest) await refresh(host, false)
-    return shared.latest!
-  }),
+  state: implementAction(StateAction, (_args, { host }) => currentState(host)),
   check: implementAction(CheckAction, async (_args, { host }) => {
     const shared = state(host)
     if (preview()) return previewState(host.ultimateRoot)
