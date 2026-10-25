@@ -10,7 +10,8 @@ type Reply = CallToolResult | ((call: FakeCall) => CallToolResult | Promise<Call
 /** A fresh MCP server per connection, with Calculator state and scripts shared across reconnects. */
 export function createFakeDriver(options: { version?: string; name?: string } = {}) {
   const calls: FakeCall[] = []
-  const scripts: (Reply | 'drop')[] = []
+  const scripts: { tool?: string; reply: Reply | 'drop' }[] = []
+  let frontmostPid: number | undefined = 999
   const labels = [
     ...Array.from({ length: 10 }, (_, i) => String(i)),
     'Multiply',
@@ -33,6 +34,11 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
       snapshot_id: `s${snapshot}`,
       tree_markdown: `AXWindow Calculator\n${labels.map((label) => `  AXButton ${label}`).join('\n')}\n  AXStaticText ${display}`,
       truncated: false,
+      window_bounds: { x: 0, y: 0, width: 400, height: 100 },
+      capture_id: `capture${snapshot}`,
+      screenshot_width: 800,
+      screenshot_height: 200,
+      screenshot_scale: 2,
       elements: [
         {
           element_token: `s${snapshot}:0`,
@@ -111,7 +117,18 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
     if (tool === 'verify_state') {
       structured = { status: args.value === display ? 'satisfied' : 'unsatisfied' }
     }
-    if (tool === 'list_apps') structured = { apps: [{ name: 'Calculator', pid: 123 }] }
+    if (tool === 'list_apps')
+      structured = {
+        apps: [
+          {
+            name: 'Calculator',
+            bundle_id: 'com.apple.calculator',
+            pid: 123,
+            active: frontmostPid === 123,
+          },
+          { name: 'Other', pid: 999, active: frontmostPid === 999 },
+        ],
+      }
     if (tool === 'launch_app' || tool === 'list_windows') {
       structured = { windows: [{ window_id: 456, window_title: 'Calculator', pid: 123 }] }
     }
@@ -123,6 +140,12 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
 
   return {
     calls,
+    set frontmostPid(pid: number | undefined) {
+      frontmostPid = pid
+    },
+    replyFor(tool: string, reply: Reply) {
+      scripts.push({ tool, reply })
+    },
     get connections() {
       return connections
     },
@@ -130,13 +153,13 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
       return display
     },
     replyNext(reply: Reply) {
-      scripts.push(reply)
+      scripts.push({ reply })
     },
     refuseNext(code: string, message: string, hint?: string) {
-      scripts.push(refusal(code, message, hint))
+      scripts.push({ reply: refusal(code, message, hint) })
     },
     dropNext() {
-      scripts.push('drop')
+      scripts.push({ reply: 'drop' })
     },
     async disconnect() {
       await current?.close()
@@ -168,7 +191,8 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
           args: (request.params.arguments ?? {}) as Record<string, JsonValue>,
         }
         calls.push(call)
-        const script = scripts.shift()
+        const index = scripts.findIndex((s) => !s.tool || s.tool === call.tool)
+        const script = index < 0 ? undefined : scripts.splice(index, 1)[0].reply
         if (script === 'drop') {
           await serverTransport.close()
           return { content: [] }

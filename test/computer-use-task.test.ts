@@ -66,7 +66,13 @@ function ask(on_task = 0.9, progressing = 0.9): ClassifyService['ask'] {
     },
   }))
 }
-const evidence = { kind: 'capture' as const, captureId: 'P1', ref: 'J1', app: 'Numbers' }
+const evidence = {
+  kind: 'capture' as const,
+  captureId: 'P1',
+  ref: 'J1',
+  app: 'Numbers',
+  criterion: 'C1',
+}
 
 describe('computer task grounding', () => {
   it('starts active with defaults, preserving the verbatim intent; flags all confirmation reasons', () => {
@@ -229,7 +235,7 @@ describe('computer task grounding', () => {
     input.criteria.push({ id: 'C2', text: 'Capture', check: 'evidence' })
     let confirmed = confirmTask(startTask(input, 1000).state)
     confirmed = setSubgoals(confirmed, [{ id: 'S1', text: 'Export' }])
-    confirmed = addEvidence(confirmed, 'S1', evidence)
+    confirmed = addEvidence(confirmed, 'S1', { ...evidence, criterion: 'C2' })
     const verify = vi.fn<Parameters<typeof finish>[2]>(async () => 'satisfied')
     const done = await finish(confirmed, 'done', verify, ask())
     expect(verify).toHaveBeenCalledExactlyOnceWith(input.criteria[0].check)
@@ -294,5 +300,30 @@ describe('computer task grounding', () => {
     expect(anchor(state)).not.toContain('private')
     expect(anchor(state).length).toBeLessThanOrEqual(500)
     expect(anchor(state)).toBe(anchor(state))
+  })
+})
+
+it('requires criterion-linked evidence and redacts evidence excerpts', async () => {
+  let state = task()
+  state.spec.criteria.push({ id: 'C2', text: 'Capture proves export', check: 'evidence' })
+  state = addEvidence(state, 'S1', {
+    kind: 'verify',
+    predicates: [{ arbitrary: true }],
+    verdict: 'satisfied',
+    ref: 'J1',
+  })
+  expect(completeSubgoal(state, 'S1')).toMatchObject({ refuse: 'evidence_required' })
+  expect((await finish(state, 'done', async () => 'satisfied')).criteria[1].state).toBe('unmet')
+  state = addEvidence(state, 'S1', {
+    kind: 'ax',
+    snapshot: 's1',
+    excerpt: 'report.pdf and report pdf',
+    ref: 'J2',
+    criterion: 'C2',
+  })
+  expect(JSON.stringify(state.subgoals[0].evidence.at(-1))).not.toContain('report.pdf')
+  expect(JSON.stringify(state.subgoals[0].evidence.at(-1))).not.toContain('report pdf')
+  expect(completeSubgoal(state, 'S1')).toMatchObject({
+    subgoals: [expect.objectContaining({ status: 'done' })],
   })
 })

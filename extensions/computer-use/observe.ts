@@ -15,13 +15,21 @@ import { Type } from '@earendil-works/pi-ai'
 import { resizeImage } from '@earendil-works/pi-coding-agent'
 import { defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { parseObservation } from './observation.ts'
-import type { Driver, Element, Observation } from './types.ts'
+import { parseObservation, ancestry } from './observation.ts'
+import type { Driver, Observation } from './types.ts'
 import { updateSession } from './session.ts'
 import * as task from './task.ts'
+import { untrusted } from './content.ts'
+import { readSession } from './session.ts'
+import { allGrants, resolveIdentity, readConsent } from './gates.ts'
 
-export async function windowFor(driver: Driver, app: string, window?: string | number) {
-  const listed = await driver.call('list_windows', { app })
+export async function windowFor(
+  driver: Driver,
+  app: string,
+  window?: string | number,
+  signal?: AbortSignal,
+) {
+  const listed = await driver.call('list_windows', { app }, signal)
   const windows = listed.structured?.windows
   const matches = (Array.isArray(windows) ? windows : [])
     .map(object)
@@ -65,8 +73,9 @@ export async function observeWindow(
   screenshot: 'auto' | 'always' | 'never' = 'auto',
   query?: string,
   maxDimension = 1568,
+  signal?: AbortSignal,
 ): Promise<Observation> {
-  const target = await windowFor(driver, app, window)
+  const target = await windowFor(driver, app, window, signal)
   const args = {
     ...target,
     full_output: true,
@@ -77,7 +86,7 @@ export async function observeWindow(
     include_screenshot: screenshot === 'always',
     ...(query ? { query } : {}),
   }
-  let observed = parseWindow(await driver.call('get_window_state', args), app)
+  let observed = parseWindow(await driver.call('get_window_state', args, signal), app)
   const chromeOnly = !observed.elements.some(
     (e) =>
       !['AXWindow', 'AXGroup', 'AXScrollArea', 'AXSplitGroup', 'AXToolbar'].includes(e.role) &&
@@ -90,7 +99,7 @@ export async function observeWindow(
   )
   if (screenshot === 'auto' && chromeOnly)
     observed = parseWindow(
-      await driver.call('get_window_state', { ...args, include_screenshot: true }),
+      await driver.call('get_window_state', { ...args, include_screenshot: true }, signal),
       app,
     )
   observed.truncated ||= observed.tree.length > 16_000
@@ -105,7 +114,9 @@ export async function observedOutput(observation: Observation, maxDimension = 15
   )[] = [
     {
       type: 'text',
-      text: `${JSON.stringify(metadata)}\n<untrusted_screen_content>\n${tree.replaceAll('</untrusted_screen_content>', '&lt;/untrusted_screen_content&gt;')}\n${observation.truncated ? '[tree truncated]\n' : ''}</untrusted_screen_content>`,
+      text: untrusted(
+        `${JSON.stringify(metadata)}\n${tree}\n${observation.truncated ? '[tree truncated]' : ''}`,
+      ),
     },
   ]
   if (image) {
@@ -117,35 +128,6 @@ export async function observedOutput(observation: Observation, maxDimension = 15
   }
   return { output: content, structuredOutput: json({ ...metadata, tree }) }
 }
-export function ancestry(element: Element, observation: Observation): Element[] {
-  const chain: Element[] = []
-  const seen = new Set<number>()
-  let current: Element | undefined = element
-  while (current && !seen.has(current.index)) {
-    seen.add(current.index)
-    chain.unshift(current)
-    current = observation.elements.find((e) => e.index === current!.parent)
-  }
-  return chain
-}
-export function path(element: Element, observation: Observation) {
-  return JSON.stringify(ancestry(element, observation).map((e) => [e.role, e.label ?? '']))
-}
-export function confirmationLocation(
-  target: Element | undefined,
-  observation: Observation | undefined,
-) {
-  return {
-    window: observation?.title ?? '',
-    ancestors:
-      target && observation
-        ? ancestry(target, observation)
-            .slice(0, -1)
-            .map((e) => e.label ?? '')
-        : [],
-  }
-}
-
 export function observeTool(host: ExtensionHost) {
   return defineTool({
     name: 'computer_observe',
@@ -162,6 +144,7 @@ export function observeTool(host: ExtensionHost) {
         query?: string
         zoom?: [number, number, number, number]
         evidence?: boolean
+        criterion?: string
       },
     parameters: Type.Object({
       app: Type.Optional(Type.String()),
@@ -173,19 +156,35 @@ export function observeTool(host: ExtensionHost) {
       ),
       query: Type.Optional(Type.String()),
       evidence: Type.Optional(Type.Boolean()),
+      criterion: Type.Optional(Type.String()),
       zoom: Type.Optional(Type.Tuple([Type.Number(), Type.Number(), Type.Number(), Type.Number()])),
     }),
-    async execute(args, api) {
+    async execute(args, api, ctx) {
       return setup(host, api.conversationId, async (driver) => {
         const state = runtime(host)
         if (state.busy) return result({ status: 'busy' })
         state.busy = true
         try {
+          if (args.app) {
+            const identity = await resolveIdentity(driver, args.app, ctx.abortSignal)
+            if (!identity) return result({ status: 'app_identity' })
+            const consent = readConsent(
+              identity,
+              await allGrants(
+                host,
+                api.conversationId,
+                await readSession(host, api.conversationId),
+              ),
+            )
+            if (consent !== 'granted')
+              return result({ status: consent === 'denied' ? 'denied' : 'consent_required' })
+          }
           if (args.window === undefined)
             return result(
               await driver.call(
                 args.app ? 'list_windows' : 'list_apps',
                 args.app ? { app: args.app } : {},
+                ctx.abortSignal,
               ),
             )
           if (!args.app)
@@ -205,19 +204,25 @@ export function observeTool(host: ExtensionHost) {
             args.zoom ? 'always' : args.screenshot,
             args.query,
             max,
+            ctx.abortSignal,
           )
           if (args.zoom) {
             const [x1, y1, x2, y2] = args.zoom
-            const zoom = await driver.call('zoom', {
-              pid: observation.pid,
-              window_id: observation.windowId,
-              x1,
-              y1,
-              x2,
-              y2,
-            })
+            const zoom = await driver.call(
+              'zoom',
+              {
+                pid: observation.pid,
+                window_id: observation.windowId,
+                x1,
+                y1,
+                x2,
+                y2,
+              },
+              ctx.abortSignal,
+            )
             observation.image = zoom.images[0]
           }
+          ctx.abortSignal?.throwIfAborted()
           runtime(host).observations.set(cacheKey(api.conversationId, args.app), observation)
           if (args.zoom) runtime(host).zoomed.add(cacheKey(api.conversationId, args.app))
           else runtime(host).zoomed.delete(cacheKey(api.conversationId, args.app))
@@ -235,6 +240,7 @@ export function observeTool(host: ExtensionHost) {
                   excerpt: observation.tree.slice(0, 2000),
                   ref: api.callId,
                   app: observation.app,
+                  ...(args.criterion ? { criterion: args.criterion } : {}),
                 })
             }
           })

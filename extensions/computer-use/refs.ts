@@ -1,16 +1,11 @@
 /** Computer use: durable session state and the user's consent, confirmation and stop controls. */
 import { actionRef, docRef } from '../../shared/extension-api.ts'
 import type { JevDecision, TaskState } from './types.ts'
+import type { Grant } from './types.ts'
 
 export type Session = {
   task?: TaskState
-  grants: {
-    app: string
-    scope: 'once' | 'conversation' | 'project' | 'deny'
-    at: number
-    used?: boolean
-    always?: boolean
-  }[]
+  grants: Grant[]
   confirmed: string[]
   pending: {
     kind: 'consent' | 'confirm' | 'task' | 'change'
@@ -20,6 +15,7 @@ export type Session = {
     at: number
     window?: string
     label?: string
+    payload?: string
   }[]
   journal: {
     call: string
@@ -50,11 +46,11 @@ export const GrantAction = actionRef<
   },
   Session
 >('computer-use', 'grant')
-/** `{conversation, app}` → session; user-only revocation. */
-export const DenyAction = actionRef<{ conversation: number; app: string }, Session>(
-  'computer-use',
-  'deny',
-)
+/** `{conversation, app, scope?}` → session; user-only revocation (conversation by default). */
+export const DenyAction = actionRef<
+  { conversation: number; app: string; scope?: 'conversation' | 'project' },
+  Session
+>('computer-use', 'deny')
 /** `{conversation, key}` → session; user-only confirmation of an exact pending action. */
 export const ConfirmAction = actionRef<{ conversation: number; key: string }, Session>(
   'computer-use',

@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util'
+import { redactor } from './content.ts'
 import type { ClassifyService } from '../classify/api.ts'
 import type { Escalation, Predicate, Step, Verdict } from './types.ts'
 import type { Evidence, Replan, TaskSpec, TaskState, Refusal } from './types.ts'
@@ -176,12 +178,26 @@ export function markInterrupted(
   log(next, 'interrupted', event, now)
   return next
 }
+export function linkedEvidence(state: TaskState, evidence: Evidence): boolean {
+  if (evidence.kind === 'verify' && evidence.verdict !== 'satisfied') return false
+  return state.spec.criteria.some(
+    (c) =>
+      evidence.criterion === c.id ||
+      (c.check !== 'evidence' &&
+        evidence.kind === 'verify' &&
+        evidence.verdict === 'satisfied' &&
+        isDeepStrictEqual(c.check, evidence.predicates)),
+  )
+}
 /** Driver results only: do not accept Evidence from tool/model arguments. */
 export function addEvidence(state: TaskState, subgoalId: string, evidence: Evidence): TaskState {
   const next = copy(state)
   const subgoal = next.subgoals.find((s) => s.id === subgoalId)
   if (!subgoal) throw new Error('Unknown subgoal')
-  subgoal.evidence.push(structuredClone(evidence))
+  const item = structuredClone(evidence)
+  if (item.kind === 'ax')
+    item.excerpt = redactor(Object.values(state.spec.scope.params))(item.excerpt)
+  subgoal.evidence.push(item)
   return next
 }
 export function setSubgoals(
@@ -208,7 +224,8 @@ export function activate(state: TaskState, id: string, now?: number): TaskState 
 export function completeSubgoal(state: TaskState, id: string, now?: number): TaskState | Refusal {
   const next = copy(state)
   const subgoal = next.subgoals.find((s) => s.id === id)
-  if (!subgoal?.evidence.length) return refuse('evidence_required', 'Driver evidence is required')
+  if (!subgoal?.evidence.some((e) => linkedEvidence(state, e)))
+    return refuse('evidence_required', 'Criterion-linked Driver evidence is required')
   subgoal.status = 'done'
   next.counters.sinceProgress = 0
   log(next, 'subgoal_done', id, now)
@@ -220,11 +237,7 @@ function redact(state: TaskState, text: string): string {
     ...Object.values(state.spec.scope.params),
     ...Object.values(state.pendingChange?.scope?.params ?? {}),
   ]
-  for (const value of values.filter(Boolean).toSorted((a, b) => b.length - a.length)) {
-    text = text.split(value).join('[param]')
-    text = text.split(JSON.stringify(value).slice(1, -1)).join('[param]')
-  }
-  return text
+  return redactor(values)(text)
 }
 function judgeState(state: TaskState, details: unknown) {
   return JSON.parse(
@@ -380,7 +393,8 @@ export async function finish(
   const criteria = await Promise.all(
     next.spec.criteria.map(async (c) => {
       let verdict: Verdict = 'unknown'
-      if (c.check === 'evidence') verdict = evidence.length ? 'satisfied' : 'unsatisfied'
+      if (c.check === 'evidence')
+        verdict = evidence.some((e) => e.criterion === c.id) ? 'satisfied' : 'unsatisfied'
       else {
         try {
           verdict = await verify(structuredClone(c.check))

@@ -14,7 +14,8 @@ import {
   StopAction,
   TakeoverAction,
 } from './refs.ts'
-import { plainTask, activatePending, runtime, driverFor } from './runtime.ts'
+import { plainTask, activatePending, runtime } from './runtime.ts'
+import { stopDriver } from './driver.ts'
 import * as task from './task.ts'
 
 export function validate<T>(
@@ -40,41 +41,44 @@ export function validate<T>(
 export async function stop(host: ExtensionHost, conversation: number) {
   validate({ conversation })
   const state = runtime(host)
-  const active = state.active.get(conversation)
-  if (active) active.stopped = true
-  const previous = await readSession(host, conversation)
-  await updateSession(host, conversation, (doc) => {
-    doc.stopped = true
-    if (doc.task) doc.task = task.markInterrupted(plainTask(doc.task), 'stop', [], Date.now())
-    doc.takeovers = []
-  })
-  if (active) {
+  const previous = await readSession(host, 1)
+  const affected = new Set([conversation, ...state.calls.values(), ...state.active.keys()])
+  for (const abort of state.calls.keys()) abort.abort()
+  for (const active of state.active.values()) {
     active.stopped = true
+    active.abort?.abort()
     if (active.inFlight && !previous.stopped) {
       active.timer = setTimeout(() => {
-        if (active.inFlight)
+        if (active.inFlight || active.uncertain)
           void hardStop(host).catch((error) => console.error('computer-use: stop failed:', error))
       }, 1000)
       active.timer.unref()
     }
   }
+  await updateSession(host, 1, (doc) => {
+    doc.stopped = true
+  })
+  for (const id of affected) await interrupt(host, id)
+  state.observations.clear()
+  state.zoomed.clear()
   if (previous.stopped) await hardStop(host)
   return readSession(host, conversation)
 }
 export async function hardStop(host: ExtensionHost) {
   const state = runtime(host)
-  const updates: Promise<void>[] = []
+  const affected = new Set([...state.calls.values(), ...state.active.keys()])
+  for (const abort of state.calls.keys()) abort.abort()
+  const updates: Promise<void>[] = [
+    updateSession(host, 1, (doc) => {
+      doc.stopped = true
+    }),
+    ...[...affected].map((id) => interrupt(host, id)),
+  ]
   clearTimeout(state.idle)
-  for (const [conversation, active] of state.active) {
+  for (const active of state.active.values()) {
     active.stopped = true
+    active.abort?.abort()
     clearTimeout(active.timer)
-    updates.push(
-      updateSession(host, conversation, (doc) => {
-        doc.stopped = true
-        if (doc.task) doc.task = task.markInterrupted(plainTask(doc.task), 'stop', [], Date.now())
-        doc.takeovers = []
-      }),
-    )
   }
   state.observations.clear()
   state.zoomed.clear()
@@ -82,10 +86,19 @@ export async function hardStop(host: ExtensionHost) {
   await Promise.all([
     ...updates,
     (async () => {
-      await (state.driver ? await state.driver : await driverFor(host)).stop()
+      if (state.driver) await (await state.driver).stop()
+      else await stopDriver()
     })(),
   ])
   return { stopped: true as const }
+}
+
+async function interrupt(host: ExtensionHost, conversation: number) {
+  await updateSession(host, conversation, (doc) => {
+    doc.stopped = true
+    if (doc.task) doc.task = task.markInterrupted(plainTask(doc.task), 'stop', [], Date.now())
+    doc.takeovers = []
+  })
 }
 export const actions = {
   confirmTask: implementAction(ConfirmTaskAction, async (args, { host }) => {
@@ -151,11 +164,23 @@ export const actions = {
   }),
   deny: implementAction(DenyAction, async (args, { host }) => {
     validate(args, true)
-    await updateSession(host, args.conversation, (doc) => {
-      doc.grants.push({ app: args.app, scope: 'deny', at: Date.now() })
+    if (args.scope !== undefined && args.scope !== 'conversation' && args.scope !== 'project')
+      throw new Error('Invalid deny scope')
+    await updateSession(host, args.scope === 'project' ? 1 : args.conversation, (doc) => {
+      doc.grants.push({
+        app: args.app,
+        scope: 'deny',
+        denyScope: args.scope === 'project' ? 'project' : 'conversation',
+        at: Date.now(),
+      })
       doc.takeovers = doc.takeovers.filter((t) => t.app.toLowerCase() !== args.app.toLowerCase())
       doc.pending = doc.pending.filter((p) => p.app.toLowerCase() !== args.app.toLowerCase())
     })
+    if (args.scope === 'project' && args.conversation !== 1)
+      await updateSession(host, args.conversation, (doc) => {
+        doc.takeovers = doc.takeovers.filter((t) => t.app.toLowerCase() !== args.app.toLowerCase())
+        doc.pending = doc.pending.filter((p) => p.app.toLowerCase() !== args.app.toLowerCase())
+      })
     return readSession(host, args.conversation)
   }),
   confirm: implementAction(ConfirmAction, async (args, { host }) => {
@@ -182,8 +207,12 @@ export const actions = {
   hardStop: implementAction(HardStopAction, (_args, { host }) => hardStop(host)),
   resume: implementAction(ResumeAction, async (args, { host }) => {
     validate(args)
+    await updateSession(host, 1, (doc) => {
+      doc.stopped = false
+    })
     await updateSession(host, args.conversation, (doc) => {
       doc.stopped = false
+      doc.budget = { steps: 0, startedAt: 0 }
       if (doc.task && ['stopped', 'paused_by_user'].includes(doc.task.status))
         doc.task.status = 'active'
     })

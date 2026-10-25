@@ -1,4 +1,6 @@
 import type { ClassifyService } from '../classify/api.ts'
+import { redactor } from './content.ts'
+import { effectiveLabel } from './policy.ts'
 import { jevThresholds } from './types.ts'
 import type {
   Element,
@@ -29,6 +31,7 @@ export type GoalDeps = {
   verify: (preds: Predicate[]) => Promise<Verdict>
   ask: ClassifyService['ask'] | undefined
   allowed: (candidate: Candidate) => 'ok' | 'consequential'
+  confirm?: (candidate: Candidate) => Promise<boolean>
   stopped: () => boolean
   signal: AbortSignal
   now: () => number
@@ -61,7 +64,7 @@ function candidates(observation: Observation, goal: Goal, readback = false): Can
   const counts = new Map<string, number>()
   return observation.elements.flatMap((element): Candidate[] => {
     const roleClass = roles[element.role]
-    const label = element.label?.trim()
+    const label = effectiveLabel(element, observation).trim()
     if (!roleClass || !element.enabled || !label || chrome.test(label)) return []
     const ancestors: string[] = []
     const seen = new Set([element.index])
@@ -190,19 +193,18 @@ export async function runGoal(goal: Goal, deps: GoalDeps): Promise<GoalResult> {
       .map(({ candidate }) => candidate)
     decision.candidates = ranked.length
     if (!ranked.length) return escalate('no_candidates')
+    const redact = redactor(Object.values(goal.params ?? {}))
+    const modelIds = new Map(
+      ranked.map((c, i) => [c.id, redact(c.id) === c.id ? c.id : `candidate_${i}`]),
+    )
     const criteria: Record<string, string> = Object.fromEntries(
       ranked.map((c) => [
-        c.id,
-        `${c.roleClass}: ${c.label}${c.param === undefined ? '' : ` ← param ${c.param}`}`,
+        modelIds.get(c.id)!,
+        redact(`${c.roleClass}: ${c.label}${c.param === undefined ? '' : ` ← param ${c.param}`}`),
       ]),
     )
     criteria.reobserve = 'Observe the window again'
     criteria.abstain = 'No safe next action'
-    // Redact planner values even after the UI echoes a filled field back in its labels or title.
-    const redact = (text: string) =>
-      Object.values(goal.params ?? {})
-        .filter(Boolean)
-        .reduce((s, value) => s.split(value).join('[param]'), text)
     let result
     try {
       result = await deps.ask(
@@ -268,7 +270,12 @@ export async function runGoal(goal: Goal, deps: GoalDeps): Promise<GoalResult> {
       )
     )
       return escalate('jev_unavailable', 'Invalid Jev answers')
-    const top = Object.entries(next.probabilities).toSorted((a, b) => b[1] - a[1])
+    const top = Object.entries(next.probabilities)
+      .map(([id, p]): [string, number] => [
+        ranked.find((c) => modelIds.get(c.id) === id)?.id ?? id,
+        p,
+      ])
+      .toSorted((a, b) => b[1] - a[1])
     decision = {
       ...decision,
       done: done.noul,
@@ -287,7 +294,6 @@ export async function runGoal(goal: Goal, deps: GoalDeps): Promise<GoalResult> {
       record('done')
       return { status: 'done', steps, decisions, verdict }
     }
-    if (risk.noul >= thresholds.risk) return escalate('consequential')
     const [id, probability] = top[0] ?? ['abstain', 0]
     if (id === 'reobserve') {
       if (reobserved) return escalate('low_confidence', 'Repeated reobserve')
@@ -305,6 +311,8 @@ export async function runGoal(goal: Goal, deps: GoalDeps): Promise<GoalResult> {
     }
     const candidate = ranked.find((c) => c.id === id)
     if (!candidate) return escalate('low_confidence')
+    if (risk.noul >= thresholds.risk && !(await deps.confirm?.(candidate)))
+      return escalate('consequential')
     if (deps.allowed(candidate) !== 'ok') return escalate('consequential')
     if (stopped()) return escalate('stopped')
     if (budget()) return escalate('budget')

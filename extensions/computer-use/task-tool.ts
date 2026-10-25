@@ -1,4 +1,6 @@
 import { Type } from '@earendil-works/pi-ai'
+import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ClassifyApi } from '../classify/api.ts'
@@ -22,6 +24,7 @@ export type TaskArgs =
   | { action: 'start'; spec: Parameters<typeof task.startTask>[0] }
   | { action: 'subgoals'; list: { id: string; text: string }[] }
   | { action: 'activate'; id: string }
+  | { action: 'complete'; subgoal: string }
   | { action: 'checkpoint'; assessment: string; recentSteps: string[] }
   | ({ action: 'replan' } & task.Replan)
   | { action: 'finish'; outcome: 'done' | 'partial' | 'blocked'; summary: string }
@@ -58,6 +61,18 @@ export async function taskTool(
       result({ status: 'invalid_arguments', message: 'Subgoals must not be empty' }),
     )
   if (args.action === 'start') {
+    signal.throwIfAborted()
+    if (!(await intentInConversation(host, conversation, args.spec.intent)))
+      return anchored(
+        host,
+        conversation,
+        result({
+          status: 'intent_required',
+          message:
+            'intent must appear verbatim in this conversation’s user input or operator brief.',
+        }),
+      )
+    signal.throwIfAborted()
     const started = task.startTask(args.spec, Date.now())
     started.state = task.activate(
       task.setSubgoals(started.state, [{ id: 'S1', text: started.state.spec.goal }], Date.now()),
@@ -71,6 +86,7 @@ export async function taskTool(
       )
         throw new Error('Finish the current task before starting another')
       doc.task = started.state
+      doc.budget = { steps: 0, startedAt: 0 }
       doc.pending = doc.pending.filter((p) => p.kind !== 'task' && p.kind !== 'change')
       if (started.needsConfirmation.length)
         doc.pending.push({
@@ -83,6 +99,25 @@ export async function taskTool(
       host,
       conversation,
       result({ status: started.state.status, needsConfirmation: started.needsConfirmation }),
+    )
+  }
+  if (args.action === 'complete') {
+    let refusal: task.Refusal | undefined
+    await updateSession(host, conversation, (doc) => {
+      if (!doc.task) {
+        refusal = { refuse: 'no_task', message: 'No task' }
+        return
+      }
+      refusal = task.requireActiveTask(doc.task)
+      if (refusal) return
+      const next = task.completeSubgoal(plainTask(doc.task), args.subgoal, Date.now())
+      if ('refuse' in next) refusal = next
+      else doc.task = activatePending(next)
+    })
+    return anchored(
+      host,
+      conversation,
+      result({ status: refusal?.refuse ?? 'completed', message: refusal?.message }),
     )
   }
   const state = (await readSession(host, conversation)).task
@@ -106,7 +141,7 @@ export async function taskTool(
         async (preds) => {
           let verdict: Verdict = 'unsatisfied'
           for (const app of state.spec.scope.apps) {
-            const listed = await driver.call('list_windows', { app })
+            const listed = await driver.call('list_windows', { app }, signal)
             const windows = listed.structured?.windows
             if (!listed.ok || !Array.isArray(windows) || !windows.length) verdict = 'unknown'
             for (const window of Array.isArray(windows) ? windows.map(object) : []) {
@@ -233,6 +268,7 @@ export function taskToolDefinition(host: ExtensionHost) {
         }),
         Type.Object({ action: Type.Literal('subgoals'), list: subgoalsSchema }),
         Type.Object({ action: Type.Literal('activate'), id: Type.String() }),
+        Type.Object({ action: Type.Literal('complete'), subgoal: Type.String() }),
         Type.Object({
           action: Type.Literal('checkpoint'),
           assessment: Type.String(),
@@ -270,4 +306,33 @@ export function taskToolDefinition(host: ExtensionHost) {
       }
     },
   })
+}
+
+export async function intentInConversation(
+  host: ExtensionHost,
+  conversation: number,
+  intent: string,
+) {
+  const target = await host.harness().conversation(conversation as ConversationId, context)
+  if (!target || !intent.trim()) return false
+  const normalized = (text: string) => text.replace(/\s+/g, ' ').trim()
+  let cursor: Parameters<typeof target.entries>[2]
+  do {
+    const page = await target.entries({}, 64, cursor, context)
+    for (const entry of page.items) {
+      if (entry.kind !== 'pi.user' && !entry.kind.includes('brief')) continue
+      for (const message of entry.model ?? []) {
+        if (message.role !== 'user') continue
+        const text =
+          typeof message.content === 'string'
+            ? message.content
+            : message.content
+                .flatMap((block) => (block.type === 'text' ? [block.text] : []))
+                .join(' ')
+        if (normalized(text).includes(normalized(intent))) return true
+      }
+    }
+    cursor = page.next
+  } while (cursor !== undefined)
+  return false
 }

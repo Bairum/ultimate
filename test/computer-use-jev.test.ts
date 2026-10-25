@@ -228,3 +228,32 @@ it('honours stop immediately before dispatch and reports driver refusals', async
     detail: 'stale_ref',
   })
 })
+
+it('redacts parameter values and normalised forms from the entire classify payload, including candidate ids and descriptions', async () => {
+  const f = fixture()
+  const observe = f.deps.observe
+  f.deps.observe = async () => ({
+    ...(await observe()),
+    title: 'bob x com',
+    elements: [element(1, 'AXButton', 'Open bob@x.com'), element(2, 'AXButton', 'Find bob x com')],
+  })
+  f.deps.allowed = () => 'ok'
+  f.deps.ask = async (request) => {
+    const payload = JSON.stringify(request)
+    expect(payload).not.toContain('bob@x.com')
+    expect(payload).not.toContain('bob x com')
+    expect(payload).toContain('[param]')
+    return {
+      model: 'fake',
+      usage: { inputTokens: 1 },
+      answers: {
+        next: { type: 'choice', choice: 'abstain', confidence: 1, probabilities: { abstain: 1 } },
+        done: { type: 'noul', noul: 0 },
+        risk: { type: 'noul', noul: 0 },
+      },
+    }
+  }
+  expect(
+    (await runGoal({ text: 'Open bob@x.com', params: { Name: 'bob@x.com' } }, f.deps)).status,
+  ).toBe('escalated')
+})

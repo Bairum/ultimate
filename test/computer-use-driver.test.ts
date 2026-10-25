@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { createDriver } from '../extensions/computer-use/driver.ts'
 import { parseObservation } from '../extensions/computer-use/observation.ts'
 import { createFakeDriver } from './computer-use-fake-driver.ts'
+import * as driverModule from '../extensions/computer-use/driver.ts'
+import { hardStop } from '../extensions/computer-use/actions.ts'
+import { initialSession } from '../extensions/computer-use/session.ts'
+import type { ExtensionHost } from '../server/extensions.ts'
+import { exec } from '../lib/exec.ts'
+
+vi.mock('../lib/exec.ts', () => ({ exec: vi.fn<typeof exec>() }))
 
 const expectedVersion = '0.37.0'
 
@@ -206,4 +213,30 @@ describe('parseObservation', () => {
       ),
     ).toThrow('missing or invalid pid')
   })
+})
+
+it('hard-stops directly without spawning a Driver when no connection exists', async () => {
+  const session = initialSession()
+  const resources = new Map<string, unknown>()
+  const host = {
+    resource: (key: string, create: () => unknown) => {
+      if (!resources.has(key)) resources.set(key, create())
+      return resources.get(key)
+    },
+    onClose: () => {},
+    harness: () => ({
+      commit: async (change: (tx: unknown) => Promise<void>) =>
+        change({ doc: async () => session }),
+    }),
+  } as unknown as ExtensionHost
+  const connect = vi.spyOn(driverModule, 'createDriver')
+  vi.mocked(exec).mockResolvedValue({ stdout: '', stderr: '' })
+  try {
+    expect(await hardStop(host)).toEqual({ stopped: true })
+    expect(connect).not.toHaveBeenCalled()
+    expect(exec).toHaveBeenCalledWith(driverModule.driverCommand(), ['stop'], { timeout: 5000 })
+    expect(session.stopped).toBe(true)
+  } finally {
+    connect.mockRestore()
+  }
 })

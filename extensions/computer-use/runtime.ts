@@ -1,5 +1,9 @@
 import { Type } from '@earendil-works/pi-ai'
+import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
+import type { ToolExecutionApi } from '@earendil-works/pi-durable'
+import { Profile } from '../subagents/api.ts'
 import { normalizeArguments } from './policy.ts'
+import { untrusted } from './content.ts'
 import type { JsonValue } from '@earendil-works/chord'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
@@ -24,7 +28,7 @@ export async function settings(host: ExtensionHost): Promise<Settings> {
 }
 export const json = (value: unknown): JsonValue => JSON.parse(JSON.stringify(value)) as JsonValue
 export const result = (value: unknown) => ({
-  output: [{ type: 'text' as const, text: JSON.stringify(value) }],
+  output: [{ type: 'text' as const, text: untrusted(value) }],
   structuredOutput: json(value),
 })
 export const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -66,7 +70,13 @@ export function activatePending(state: task.TaskState) {
     ? task.activate(state, firstPending.id, Date.now())
     : state
 }
-export type Active = { stopped: boolean; inFlight: boolean; timer?: NodeJS.Timeout }
+export type Active = {
+  stopped: boolean
+  inFlight: boolean
+  timer?: NodeJS.Timeout
+  abort?: AbortController
+  uncertain?: boolean
+}
 export type Runtime = {
   driver?: Promise<Driver>
   idle?: NodeJS.Timeout
@@ -74,6 +84,7 @@ export type Runtime = {
   observations: Map<string, Observation>
   zoomed: Set<string>
   busy: boolean
+  calls: Map<AbortController, number>
 }
 export function runtime(host: ExtensionHost) {
   return host.resource<Runtime>('computer-use.driver', () => {
@@ -82,6 +93,7 @@ export function runtime(host: ExtensionHost) {
       observations: new Map(),
       zoomed: new Set(),
       busy: false,
+      calls: new Map(),
     }
     host.onClose(async () => {
       clearTimeout(state.idle)
@@ -175,4 +187,12 @@ export function prepare(raw: unknown) {
     ...args,
     ...(Array.isArray(args.actions) ? { actions: args.actions.map(normalizeArguments) } : {}),
   }
+}
+
+export async function operatorOnly(host: ExtensionHost, api: ToolExecutionApi) {
+  await api.agent(context)
+  const profile = await host.harness().snapshot(Profile, api.conversationId, context)
+  return profile?.definition === 'computer-operator'
+    ? undefined
+    : result({ status: 'operator_required', message: 'delegate to the computer-operator agent' })
 }

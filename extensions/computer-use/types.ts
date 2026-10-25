@@ -29,6 +29,9 @@ export type Element = {
   depth: number
   role: string
   label?: string
+  identifier?: string
+  help?: string
+  description?: string
   value?: string
   enabled: boolean
   actions: string[]
@@ -41,6 +44,7 @@ export type Observation = {
   pid: number
   windowId: number
   title: string
+  bounds?: { x: number; y: number; w: number; h: number }
   snapshot: string
   elements: Element[]
   /** The Driver's compact Markdown tree, for the model. */
@@ -147,7 +151,7 @@ export type Evidence = (
   | { kind: 'verify'; predicates: Predicate[]; verdict: Verdict; ref: string }
   | { kind: 'ax'; snapshot: string; excerpt: string; ref: string }
   | { kind: 'capture'; captureId: string; path?: string; ref: string }
-) & { app?: string }
+) & { app?: string; criterion?: string }
 export type Subgoal = {
   id: string
   text: string
@@ -189,3 +193,11 @@ export type TaskState = {
   pendingChange?: Replan
 }
 export type Refusal = { refuse: string; message: string }
+export type Grant = {
+  app: string
+  scope: 'once' | 'conversation' | 'project' | 'deny'
+  at: number
+  used?: boolean
+  always?: boolean
+  denyScope?: 'conversation' | 'project'
+}

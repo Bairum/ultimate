@@ -18,13 +18,16 @@ import { Type } from '@earendil-works/pi-ai'
 import { defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ClassifyApi } from '../classify/api.ts'
-import { confirmationKey, consequential, consentFor, consume } from './policy.ts'
+import { confirmationKey, stepTarget } from './policy.ts'
+import { redactor } from './content.ts'
+import { path, confirmationLocation } from './observation.ts'
+import { ObservationUnavailable } from './runtime.ts'
 import { runGoal } from './jev.ts'
 import type { Candidate } from './jev.ts'
 import type { Driver, Goal, Observation, Predicate, Step, StepOutcome, Verdict } from './types.ts'
 import { readSession, updateSession } from './session.ts'
 import type { Active } from './runtime.ts'
-import { observeWindow, observedOutput, path, confirmationLocation } from './observe.ts'
+import { observeWindow, observedOutput } from './observe.ts'
 import {
   outline,
   actionHash,
@@ -33,6 +36,9 @@ import {
   consumeCanonical,
   gates,
   allGrants,
+  preflightGates,
+  frontmostGate,
+  resolveIdentity,
 } from './gates.ts'
 import type { GateContext, Refusal } from './gates.ts'
 import * as task from './task.ts'
@@ -49,6 +55,7 @@ export type ActArgs = {
   goal?: Goal
   expect?: Predicate[]
   foreground?: boolean
+  criterion?: string
   subgoal?: string
 }
 export async function pending(
@@ -66,6 +73,7 @@ export async function pending(
         app,
         ...(step === undefined ? {} : { step }),
         ...(refusal.key ? { key: refusal.key } : {}),
+        ...(refusal.payload === undefined ? {} : { payload: refusal.payload }),
         ...(refusal.window !== undefined
           ? { window: refusal.window, label: refusal.label ?? '' }
           : {}),
@@ -133,7 +141,9 @@ export async function act(
       status: 'busy',
       message: 'Another computer call is active; observe again when it finishes.',
     })
-  const active: Active = { stopped: false, inFlight: false }
+  const abort = new AbortController()
+  signal = AbortSignal.any([signal, abort.signal])
+  const active: Active = { stopped: false, inFlight: false, abort }
   runtimeState.busy = true
   runtimeState.active.set(conversation, active)
   try {
@@ -155,12 +165,12 @@ export async function act(
     }
     const values = [
       ...Object.values(args.goal?.params ?? {}),
+      ...Object.values(session.task!.spec.scope.params),
       ...(args.actions ?? []).flatMap((s) =>
         s.kind === 'type' ? [s.text] : s.kind === 'set_value' ? [s.value] : [],
       ),
     ].filter(Boolean)
-    const redact = (text: string) =>
-      values.reduce((s, value) => s.replaceAll(value, '[param]'), text)
+    const redact = redactor(values)
     let count = 0
     let observation = runtimeState.observations.get(cacheKey(conversation, args.app))
     const initialObservation = observation
@@ -168,8 +178,12 @@ export async function act(
     const initial: GateContext = {
       session,
       grants: await allGrants(host, conversation, session),
+      params: values,
       app: args.app,
       step: args.actions?.[0] ?? { kind: 'click' },
+      target: observation
+        ? stepTarget(args.actions?.[0] ?? { kind: 'click' }, observation)
+        : undefined,
       stepKinds: args.goal ? ['click', 'set_value'] : undefined,
       observation,
       foreground: args.foreground ?? false,
@@ -179,7 +193,7 @@ export async function act(
       host,
       driver,
     }
-    for (const gate of gates.slice(0, 9)) {
+    for (const gate of preflightGates) {
       const refusal = await gate(initial)
       if (refusal) {
         await pending(host, conversation, args.app, refusal)
@@ -202,11 +216,31 @@ export async function act(
       })
     }
     const observe = async () => {
+      const latest = await readSession(host, conversation)
+      const identity = await resolveIdentity(driver, args.app, signal)
+      if (!identity)
+        throw new ObservationUnavailable('app_identity', 'Could not resolve the app identity.')
+      const consent = canonicalConsent(identity, await allGrants(host, conversation, latest))
+      if (
+        latest.stopped ||
+        (await readSession(host, 1)).stopped ||
+        active.stopped ||
+        signal.aborted
+      )
+        throw new ObservationUnavailable('stopped', 'Computer use is stopped.')
+      if (args.goal && consent !== 'granted')
+        throw new ObservationUnavailable(
+          consent === 'denied' ? 'denied' : 'consent_required',
+          'Canonical app consent is required before reading for Jev.',
+        )
       observation = await observeWindow(
         driver,
         args.app,
         args.window ?? observation?.windowId,
         'never',
+        undefined,
+        1568,
+        signal,
       )
       runtimeState.observations.set(cacheKey(conversation, args.app), observation)
       runtimeState.zoomed.delete(cacheKey(conversation, args.app))
@@ -217,27 +251,36 @@ export async function act(
       })
       return observation
     }
+    let linkedProgress = false
     const verify = async (preds: Predicate[]): Promise<Verdict> => {
+      linkedProgress = false
       if (!preds.length || !observation) return 'unknown'
-      const checked = await driver.call('verify_state', {
-        pid: observation.pid,
-        window_id: observation.windowId,
-        expect: preds,
-        timeout_ms: 0,
-      })
+      const checked = await driver.call(
+        'verify_state',
+        {
+          pid: observation.pid,
+          window_id: observation.windowId,
+          expect: preds,
+          timeout_ms: 0,
+        },
+        signal,
+      )
       const verdict = checked.structured?.verdict ?? checked.structured?.status
       const verified =
         checked.ok && (verdict === 'satisfied' || verdict === 'unsatisfied') ? verdict : 'unknown'
       if (verified === 'satisfied')
-        await changeTask(host, conversation, (state) =>
-          task.addEvidence(state, subgoal!, {
+        await changeTask(host, conversation, (state) => {
+          const evidence: task.Evidence = {
             kind: 'verify',
             predicates: preds,
             verdict: verified,
             ref: call,
             app: observation!.app,
-          }),
-        )
+            ...(args.criterion ? { criterion: args.criterion } : {}),
+          }
+          linkedProgress = task.linkedEvidence(state, evidence)
+          return task.addEvidence(state, subgoal!, evidence)
+        })
       return verified
     }
     let pendingStep: { actionHash: string; delivered: boolean; subgoal: string } | undefined
@@ -254,6 +297,7 @@ export async function act(
       )
     }
     const step = async (original: Step): Promise<StepOutcome> => {
+      let remapped = false
       // A batch's later tokens were valid at entry. Remap them by a unique role/label path
       // after our own post-step reads; never extend this to tokens from earlier calls.
       if (
@@ -273,7 +317,10 @@ export async function act(
               (e) => path(e, observation!) === path(prior, initialObservation),
             )
           : []
-        if (matches.length === 1) original = { ...original, element: matches[0].token }
+        if (matches.length === 1) {
+          original = { ...original, element: matches[0].token }
+          remapped = true
+        }
       }
       let next = original
       const before = observation!
@@ -302,10 +349,7 @@ export async function act(
           code: 'invalid_arguments',
           message: 'Clicks require an element token or capture-bound x/y.',
         }
-      const target =
-        'element' in original
-          ? before.elements.find((e) => e.token === original.element)
-          : undefined
+      const target = stepTarget(original, before)
       if ('element' in original && original.element && !target)
         return {
           status: 'refused',
@@ -325,12 +369,7 @@ export async function act(
           session,
           grants: await allGrants(host, conversation, session),
           step: next,
-          target:
-            'element' in next
-              ? observation!.elements.find(
-                  (e) => e.token === ('element' in next ? next.element : undefined),
-                )
-              : undefined,
+          target: stepTarget(next, observation!),
           dispatch: true,
           observation,
           count,
@@ -371,15 +410,19 @@ export async function act(
         })
         progress(`Step ${index + 1}: ${next.kind} sending\n`)
         let outcome: StepOutcome
+        ctx.session = await readSession(host, conversation)
+        const focusRefusal = await frontmostGate(ctx)
         const latest = await readSession(host, conversation)
         const stillConsented =
           canonicalConsent(ctx.identity!, await allGrants(host, conversation, latest)) === 'granted'
-        const stillTakenOver =
-          !ctx.frontmost ||
-          (args.foreground && latest.takeovers.some((t) => matchesApp(ctx.identity!, t.app)))
+        const takeover =
+          args.foreground && latest.takeovers.some((t) => matchesApp(ctx.identity!, t.app))
+        const stillTakenOver = !focusRefusal && ((!ctx.frontmost && !args.foreground) || takeover)
+        const projectStopped = (await readSession(host, 1)).stopped
         if (
           active.stopped ||
           latest.stopped ||
+          projectStopped ||
           signal.aborted ||
           !stillConsented ||
           !stillTakenOver
@@ -387,7 +430,7 @@ export async function act(
           await updateSession(host, conversation, (doc) => {
             doc.journal.findLast((j) => j.call === call && j.step === index)!.status = 'refused'
           })
-          return active.stopped || latest.stopped || signal.aborted
+          return active.stopped || latest.stopped || projectStopped || signal.aborted
             ? { status: 'not_run' }
             : {
                 status: 'refused',
@@ -397,6 +440,10 @@ export async function act(
                   : 'Consent was revoked before dispatch.',
               }
         }
+        await updateSession(host, conversation, (doc) => {
+          doc.confirmed = doc.confirmed.filter((key) => key !== ctx.confirmation)
+          doc.grants = consumeCanonical(ctx.identity!, doc.grants)
+        })
         active.inFlight = true
         try {
           const reply = await driver.call(command.tool, command.args, signal)
@@ -408,17 +455,16 @@ export async function act(
         } catch {
           // Once sent, a transport error cannot prove non-delivery; never automatically retry it.
           outcome = { status: 'unknown' }
+          active.uncertain = signal.aborted
         } finally {
           active.inFlight = false
-          clearTimeout(active.timer)
+          if (!active.uncertain) clearTimeout(active.timer)
         }
         await updateSession(host, conversation, (doc) => {
           const entry = doc.journal.findLast(
             (j) => j.call === call && j.step === index && j.status === 'sending',
           )!
           entry.status = outcome.status
-          if (outcome.status === 'delivered')
-            doc.grants = consumeCanonical(ctx.identity!, doc.grants)
         })
         progress(`Step ${index + 1}: ${outcome.status}\n`)
         pendingStep = {
@@ -435,7 +481,9 @@ export async function act(
           let post: Observation | undefined
           try {
             verified =
-              outcome.status === 'delivered' && (await verify(args.expect ?? [])) === 'satisfied'
+              outcome.status === 'delivered' &&
+              (await verify(args.expect ?? [])) === 'satisfied' &&
+              linkedProgress
             if (outcome.status === 'delivered') post = await observe()
           } catch (error) {
             await changeTask(host, conversation, (current) =>
@@ -459,7 +507,8 @@ export async function act(
           const matches = target
             ? fresh.elements.filter((e) => path(e, fresh) === path(target, before))
             : []
-          if (attempt === 0 && matches.length === 1 && 'element' in next) {
+          if (!remapped && attempt === 0 && matches.length === 1 && 'element' in next) {
+            remapped = true
             next = { ...next, element: matches[0].token }
             continue
           }
@@ -488,24 +537,35 @@ export async function act(
           ? (request, requestSignal) => host.want(ClassifyApi)!.ask(request, requestSignal)
           : undefined,
         allowed: (c) =>
-          !session.task!.spec.scope.actions.includes(candidateStep(c).kind)
-            ? 'consequential'
-            : consequential(candidateStep(c), c.element).hit &&
-                !session.confirmed.includes(
-                  confirmationKey(
-                    observation?.app ?? args.app,
-                    candidateStep(c),
-                    c.element,
-                    confirmationLocation(c.element, observation),
-                  ),
-                )
-              ? 'consequential'
-              : 'ok',
+          session.task!.spec.scope.actions.includes(candidateStep(c).kind) ? 'ok' : 'consequential',
+        confirm: async (c) => {
+          const next = candidateStep(c)
+          const target = stepTarget(next, observation!)
+          const app = observation!.app
+          const key = confirmationKey(app, next, target, confirmationLocation(target, observation))
+          if ((await readSession(host, conversation)).confirmed.includes(key)) return true
+          await pending(
+            host,
+            conversation,
+            app,
+            {
+              refuse: 'confirm_required',
+              message: 'The user must confirm this exact action.',
+              key,
+              window: observation!.title,
+              label: target?.label ?? next.kind,
+              payload: (next.kind === 'set_value' ? next.value : '').slice(0, 200),
+            },
+            count,
+          )
+          return false
+        },
         stopped: () => active.stopped,
         signal,
         now: Date.now,
         thresholds: config.jev,
         record: (decision) => {
+          const { chose, ...fields } = decision
           decisions.push(
             updateSession(host, conversation, (doc) => {
               doc.journal.push({
@@ -516,19 +576,19 @@ export async function act(
                 status: 'decision',
                 at: Date.now(),
                 decision: {
-                  ...decision,
+                  ...fields,
                   top: decision.top.map((t) => ({
                     ...t,
                     id: redact(t.id),
                     label: redact(t.label),
                   })),
-                  ...(decision.chose === undefined ? {} : { chose: redact(decision.chose) }),
+                  ...(chose === undefined ? {} : { chose: redact(chose) }),
                 },
               })
               if (decision.outcome === 'verified' && pendingStep) {
                 doc.task = task.recordStep(plainTask(doc.task!), {
                   ...pendingStep,
-                  verifiedProgress: true,
+                  verifiedProgress: linkedProgress,
                   outlineFingerprint: outline(observation),
                 })
                 pendingStep = undefined
@@ -597,11 +657,11 @@ export async function act(
       structuredOutput: json({ ...summary, observation: { ...observation, image: undefined } }),
     }
   } finally {
-    clearTimeout(active.timer)
+    if (!active.uncertain) clearTimeout(active.timer)
     runtimeState.active.delete(conversation)
     runtimeState.busy = false
     // Re-arm the idle timer after long-running calls as well as short ones.
-    await driverFor(host)
+    await driverFor(host).catch((error) => console.error('computer-use: idle timer failed:', error))
   }
 }
 
@@ -616,6 +676,7 @@ export function actTool(host: ExtensionHost) {
       app: Type.String(),
       window: windowSchema,
       subgoal: Type.Optional(Type.String()),
+      criterion: Type.Optional(Type.String()),
       actions: Type.Optional(Type.Array(stepSchema, { minItems: 1 })),
       goal: Type.Optional(
         Type.Object({
@@ -667,8 +728,19 @@ export function appsTool(host: ExtensionHost) {
       'List running native apps, or launch a consented app in the background. Listing is read-only; launches are not replayed.',
     prepareArguments: (raw) => prepare(raw) as { launch?: string },
     parameters: Type.Object({ launch: Type.Optional(Type.String()) }),
-    async execute(args, api) {
+    async execute(args, api, ctx) {
       if (args.launch) {
+        if (
+          (await readSession(host, api.conversationId)).journal.some((j) => j.call === api.callId)
+        )
+          return anchored(
+            host,
+            api.conversationId,
+            result({
+              status: 'observe_first',
+              message: 'This launch was already sent; observe its outcome instead of repeating it.',
+            }),
+          )
         const current = (await readSession(host, api.conversationId)).task
         const refusal = task.requireActiveTask(current)
         if (refusal)
@@ -677,17 +749,19 @@ export function appsTool(host: ExtensionHost) {
             api.conversationId,
             result({ status: refusal.refuse, message: refusal.message }),
           )
-        if (!current!.spec.scope.apps.includes(args.launch))
-          return anchored(host, api.conversationId, result({ status: 'out_of_scope' }))
       }
       return setup(host, api.conversationId, async (driver) => {
         if (!args.launch) return result(await driver.call('list_apps', {}))
         const session = await readSession(host, api.conversationId)
-        if (session.stopped) return result({ status: 'stopped' })
-        const consent = consentFor(
-          args.launch,
+        if (session.stopped || (await readSession(host, 1)).stopped)
+          return result({ status: 'stopped' })
+        const identity = await resolveIdentity(driver, args.launch, ctx.abortSignal)
+        if (!identity) return result({ status: 'app_identity' })
+        if (!session.task!.spec.scope.apps.some((app) => matchesApp(identity, app)))
+          return result({ status: 'out_of_scope' })
+        const consent = canonicalConsent(
+          identity,
           await allGrants(host, api.conversationId, session),
-          Date.now(),
         )
         if (consent !== 'granted') {
           const refusal = {
@@ -699,13 +773,9 @@ export function appsTool(host: ExtensionHost) {
         }
         const state = runtime(host)
         if (state.busy) return result({ status: 'busy' })
-        if (session.journal.some((j) => j.call === api.callId))
-          return result({
-            status: 'observe_first',
-            message: 'This launch was already sent; observe its outcome instead of repeating it.',
-          })
-        const app = args.launch
-        const active: Active = { stopped: false, inFlight: false }
+        const app = identity.name
+        const abort = new AbortController()
+        const active: Active = { stopped: false, inFlight: false, abort }
         state.active.set(api.conversationId, active)
         state.busy = true
         let sent = false
@@ -724,7 +794,8 @@ export function appsTool(host: ExtensionHost) {
           if (
             active.stopped ||
             latest.stopped ||
-            consentFor(app, await allGrants(host, api.conversationId, latest), Date.now()) !==
+            (await readSession(host, 1)).stopped ||
+            canonicalConsent(identity, await allGrants(host, api.conversationId, latest)) !==
               'granted'
           ) {
             await updateSession(host, api.conversationId, (doc) => {
@@ -734,21 +805,28 @@ export function appsTool(host: ExtensionHost) {
               status: active.stopped || latest.stopped ? 'stopped' : 'consent_required',
             })
           }
+          await updateSession(host, api.conversationId, (doc) => {
+            doc.grants = consumeCanonical(identity, doc.grants)
+          })
           active.inFlight = true
           sent = true
-          const reply = await driver.call('launch_app', { name: app })
+          const reply = await driver.call(
+            'launch_app',
+            { name: app },
+            ctx.abortSignal ? AbortSignal.any([abort.signal, ctx.abortSignal]) : abort.signal,
+          )
           await updateSession(host, api.conversationId, (doc) => {
             doc.journal.findLast((j) => j.call === api.callId)!.status = reply.ok
               ? 'delivered'
               : reply.refusal
                 ? 'refused'
                 : 'failed'
-            if (reply.ok) doc.grants = consume(app, doc.grants, Date.now())
           })
           return result(reply)
         } catch (error) {
           if (!sent) throw error
           // A transport failure after sending cannot prove that the app was not launched.
+          active.uncertain = abort.signal.aborted || ctx.abortSignal?.aborted
           await updateSession(host, api.conversationId, (doc) => {
             doc.journal.findLast((j) => j.call === api.callId)!.status = 'unknown'
           })
@@ -758,10 +836,12 @@ export function appsTool(host: ExtensionHost) {
           })
         } finally {
           active.inFlight = false
-          clearTimeout(active.timer)
+          if (!active.uncertain) clearTimeout(active.timer)
           state.active.delete(api.conversationId)
           state.busy = false
-          await driverFor(host)
+          await driverFor(host).catch((error) =>
+            console.error('computer-use: idle timer failed:', error),
+          )
         }
       })
     },

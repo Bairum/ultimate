@@ -1,14 +1,15 @@
 import { createHash } from 'node:crypto'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ClassifyApi } from '../classify/api.ts'
-import { confirmationKey, consequential, consentFor, consume } from './policy.ts'
+import { confirmationKey, consequential, consentFor, consume, denyList } from './policy.ts'
 import type { Driver, Element, Observation, Step } from './types.ts'
 import { readSession } from './session.ts'
 import type { Session } from './session.ts'
 import { json, message, object } from './runtime.ts'
 import type { Active } from './runtime.ts'
-import { path, confirmationLocation } from './observe.ts'
+import { path, confirmationLocation } from './observation.ts'
 import * as task from './task.ts'
+import { redactor } from './content.ts'
 
 export const hash = (value: unknown) =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -18,6 +19,10 @@ export function actionHash(step: Step, target?: Element, observation?: Observati
   const { kind, ...payload } = step
   if ('element' in payload) delete payload.element
   if ('capture' in payload) delete payload.capture
+  if (target && 'x' in payload) {
+    delete payload.x
+    delete payload.y
+  }
   return hash([kind, target && observation ? path(target, observation) : '', hash(payload)])
 }
 export type Identity = { name: string; bundle?: string }
@@ -58,6 +63,8 @@ export type GateContext = {
   host: ExtensionHost
   driver: Driver
   stepKinds?: Step['kind'][]
+  confirmation?: string
+  params?: string[]
 }
 export type Refusal = {
   refuse: string
@@ -65,10 +72,11 @@ export type Refusal = {
   key?: string
   window?: string
   label?: string
+  payload?: string
 }
 export type Gate = (ctx: GateContext) => undefined | Refusal | Promise<undefined | Refusal>
 // Task grounding precedes authority/safety gates; canonical scope is checked again at identity resolution.
-export const gates: Gate[] = [
+export const preflightGates: Gate[] = [
   (ctx) => task.requireActiveTask(ctx.session.task),
   (ctx) => task.observeGate(ctx.session.task!),
   (ctx) => {
@@ -89,8 +97,11 @@ export const gates: Gate[] = [
   (ctx) => task.oscillationGate(ctx.session.task!),
   (ctx) => task.checkpointGate(ctx.session.task!),
   (ctx) => task.budgetGate(ctx.session.task!, Date.now()),
-  (ctx) =>
-    ctx.session.stopped || ctx.active.stopped || ctx.signal.aborted
+  async (ctx) =>
+    ctx.session.stopped ||
+    (await readSession(ctx.host, 1)).stopped ||
+    ctx.active.stopped ||
+    ctx.signal.aborted
       ? { refuse: 'stopped', message: 'Computer use is stopped; ask the user to resume.' }
       : undefined,
   async (ctx) => {
@@ -105,7 +116,7 @@ export const gates: Gate[] = [
             message: `User consent required for ${ctx.app}.`,
           }
     }
-    const listed = await ctx.driver.call('list_apps', {})
+    const listed = await ctx.driver.call('list_apps', {}, ctx.signal)
     const apps = listed.structured?.apps
     const app = (Array.isArray(apps) ? apps : [])
       .map(object)
@@ -140,23 +151,27 @@ export const gates: Gate[] = [
           message: `User consent required for ${identity.name}.`,
         }
   },
-  async (ctx) => {
-    if (!['type', 'set_value', 'key', 'menu'].includes(ctx.step.kind)) return undefined
-    const desktop = await ctx.driver.call('get_accessibility_tree', {})
-    const windows = desktop.structured?.windows
-    const first = Array.isArray(windows) ? object(windows[0]) : {}
-    // The Driver returns visible windows front-to-back. Unknown focus fails closed for edits.
-    const frontmost = first.pid === ctx.observation?.pid || Object.keys(first).length === 0
-    ctx.frontmost = frontmost
-    const takeover =
-      ctx.foreground && ctx.session.takeovers.some((t) => matchesApp(ctx.identity!, t.app))
-    if (frontmost && !takeover)
-      return {
-        refuse: 'user_active',
-        message: 'Never edit the app the user is in. The user can grant a foreground takeover.',
-      }
-    return undefined
-  },
+]
+export async function frontmostGate(ctx: GateContext): Promise<Refusal | undefined> {
+  const takeover =
+    ctx.foreground && ctx.session.takeovers.some((t) => matchesApp(ctx.identity!, t.app))
+  if (ctx.foreground && !takeover)
+    return { refuse: 'user_active', message: 'Foreground delivery requires a user takeover.' }
+  const listed = await ctx.driver.call('list_apps', {}, ctx.signal)
+  const apps = listed.structured?.apps
+  const active = (Array.isArray(apps) ? apps : []).map(object).filter((a) => a.active === true)
+  if (!listed.ok || active.length !== 1)
+    return { refuse: 'user_active', message: 'Frontmost app is unknown; refusing input.' }
+  ctx.frontmost = active[0].pid === ctx.observation?.pid
+  if (ctx.frontmost && !takeover)
+    return {
+      refuse: 'user_active',
+      message: 'Never act in the user’s frontmost app without a foreground takeover.',
+    }
+  return undefined
+}
+export const dispatchGates: Gate[] = [
+  frontmostGate,
   async (ctx) => {
     const key = confirmationKey(
       ctx.app,
@@ -164,10 +179,15 @@ export const gates: Gate[] = [
       ctx.target,
       confirmationLocation(ctx.target, ctx.observation),
     )
+    ctx.confirmation = key
     if (ctx.session.confirmed.includes(key)) return undefined
     let risky = consequential(ctx.step, ctx.target).hit
     const classify = ctx.host.want(ClassifyApi)
     if (!risky && classify) {
+      const redact = redactor([
+        ...Object.values(ctx.session.task!.spec.scope.params),
+        ...(ctx.params ?? []),
+      ])
       try {
         const answer = await classify.ask(
           {
@@ -175,7 +195,10 @@ export const gates: Gate[] = [
               app: ctx.app,
               kind: ctx.step.kind,
               role: ctx.target?.role,
-              label: ctx.target?.label,
+              label: redact(ctx.target?.label ?? ''),
+              ...(ctx.step.kind === 'key'
+                ? { key: redact(ctx.step.key), modifiers: (ctx.step.modifiers ?? []).map(redact) }
+                : {}),
             }),
             questions: {
               risk: {
@@ -201,6 +224,16 @@ export const gates: Gate[] = [
         label:
           ctx.target?.label ??
           (ctx.step.kind === 'menu' ? ctx.step.path.join(' / ') : ctx.step.kind),
+        payload: (ctx.step.kind === 'type'
+          ? ctx.step.text
+          : ctx.step.kind === 'set_value'
+            ? ctx.step.value
+            : ctx.step.kind === 'key'
+              ? [...(ctx.step.modifiers ?? []), ctx.step.key].join('+')
+              : ctx.step.kind === 'menu'
+                ? ctx.step.path.join(' / ')
+                : ''
+        ).slice(0, 200),
       }
     return undefined
   },
@@ -215,13 +248,44 @@ export const gates: Gate[] = [
         }
       : undefined,
 ]
+export const gates = [...preflightGates, ...dispatchGates]
 export async function allGrants(host: ExtensionHost, conversation: number, session: Session) {
-  return conversation === 1
-    ? session.grants
-    : [
-        ...(await readSession(host, 1)).grants.filter(
-          (g) => g.scope === 'project' || g.scope === 'deny',
+  if (conversation === 1) return session.grants
+  const project = (await readSession(host, 1)).grants
+  return [
+    ...project.filter((g) => g.scope === 'project'),
+    ...session.grants,
+    // Across documents, a same-millisecond project revocation must win the ambiguous tie.
+    ...project.filter((g) => g.scope === 'deny' && g.denyScope === 'project'),
+  ]
+}
+
+export async function resolveIdentity(
+  driver: Driver,
+  app: string,
+  signal?: AbortSignal,
+): Promise<Identity | undefined> {
+  const listed = await driver.call('list_apps', {}, signal)
+  const apps = listed.structured?.apps
+  const matches = (Array.isArray(apps) ? apps : [])
+    .map(object)
+    .filter(
+      (a) =>
+        typeof a.name === 'string' &&
+        matchesApp(
+          { name: a.name, bundle: typeof a.bundle_id === 'string' ? a.bundle_id : undefined },
+          app,
         ),
-        ...session.grants,
-      ]
+    )
+  if (!listed.ok || matches.length !== 1) return undefined
+  return {
+    name: matches[0].name as string,
+    ...(typeof matches[0].bundle_id === 'string' ? { bundle: matches[0].bundle_id } : {}),
+  }
+}
+
+export function readConsent(identity: Identity, grants: Session['grants']) {
+  return denyList.some((name) => matchesApp(identity, name))
+    ? canonicalConsent(identity, grants)
+    : 'granted'
 }

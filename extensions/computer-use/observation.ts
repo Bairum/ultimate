@@ -1,4 +1,5 @@
 import type { DriverResult, Element, Observation } from './types.ts'
+import { effectiveLabel } from './policy.ts'
 
 function object(value: unknown, field: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -48,6 +49,9 @@ export function parseObservation(result: DriverResult, app: string): Observation
       depth: number(element.depth, 'depth'),
       role,
       ...(element.label != null ? { label: string(element.label, 'label') } : {}),
+      ...(typeof element.identifier === 'string' ? { identifier: element.identifier } : {}),
+      ...(typeof element.help === 'string' ? { help: element.help } : {}),
+      ...(typeof element.description === 'string' ? { description: element.description } : {}),
       ...(element.value != null ? { value: string(element.value, 'value') } : {}),
       enabled: element.enabled == null ? role !== 'AXWindow' : boolean(element.enabled, 'enabled'),
       actions: element.actions,
@@ -63,6 +67,7 @@ export function parseObservation(result: DriverResult, app: string): Observation
     tree: string(data.tree_markdown, 'tree_markdown'),
     truncated: boolean(data.truncated, 'truncated'),
     elements,
+    ...(data.window_bounds ? { bounds: windowBounds(data.window_bounds) } : {}),
     ...(data.capture_id != null
       ? {
           capture: {
@@ -84,5 +89,45 @@ function frame(value: unknown): NonNullable<Element['frame']> {
     y: number(data.y, 'frame.y'),
     w: number(data.w, 'frame.w'),
     h: number(data.h, 'frame.h'),
+  }
+}
+
+function windowBounds(value: unknown): NonNullable<Observation['bounds']> {
+  const data = object(value, 'window_bounds')
+  return {
+    x: number(data.x, 'window_bounds.x'),
+    y: number(data.y, 'window_bounds.y'),
+    w: number(data.width, 'window_bounds.width'),
+    h: number(data.height, 'window_bounds.height'),
+  }
+}
+export function ancestry(element: Element, observation: Observation): Element[] {
+  const chain: Element[] = []
+  const seen = new Set<number>()
+  let current: Element | undefined = element
+  while (current && !seen.has(current.index)) {
+    seen.add(current.index)
+    chain.unshift(current)
+    current = observation.elements.find((e) => e.index === current!.parent)
+  }
+  return chain
+}
+export function path(element: Element, observation: Observation) {
+  return JSON.stringify(
+    ancestry(element, observation).map((e) => [e.role, effectiveLabel(e, observation)]),
+  )
+}
+export function confirmationLocation(
+  target: Element | undefined,
+  observation: Observation | undefined,
+) {
+  return {
+    window: observation?.title ?? '',
+    ancestors:
+      target && observation
+        ? ancestry(target, observation)
+            .slice(0, -1)
+            .map((e) => JSON.stringify([e.role, effectiveLabel(e, observation)]))
+        : [],
   }
 }

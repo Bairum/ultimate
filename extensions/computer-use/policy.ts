@@ -1,13 +1,7 @@
 import { createHash } from 'node:crypto'
-import type { Element, Step } from './types.ts'
-
-export type Grant = {
-  app: string
-  scope: 'once' | 'conversation' | 'project' | 'deny'
-  at: number
-  used?: boolean
-  always?: boolean
-}
+import type { Element, Observation, Step } from './types.ts'
+import type { Grant } from './types.ts'
+export type { Grant } from './types.ts'
 
 export const denyList = [
   '1Password',
@@ -91,6 +85,10 @@ export function consequential(
   target: Element | undefined,
   menuPath?: string[],
 ): { hit: boolean; reason?: string } {
+  if (['click', 'double_click', 'right_click'].includes(step.kind) && !target?.label?.trim())
+    return { hit: true, reason: 'Unlabelled click' }
+  if (step.kind === 'type' && /[\r\n]/.test(step.text))
+    return { hit: true, reason: 'Text may submit a form' }
   const label = [
     target?.label ?? '',
     ...(menuPath ?? (step.kind === 'menu' ? step.path : [])),
@@ -107,6 +105,8 @@ export function consequential(
     const parts = step.key.toLowerCase().split('+')
     const key = parts.pop()!
     const mods = [...(step.modifiers ?? []), ...parts].map(modifier)
+    if (['enter', 'return', 'space', 'spacebar', ' '].includes(key))
+      return { hit: true, reason: 'Committing key' }
     if (
       mods.includes('cmd') &&
       ['enter', 'return', 'delete', 'backspace', 'q', 'w'].includes(key)
@@ -141,6 +141,10 @@ export function confirmationKey(
     target?.role ?? '',
     target?.label ?? '',
     location.ancestors,
+    target?.frame
+      ? [target.frame.x, target.frame.y, target.frame.w, target.frame.h].map(Math.round)
+      : null,
+    !target && 'x' in step ? [step.x, step.y] : null,
     createHash('sha256').update(payload).digest('hex').slice(0, 16),
   ])
 }
@@ -190,4 +194,47 @@ export function normalizeArguments(raw: unknown): unknown {
     }
   }
   return result
+}
+
+/** AX frames use screen points; captures use window-local pixels at the capture scale. */
+export function hitTest(step: Step, observation: Observation): Element | undefined {
+  if (!('x' in step) || step.x === undefined || step.y === undefined) return undefined
+  const { capture, bounds } = observation
+  if (!capture || !bounds || capture.scale <= 0) return undefined
+  const x = bounds.x + step.x / capture.scale
+  const y = bounds.y + step.y / capture.scale
+  return observation.elements
+    .filter((e) => {
+      const f = e.frame
+      return f && x >= f.x && y >= f.y && x < f.x + f.w && y < f.y + f.h
+    })
+    .toSorted((a, b) => b.depth - a.depth)[0]
+}
+
+export function effectiveLabel(element: Element, observation: Observation): string {
+  const own = [element.label, element.identifier, element.help, element.description].find((s) =>
+    s?.trim(),
+  )
+  if (own) return own
+  const descendants = new Set([element.index])
+  const text: string[] = []
+  for (let depth = 0; depth < 12 && text.join(' ').length < 500; depth++) {
+    let added = false
+    for (const e of observation.elements.slice(0, 250)) {
+      if (e.parent === undefined || !descendants.has(e.parent) || descendants.has(e.index)) continue
+      descendants.add(e.index)
+      added = true
+      if (e.role === 'AXStaticText') text.push(e.label || e.value || '')
+    }
+    if (!added) break
+  }
+  return text.join(' ').slice(0, 500)
+}
+
+export function stepTarget(step: Step, observation: Observation): Element | undefined {
+  const target =
+    'element' in step && step.element
+      ? observation.elements.find((e) => e.token === step.element)
+      : hitTest(step, observation)
+  return target ? { ...target, label: effectiveLabel(target, observation) } : undefined
 }

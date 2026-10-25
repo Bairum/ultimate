@@ -9,10 +9,11 @@ import type { ClassifyService, ClassifyResult } from '../extensions/classify/api
 import type { Observation } from '../extensions/computer-use/types.ts'
 import { afterEach, expect, it, vi } from 'vitest'
 import computerUse, { actions, userActions } from '../extensions/computer-use/server.ts'
-import { readSession } from '../extensions/computer-use/session.ts'
+import { readSession, updateSession } from '../extensions/computer-use/session.ts'
 import { createDriver } from '../extensions/computer-use/driver.ts'
 import { createFakeDriver } from './computer-use-fake-driver.ts'
 import { removeTemp, temp } from './helpers.ts'
+import { Profile } from '../extensions/subagents/api.ts'
 
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
@@ -78,6 +79,11 @@ async function fixture() {
   const root = await harness.root(context, {
     agent: { model: { provider: 'faux', modelId: 'faux-1' } },
   })
+  await harness.commit(async (tx) => {
+    ;(await tx.doc(Profile, root.id)).definition = 'computer-operator'
+  }, context)
+  await root.submit({ type: 'input', content: spec().intent }, context)
+  await harness.waitForIdle(context)
   cleanup.push(async () => {
     await harness.close(context)
     for (const close of closes) await close()
@@ -95,6 +101,7 @@ async function fixture() {
           conversationId: root.id,
           callId: String(++call),
           output: () => {},
+          agent: (callContext: typeof context) => root.agent(callContext),
         } as unknown as ToolExecutionApi,
         context,
       )
@@ -102,6 +109,8 @@ async function fixture() {
   const observe = (evidence = false) =>
     invoke('computer_observe', { app: 'Calculator', window: 456, screenshot: 'never', evidence })
   const start = async (input = spec()) => {
+    await root.submit({ type: 'input', content: input.intent }, context)
+    await harness.waitForIdle(context)
     const output = await task({ action: 'start', spec: input })
     await task({ action: 'subgoals', list: [{ id: 'S1', text: 'Show 42' }] })
     await task({ action: 'activate', id: 'S1' })
@@ -333,4 +342,64 @@ it('requires fresh observation after Stop and user resume', async () => {
     ).status,
   ).toBe('observe_first')
   expect(data(await f.click('6')).status).toBe('delivered')
+})
+
+it('refuses invented intent and accepts verbatim whitespace-normalised user intent', async () => {
+  const f = await fixture()
+  expect(
+    data(await f.task({ action: 'start', spec: { ...spec(), intent: 'Send all my files' } }))
+      .status,
+  ).toBe('intent_required')
+  expect(f.fake.calls).toEqual([])
+  const intent = 'Use   Calculator\n to show 42'
+  await f.task({ action: 'start', spec: { ...spec(), intent } })
+  expect((await readSession(f.host, f.root.id)).task?.spec.intent).toBe(intent)
+})
+
+it('does not let an arbitrary expect reset loops or complete a subgoal; linked verification can complete explicitly', async () => {
+  const f = await fixture()
+  await f.start()
+  await f.grant()
+  const call = f.driver.call.bind(f.driver)
+  f.driver.call = (tool, args, signal) =>
+    tool === 'verify_state'
+      ? Promise.resolve({
+          ok: true,
+          text: 'satisfied',
+          structured: { verdict: 'satisfied' },
+          images: [],
+        })
+      : call(tool, args, signal)
+  let view = (await f.observe()).structuredOutput as unknown as Observation
+  await f.invoke('computer_act', {
+    app: 'Calculator',
+    actions: [{ kind: 'click', element: `${view.snapshot}:7` }],
+    expect: [{ arbitrary: true }],
+  })
+  expect((await readSession(f.host, f.root.id)).task?.recent.actions).toHaveLength(1)
+  expect(data(await f.task({ action: 'complete', subgoal: 'S1' })).status).toBe('evidence_required')
+  view = (await f.observe()).structuredOutput as unknown as Observation
+  await f.invoke('computer_act', {
+    app: 'Calculator',
+    actions: [{ kind: 'click', element: `${view.snapshot}:8` }],
+    expect: spec().criteria[0].check,
+  })
+  expect((await readSession(f.host, f.root.id)).task?.recent.actions).toEqual([])
+  expect(data(await f.task({ action: 'complete', subgoal: 'S1' })).status).toBe('completed')
+  expect((await readSession(f.host, f.root.id)).task?.subgoals[0].status).toBe('done')
+})
+
+it('resets the conversation budget on a new task and user resume', async () => {
+  const f = await fixture()
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.budget = { steps: 60, startedAt: 1 }
+  })
+  await f.start()
+  expect((await readSession(f.host, f.root.id)).budget).toEqual({ steps: 0, startedAt: 0 })
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.budget = { steps: 60, startedAt: 1 }
+  })
+  await actions.stop({ conversation: f.root.id }, f.ctx)
+  await actions.resume({ conversation: f.root.id }, f.ctx)
+  expect((await readSession(f.host, f.root.id)).budget).toEqual({ steps: 0, startedAt: 0 })
 })

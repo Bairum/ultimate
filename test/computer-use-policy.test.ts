@@ -6,9 +6,10 @@ import {
   consume,
   denyList,
   normalizeArguments,
+  stepTarget,
 } from '../extensions/computer-use/policy.ts'
 import type { Grant } from '../extensions/computer-use/policy.ts'
-import type { Element, Step } from '../extensions/computer-use/types.ts'
+import type { Element, Observation, Step } from '../extensions/computer-use/types.ts'
 
 const target: Element = {
   token: 's1:1',
@@ -142,4 +143,35 @@ it('repairs model arguments without mutating them and leaves unknown kinds alone
     seconds: 0.5,
   })
   expect(normalizeArguments({ kind: 'unknown', x: '4' })).toEqual({ kind: 'unknown', x: '4' })
+})
+
+it('uses descendant labels for pixel hits, confirms unlabelled clicks, and separates look-alike frames', () => {
+  const button = { ...target, label: '', frame: { x: 110, y: 210, w: 30, h: 30 } }
+  const observation: Observation = {
+    app: 'App',
+    pid: 1,
+    windowId: 1,
+    title: 'Window',
+    snapshot: 's1',
+    tree: '',
+    truncated: false,
+    bounds: { x: 100, y: 200, w: 100, h: 100 },
+    capture: { id: 'c1', width: 200, height: 200, scale: 2 },
+    elements: [
+      button,
+      { ...target, index: 2, parent: 1, depth: 1, role: 'AXStaticText', label: 'Send' },
+    ],
+  }
+  const step: Step = { kind: 'click', x: 40, y: 40, capture: 'c1' }
+  const hit = stepTarget(step, observation)!
+  expect(hit.label).toBe('Send')
+  expect(consequential(step, hit).hit).toBe(true)
+  expect(consequential({ kind: 'click' }, { ...button, label: '' }).hit).toBe(true)
+  const location = { window: 'Window', ancestors: [] }
+  expect(confirmationKey('App', step, hit, location)).not.toBe(
+    confirmationKey('App', step, { ...hit, frame: { ...hit.frame!, x: 150 } }, location),
+  )
+  expect(
+    stepTarget(step, { ...observation, elements: [{ ...button, identifier: 'Delete' }] })?.label,
+  ).toBe('Delete')
 })

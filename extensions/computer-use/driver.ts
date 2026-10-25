@@ -19,9 +19,15 @@ export type DriverOptions = {
   callTimeoutMs?: number
 }
 
-export async function createDriver(options: DriverOptions): Promise<Driver> {
+export function driverCommand() {
   const local = join(homedir(), '.local/bin/cua-driver')
-  const command = options.command ?? (existsSync(local) ? local : 'cua-driver')
+  return existsSync(local) ? local : 'cua-driver'
+}
+export async function stopDriver() {
+  await exec(driverCommand(), ['stop'], { timeout: 5_000 })
+}
+export async function createDriver(options: DriverOptions): Promise<Driver> {
+  const command = options.command ?? driverCommand()
   let client: Client
   let connected = false
   let closed = false
