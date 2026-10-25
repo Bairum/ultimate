@@ -407,8 +407,10 @@ export async function loadExtensions(
       await extensionHost.reloadExtensions()
     },
     reloadExtensions: async () => {
-      chain = chain.then(() => reloadSettings())
-      await chain
+      const work = chain.then(() => reloadSettings())
+      // The caller gets the failure; the chain recovers so later reloads still run.
+      chain = work.catch(() => changed())
+      await work
       for (const id of [
         '\0virtual:ultimate/web-facets',
         join(host.ultimateRoot, 'web/src/index.css'),
@@ -432,6 +434,24 @@ export async function loadExtensions(
       ),
     )
   let chain = Promise.resolve()
+  /** Runs `work` after earlier reloads; a failure becomes a notice and still publishes what is loaded. */
+  function enqueue(work: () => Promise<void>) {
+    chain = chain.then(work).catch((error: unknown) => {
+      notice(`Extension reload failed: ${String(error)}`)
+      return changed()
+    })
+  }
+  /** Drops `name`'s server facet: its host, tools, documents and actions. */
+  async function unload(name: string) {
+    await dispose(facetHosts.get(name))
+    facetHosts.delete(name)
+    if (installed.delete(name)) host.registry.uninstall({ name })
+    documents.delete(name)
+    actions.delete(name)
+    userActions.delete(name)
+    pollActions.delete(name)
+    settingsReloads.delete(name)
+  }
   let closed = false
   const settingsFiles = [
     ...extensionSettingsFiles(host.projectRoot, host.userHome),
@@ -568,14 +588,7 @@ export async function loadExtensions(
           }
         }
       } else if (!enabled || !record.facets.server) {
-        await dispose(facetHosts.get(name))
-        facetHosts.delete(name)
-        if (installed.delete(name)) host.registry.uninstall({ name })
-        documents.delete(name)
-        actions.delete(name)
-        userActions.delete(name)
-        pollActions.delete(name)
-        settingsReloads.delete(name)
+        await unload(name)
         record.actions = []
         delete record.server
       }
@@ -587,17 +600,10 @@ export async function loadExtensions(
     }
     for (const name of records.keys()) {
       if (!folders.includes(name)) {
-        await dispose(facetHosts.get(name))
-        facetHosts.delete(name)
-        if (installed.delete(name)) host.registry.uninstall({ name })
+        await unload(name)
         records.delete(name)
         host.extensionSources.delete(name)
-        actions.delete(name)
-        userActions.delete(name)
-        pollActions.delete(name)
-        settingsReloads.delete(name)
         host.builds.remove(name)
-        documents.delete(name)
       }
     }
     host.builds.refresh(winners.map(({ name, enabled }) => [name, enabled]))
@@ -640,14 +646,14 @@ export async function loadExtensions(
     )
       return
     if (settingsFiles.includes(resolve(file))) {
-      chain = chain.then(() => reloadSettings()).catch(() => changed())
+      enqueue(reloadSettings)
       return
     }
     const directory = directories.find((root) => file.startsWith(root + '/'))
     if (!directory && !/\.[cm]?[jt]s$/.test(file)) return
     if (graphLost) {
       graphLost = false
-      chain = chain.then(() => reload()).catch(() => changed())
+      enqueue(() => reload())
       return
     }
     chain = chain
@@ -683,11 +689,11 @@ export async function loadExtensions(
     if (!directory) return onChange(file)
     if (graphLost) {
       graphLost = false
-      chain = chain.then(() => reload()).catch(() => changed())
+      enqueue(() => reload())
       return
     }
     const name = file.slice(directory.length + 1).split('/')[0]
-    chain = chain.then(() => reload(new Set([name]), new Set([name]))).catch(() => changed())
+    enqueue(() => reload(new Set([name]), new Set([name])))
   }
   const structure = ['add', 'unlink', 'addDir', 'unlinkDir'] as const
   let attached = false
@@ -702,9 +708,7 @@ export async function loadExtensions(
     watcher.add(watchedRoots)
     const stopRoots = watchRoots(watchedRoots, (root) => {
       watcher.add(root)
-      chain = chain
-        .then(() => (settingsFiles.includes(root) ? reloadSettings() : reload()))
-        .catch(() => changed())
+      enqueue(() => (settingsFiles.includes(root) ? reloadSettings() : reload()))
     })
     watcher.on('change', onChange)
     for (const event of structure) watcher.on(event, onStructure)

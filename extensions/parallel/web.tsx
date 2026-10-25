@@ -21,6 +21,7 @@ import {
   useToolDuration,
   useUltimate,
 } from '@/sdk'
+import { plural } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
 
 /** A result or fetched page in the tools' `details` (server.ts). */
@@ -54,7 +55,6 @@ type Details =
   | { status: 'error'; error: string; httpStatus: number | null; ref_id: string | null }
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
-const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 /** Fetched markdown must not load anything from the web: no images. */
 const offline = ['img', 'picture', 'source']
 

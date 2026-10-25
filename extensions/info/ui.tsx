@@ -1,10 +1,8 @@
 /** Info's components for other extensions: the panel's sections, copy buttons, meters and tags. */
 import { CheckIcon, ChevronRightIcon, CopyIcon } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { cn, errorMessage, useExtensionUiState } from '@/sdk'
-import { store } from '@/sdk/client'
+import { cn, useCopy, useExtensionUiState } from '@/sdk'
 
 /** A collapsible group of the panel; which ones are closed is kept in durable UI state. */
 export function Section({
@@ -51,25 +49,14 @@ export function Copy({
   children?: ReactNode
   className?: string
 }) {
-  const [copied, setCopied] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  useEffect(() => () => clearTimeout(timer.current), [])
+  const { copied, copy } = useCopy()
   return (
     <button
       className={cn(
         'group/copy flex min-w-0 items-center gap-1 text-left transition-colors hover:text-foreground',
         className,
       )}
-      onClick={() => {
-        void navigator.clipboard
-          .writeText(value)
-          .then(() => {
-            setCopied(true)
-            clearTimeout(timer.current)
-            timer.current = setTimeout(() => setCopied(false), 1200)
-          })
-          .catch((error: unknown) => store.notify({ level: 'error', message: errorMessage(error) }))
-      }}
+      onClick={() => copy(value)}
       title={`${value}\nclick to copy`}
       type="button"
     >
