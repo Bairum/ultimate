@@ -118,20 +118,20 @@ export async function send(
     let re = input.re
     if (from !== 'user' && input.reply !== false) {
       const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
+      // A user's message still queued is unread: it gets its own turn, and does not stand in the way of this one.
       const pending = log.messages.find(
         (m) =>
           m.to === from &&
           m.from === to &&
           m.reply &&
-          (m.state === 'sent' || m.state === 'delivered'),
+          (m.state === 'delivered' || (m.state === 'sent' && to !== 'user')),
       )
-      // Still queued, it is unread: answering it would answer what the agent has not seen. A plain final answer
-      // reaches the user anyway; only a next question needs a message.
-      if (pending && (pending.state === 'sent' || (to === 'user' && !questions)))
+      // Still queued, it is unread: answering it would answer what the agent has not seen.
+      if (pending?.state === 'sent')
         throw new Error(
           `Your answer to ${toLabel}'s message ${pending.id} is sent back automatically. Answer instead of messaging.`,
         )
-      // Asking the user the next question answers their reply: the new question is that answer, and stays open.
+      // A message to the user who is owed an answer is that answer, with its questions and images.
       if (pending && to === 'user') {
         pending.state = 'answered'
         re = pending.id

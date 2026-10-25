@@ -513,7 +513,45 @@ it('turns a message to a sender it owes an answer into that answer, once, with i
   view.dispose()
   expect(f.observed.filter((t) => t.startsWith('Reply from'))).toHaveLength(1)
 })
-it('refuses @ultimate messaging the user it owes an answer', async () => {
+it("turns @ultimate's message to the user it owes an answer into that answer and ends the run", async () => {
+  const f = await fixture()
+  const owe = (text: string) =>
+    f.opened.harness.commit(async (tx) => {
+      const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
+      log.messages.push({
+        id: log.next++,
+        from: 'user',
+        to: 1,
+        text,
+        at: 0,
+        reply: true,
+        state: 'delivered',
+      })
+    }, context)
+  await owe('Q')
+  await f.send('user', 'Report')
+  const [first, report] = (await f.log())!.messages
+  expect(first.state).toBe('answered')
+  expect(report).toMatchObject({ to: 'user', re: first.id, text: 'Report', state: 'delivered' })
+  const ended = await f.opened.root.viewState(context)
+  expect(ended.value.entries.at(-1)?.kind).toBe('pi.tool-result')
+  ended.dispose()
+  // With questions it is the answer too, and stays open itself.
+  await owe('Q2')
+  await f.send('user', 'Next', { questions: [{ text: 'Ready?', kind: 'confirm' }] })
+  const [, , second, next] = (await f.log())!.messages
+  expect(second.state).toBe('answered')
+  expect(next).toMatchObject({ to: 'user', re: second.id, reply: true, state: 'delivered' })
+  expect(next.questions).toHaveLength(1)
+  // Its card reads the result as a sent message, so the answer card shows under it.
+  const view = await f.opened.root.viewState(context)
+  const results = view.value.entries.filter((e) => e.kind === 'pi.tool-result')
+  expect(view.value.entries.at(-1)?.kind).toBe('pi.tool-result')
+  view.dispose()
+  expect(JSON.stringify(results.at(-1)?.model)).toContain(`Message ${next.id} sent.`)
+})
+// omarchy-config #42: the user's card reply was still queued behind the run, and the questions were refused.
+it("never lets the user's queued reply block @ultimate's message to them", async () => {
   const f = await fixture()
   await f.opened.harness.commit(async (tx) => {
     const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
@@ -521,27 +559,18 @@ it('refuses @ultimate messaging the user it owes an answer', async () => {
       id: log.next++,
       from: 'user',
       to: 1,
-      text: 'Q',
+      text: '1a',
       at: 0,
       reply: true,
-      state: 'delivered',
+      state: 'sent',
     })
   }, context)
-  await f.send('user', 'Restated')
-  expect(f.observed.join('\n')).toContain(
-    "Your answer to user's message 1 is sent back automatically. Answer instead of messaging.",
-  )
-  expect((await f.log())!.messages).toHaveLength(1)
-  // The next question, though, is the answer: it closes the user's reply and stays open itself.
-  await f.send('user', 'Next', { questions: [{ text: 'Ready?', kind: 'confirm' }] })
-  const [reply, next] = (await f.log())!.messages
-  expect(reply.state).toBe('answered')
-  expect(next).toMatchObject({ to: 'user', re: reply.id, reply: true, state: 'delivered' })
-  // Its card reads the result as a sent message, so the answer card shows under it.
-  const view = await f.opened.root.viewState(context)
-  const results = view.value.entries.filter((e) => e.kind === 'pi.tool-result')
-  view.dispose()
-  expect(JSON.stringify(results.at(-1)?.model)).toContain(`Message ${next.id} sent.`)
+  await f.send('user', 'Assessment', { questions: [{ text: 'Go?', kind: 'confirm' }] })
+  const [queued, assessment] = (await f.log())!.messages
+  expect(queued.state).toBe('sent')
+  expect(assessment).toMatchObject({ to: 'user', reply: true, state: 'delivered' })
+  expect(assessment.re).toBeUndefined()
+  expect(assessment.questions).toHaveLength(1)
 })
 it.each([false, true])('replays a converted answer once (afterMemo: %s)', async (afterMemo) => {
   const sendGate = { gate: gate(), afterMemo, entered: false, conversation: () => 0 }

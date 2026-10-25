@@ -31,10 +31,11 @@ original `answered`, appends the reply (`re`, `reply: false`, its `images`, its 
 in its reply phase; its `steer` and `reply` flags are ignored. The original's delivery then sees it answered and keeps
 the final answer local, and the tool returns `Sent as your answer to message N.` with `terminate`, so the run ends
 without restating it. A replayed call finds the reply through the `board.sent` receipt and memo, so it is sent once.
-`reply: false` updates and other recipients are unaffected. @ultimate's message to `user` while the user's message is
-open is still refused, since its answer goes back automatically, unless it carries `questions`: then the next
-question answers the user's message (marked `answered`, the new one names it in `re`) and stays open itself, so a
-conversation such as the onboarding walkthrough can ask one card after another.
+`reply: false` updates and other recipients are unaffected. @ultimate's message to `user` is never refused for an
+owed answer: while a user's message it has read is open, the message answers it (marked `answered`, the new one
+names it in `re`, its delivery keeps the final answer local) and, with `questions`, stays open itself, so a
+conversation such as the onboarding walkthrough can ask one card after another. A user's message still queued is
+unread and left alone; it gets its own turn.
 A subagent (a conversation its parent lists in `ultimate.subagents`) may message only that parent, so its work reaches
 the user through its coordinator and @ultimate; its prompt says so. Automation runs and top-level conversations may
 message any agent; only @ultimate may message the user.
@@ -71,8 +72,8 @@ The incoming row shows it after its kind: a spinner and `assessing…`, then `ac
 Sending to `user` writes a message
 shown in @ultimate's transcript; it starts no run. The message is @ultimate's answer: a direct `message` call to
 `user` returns `terminate`, so the run ends without a final answer that would restate it, when every call of that
-tool round does so. It does not while a reply-enabled message to @ultimate is still open, so that reply is still
-answered; codemode's nested calls never end the run.
+tool round does so. It does not while a reply-enabled message @ultimate has read is still open, so that reply is
+still answered; codemode's nested calls never end the run.
 A reply-enabled message to `user` stays open, and its sender shows as awaiting reply, until the user answers that
 message: a user Reply with `re` (an answer card, or a typed Reply) marks only that message answered, in the reply's
 commit. Plain input, new posts and answers to other questions leave it open. The service's `dismiss` closes it as
