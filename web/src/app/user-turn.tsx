@@ -4,6 +4,9 @@ import { MentionText, Message, MessageContent } from '@/components/ai/message'
 import { MessageResponse } from '@/components/ai/message'
 import { Tool, ToolContent, ToolHeader, ToolImage, ToolSection } from '@/components/ai/tool'
 import { cn } from 'cn'
+import { useExtensions } from '../sdk/hooks.ts'
+import { messageItems } from '../sdk/registry.ts'
+import { ExtensionBoundary } from './boundary.tsx'
 import { MessageActions } from './message-actions.tsx'
 
 /** The text blocks of a user message, joined. */
@@ -77,19 +80,27 @@ export function UserView({
       ? []
       : message.content.filter((block) => block.type === 'image')
   const skill = skillInput(text)
+  const additions = messageItems(useExtensions(), 'userBubble')
   return (
     <Message className="group/message mt-3 first:mt-0" from="user">
-      <MessageContent>
-        {skill && <SkillRun {...skill} />}
-        {(!skill || skill.request) && <UserText text={skill ? skill.request : text} />}
-        {images.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {images.map((image, index) => (
-              <ToolImage alt={`Attached image ${index + 1}`} image={image} key={index} />
-            ))}
-          </div>
-        )}
-      </MessageContent>
+      <div className="relative">
+        <MessageContent>
+          {skill && <SkillRun {...skill} />}
+          {(!skill || skill.request) && <UserText text={skill ? skill.request : text} />}
+          {images.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {images.map((image, index) => (
+                <ToolImage alt={`Attached image ${index + 1}`} image={image} key={index} />
+              ))}
+            </div>
+          )}
+        </MessageContent>
+        {additions.map(({ key, extension, version, component: Addition }) => (
+          <ExtensionBoundary extension={extension} fallback={null} key={key} version={version}>
+            <Addition entry={entry} />
+          </ExtensionBoundary>
+        ))}
+      </div>
       <MessageActions
         className="-mt-1 justify-end"
         entry={entry}

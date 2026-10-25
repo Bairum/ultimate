@@ -16,12 +16,18 @@ export type SlotName =
   | 'statusline.right'
   | 'composer.toolbar'
   | 'composer.status'
+  | 'composer.actions'
   | 'conversation.overlay'
   | 'transcript.start'
   | 'overlay'
 
-/** A slot component, optionally with an `order` (default 0; ties keep folder-name order). */
-export type Contribution = ComponentType | { component: ComponentType; order?: number }
+/**
+ * A slot component, optionally with an `order` (default 0; ties keep folder-name order). In the status line, `phone`
+ * keeps the item on the line on a phone; the others move behind its ⋯ popover there.
+ */
+export type Contribution =
+  | ComponentType
+  | { component: ComponentType; order?: number; phone?: boolean }
 
 /** A tab in the right panel. */
 export interface PanelContribution {
@@ -292,6 +298,8 @@ export interface WebExtension {
   messageDetails?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Inline labels after the Final answer heading on stored assistant messages. */
   answerLabels?: readonly ComponentType<{ entry: EntryRecord }>[]
+  /** Overlays on the user's bubble, rendered after it inside a positioned box exactly its size (`absolute inset-0`). */
+  userBubble?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Shows matching conversations in compact mode; the visible tools of every matching facet combine. */
   compact?: CompactContribution
   /** The empty state's wording and the composer's placeholder for matching conversations. */

@@ -2,7 +2,10 @@ Inline setup choices, the first-run prerequisites, and the Extensions panel that
 
 ## First run
 
-The first run has only **Get ready**: connect a provider and choose an available model. Continue waits for both, starts onboarding with @ultimate through `onDone`, then records `firstRunDone`;
+The first run has only **Get ready**: connect a provider and choose an available model. The model row recommends a
+1M+ context window for @ultimate, and names the chosen model's window when it is smaller. ⌘K **Get ready…** opens it
+again whatever the recorded state, e.g. on a preview, which shares the user's `~/.ultimate/onboarding.json`; its
+Continue starts onboarding once per root, as above. Continue waits for both, starts onboarding with @ultimate through `onDone`, then records `firstRunDone`;
 there is no second page. Escape or the close button records completion without changing settings. Closing returns
 focus to the composer. An automated browser (`navigator.webdriver`) does not get this dialog.
 
@@ -17,7 +20,15 @@ and preserves the instructions. Request id `onboarding:<root>` ensures one input
 `{ id }` without sending again. The root conversation's `onboarding.starts` document maps roots to that standing id
 so Start here can show **@ultimate is setting up this project · open** across reloads.
 
-@ultimate greets, shows only applicable setup cards one at a time and waits for each choice, then reads the project
+@ultimate greets and first walks the user through how Ultimate works with the `how-ultimate-works` skill
+(`skills/how-ultimate-works/SKILL.md`): five short beats, each a message with one question card and a Skip the rest
+option, ending with what the project is about and what to do first. That answer is the user's instructions for setup.
+The input carries @ultimate's model and context window so the walkthrough can recommend a 1M+ model.
+
+**Walk me through Ultimate** (⌘K) reruns only the walkthrough: the user-only `walkthrough` action submits a
+`walkthrough.start` input to @ultimate, every time, and opens its conversation.
+
+Then @ultimate shows only applicable setup cards one at a time and waits for each choice, then reads the project
 with the user able to steer. It writes the root's first memories with `remember` (the user's instructions verbatim among them), suggests at most three useful
 project-specific agents, extensions or settings, and builds only what the user chooses. The first feature becomes a
 coordinator through `branch`. Roots stay read-only while @ultimate handles setup.
@@ -31,7 +42,7 @@ the agent should wait for an `onboarding.choice` input before continuing.
 The tool renderer shows a quiet, transcript-width card:
 
 - **Extensions:** recommended extensions as checkboxes, initially checked unless the user's settings disable them.
-  The default-off built-ins (`cloud`, `parallel`, `tailscale`, `update`, `health`, `classify`, `phase`, `sounds`;
+  The default-off built-ins (`cloud`, `parallel`, `tailscale`, `health`, `classify`, `phase`, `sounds`;
   see [settings](../../docs/settings.md)) start unchecked unless the user's settings enable them, each with one line
   on what it needs (a key, a service, a Worker).
   Core-tier extensions (`ExtensionInfo.core`, such as `subagents`, `messages`, `lineage`, `onboarding` and `documents`)
@@ -84,6 +95,7 @@ This default-on built-in exports browser actions. Settings choices and completio
 cannot apply them through codemode `ultimate.action`.
 
 - `start { root?, instructions? }`: starts the flow above once per root, returning `{ id }`; user-only.
+- `walkthrough`: has @ultimate run the walkthrough again, without setup, returning `{ id }`; user-only.
 - `help { card: 'project' | 'git' }`: asks @ultimate for setup help through a direct input, returning `{ id }`; user-only.
 - `status`: first-run state; project configuration, decision and README; the user's enable/disable lists; and `adds`,
   the project's agents, skills, extension folders, replacements and declared settings, inspected even while undecided.

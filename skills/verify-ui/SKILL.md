@@ -19,6 +19,15 @@ Never claim a UI change works without an image of it.
   `theme: 'light'` and `'dark'` for both themes. Omit `path` so the PNG stays outside your checkout.
 - `browser {url, steps}` to drive a state: `click`, `fill` (`#composer-input` is the composer), `press`
   (`Control+k` opens ⌘K), `wait`, `eval`. The result lists console errors and failed requests: read them.
+- Wait on Ultimate's state, never a guessed time: `{send: 'prompt'}` submits without the composer, then
+  `{until: 'idle'}` returns when that turn is done, `{until: 'quiet'}` when nothing runs (branches and subagents
+  included), `{until: {entry: 'pi.tool-result'}}` or `{until: {event: 'workspaces.landed', where: {…}}}` when that
+  appears. A timeout says what was still busy. `conversation: <id>` targets another conversation. Click and fill only
+  when the interaction itself is under test.
+- `where` matches only fields the event carries, and events never carry text: after a send, match
+  `{event: 'user.input', where: {conversation: <id>, kind: 'prompt'}}`, not the prompt. Each event's fields are in
+  `extensions/browser/README.md` and its `defineEvent`. Tool calls live inside `pi.assistant`; there is no
+  `pi.toolCall` entry.
 - Open a conversation with `?conversation=<id>`. Right-panel section titles are uppercased by CSS: find them with
   `textContent.startsWith('Skills')`, not by their shown text.
 - Seed real state with real prompts on a preview; do not inject entries.

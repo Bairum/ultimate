@@ -9,7 +9,7 @@ import {
   SunriseIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MentionText, MessageResponse } from '@/components/ai/message'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -32,6 +32,7 @@ import {
   useExtensionUiState,
   useNow,
   useTranscript,
+  useUiState,
   useUltimate,
 } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
@@ -41,8 +42,9 @@ import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open } from '../workspaces/ui.tsx'
 import { CompactAction, ForgetAction, MemoryDoc, TallyDoc } from './refs.ts'
 import type { MemoryItem } from './refs.ts'
-import { column, EmptyRoot, MEMORY_PANEL, MemoryHeader, useRoots } from './ui.tsx'
+import { column, EmptyRoot, MEMORY_FOCUS, MEMORY_PANEL, MemoryHeader, useRoots } from './ui.tsx'
 import { GoBackAction, Rewound, RewoundDependent } from './rewind.tsx'
+import { emptyRoot } from './empty-root.ts'
 
 function userText(entry: EntryRecord) {
   const message = entry.model?.[0]
@@ -398,11 +400,12 @@ function RootComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
 /** Only a root subscribes to its `lineage.tally` document; a root from before tallies has none and shows the footer. */
 function TallyComposer({ id, dock }: { id: number; dock?: boolean }) {
   const tally = useDocOf(id, TallyDoc)
+  const memories = useDocOf(id, MemoryDoc)
   const history = useConversation((conversation) =>
     conversation.loading ? undefined : conversation.entries.length > 0,
   )
-  if (tally === undefined || history === undefined) return null
-  if (tally?.since === undefined && !history)
+  if (tally === undefined || memories === undefined || history === undefined) return null
+  if (emptyRoot(tally, history, memories))
     return (
       <Provided input={{ id, dock }} point={EmptyRoot}>
         {(start) => start}
@@ -560,8 +563,17 @@ function MemoryRow({
 }) {
   const [open, setOpen] = useState(false)
   const [forgetting, setForgetting] = useState(false)
+  // A recall chip asks for this memory: unfold it, bring it into view, and take the request.
+  const [focus, setFocus] = useUiState<string | null>(MEMORY_FOCUS, null)
+  const row = useRef<HTMLLIElement>(null)
+  useEffect(() => {
+    if (focus !== slug) return
+    setOpen(true)
+    row.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    setFocus(null)
+  }, [focus, slug, setFocus])
   return (
-    <li className="group/memory min-w-0 rounded-sm hover:bg-muted/40" data-memory={slug}>
+    <li className="group/memory min-w-0 rounded-sm hover:bg-muted/40" data-memory={slug} ref={row}>
       <div className="flex min-w-0 items-start">
         <button
           aria-expanded={open}

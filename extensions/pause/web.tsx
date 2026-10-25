@@ -447,8 +447,8 @@ export default defineWebExtension({
   provides: [provide(ParkedRuns, useParked)],
   slots: {
     'statusline.right': [
-      { component: Item, order: -3 },
-      { component: Play, order: -3 },
+      { component: Item, order: -3, phone: true },
+      { component: Play, order: -3, phone: true },
     ],
     'composer.status': [Hint],
   },

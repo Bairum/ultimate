@@ -1,8 +1,25 @@
 diff --git a/src/claude-cli.ts b/src/claude-cli.ts
-index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..c5e47effcec94e266ae31abe0842c2e9681449bc 100644
+index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..3bc9e94a1a027e6f1a3fb2bf0e7ac92f3a0c7367 100644
 --- a/src/claude-cli.ts
 +++ b/src/claude-cli.ts
-@@ -544,15 +544,23 @@ function setReplayCacheBreakpoints(messages: NativeRequestMessage[]): void {
+@@ -19,7 +19,7 @@ import type {
+   NativeResult,
+   NativeUsage,
+ } from "./native-types.ts";
+-import { TOOL_PREFIX, type NativeSystemInjection, type ToolManifestEntry } from "./transcript.ts";
++import type { NativeSystemInjection, ToolManifestEntry } from "./transcript.ts";
+ 
+ export const INSTALL_HINT =
+   "Claude Code is not installed. Install it with `npm install -g @anthropic-ai/claude-code` " +
+@@ -45,7 +45,6 @@ export interface RunClaudeInput {
+   systemPrompt: string;
+   manifest: ToolManifestEntry[];
+   extraBody: Record<string, unknown>;
+-  toolNames: Set<string>;
+   signal?: AbortSignal;
+   timeoutMs?: number;
+   env?: Record<string, string | undefined>;
+@@ -544,15 +543,23 @@ function setReplayCacheBreakpoints(messages: NativeRequestMessage[]): void {
    const userIndexes = messages
      .map((message, index) => (message.role === "user" ? index : -1))
      .filter((index) => index >= 0);
@@ -33,7 +50,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..c5e47effcec94e266ae31abe0842c2e9
    }
    const final = messages.at(-1);
    if (final) setCacheBreakpoint(final);
-@@ -642,6 +650,11 @@ export function rewriteInitialRequest(
+@@ -642,6 +649,11 @@ export function rewriteInitialRequest(
    };
    let messages = payload.messages;
    const first = messages?.[0];
@@ -45,7 +62,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..c5e47effcec94e266ae31abe0842c2e9
    if (first?.role !== "user" || !Array.isArray(first.content)) {
      throw new Error("Claude Code request is missing its initial user message");
    }
-@@ -666,9 +679,11 @@ export function rewriteInitialRequest(
+@@ -666,9 +678,11 @@ export function rewriteInitialRequest(
    if (nativeSystemInjections) {
      messages = injectNativeSystemMessages(messages!, nativeSystemInjections);
      payload.messages = messages;
@@ -58,7 +75,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..c5e47effcec94e266ae31abe0842c2e9
  
    return Buffer.from(JSON.stringify(payload));
  }
-@@ -726,6 +741,20 @@ function launchPlan(input: RunClaudeInput): ClaudeLaunchPlan {
+@@ -726,6 +740,20 @@ function launchPlan(input: RunClaudeInput): ClaudeLaunchPlan {
    };
  }
  
@@ -79,7 +96,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..c5e47effcec94e266ae31abe0842c2e9
  class ClaudeProcess {
    busy = false;
    readonly createdAt = Date.now();
-@@ -976,11 +1005,7 @@ class ClaudeProcess {
+@@ -976,11 +1004,7 @@ class ClaudeProcess {
          message = assistants.at(-1);
        }
  
@@ -92,6 +109,215 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..c5e47effcec94e266ae31abe0842c2e9
  
        const nativeFailureHandled = this.relay.denied > 0 || message.stop_reason === "refusal";
        if (nativeError && !nativeFailureHandled) throw new Error(`Claude Code API error: ${nativeError}`);
+@@ -990,13 +1014,6 @@ class ClaudeProcess {
+         throw new Error(`Claude Code request failed: ${result.subtype ?? "unknown result"}`);
+       }
+ 
+-      for (const block of message.content) {
+-        if (block.type !== "tool_use") continue;
+-        if (!block.name.startsWith(TOOL_PREFIX) || !input.toolNames.has(block.name.slice(TOOL_PREFIX.length))) {
+-          throw new Error("Claude Code returned a tool outside Pi's current tool inventory");
+-        }
+-      }
+-
+       const usage = message.usage ?? result.usage;
+       if (!usage || typeof usage.input_tokens !== "number" || typeof usage.output_tokens !== "number") {
+         throw new Error("Claude Code response did not include complete token usage");
+diff --git a/src/stream.ts b/src/stream.ts
+index b516241c794b5dd7054822921d445a2169c6b70e..00ccb6aa5ddec60e64ccc4d339942be8124567fb 100644
+--- a/src/stream.ts
++++ b/src/stream.ts
+@@ -6,6 +6,7 @@ import {
+   getCurrentTools,
+   getInitialSystemMessage,
+   getSystemMessageText,
++  parseStreamingJson,
+   type AssistantMessage,
+   type AssistantMessageEventStream,
+   type Model,
+@@ -122,7 +123,17 @@ function comparableContent(content: AssistantMessage["content"]): unknown[] {
+   });
+ }
+ 
+-function nativeContent(content: NativeContentBlock[], toolNames: Set<string>): AssistantMessage["content"] {
++/**
++ * Resolve a native tool name to Pi's. Claude Code runs without built-in tools and offers Pi's as
++ * `mcp__pi__<name>`, yet the model sometimes names one bare (`bash` for `mcp__pi__bash`). Both resolve to
++ * Pi's name; a name Pi does not have stays a tool call, which Pi answers with a "not available" tool error
++ * the model recovers from, instead of ending the turn.
++ */
++export function piToolName(nativeName: string): string {
++  return nativeName.startsWith(TOOL_PREFIX) ? nativeName.slice(TOOL_PREFIX.length) : nativeName;
++}
++
++function nativeContent(content: NativeContentBlock[]): AssistantMessage["content"] {
+   const converted: AssistantMessage["content"] = [];
+   for (const block of content) {
+     if (block.type === "text") {
+@@ -141,9 +152,7 @@ function nativeContent(content: NativeContentBlock[], toolNames: Set<string>): A
+         redacted: true,
+       });
+     } else if (block.type === "tool_use") {
+-      if (!block.name.startsWith(TOOL_PREFIX)) throw new Error(`Claude Code returned unexpected tool ${block.name}`);
+-      const name = block.name.slice(TOOL_PREFIX.length);
+-      if (!toolNames.has(name)) throw new Error(`Claude Code returned unavailable tool ${name}`);
++      const name = piToolName(block.name);
+       converted.push({ type: "toolCall", id: block.id, name, arguments: block.input as never });
+     }
+   }
+@@ -158,7 +167,6 @@ class EventTranslator {
+     private readonly model: Model<any>,
+     private readonly output: AssistantMessage,
+     private readonly stream: AssistantMessageEventStream,
+-    private readonly toolNames: Set<string>,
+   ) {}
+ 
+   event(event: AnthropicStreamEvent): void {
+@@ -195,7 +203,11 @@ class EventTranslator {
+     initialUserPrefix?: unknown[],
+     initialSystemMessages?: unknown[],
+   ): void {
+-    const authoritative = nativeContent(message.content, this.toolNames);
++    const authoritative = nativeContent(message.content);
++    // Replay the call under the name the request offers, so the history never shows a bare name working.
++    for (const block of message.content) {
++      if (block.type === "tool_use") block.name = `${TOOL_PREFIX}${piToolName(block.name)}`;
++    }
+     if (!this.sawContentEvent) {
+       this.emitComplete(authoritative);
+     } else if (JSON.stringify(comparableContent(this.output.content)) !== JSON.stringify(comparableContent(authoritative))) {
+@@ -239,9 +251,7 @@ class EventTranslator {
+       } as IndexedThinking);
+       this.stream.push({ type: "thinking_start", contentIndex, partial: this.output });
+     } else if (native.type === "tool_use") {
+-      if (!native.name.startsWith(TOOL_PREFIX)) throw new Error(`Claude Code returned unexpected tool ${native.name}`);
+-      const name = native.name.slice(TOOL_PREFIX.length);
+-      if (!this.toolNames.has(name)) throw new Error(`Claude Code returned unavailable tool ${name}`);
++      const name = piToolName(native.name);
+       this.output.content.push({
+         type: "toolCall",
+         id: native.id,
+@@ -270,7 +280,8 @@ class EventTranslator {
+       block.thinkingSignature = (block.thinkingSignature ?? "") + delta.signature;
+     } else if (delta.type === "input_json_delta" && block.type === "toolCall") {
+       block.partialJson += delta.partial_json;
+-      block.arguments = parseArguments(block.partialJson, block.arguments);
++      // Partial arguments while the call streams in, as pi-ai's own providers do, so renderers can show it arriving.
++      block.arguments = parseStreamingJson(block.partialJson);
+       this.stream.push({ type: "toolcall_delta", contentIndex, delta: delta.partial_json, partial: this.output });
+     }
+   }
+@@ -368,7 +379,7 @@ export function streamClaudeCode(
+         nativeTranscript?.requestTools ?? preparedTools.nativeTools,
+         options,
+       );
+-      const translator = new EventTranslator(model, output, stream, preparedTools.names);
++      const translator = new EventTranslator(model, output, stream);
+ 
+       stream.push({ type: "start", partial: output });
+       const response = await runClaudeRequest({
+@@ -378,7 +389,6 @@ export function streamClaudeCode(
+         systemPrompt,
+         manifest: preparedTools.manifest,
+         extraBody,
+-        toolNames: preparedTools.names,
+         signal: options?.signal,
+         timeoutMs: options?.timeoutMs,
+         env: options?.env,
+diff --git a/src/transcript.ts b/src/transcript.ts
+index e0a824be43db62a92a0329ff7c63fc0f14f3af65..3d1ce16fbcba0e880a73a9059e3da7d60c05631f 100644
+--- a/src/transcript.ts
++++ b/src/transcript.ts
+@@ -1,7 +1,5 @@
+ import {
+-  getDeclaredTools,
+   getInitialSystemMessage,
+-  hasToolRedefinitions,
+   renderSystemMessageUpdate,
+   type AssistantMessage,
+   type ImageContent,
+@@ -17,7 +15,7 @@ import type { NativeContentBlock, NativeFrame, NativeMessage } from "./native-ty
+ 
+ export const TOOL_PREFIX = "mcp__pi__";
+ export const NATIVE_REPLAY_DIAGNOSTIC = "claude-code.native-assistant.v1";
+-export const NATIVE_TOOL_CHANGES_BETA = "mid-conversation-tool-changes-2026-07-01";
++export const NATIVE_TOOL_CHANGES_BETA = "inline-tools-2026-09-15";
+ 
+ const DEFERRED_TOOL_PLACEHOLDER = {
+   name: "__pi_deferred_placeholder__",
+@@ -292,28 +290,35 @@ export function prepareTools(tools: Tool[]): {
+   return { manifest, nativeTools, names };
+ }
+ 
++/**
++ * A later system message as native blocks. Tools are defined by value in `tool_addition`, so a new
++ * definition under an existing name replaces the old one and needs no removal, as in pi-ai's
++ * Anthropic transport.
++ */
+ function nativeSystemBlocks(message: SystemMessage): Array<Record<string, unknown>> {
+   const blocks: Array<Record<string, unknown>> = [];
+   const text = renderSystemMessageUpdate(message);
+   if (text) blocks.push({ type: "text", text: sanitizeSurrogates(text) });
++  const added = message.toolsAdded ?? [];
++  const redefined = new Set(added.map((tool) => tool.name));
+   for (const tool of message.toolsRemoved ?? []) {
++    if (redefined.has(tool.name)) continue;
+     blocks.push({
+       type: "tool_removal",
+       tool: { type: "tool_reference", name: `${TOOL_PREFIX}${tool.name}` },
+     });
+   }
+-  for (const tool of message.toolsAdded ?? []) {
+-    blocks.push({
+-      type: "tool_addition",
+-      tool: { type: "tool_reference", name: `${TOOL_PREFIX}${tool.name}` },
+-    });
++  for (const definition of prepareTools(added).nativeTools) {
++    blocks.push({ type: "tool_addition", tool: { type: "tool_definition", definition } });
+   }
+   return blocks;
+ }
+ 
+ /**
+  * Build Anthropic's cache-preserving native representation of transcript tool changes.
+- * The placeholder keeps deferred-tool prompt scaffolding stable from the first request.
++ * The request tool list holds the initial tools and the placeholder and never changes; later
++ * tools, redefinitions included, arrive inline at their message. The placeholder keeps
++ * deferred-tool prompt scaffolding stable from the first request.
+  */
+ export function prepareNativeTranscript(
+   messages: Message[],
+@@ -321,19 +326,10 @@ export function prepareNativeTranscript(
+ ): NativeTranscriptPlan | undefined {
+   const initial = getInitialSystemMessage(messages);
+   const initialTools = initial?.toolsAdded ?? [];
+-  if (!supported || initialTools.length === 0 || hasToolRedefinitions(messages)) return undefined;
++  if (!supported || initialTools.length === 0) return undefined;
+ 
+-  const declared = getDeclaredTools(messages);
+-  const prepared = prepareTools(declared);
+-  const nativeByName = new Map(
+-    prepared.nativeTools.map((tool) => [String(tool.name).slice(TOOL_PREFIX.length), tool]),
+-  );
+-  const initialNames = new Set(initialTools.map((tool) => tool.name));
+-  const initialNative = initialTools.map((tool) => structuredClone(nativeByName.get(tool.name)!));
++  const initialNative = prepareTools(initialTools).nativeTools;
+   initialNative.at(-1)!.cache_control = { type: "ephemeral", ttl: "1h" };
+-  const laterNative = declared
+-    .filter((tool) => !initialNames.has(tool.name))
+-    .map((tool) => ({ ...structuredClone(nativeByName.get(tool.name)!), defer_loading: true }));
+ 
+   const systemInjections: NativeSystemInjection[] = [];
+   let pending: Array<Array<Record<string, unknown>>> = [];
+@@ -356,7 +352,7 @@ export function prepareNativeTranscript(
+   flush(null);
+ 
+   return {
+-    requestTools: [...initialNative, structuredClone(DEFERRED_TOOL_PLACEHOLDER), ...laterNative],
++    requestTools: [...initialNative, structuredClone(DEFERRED_TOOL_PLACEHOLDER)],
+     systemInjections,
+   };
+ }
 diff --git a/src/turn-relay.ts b/src/turn-relay.ts
 index 08ec86e5df1baac866a1cd97cea4dc94a523fbd7..b3aa4007e5154b2d9cd21e8d2ad8fbc622f919c8 100644
 --- a/src/turn-relay.ts
@@ -105,49 +331,3 @@ index 08ec86e5df1baac866a1cd97cea4dc94a523fbd7..b3aa4007e5154b2d9cd21e8d2ad8fbc6
        if (!response.headersSent) response.writeHead(this.cancelled ? 499 : 502).end();
        else response.destroy();
      } finally {
-diff --git a/src/stream.ts b/src/stream.ts
-index b516241c794b5dd7054822921d445a2169c6b70e..ba5330c54b36584a6f7b35a53afee4c411770e07 100644
---- a/src/stream.ts
-+++ b/src/stream.ts
-@@ -122,6 +122,19 @@ function comparableContent(content: AssistantMessage["content"]): unknown[] {
-   });
- }
- 
-+/**
-+ * Resolve a native tool name to Pi's. Claude Code runs without built-in tools, so a name outside the request
-+ * is the model naming a tool it was not offered, e.g. bare `bash` for `mcp__pi__bash`. That is a sampling slip,
-+ * not a fault in the request: the error says the stream "ended without" a response so pi-ai retries it.
-+ */
-+export function piToolName(nativeName: string, toolNames: Set<string>): string {
-+  const name = nativeName.startsWith(TOOL_PREFIX) ? nativeName.slice(TOOL_PREFIX.length) : undefined;
-+  if (name !== undefined && toolNames.has(name)) return name;
-+  throw new Error(
-+    `Claude Code returned ${name === undefined ? "unexpected" : "unavailable"} tool ${name ?? nativeName}: the model named a tool the request did not offer, so the stream ended without a usable response`,
-+  );
-+}
-+
- function nativeContent(content: NativeContentBlock[], toolNames: Set<string>): AssistantMessage["content"] {
-   const converted: AssistantMessage["content"] = [];
-   for (const block of content) {
-@@ -141,9 +154,7 @@ function nativeContent(content: NativeContentBlock[], toolNames: Set<string>): A
-         redacted: true,
-       });
-     } else if (block.type === "tool_use") {
--      if (!block.name.startsWith(TOOL_PREFIX)) throw new Error(`Claude Code returned unexpected tool ${block.name}`);
--      const name = block.name.slice(TOOL_PREFIX.length);
--      if (!toolNames.has(name)) throw new Error(`Claude Code returned unavailable tool ${name}`);
-+      const name = piToolName(block.name, toolNames);
-       converted.push({ type: "toolCall", id: block.id, name, arguments: block.input as never });
-     }
-   }
-@@ -239,9 +250,7 @@ class EventTranslator {
-       } as IndexedThinking);
-       this.stream.push({ type: "thinking_start", contentIndex, partial: this.output });
-     } else if (native.type === "tool_use") {
--      if (!native.name.startsWith(TOOL_PREFIX)) throw new Error(`Claude Code returned unexpected tool ${native.name}`);
--      const name = native.name.slice(TOOL_PREFIX.length);
--      if (!this.toolNames.has(name)) throw new Error(`Claude Code returned unavailable tool ${name}`);
-+      const name = piToolName(native.name, this.toolNames);
-       this.output.content.push({
-         type: "toolCall",
-         id: native.id,

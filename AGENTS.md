@@ -69,6 +69,7 @@ New UI is a new extension folder, not a change to `web/`: follow the `write-exte
 
 ## Developer reference — read when needed
 
+- [Architecture diagrams](docs/architecture/index.html): five pictures of how the browser, server, Pi Durable, extensions, events and agents fit together.
 - [Running the server](docs/running.md): before starting, debugging or testing a server or core swap.
 - [Worktrees and integration](docs/worktrees.md): before previewing an isolate, landing or recovering a rejected push.
 - [Discovery and settings](docs/settings.md): before changing configuration, trust, resources or `summaryModel` (titles, summaries, reply summaries and tree abstracts).
@@ -113,5 +114,7 @@ invalid states: data loss, security, impossible states. Lint enforces only what 
 A swallowed error needs a reason comment explaining why ignoring it is correct; `ultimate/no-silent-catch` enforces this for empty catch blocks and empty or `undefined`-returning `.catch` handlers.
 
 Reject slop and jargon: keep code and explanations direct, minimal, and grounded in evidence. No backward-compatibility
-shims or speculative fallbacks; move forward and update callers. Tests must exercise meaningful behaviour and failure
-cases, not inflate coverage or merely restate the implementation.
+shims or speculative fallbacks; move forward and update callers. Commit tests for a feature's core path and one
+regression test per bug that actually happened; they exercise behaviour and failure cases, never restate the
+implementation. Prove edge cases once instead (a throwaway test or script you run and delete, an action call, a
+preview check) and show the command and its output in the report; one-off migrations and retired shapes get no test.

@@ -13,11 +13,13 @@ it('kills a silent process group on stall and a printing process on the total ca
       const childFile = join(directory, 'child')
       const command = `echo $$ > '${pidFile}'; sleep 10 & echo $! > '${childFile}'; ${printing ? 'while true; do echo progress; sleep 0.02; done' : 'wait'}`
       const pids = join(directory, 'pids')
-      const result = await runLanderCheck(directory, command, context, pids, {
+      const tmp = join(directory, 'tmp')
+      const result = await runLanderCheck(directory, command, context, pids, tmp, {
         stall: 0.2,
         total: 0.5,
       })
       expect(await readdir(pids)).toEqual([])
+      expect(await readdir(tmp)).toEqual([])
       expect(result.failure).toContain(printing ? 'Timed out after' : 'Stalled: no output for')
       expect(result.failure?.includes('progress')).toBe(printing)
       const pid = Number(await readFile(pidFile, 'utf8'))

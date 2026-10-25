@@ -15,6 +15,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { actions, layout, shellKeys } from '../sdk/actions.ts'
 import { useConversation, useExtensions, useRegionOpen, useUiState } from '../sdk/hooks.ts'
@@ -30,18 +31,57 @@ import { Transcript } from './transcript.tsx'
 /**
  * The bottom line with the `statusline.left` and `statusline.right` slots. On a touch screen of tablet width (an
  * unfolded foldable, a tablet) the page reaches the display's rounded corners, so the line's ends move in and up to
- * clear them.
+ * clear them. A phone keeps only the items marked `phone` on the line, moved in from the corners, and lists the
+ * rest in a ⋯ popover.
  */
 export function StatusLine() {
+  const phone = useViewport() === 'phone'
   return (
-    <footer className="flex h-7 shrink-0 items-center gap-4 overflow-hidden border-t border-border/70 bg-sidebar px-3 font-mono text-[11.5px] text-muted-foreground md:pointer-coarse:box-content md:pointer-coarse:px-7 md:pointer-coarse:pb-3">
-      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden whitespace-nowrap">
-        <Slot name="statusline.left" variant="inline" />
-      </div>
-      <div className="flex shrink-0 items-center gap-3 whitespace-nowrap">
-        <Slot name="statusline.right" variant="inline" />
-      </div>
+    <footer className="status-line flex h-7 shrink-0 items-center gap-4 overflow-hidden border-t border-border/70 bg-sidebar px-3 font-mono text-[11.5px] text-muted-foreground max-md:px-8 md:pointer-coarse:box-content md:pointer-coarse:px-7 md:pointer-coarse:pb-3">
+      {phone ? (
+        <>
+          <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden whitespace-nowrap">
+            <Slot name="statusline.left" phone variant="inline" />
+            <Slot name="statusline.right" phone variant="inline" />
+          </div>
+          <StatusMore />
+        </>
+      ) : (
+        <>
+          <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden whitespace-nowrap">
+            <Slot name="statusline.left" variant="inline" />
+          </div>
+          <div className="flex shrink-0 items-center gap-3 whitespace-nowrap">
+            <Slot name="statusline.right" variant="inline" />
+          </div>
+        </>
+      )}
     </footer>
+  )
+}
+
+/** On a phone, the status-line items that don't fit the line: one per row, each still opening its own popover. */
+function StatusMore() {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          aria-label="More status"
+          className="-mx-1 flex shrink-0 items-center rounded-sm px-1 transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
+          type="button"
+        >
+          <EllipsisIcon className="size-3.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className="flex w-auto max-w-[calc(100vw-2rem)] flex-col items-start gap-2.5 px-3 py-2.5 font-mono text-[11.5px] whitespace-nowrap text-muted-foreground"
+        side="top"
+      >
+        <Slot name="statusline.left" phone={false} variant="inline" />
+        <Slot name="statusline.right" phone={false} variant="inline" />
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -118,7 +158,7 @@ function Overlay({
       />
       <aside
         className={cn(
-          'absolute inset-y-0 flex w-[85%] max-w-[26rem] flex-col shadow-2xl shadow-black/40 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+          'absolute inset-y-0 flex w-[85%] max-w-[26rem] flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-2xl shadow-black/40 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
           side === 'left' ? 'left-0 border-r' : 'right-0 border-l',
           !open && (side === 'left' ? '-translate-x-full' : 'translate-x-full'),
           drag !== undefined && 'transition-none',

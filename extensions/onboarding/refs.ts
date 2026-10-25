@@ -50,6 +50,8 @@ export const StartAction = actionRef<{ root?: number; instructions?: string }, {
   'onboarding',
   'start',
 )
+/** No arguments → `{ id }`: have @ultimate walk the user through how Ultimate works again, without project setup. */
+export const WalkthroughAction = actionRef<null, { id: number }>('onboarding', 'walkthrough')
 /** `{ card }` → `{ id }`: ask @ultimate for help with the project or Git card; `id` is @ultimate's conversation. */
 export const HelpAction = actionRef<{ card: 'project' | 'git' }, { id: number }>(
   'onboarding',

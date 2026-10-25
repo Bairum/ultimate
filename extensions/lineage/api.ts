@@ -6,6 +6,7 @@ import type { Context } from '@earendil-works/chord'
 import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
 import { RootsDoc } from './refs.ts'
+import type { MemoryItem } from './refs.ts'
 import type { BranchInput, leaveNote, rootOf, startBranch } from './server.ts'
 
 /** The project's roots, each the top of one conversation tree; a fresh project's first conversation is its first. */
@@ -48,6 +49,11 @@ export type LineageService = {
   ) => ReturnType<typeof leaveNote>
   /** Apply memory `ops` to root `root` in one atomic batch, written at `now`; returns what changed. */
   remember: (root: number, ops: readonly unknown[], ctx: Context, now?: number) => Promise<string>
+  /** The memories of conversation `id`'s tree root, else of the project's only root; undefined without either. */
+  memoriesOf: (
+    id: number,
+    ctx: Context,
+  ) => Promise<{ root: number; memories: Record<string, MemoryItem> } | undefined>
 }
 export { Branched, Rooted } from './refs.ts'
 

@@ -182,7 +182,7 @@ export default function messages(host: ExtensionHost) {
       defineTool({
         name: 'message',
         description:
-          'Send a message to #id or @name (only @ultimate may send to user). Returns immediately; the answer comes back as a reply. A busy recipient gets it after its current run, or during it with steer: true (the default for @ultimate). To an agent whose message you owe an answer, it is that answer (with its images) and ends your run.',
+          'Send a message to #id or @name (only @ultimate may send to user). Returns immediately; the answer comes back as a reply. A busy recipient gets it after its current run, or during it with steer: true (the default for @ultimate). images forwards screenshots or other images from your conversation, to an agent or to the user. To an agent whose message you owe an answer, it is that answer (with its images) and ends your run.',
         parameters: Type.Object({
           to: Type.String(),
           text: Type.String({ minLength: 1 }),
@@ -216,8 +216,9 @@ export default function messages(host: ExtensionHost) {
             .snapshot(Messages, ROOT_CONVERSATION_ID, ctx))!.messages.find(
             (message) => message.id === id,
           )
-          // It answered a message the recipient is waiting on: the answer is given, so the run ends here.
-          if (sent?.re !== undefined)
+          // It answered a message the recipient is waiting on: the answer is given, so the run ends here. A next
+          // question to the user answers theirs too, but shows as an open question below.
+          if (sent?.re !== undefined && sent.to !== 'user')
             return {
               output: [
                 {

@@ -15,9 +15,13 @@
 - `pnpm check` checks format/lint/types; `pnpm test` runs the fast in-process tests with temporary homes (about 60 s today), each scripting its model responses on Pi's faux provider (`prepareHarness({ faux })`, test-only); `pnpm test:e2e` runs `test/e2e`, the tests that spawn real supervisors and instances, on a scripted OpenAI-compatible endpoint (`test/e2e/scripted-model.ts`). Test servers find no Tailscale CLI (`TAILSCALE_COMMAND`), so they stay off the tailnet.
 - UI and behaviour are verified on a preview: `instance start` runs a clean Ultimate with every agent on `instance.model` (default `openai-codex/gpt-6.1-sol`, fast; its own home; provider logins are read from `~/.pi/agent`, never copied). Seed it by prompting it as a user would, then look with screenshot or browser (the `verify-ui` skill has the checklist). It spends tokens; stop it when done.
 - Restart and chapter-switch flows need a supervised scratch server, since a preview runs `server/main.ts` without the
-  supervisor and cannot restart. From the checkout under test:
-  `ULTIMATE_HOME=$(mktemp -d) pnpm start --port 4799 --no-open`. Tailscale follows user settings, so with it on there
-  the scratch server publishes on the tailnet for Daniel to open remotely. Stop it and delete the scratch home when done.
+  supervisor and cannot restart. From the checkout under test, with the host's variables cleared (an agent's shell
+  inherits the live server's `ULTIMATE_*`):
+  `env $(env | grep -o '^ULTIMATE_[A-Z_]*' | sed 's/^/-u /') ULTIMATE_HOME=$(mktemp -d) pnpm start --port 4799 --no-open`.
+  The home must be its own: never the project's default home, which is the live server's. Tailscale follows user
+  settings, so with it on there the scratch server publishes on its own tailnet port (`https://<machine>:4799`,
+  registered under the scratch home) for Daniel to open remotely, and frees only that port when it stops; the live
+  server's address is untouched. Stop it and delete the scratch home when done.
   A state you cannot reach is reported as unverified, never faked by injecting entries.
 - `tsconfig.swap.json` is the server-only type-check gate for swaps.
 - `tsconfig.json` (server, tests, tooling) references `tsconfig.web.json` (browser: `web/src`, `extensions/**/*.tsx`).

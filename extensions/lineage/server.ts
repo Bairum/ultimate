@@ -406,7 +406,7 @@ function lineage(host: ExtensionHost) {
   })
   const Notify = defineTask<
     { target: ConversationId; wake: boolean },
-    { phase: 'wait' } | { phase: 'deliver'; title?: string; text: string; answer?: number },
+    { phase: 'wait' } | { phase: 'deliver'; title?: string; text: string; answer: number },
     null
   >({
     name: 'lineage.notify',
@@ -474,11 +474,10 @@ function lineage(host: ExtensionHost) {
       },
       deliver: async (task, runtime, ctx) => {
         const { target, wake } = task.input
-        // A checkpoint from before answers were tracked has none: it delivers as it did then and records nothing.
         const { title, text, answer } = task.state.checkpoint as {
           title?: string
           text: string
-          answer?: number
+          answer: number
         }
         // Keyed by the answer, so a task that replaced one aborted between submit and record finds its delivery.
         const requestId = answer
@@ -518,7 +517,7 @@ function lineage(host: ExtensionHost) {
             requestId,
           })
         await runtime.commit(async (tx) => {
-          if (answer !== undefined) (await tx.doc(Notified, caller)).answers[target] = answer
+          ;(await tx.doc(Notified, caller)).answers[target] = answer
           return { status: 'terminal', outcome: { status: 'completed', result: null } }
         }, ctx)
       },
@@ -1408,6 +1407,13 @@ export default function lineageExtension(host: ExtensionHost) {
     leaveNote: (to, text, source) => leaveNote(host, to, text, source),
     remember: (root, ops, ctx, now) =>
       host.harness().commit((tx) => applyMemoryOps(tx, root, ops, now), ctx),
+    memoriesOf: async (id, ctx) => {
+      const roots = await rootsOf(host, ctx)
+      const root = (await rootOf(host, id, ctx)) ?? (roots.length === 1 ? roots[0] : undefined)
+      if (root === undefined) return undefined
+      const doc = await host.harness().snapshot(Memory, root, ctx)
+      return { root, memories: doc?.memories ?? {} }
+    },
   })
   // What summaries need to know of a conversation's tree, through conversations' extension point.
   host.implement(Trees, {

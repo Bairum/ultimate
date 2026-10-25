@@ -9,7 +9,7 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { Messages } from '../../extensions/messages/api.ts'
 import { launchHandshake, Automations } from '../../extensions/automations/server.ts'
 import { Done, Exited } from '../../extensions/automations/refs.ts'
-import type { Automation } from '../../extensions/automations/types.ts'
+import type { Automation, AutomationListItem } from '../../extensions/automations/types.ts'
 import { context } from '../../server/harness.ts'
 import { eventHost, fauxServer, temp, until } from '../helpers.ts'
 
@@ -347,6 +347,42 @@ it('stops a recurring script that prints DONE and exits 0 without waking anyone;
       'investigating',
   )
   expect(await done()).toHaveLength(2)
+})
+
+it('keeps listing and supervising scripts after a reload bumps the ledger version', async () => {
+  const { app, folder } = await fixture()
+  const sub = await create(app)
+  const get = async () =>
+    (
+      (await app.extensions.invoke(
+        'automations',
+        'list',
+        null,
+        new AbortController().signal,
+      )) as AutomationListItem[]
+    ).find((a) => a.id === sub.id)!
+  await writeRun(folder(sub.id), 'sleep 60')
+  const before = (await call(app, 'resume', sub.id)) as Automation
+  // ultimateRoot is an isolated source copy; never mutate the working checkout here.
+  const file = join(app.host.ultimateRoot, 'extensions/automations/server.ts')
+  const source = await readFile(file, 'utf8')
+  const loaded = () => app.extensions.info().find((e) => e.name === 'automations')!.server!.loadedAt
+  const previous = loaded()
+  await writeFile(file, source.replace('  version: 2,\n  scope: ', '  version: 3,\n  scope: '))
+  app.vite.watcher.emit('change', file)
+  await until(() => loaded() !== previous)
+  // A reload restarts running scripts on the new code, as a core swap does.
+  await until(async () => {
+    const now = await get()
+    return now.alive && now.script!.pid !== before.script!.pid
+  })
+  // The new token migrates the ledger to version 3 on its next write; the supervisor must use it too.
+  await call(app, 'pause', sub.id)
+  await until(async () => !!(await get()).script!.exitedAt)
+  expect(await get()).toMatchObject({ enabled: false, script: { state: 'stopped' } })
+  await writeRun(folder(sub.id), 'echo FIRE after')
+  await call(app, 'resume', sub.id)
+  await until(async () => (await get()).fires === 1)
 })
 
 /** A recurring project automation committed in `root`'s `.ultimate/automations/<slug>/`. */

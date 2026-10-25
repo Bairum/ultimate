@@ -1054,7 +1054,7 @@ describe('turns without an answer', () => {
   })
 })
 
-function stopCaptureGate(f: Awaited<ReturnType<typeof gatedFixture>>, legacy = false) {
+function stopCaptureGate(f: Awaited<ReturnType<typeof gatedFixture>>) {
   const state = { ...gate(), entered: false, enabled: true }
   f.prepared.registry.install(
     defineExtension({
@@ -1070,11 +1070,6 @@ function stopCaptureGate(f: Awaited<ReturnType<typeof gatedFixture>>, legacy = f
                 {
                   ...api,
                   memo: (name: string, value: JsonValue | Context, memoContext?: Context) => {
-                    // The memo shape saved before the watchdog existed: no `watchdogs` list.
-                    if (legacy && name === 'stopTarget' && memoContext !== undefined) {
-                      const { watchdogs: _, ...old } = value as { watchdogs?: unknown }
-                      value = old
-                    }
                     const saved =
                       memoContext === undefined
                         ? api.memo(name, value as Context)
@@ -1386,28 +1381,6 @@ describe('subagents', () => {
     f.childGate.release()
     expect(await submission.wait(context)).toMatchObject({ status: 'done' })
     expect(await reports(resumed)).toHaveLength(0)
-    expect(f.errors).toEqual([])
-  })
-
-  it('finishes a stop whose captured identities were saved before the watchdog', async () => {
-    const f = await gatedFixture()
-    await call(f.opened, { action: 'start', agent: 'scout', task: 'HOLD', background: true })
-    const [child] = await children(f.opened)
-    await until(async () => f.holding.has(child.conversationId))
-    const stopGate = stopCaptureGate(f, true)
-    await startCall(f.opened, { action: 'stop', id: child.conversationId })
-    await until(async () => stopGate.entered)
-    await f.opened.close()
-    hosts.splice(hosts.indexOf(f.opened), 1)
-    stopGate.enabled = false
-    const resumed = await f.reopen()
-    await resumed.root.waitForIdle(context)
-    expect(await latestResult(resumed)).toMatchObject({
-      content: [{ type: 'text', text: `Stopped ${child.conversationId}.` }],
-    })
-    expect(
-      (await resumed.harness.snapshot(LiveDoc, child.conversationId, context))?.run,
-    ).toBeUndefined()
     expect(f.errors).toEqual([])
   })
 

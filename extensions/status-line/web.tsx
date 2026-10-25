@@ -370,6 +370,6 @@ export default defineWebExtension({
   slots: {
     'composer.status': [Cwd, Tokens, Context],
     'statusline.left': [GlobalUsage],
-    'statusline.right': [Connection],
+    'statusline.right': [{ component: Connection, phone: true }],
   },
 })

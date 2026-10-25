@@ -64,6 +64,8 @@ export type Standing = {
   behind: number
   /** Why a fast-forward is refused: uncommitted changes, another branch, a diverged branch. */
   refused?: string
+  /** The refusal is only that the branch has commits of its own besides origin's new ones: a merge would move it. */
+  diverged?: true
 }
 
 /** The checkout against origin's default branch (no fetch); throws only when origin has no default branch. */
@@ -83,7 +85,10 @@ export async function standing(git: Git): Promise<Standing> {
     result.refused = 'The checkout has uncommitted changes'
   else if (current !== branch)
     result.refused = `The checkout is on ${current || 'a detached HEAD'}, not ${branch}`
-  else if (ahead && behind) result.refused = `${branch} has diverged from ${remote}`
+  else if (ahead && behind) {
+    result.refused = `${branch} has diverged from ${remote}`
+    result.diverged = true
+  }
   return result
 }
 

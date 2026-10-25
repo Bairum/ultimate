@@ -4,7 +4,7 @@
 import { createCodePlugin } from '@streamdown/code'
 import type { HighlightOptions, HighlightResult } from '@streamdown/code'
 import { cn } from 'cn'
-import type { CSSProperties, HTMLAttributes } from 'react'
+import type { CSSProperties, HTMLAttributes, Ref } from 'react'
 import { memo, useEffect, useState } from 'react'
 
 /** One highlighter for Streamdown and every code block. */
@@ -68,6 +68,9 @@ export type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   showLineNumbers?: boolean
   /** Number of the first line, for excerpts. */
   startLine?: number
+  /** The code is still arriving: a soft cursor ends its last line. */
+  caret?: boolean
+  ref?: Ref<HTMLDivElement>
 }
 
 const CodeBlockContent = memo(
@@ -76,6 +79,7 @@ const CodeBlockContent = memo(
     language,
     showLineNumbers = false,
     startLine = 1,
+    caret = false,
     className,
   }: Omit<CodeBlockProps, keyof HTMLAttributes<HTMLDivElement>> & { className?: string }) => {
     const tokens = useTokens(code.replace(/\n$/, ''), language)
@@ -99,7 +103,7 @@ const CodeBlockContent = memo(
                 </span>
               )}
               <span className="whitespace-pre">
-                {line.length === 0
+                {line.length === 0 && !(caret && index === tokens.length - 1)
                   ? ' '
                   : line.map((token, i) => (
                       <span
@@ -113,6 +117,9 @@ const CodeBlockContent = memo(
                         {token.content}
                       </span>
                     ))}
+                {caret && index === tokens.length - 1 && (
+                  <span className="ml-px inline-block h-3.5 w-1.5 animate-pulse-dot bg-brand align-middle" />
+                )}
               </span>
             </span>
           ))}
@@ -128,6 +135,7 @@ export const CodeBlock = ({
   language,
   showLineNumbers = false,
   startLine,
+  caret,
   className,
   children,
   ...props
@@ -143,6 +151,7 @@ export const CodeBlock = ({
       language={language}
       showLineNumbers={showLineNumbers}
       startLine={startLine}
+      caret={caret}
     />
   </div>
 )

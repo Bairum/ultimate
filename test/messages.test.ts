@@ -532,6 +532,16 @@ it('refuses @ultimate messaging the user it owes an answer', async () => {
     "Your answer to user's message 1 is sent back automatically. Answer instead of messaging.",
   )
   expect((await f.log())!.messages).toHaveLength(1)
+  // The next question, though, is the answer: it closes the user's reply and stays open itself.
+  await f.send('user', 'Next', { questions: [{ text: 'Ready?', kind: 'confirm' }] })
+  const [reply, next] = (await f.log())!.messages
+  expect(reply.state).toBe('answered')
+  expect(next).toMatchObject({ to: 'user', re: reply.id, reply: true, state: 'delivered' })
+  // Its card reads the result as a sent message, so the answer card shows under it.
+  const view = await f.opened.root.viewState(context)
+  const results = view.value.entries.filter((e) => e.kind === 'pi.tool-result')
+  view.dispose()
+  expect(JSON.stringify(results.at(-1)?.model)).toContain(`Message ${next.id} sent.`)
 })
 it.each([false, true])('replays a converted answer once (afterMemo: %s)', async (afterMemo) => {
   const sendGate = { gate: gate(), afterMemo, entered: false, conversation: () => 0 }
@@ -1216,13 +1226,18 @@ it('refuses image references that do not resolve or exceed the limits', async ()
   expect(f.observed.join('\n')).toContain(`entry ${plain} has no images`)
   await submitWithImages(f, `SEND ${JSON.stringify({ to, text: 'Too many', images: 'latest' })}`, 5)
   expect(f.observed.join('\n')).toContain('has 5 images; at most 4 go along')
-  await submitWithImages(
+  expect((await f.log())?.messages ?? []).toHaveLength(0)
+})
+it("lets @ultimate's message to the user carry its images", async () => {
+  const f = await fixture()
+  const shot = await submitWithImages(
     f,
     `SEND ${JSON.stringify({ to: 'user', text: 'Look', images: 'latest' })}`,
     1,
   )
-  expect(f.observed.join('\n')).toContain('images go along only to conversations and agents')
-  expect((await f.log())?.messages ?? []).toHaveLength(0)
+  expect((await f.log())!.messages).toMatchObject([
+    { from: 1, to: 'user', text: 'Look', images: { entry: shot, count: 1 } },
+  ])
 })
 const result = (images: object[]) => [
   {

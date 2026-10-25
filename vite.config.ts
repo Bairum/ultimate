@@ -193,6 +193,7 @@ export default defineConfig({
   fmt: { semi: false, singleQuote: true },
   test: {
     root: '.',
+    globalSetup: ['test/sweep-temp.ts'],
     setupFiles: ['test/setup.ts'],
     include: ['test/**/*.test.ts'],
     exclude: ['test/e2e/**'],

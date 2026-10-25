@@ -99,8 +99,9 @@ function Body({ onClose }: { onClose: () => void }) {
           </dl>
         </section>
         <p className="text-[13px] leading-relaxed text-muted-foreground">
-          The journal lands in @ultimate's conversation, and we go through its proposals together.
-          Each one you approve becomes an ordinary branch that is reviewed and lands as usual.{' '}
+          First I write a handoff while I still remember everything; the dream reads it first. The
+          journal lands in @ultimate's conversation, and we go through its proposals together. Each
+          one you approve becomes an ordinary branch that is reviewed and lands as usual.{' '}
           <span className="text-foreground">Nothing changes code or memory by itself.</span>
         </p>
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 border-t border-border/60 pt-3 text-[12px]">

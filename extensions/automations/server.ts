@@ -436,11 +436,12 @@ function backend(host: ExtensionHost) {
     args.secrets?.forEach(validateName)
     if (args.action === 'update') {
       const a = await scripts.status(required(args.id, 'id'))
+      // A schedule, event or condition may become another of these; a script stays a script.
+      const kinds = [args.schedule, args.event, args.condition].filter((v) => v !== undefined)
       if (
         (args.ask !== undefined && !a.script) ||
-        (args.schedule !== undefined && !a.schedule) ||
-        (args.event !== undefined && !a.event) ||
-        (args.condition !== undefined && !a.condition)
+        (kinds.length > 0 && !!a.script) ||
+        kinds.length > 1
       )
         throw new Error('Cannot change trigger kind')
       if (args.ask !== undefined) required(args.ask, 'ask')
@@ -532,16 +533,26 @@ function backend(host: ExtensionHost) {
       }
       if (!a.prompt && !a.subscribers.length)
         throw new Error('At least one of prompt or subscribers is required')
-      if (args.schedule !== undefined) a.schedule = parseSchedule(args.schedule)
-      if (args.event !== undefined)
+      if (args.schedule !== undefined) {
+        delete a.event
+        delete a.condition
+        a.schedule = parseSchedule(args.schedule)
+      }
+      if (args.event !== undefined) {
+        delete a.schedule
+        delete a.condition
         a.event = { ...args.event, sinceEvent: a.event?.sinceEvent ?? (await newestEvent(tx)) }
-      if (args.condition !== undefined)
+      }
+      if (args.condition !== undefined) {
+        delete a.schedule
+        delete a.event
         a.condition = {
           ...a.condition,
           ...args.condition,
           cooldownMs: args.condition.cooldownMs ?? a.condition?.cooldownMs ?? 3600000,
           armed: a.condition?.armed ?? true,
         }
+      }
       if (a.script) {
         if (args.ask !== undefined) a.script.ask = required(args.ask, 'ask')
         if (args.once !== undefined) a.script.once = args.once
@@ -824,7 +835,8 @@ export default function automations(host: ExtensionHost) {
         const lines = Object.values(state?.automations ?? {})
           .filter((a) => a.enabled)
           .map((a) => `${a.id} ${a.name}: ${describeTrigger(a)}`)
-        return lines.length ? lines.join('\n') : undefined
+        // Always rendered: a section that disappears and reappears reorders the prompt, which rebuilds it whole.
+        return lines.length ? lines.join('\n') : 'None enabled.'
       }),
     ],
     tools: [

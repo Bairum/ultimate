@@ -2,6 +2,7 @@
 import { XIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnsiOutput } from '@/components/ai/ansi-output'
+import { Shimmer } from '@/components/ai/shimmer'
 import { CodeBlock, languageFromPath } from '@/components/ai/code-block'
 import {
   Tool,
@@ -114,21 +115,43 @@ function Read({ call }: { call: ToolCallView }) {
   )
 }
 
+/** Keeps a growing body scrolled to its end while `following`, as a running bash call does. */
+function useFollow<T extends HTMLElement>(following: boolean, content: unknown) {
+  const ref = useRef<T>(null)
+  useEffect(() => {
+    const element = ref.current
+    if (following && element) element.scrollTop = element.scrollHeight
+  }, [content, following])
+  return ref
+}
+
+/** A file call's title: its path, or a shimmering verb until the model has written the path. */
+function FileTitle({ path, verb }: { path: string; verb: string }) {
+  const shown = usePath(path)
+  return path ? shown : <Shimmer>{`${verb}…`}</Shimmer>
+}
+
 function Write({ call }: { call: ToolCallView }) {
   const path = text(call.args.path)
-  const shown = usePath(path)
   const content = text(call.args.content)
   const duration = useToolDuration(call)
   const failed = call.status === 'error'
+  const streaming = call.status === 'streaming'
+  // Open while it streams in, so the file appears as it is written, and it stays open rather than jump shut when
+  // the write lands; a write first seen finished starts closed.
+  const [watched] = useState(streaming)
+  const [toggled, setToggled] = useState<boolean>()
+  const open = toggled ?? (watched || streaming || failed)
+  const scroller = useFollow<HTMLDivElement>(streaming, content)
   return (
-    <Tool defaultOpen={failed}>
+    <Tool onOpenChange={setToggled} open={open}>
       <ToolHeader
         meta={
           <>
             {content && (
               <span>
-                {lines(lineCount(content))} ·{' '}
-                {formatBytes(new TextEncoder().encode(content).length)}
+                {lines(lineCount(content))}
+                {!streaming && ` · ${formatBytes(new TextEncoder().encode(content).length)}`}
               </span>
             )}
             {duration && <span>{duration}</span>}
@@ -136,14 +159,16 @@ function Write({ call }: { call: ToolCallView }) {
         }
         name="write"
         state={call.status}
-        title={shown}
+        title={<FileTitle path={path} verb="writing" />}
       />
       <ToolContent>
         {content && (
           <CodeBlock
+            caret={streaming}
             className="max-h-96 overflow-auto rounded-none border-none"
             code={content}
             language={languageFromPath(path)}
+            ref={scroller}
             showLineNumbers
           />
         )}
@@ -161,8 +186,8 @@ interface EditDetails {
 
 function Edit({ call }: { call: ToolCallView }) {
   const path = text(call.args.path)
-  const shown = usePath(path)
   const duration = useToolDuration(call)
+  const streaming = call.status === 'streaming'
   const details = (call.details ?? {}) as EditDetails
   const edits = Array.isArray(call.args.edits)
     ? (call.args.edits as { oldText?: string; newText?: string }[])
@@ -172,8 +197,10 @@ function Edit({ call }: { call: ToolCallView }) {
     : details.diff
       ? parseDisplayDiff(details.diff)
       : editRows(edits)
-  const { added, removed } = countChanges(rows)
+  // Counts only once the model has written the whole call: mid-stream they would still change.
+  const { added, removed } = countChanges(streaming ? [] : rows)
   const failed = call.status === 'error'
+  const scroller = useFollow<HTMLDivElement>(streaming, rows.length)
   return (
     <Tool defaultOpen>
       <ToolHeader
@@ -190,13 +217,13 @@ function Edit({ call }: { call: ToolCallView }) {
         }
         name="edit"
         state={call.status}
-        title={shown}
+        title={<FileTitle path={path} verb="editing" />}
       />
       <ToolContent>
         {failed ? (
           <ToolOutput isError output={call.output} />
         ) : (
-          <Diff className="max-h-[28rem]" rows={rows} />
+          <Diff caret={streaming} className="max-h-[28rem]" ref={scroller} rows={rows} />
         )}
         <ToolDiagnostics diagnostics={call.diagnostics} />
       </ToolContent>

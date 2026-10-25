@@ -7,16 +7,26 @@ until they land. Nothing changes code, memory or storage by itself.
 
 Session N lives in the `dream.sessions` document (`refs.ts`) on conversation 1: read it with codemode
 `ultimate.doc('dream.sessions', 1)`. Actions, called with codemode
-`ultimate.action('dream', name, args)`: `pass {session, pass, status, note?}`, `journal {session, learned, text,
+`ultimate.action('dream', name, args)`: `handoff {text}`, `pass {session, pass, status, note?}`, `journal {session, learned, text,
 proposals, chapter?}`, `decide {session, proposal, status, branch?}` and `stats` (tool numbers from the trace, no model). The trace keeps only about the last 7 days, so
 `stats` and `ultimate.trace` see only that window, and `stats` counts only tool calls; older failures and model
 errors are found in conversation entries.
 
 ## For @ultimate
 
-A `dream.started` input means a dream began: the user pressed Dream, a granted automation started it, or your own
-context compaction did (the built-in "Dream after compaction" automation, which waits until no other conversation
-works). Start one branch with `branch`, prompt:
+A dream starts with your **handoff**. The user pressed Dream (a `dream.handoff` input asks for it), or the built-in
+"Dream before compaction" automation fired because your context passed its threshold (70% by default; a `dream.handoff`
+entry beside the fire carries the same ask, and the fire's turn is the one to write it in; never `act` on the fire).
+Write it in that same turn, while your context
+still holds everything: what you worked on, what is still open (branches, questions, to-dos) and how far each got,
+the decisions and why, the user's corrections, the lessons, and what you would do next. Plain Markdown, at most
+12,000 characters; record it with one call, `ultimate.action('dream', 'handoff', {text})`, then end your turn with one
+line to the user. A second call replaces the first while the dream still waits. The dream starts by itself once the
+handoff is recorded and no other conversation works; after 30 minutes without one it starts without it and says so.
+The dream reads the handoff first, and a new chapter wakes up from it.
+
+A `dream.started` input means the session began (after your handoff, or under a granted automation's `act`). Start one
+branch with `branch`, prompt:
 
 > Dream session N. Follow "For the dream branch" in the clone's extensions/dream/DREAM.md.
 
@@ -36,17 +46,22 @@ reply: false. Never decide hands-off otherwise. For each decision:
 A codified memory (`retire` on the proposal) stays until its branch lands; then delete or update it with `remember`.
 The session ends by itself once every proposal is settled; the user can also end it from the journal card.
 
-When a compaction's dream settles, a `dream.settled` entry says whether it was worth a fresh chapter (landed and
+When the built-in automation's dream settles, a `dream.settled` entry says whether it was worth a fresh chapter (landed and
 applied changes against the `dream.asleepAfter` setting, default 5). Below it, carry on in this chapter. At or above
 it, either the automation's `asleep` grant falls asleep by itself (every gate still runs; nothing to do), or the input
 asks you to ask the user: send one message with a `choice` question (Fall asleep now / Later) and point at the card's
-Fall asleep button, which only they press. Never call `asleep` or `automation act {do: 'asleep'}` for it yourself.
+Fall asleep button, which only they press. When the same turn owes the user an answer, put that question into the
+answer instead: a turn that owes an answer cannot also message the user. Never call `asleep` or `automation act {do: 'asleep'}` for it yourself.
 
 ## For the dream branch
 
 You coordinate the dream. You change nothing: no code, no memory, no settings. You read, analyse and propose. The
 dream's own bookkeeping (`pass`, `journal`) is part of the job, not a change.
 
+0. Read @ultimate's handoff first: `ultimate.doc('dream.sessions', 1)`, session N's `handoff.text` (or `missing`,
+   why there is none). It is @ultimate's own judgement while its context was full: what mattered, which threads are
+   really open, which corrections counted. Put it in every pass brief as the primary input; the transcripts are the
+   evidence behind it, and a pass checks the handoff against them rather than taking it on trust.
 1. Run the five passes in parallel, each as a `dream-pass` subagent (background), with the session number, its pass
    name and the brief below. Before starting each, call `pass {session, pass, status: 'running'}`; when it reports,
    `pass {…, status: 'done', note}` with a one-line note (or `failed` with the reason).
@@ -61,8 +76,8 @@ dream's own bookkeeping (`pass`, `journal`) is part of the job, not a change.
 
 ### The passes
 
-Every pass reads with codemode (`ultimate.entries`, `ultimate.search`, `ultimate.conversations`, `ultimate.trace`),
-`memory`, `git log` and the code. Every claim cites `#conversation/entry`, a trace error, a commit or `path:line`.
+Every pass starts from @ultimate's handoff in its brief (when the session has one), then reads with codemode
+(`ultimate.entries`, `ultimate.search`, `ultimate.conversations`, `ultimate.trace`), `memory`, `git log` and the code. Every claim cites `#conversation/entry`, a trace error, a commit or `path:line`.
 Conversation summaries and abstracts (in the root's tally, `ultimate.entries(<root>)`) are the cheap way in; open a
 conversation only where they point at something.
 

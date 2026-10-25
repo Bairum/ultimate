@@ -4,7 +4,7 @@
  * Memory panel's header point.
  */
 import type { ReactNode } from 'react'
-import { definePoint, getState, useDocOf } from '@/sdk'
+import { definePoint, getState, useDocOf, useUiState, useUltimate } from '@/sdk'
 import { RootsDoc } from './refs.ts'
 
 export {
@@ -20,6 +20,18 @@ export type { MemoryItem } from './refs.ts'
 
 /** The id of lineage's Memory panel: every root's project memory, grouped by kind. */
 export const MEMORY_PANEL = 'memory'
+/** The UI state key of the memory the Memory panel shows unfolded and scrolled into view. */
+export const MEMORY_FOCUS = 'ext.lineage.memoryFocus'
+
+/** A function that opens the Memory panel on memory `slug`, unfolded. */
+export function useOpenMemory() {
+  const { openPanel } = useUltimate()
+  const [, setFocus] = useUiState<string | null>(MEMORY_FOCUS, null)
+  return (slug: string) => {
+    setFocus(slug)
+    openPanel(MEMORY_PANEL)
+  }
+}
 
 /** The composer's reading column, as the core lays it out; a card in place of a root's composer uses it. */
 export const column = (dock?: boolean) =>

@@ -20,10 +20,12 @@ import {
   useChapters,
   useWakeUp,
 } from './chapters.tsx'
-import { JournalCard, SettledCard, StartedCard } from './journal.tsx'
+import { HandoffCard, JournalCard, SettledCard, StartedCard } from './journal.tsx'
 import { MorningCard } from './morning.tsx'
 import { DreamDialog, dreamDialog } from './modal.tsx'
+import { DreamStatus, JournalDialog } from './pinned.tsx'
 import { DreamDoc } from './refs.ts'
+import { DreamSection } from './sidebar.tsx'
 
 /** Above this share of its context window, a compacted @ultimate has lived long enough to be worth a dream. */
 const FULL = 0.5
@@ -125,15 +127,23 @@ function WakeUp() {
 
 export default defineWebExtension({
   entries: {
+    'dream.handoff': HandoffCard,
     'dream.started': StartedCard,
     'dream.journal': JournalCard,
     'dream.chapter': MorningCard,
     'dream.settled': SettledCard,
   },
   slots: {
-    'sidebar.top': [{ component: OlderChapterBanner, order: -30 }],
-    'statusline.right': [TimeToDream, OlderChapterStatus],
-    overlay: [DreamDialog, ChaptersDialog, SwitchVeil, WakeUp],
+    'sidebar.top': [
+      { component: OlderChapterBanner, order: -30 },
+      { component: DreamSection, order: -25 },
+    ],
+    'statusline.right': [
+      { component: DreamStatus, order: -10, phone: true },
+      TimeToDream,
+      OlderChapterStatus,
+    ],
+    overlay: [DreamDialog, JournalDialog, ChaptersDialog, SwitchVeil, WakeUp],
   },
   commands: [
     { id: 'dream.open', title: 'Dream…', run: (context) => context.open(dreamDialog) },

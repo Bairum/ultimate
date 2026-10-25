@@ -119,48 +119,6 @@ it.concurrent('a replacing notify finds the delivery its aborted predecessor mad
   ).toBeGreaterThan(0)
 })
 
-it.concurrent('delivers a deliver checkpoint stored before answers were tracked', async () => {
-  const { server, home } = await notifyFixture()
-  const other = await second(server)
-  await (await server.harness.conversation(other.id, context))!.submit(
-    { type: 'input', content: 'HOLD' },
-    context,
-  )
-  await ask(server, ROOT_CONVERSATION_ID, `NOTIFY ${JSON.stringify({ id: other.id, wake: false })}`)
-  const [task] = await pendingNotifies(server)
-  await server.close()
-  servers.splice(servers.indexOf(server), 1)
-  const database = new DatabaseSync(join(home, 'state.sqlite'))
-  const record = JSON.parse(
-    (database.prepare('SELECT record FROM tasks WHERE id = ?').get(task.id) as { record: string })
-      .record,
-  )
-  record.state = { status: 'pending', checkpoint: { phase: 'deliver', text: 'Legacy answer' } }
-  database
-    .prepare("UPDATE tasks SET status = 'pending', record = ? WHERE id = ?")
-    .run(JSON.stringify(record), task.id)
-  database.close()
-
-  const { server: reopened, release } = await notifyFixture(home)
-  release()
-  await until(async () => (await pendingNotifies(reopened)).length === 0)
-  expect((await reopened.harness.getTask(task.id, context))?.state.outcome).toEqual({
-    status: 'completed',
-    result: null,
-  })
-  const notes = (await reopened.root.context(context)).entries.filter(
-    (entry) => entry.kind === 'lineage.note',
-  )
-  expect(notes.map((note) => note.data)).toEqual([
-    { text: 'Legacy answer', from: other.id, source: 'finished' },
-  ])
-  expect(
-    Object.keys(
-      (await reopened.harness.snapshot(Notified, ROOT_CONVERSATION_ID, context))?.answers ?? {},
-    ),
-  ).toEqual([])
-})
-
 it.concurrent('a deliver resumed after a restart finds the note it left under its task id', async () => {
   const { server, home } = await notifyFixture()
   const other = await second(server)

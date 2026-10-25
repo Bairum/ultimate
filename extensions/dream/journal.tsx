@@ -9,9 +9,10 @@ import type { EntryRecord } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { MoonRow, Passes, passLabels } from './moon.tsx'
 import { FallAsleep } from './sleep.tsx'
+import { sleepLeads } from './types.ts'
 import { Granted } from './morning.tsx'
 import { DreamDoc, EndAction } from './refs.ts'
-import type { Proposal, Session, SessionEntry } from './refs.ts'
+import type { Handoff, HandoffEntry, Proposal, Session, SessionEntry } from './refs.ts'
 
 /** Session `id` of the live `dream.sessions` document; undefined while it streams or when unknown. */
 function useSession(id: number) {
@@ -23,13 +24,15 @@ function Card({
   session,
   header,
   children,
+  className,
 }: {
   session: number
   header: ReactNode
   children?: ReactNode
+  className?: string
 }) {
   return (
-    <Frame data-dream-session={session}>
+    <Frame className={className} data-dream-session={session}>
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         {header}
       </header>
@@ -71,15 +74,16 @@ export function StartedCard({ entry }: { entry: EntryRecord }) {
           <Granted by={session.by} what="started this dream" />
         </div>
       )}
-      {session?.afterCompaction && (
+      {session?.beforeCompaction && (
         <p
           className="border-b border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground"
-          data-dream-after-compaction={session.afterCompaction.automation}
+          data-dream-before-compaction={session.beforeCompaction.automation}
         >
-          Started after my context compacted · automation {session.afterCompaction.automation}
-          {session.afterCompaction.handsOff && ' · I decide the proposals under your grant'}
+          Started as my context filled up · automation {session.beforeCompaction.automation}
+          {session.beforeCompaction.handsOff && ' · I decide the proposals under your grant'}
         </p>
       )}
+      {session?.handoff && <HandoffNote handoff={session.handoff} />}
       {session && !filed && (
         <>
           <div className="px-3 py-2.5">
@@ -108,7 +112,7 @@ export function StartedCard({ entry }: { entry: EntryRecord }) {
 export function SettledCard({ entry }: { entry: EntryRecord }) {
   const { session: id } = entry.data as SessionEntry
   const session = useSession(id)
-  const outcome = session?.afterCompaction?.outcome
+  const outcome = session?.beforeCompaction?.outcome
   // Only the newest session falls asleep, as on the journal card.
   const newest = useDocOf(1, DreamDoc)?.sessions.at(-1)?.id === id
   return (
@@ -160,11 +164,32 @@ const FOLD = 600
 
 /** `dream.journal`: what the dream learned, the journal, and its proposals followed until they land. */
 export function JournalCard({ entry }: { entry: EntryRecord }) {
-  const { session: id } = entry.data as SessionEntry
+  return <SessionJournal id={(entry.data as SessionEntry).session} />
+}
+
+/**
+ * Session `id`'s journal card. The pinned dream line shows it in a dialog with `current`: there Fall asleep always
+ * shows (the settled card it would otherwise live on is not in the dialog), and once every proposal is settled it
+ * leads, with the journal folded below it.
+ */
+export function SessionJournal({
+  id,
+  className,
+  current,
+}: {
+  id: number
+  className?: string
+  current?: boolean
+}) {
   const session = useSession(id)
   const journal = session?.journal
   // Only the newest session falls asleep; an older one keeps the record of the sleep it took.
   const newest = useDocOf(1, DreamDoc)?.sessions.at(-1)?.id === id
+  const sleeps = !!session && (newest || !!session.sleep)
+  // A compaction's dream that was worth a chapter offers Fall asleep on its settled card, below.
+  const onSettledCard =
+    !!session?.beforeCompaction?.outcome && session.beforeCompaction.outcome.result !== 'stay'
+  const ready = current && !!session && sleepLeads(session, newest)
   return (
     <Card
       header={
@@ -175,6 +200,7 @@ export function JournalCard({ entry }: { entry: EntryRecord }) {
           {journal && <span>{formatTime(journal.at)}</span>}
         </>
       }
+      className={className}
       session={id}
     >
       {!session ? (
@@ -183,20 +209,101 @@ export function JournalCard({ entry }: { entry: EntryRecord }) {
         <div className="px-3 py-2.5">
           <Passes session={session} />
         </div>
+      ) : ready ? (
+        <>
+          <div className="[&>section]:border-t-0" data-dream-current>
+            <FallAsleep session={session} />
+          </div>
+          <Collapsible className="group/folded border-t border-border/60">
+            <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-1 px-4 py-2 font-mono text-[11px] text-muted-foreground hover:text-foreground">
+              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/folded:rotate-90 motion-reduce:transition-none" />
+              {session.proposals.length === 0
+                ? 'The journal'
+                : `The journal and its ${session.proposals.length} proposal${session.proposals.length === 1 ? '' : 's'}`}
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <Learned lines={journal.learned} />
+              <Text text={journal.text} />
+              {session.proposals.length > 0 && <Proposals session={session} />}
+            </CollapsibleContent>
+          </Collapsible>
+          <Footer session={session} />
+        </>
       ) : (
         <>
           <Learned lines={journal.learned} />
           <Text text={journal.text} />
           {session.proposals.length > 0 && <Proposals session={session} />}
           <Footer session={session} />
-          {/* A compaction's dream that was worth a chapter offers Fall asleep on its settled card, below. */}
-          {(newest || session.sleep) &&
-            !(
-              session.afterCompaction?.outcome && session.afterCompaction.outcome.result !== 'stay'
-            ) && <FallAsleep session={session} />}
+          {sleeps && (current || !onSettledCard) && <FallAsleep session={session} />}
         </>
       )}
     </Card>
+  )
+}
+
+/** Whether the session carries @ultimate's handoff, folded; or why it started without one. */
+function HandoffNote({ handoff }: { handoff: Handoff }) {
+  if (!handoff.text)
+    return (
+      <p
+        className="border-b border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground"
+        data-dream-handoff="missing"
+      >
+        Started without my handoff{handoff.missing && ` · ${handoff.missing}`}
+      </p>
+    )
+  return (
+    <Collapsible className="group/handoff border-b border-border/60 px-3 py-1.5" data-dream-handoff>
+      <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 font-mono text-[11px] text-muted-foreground hover:text-foreground">
+        <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/handoff:rotate-90 motion-reduce:transition-none" />
+        Read my handoff{handoff.at !== undefined && ` · ${formatTime(handoff.at)}`}
+      </CollapsibleTrigger>
+      <CollapsibleContent className="pt-2 pb-1 text-[13px] leading-relaxed">
+        <MessageResponse>{handoff.text}</MessageResponse>
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
+/**
+ * `dream.handoff`: a dream waits for @ultimate's handoff. Live from the request: asked, recorded, and the session it
+ * started (whose own card follows), or that it gave up.
+ */
+export function HandoffCard({ entry }: { entry: EntryRecord }) {
+  const { task, automation } = entry.data as HandoffEntry
+  const doc = useDocOf(1, DreamDoc)
+  const waiting = doc?.waiting?.task === task ? doc.waiting : undefined
+  const started = doc?.sessions.find((item) => item.handoff?.task === task)
+  const status = started
+    ? started.handoff?.text
+      ? `Handed off · dream session ${started.id} started`
+      : `Dream session ${started.id} started without my handoff`
+    : waiting?.handoff
+      ? `Handed off ${formatTime(waiting.handoff.at)} · the dream starts once nothing else works`
+      : waiting
+        ? 'Writing my handoff; the dream starts once it is recorded and nothing else works'
+        : doc
+          ? 'No dream started from this request'
+          : 'Loading…'
+  return (
+    <Frame data-dream-handoff-request={task}>
+      <header className="flex flex-wrap items-center gap-2 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+        <MoonIcon className="size-3.5 text-brand" />
+        <span className="text-foreground">Handoff before dreaming</span>
+        <span>
+          {automation ? `my context filled up · automation ${automation.id}` : 'you pressed Dream'}
+        </span>
+      </header>
+      <p
+        className="border-t border-border/60 px-3 py-2 text-[12px] text-muted-foreground"
+        data-dream-handoff-status={
+          started ? 'started' : waiting?.handoff ? 'handed-off' : waiting ? 'writing' : 'gone'
+        }
+      >
+        {status}
+      </p>
+    </Frame>
   )
 }
 
