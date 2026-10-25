@@ -87,9 +87,9 @@ and accepted the AGPL detector for private local use.
    ahead only if `expect_label` matches a text box under the point (normalised, unique). Otherwise it is refused with
    `label_mismatch` and the boxes found. Zoom crops serve small text. Coordinates stay bound to the capture.
 2. **Jev over OCR boxes** (goal mode on pixel surfaces). Candidates are OCR boxes with a confidence floor the probe sets
-   (real-screen medians are about 0.6–0.7, so likely 0.6) and unique text, at most 24. Jev uses the same thresholds, risk question, verification and escalation as phase 1. A click goes
-   text, at most 24. Jev uses the same thresholds, risk question, verification and escalation as phase 1. A click goes
-   to the box centre, bound to its capture. Icon-only controls escalate to the planner.
+   (real-screen medians are about 0.6–0.7, so likely 0.6) and unique text, at most 24. Jev uses the same thresholds,
+   risk question, verification and escalation as phase 1. A click goes to the box centre, bound to its capture.
+   Icon-only controls escalate to the planner.
 3. **Scoped pre-approval** in the task spec: `approval {app, window, pixel: true, actions, steps, minutes, foreground}`,
    confirmed once on the task card through user-only and host-only actions (it joins #34448's `hostActions`). Inside
    the scope, label-checked steps run without cards. Consequential labels (send, delete, pay, install, upload,
