@@ -529,7 +529,8 @@ export default host => { host.resource('cleanup.process',()=>{
     const message = systems.at(-1)!.model![0]
     expect(message.role).toBe('system')
     if (message.role !== 'system') throw new Error('Expected system message')
-    expect(Object.keys(message.sections!)).toEqual(['prompt', 'new', 'a'])
+    // A new section is appended alone, never with a re-add of every section (patches/@earendil-works__pi-durable).
+    expect(Object.keys(message.sections!)).toEqual(['new'])
     expect(message.toolsAdded!.map((tool) => tool.name)).toEqual(['prompt', 'new', 'a'])
     const lastId = systems.at(-1)!.id
     view.dispose()
