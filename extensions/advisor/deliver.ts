@@ -1,5 +1,5 @@
 import type { Context } from '@earendil-works/chord'
-import type { ConversationId, Submission } from '@earendil-works/pi-durable'
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { AdvisorNoteEntry, Role, RoleProfile, ReviewPoint, Threshold } from './refs.ts'
@@ -42,34 +42,37 @@ export async function deliver(
 ) {
   const conversation = await host.harness().conversation(id, context)
   if (!conversation) throw new Error('Advisor recipient unavailable')
-  if (entry.delivered === 'steer') {
+  const requestId = `advisor:${entry.review}`
+  // A replay after a crash finds the earlier placement: reuse it, since a steer later downgraded to a note would
+  // reuse the request id with another submission type and be rejected.
+  const placed = await host.harness().commit((tx) => tx.submissionByRequest(id, requestId), context)
+  if (entry.delivered === 'steer' && !placed) {
     const live = await host.harness().snapshot(LiveDoc, id, context)
     if (!live?.run || live.run.inputs[0] !== run) entry = { ...entry, delivered: 'note' }
   }
   const content = advisory(entry.advisor, entry.notes)
   const draft = { kind: 'advisor.note', data: entry }
-  const requestId = `advisor:${entry.review}`
   // Writes permit an entry without model messages: cards never enter the model context.
-  let submission: Submission
-  if (entry.delivered === 'steer')
-    submission = await conversation.submit(
-      { type: 'input', whenBusy: 'steer', requestId, entry: draft, content },
-      context,
-    )
-  else
-    submission = await conversation.submit(
-      {
-        type: 'write',
-        requestId,
-        entry: {
-          ...draft,
-          ...(entry.delivered === 'note'
-            ? { model: [{ role: 'user' as const, content, timestamp: Date.now() }] }
-            : {}),
-        },
-      },
-      context,
-    )
+  const submission =
+    (placed && (await host.harness().submission(placed.id, context))) ||
+    (entry.delivered === 'steer'
+      ? await conversation.submit(
+          { type: 'input', whenBusy: 'steer', requestId, entry: draft, content },
+          context,
+        )
+      : await conversation.submit(
+          {
+            type: 'write',
+            requestId,
+            entry: {
+              ...draft,
+              ...(entry.delivered === 'note'
+                ? { model: [{ role: 'user' as const, content, timestamp: Date.now() }] }
+                : {}),
+            },
+          },
+          context,
+        ))
   const status = await submission.status(context)
   if (status.entry !== undefined)
     await host.harness().commit(async (tx) => {
