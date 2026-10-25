@@ -116,6 +116,29 @@ the tools and the conversation work in your project.
 - **Actions** let an extension's UI call its server code: `export const actions = { … }` in `server.ts`, then
   `useAction(ref, args)` in `web.tsx`, with a typed `actionRef` from `@/sdk`. See [extensions/README.md](extensions/README.md).
 
+### One Ultimate or many
+
+Ultimate works both ways. Start it in one project and use it as an individual agent. Or run several: each project
+is its own dedicated Ultimate process, on one machine or across several, and one Ultimate manages the others. It
+reads their conversations, messages their @ultimate and watches their status; for example, a hub project whose
+@ultimate checks the other projects and starts work in them. That is why every project gets its own process and
+state home instead of one server for all of them.
+
+The building blocks that make it possible:
+
+- **Finding each other:** on one machine, every running instance shows up with its URL in `ultimate.projects()`
+  and answers over loopback; no Tailscale needed. Across machines, the cloud's register names the machine and
+  tailnet address of each backed-up project, and `cloud.satellites` adds instances that never back up
+  ([Cloud](extensions/cloud/README.md#satellites)).
+- **Reading:** codemode's `ultimate.conversations`, `entries`, `search`, `trace` and `doc` take `{ project }` and
+  read another running instance read-only ([Codemode](extensions/codemode/README.md#other-projects)).
+- **Messaging:** `ultimate.tell({ project, text })` messages another project's @ultimate, and its answer comes back
+  as a reply ([Messages](extensions/messages/README.md#other-projects-ultimates)).
+- **Watching:** the `status` action reports an instance's health, failures and extensions in one cheap call
+  ([Status](extensions/status/README.md)).
+- **Reaching other machines:** the [Tailscale](extensions/tailscale/README.md) extension serves each instance on
+  your tailnet, to your own login only.
+
 ## Building blocks
 
 Built-ins live in the clone's `extensions/`, and every one is on by default; `tailscale` exposes Ultimate only to your
