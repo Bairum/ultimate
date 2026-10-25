@@ -548,16 +548,19 @@ function backend(host: ExtensionHost) {
       if (args.condition !== undefined) {
         delete a.schedule
         delete a.event
+        const previousOf = a.condition?.of
         a.condition = {
           ...a.condition,
           ...args.condition,
           cooldownMs: args.condition.cooldownMs ?? a.condition?.cooldownMs ?? 3600000,
           armed: a.condition?.armed ?? true,
         }
+        // Another target's input says nothing about this one: its pause counts afresh, from this update.
         if (!a.condition.idleFor) {
           delete a.condition.idleFor
           delete a.condition.inputAt
-        }
+        } else if (previousOf !== undefined && previousOf !== a.condition.of)
+          a.condition.inputAt = Date.now()
       }
       if (a.script) {
         if (args.ask !== undefined) a.script.ask = required(args.ask, 'ask')

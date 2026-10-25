@@ -397,6 +397,12 @@ it('fires an idle condition only after the pause, at the threshold, and re-arms 
   // Back over 50% after the pause: the second fire.
   await f.usage(51)
   await until(async () => (await f.record(a.id)).fires === 2)
+  // Retargeted: the old target's input no longer counts; the pause starts afresh from the update.
+  await f.action('update', {
+    id: a.id,
+    condition: { metric: 'context', of: `#${f.target}`, above: 50, idleFor: 8 * HOUR },
+  })
+  expect((await f.record(a.id)).condition?.inputAt).toBe(Date.now())
 })
 
 it('sees a re-arm and the crossing after it even when both commit before evaluation', async () => {

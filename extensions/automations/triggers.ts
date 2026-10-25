@@ -267,6 +267,8 @@ export function triggers(
           })
     })
     await check()
+    // A close while the first check ran ends here: no timer outlives it.
+    if (closed) return
     clearInterval(timer)
     timer = setInterval(idleTick, IDLE_TICK)
   }

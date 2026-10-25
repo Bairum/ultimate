@@ -44,7 +44,10 @@ import { buildSeed } from '../extensions/dream/seed.ts'
 import { apis, eventHost, temp, until } from './helpers.ts'
 
 const openedHosts: OpenHost[] = []
+/** The extensions' close callbacks: automations' minute timer stops before its harness closes. */
+const closers: (() => Promise<void>)[] = []
 afterEach(async () => {
+  for (const close of closers.splice(0)) await close()
   for (const opened of openedHosts.splice(0)) await opened.close()
   vi.useRealTimers()
 })
@@ -105,7 +108,7 @@ async function fixture() {
     },
     metadata: Metadata,
     onRelease: () => {},
-    onClose: () => {},
+    onClose: (callback: () => Promise<void>) => void closers.push(callback),
     onOpen: (callback: () => Promise<void>) => void openers.push(callback),
     projectSetup: async () => ({ decision: false }),
     projectSettings: async () => ({}),
