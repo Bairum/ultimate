@@ -132,10 +132,21 @@ export type StoredNote = {
   /** When a model request first carried the note (a continuation counts as read at delivery). */
   readAt?: number
   response?: NoteResponse
+  /** Who closed it (resolved or dismissed): the user, or the automatic close-out. */
+  closedBy?: 'user' | 'auto'
+  closedAt?: number
+  /** The user's reason for a dismissal; feeds audits as "dismissed by user". */
+  dismissReason?: DismissReason
+  /** Hidden from open views and the chip until then; still open. */
+  snoozedUntil?: number
+  /** Cleared from the panel's views; kept for stats and audits until pruned 90 days after closing. */
+  archivedAt?: number
 }
+export const DISMISS_REASONS = ['false-alarm', 'handled', 'wont-fix'] as const
+export type DismissReason = (typeof DISMISS_REASONS)[number]
 
-/** Lifecycle counts for one role over a window. */
-export type RoleStats = { delivered: number; read: number } & Record<
+/** Lifecycle counts for one role over a window. `dismissed` counts user dismissals, apart from agent responses. */
+export type RoleStats = { delivered: number; read: number; dismissed: number } & Record<
   ResponseStatus | 'pending',
   number
 >
@@ -144,6 +155,26 @@ export const StatsAction = actionRef<
   { days?: number } | null,
   { since: number; roles: Partial<Record<Role, RoleStats>> }
 >('advisor', 'stats')
+
+/** Which notes a bulk action touches: explicit ids, or every unarchived note matching all given filters. */
+export type NoteSelection = {
+  notes?: string[]
+  conversation?: number
+  role?: Role
+  status?: NoteStatus
+  olderThanDays?: number
+}
+/**
+ * User-only bulk management. `resolve` / `dismiss` close open notes (dismiss takes an optional reason); `reopen`
+ * reopens; `archive` clears closed notes from the panel (never the transcript's entries). Returns how many changed.
+ */
+export const ManageAction = actionRef<
+  NoteSelection & {
+    do: 'resolve' | 'dismiss' | 'reopen' | 'archive'
+    reason?: DismissReason
+  },
+  { changed: number }
+>('advisor', 'manage')
 
 export type ConversationActivity = {
   role: Role
