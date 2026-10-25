@@ -56,7 +56,8 @@ const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ?
  * step's details (redacted on the server); typed text only ever shows as its length.
  */
 function describe(step: Step, done?: ActStepDetails) {
-  const label = done?.label || (done?.role ? done.role.replace(/^AX/, '') : undefined)
+  // Labels and roles are screen text: shown verbatim, quoted, never interpreted.
+  const label = done?.label?.text || done?.role?.text.replace(/^AX/, '') || undefined
   const element = label ? `“${label}”` : text(step.element) ? `element ${text(step.element)}` : ''
   switch (step.kind) {
     case 'type':
@@ -360,7 +361,7 @@ function Steps({
 }) {
   const live = liveSteps(call.output)
   return (
-    <ToolSection label="Steps">
+    <ToolSection label="Steps · labels are screen text">
       {steps.map((step, index) => {
         const outcome = done[index]
         const state: Outcome = outcome
@@ -448,12 +449,12 @@ function Decisions({ decisions: all }: { decisions: readonly Decision[] }) {
   const decisions = all.filter((d, index) => all[index + 1]?.step !== d.step)
   if (!decisions.length) return null
   return (
-    <ToolSection label="Jev decisions">
+    <ToolSection label="Jev decisions · labels are screen text">
       {decisions.map((decision, index) => {
         const pick = decision.top.find((t) => t.id === decision.chose) ?? decision.top[0]
         const alternatives = decision.top
           .filter((t) => t !== pick)
-          .map((t) => `${t.label} ${Math.round(t.p * 100)}%`)
+          .map((t) => `${t.label.text} ${Math.round(t.p * 100)}%`)
           .join(', ')
         return (
           <div className="flex min-w-0 items-baseline gap-2 leading-[1.7]" key={index}>
@@ -470,7 +471,7 @@ function Decisions({ decisions: all }: { decisions: readonly Decision[] }) {
             >
               {decision.chose ? (
                 <>
-                  <span className="text-foreground/90">“{pick?.label ?? decision.chose}”</span>
+                  <span className="text-foreground/90">“{pick?.label.text ?? decision.chose}”</span>
                   {pick && (
                     <span className="text-muted-foreground"> {Math.round(pick.p * 100)}%</span>
                   )}
@@ -527,10 +528,20 @@ export function Act({ call }: { call: ToolCallView }) {
   const steps = (Array.isArray(call.args.actions) ? call.args.actions : []) as Step[]
   const done = act?.steps ?? []
   // While a goal runs its decisions are only in the session journal; the result carries them once done.
-  const decisions =
+  const decisions: readonly Decision[] =
     act?.decisions ??
     session?.journal.flatMap((entry) =>
-      entry.call === call.id && entry.decision ? [entry.decision] : [],
+      entry.call === call.id && entry.decision
+        ? [
+            {
+              ...entry.decision,
+              top: entry.decision.top.map((t) => ({
+                ...t,
+                label: { text: t.label, untrusted: true as const },
+              })),
+            },
+          ]
+        : [],
     ) ??
     []
   const before = useBefore(call, app)

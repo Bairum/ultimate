@@ -17,11 +17,14 @@ export type TaskDetails = NonNullable<ComputerDetails['task']>
 export const detailsOf = (call: ToolCallView) =>
   call.result ? (call.details as ComputerDetails | undefined) : undefined
 
-/** A JSON summary field as a plain object (task and apps results). */
-export const summaryOf = (details?: ComputerDetails): Record<string, unknown> =>
-  details?.summary && typeof details.summary === 'object' && !Array.isArray(details.summary)
-    ? details.summary
-    : {}
+/**
+ * A result's summary (task and apps results) as a plain object. It is untrusted data: cards read known fields from it
+ * and render their strings as plain text only.
+ */
+export const summaryOf = (details?: ComputerDetails): Record<string, unknown> => {
+  const value = details?.summary?.value
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
 
 /** Refusals that wait on the user: amber, and the request card says the rest. */
 export const asks = ['consent_required', 'confirm_required', 'user_active']

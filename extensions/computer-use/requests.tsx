@@ -165,8 +165,6 @@ function Consent({ request, conversation }: { request: Pending; conversation: nu
 
 function Confirm({ request, conversation }: { request: Pending; conversation: number }) {
   const [error, setError] = useState<string>()
-  // Pixel steps name their point; the server adds x,y to their pending requests.
-  const point = request as Pending & { x?: number; y?: number }
   return (
     <Frame
       buttons={
@@ -196,9 +194,10 @@ function Confirm({ request, conversation }: { request: Pending; conversation: nu
           {request.label ? <Screen>{request.label}</Screen> : '(unlabelled)'}
         </Fact>
       )}
-      {typeof point.x === 'number' && typeof point.y === 'number' && (
+      {request.x !== undefined && request.y !== undefined && (
         <Fact label="point">
-          {point.x}, {point.y}
+          {request.x}, {request.y}
+          <span className="ml-1.5 text-[10.5px] text-muted-foreground/60">screenshot px</span>
         </Fact>
       )}
       {request.payload ? (
