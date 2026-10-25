@@ -16,4 +16,4 @@ While a message is checked, a band of light runs around its bubble's border (`us
 
 ## Tuning
 
-The question and threshold were tuned once against 55 labelled messages from three chapters (Daniel's prompts, branch reports, casual lines such as "Good night!") and the project's live memories: precision 0.77, recall 0.62, quiet on 16 of 18 messages that called for no memory. Per-memory yes/no questions over-fired on habits that hold for every message; a single choice with `none` did not. Classify answers vary by up to 0.13 between calls, so borderline messages can flip; each input is asked once.
+The question and threshold were tuned once against 55 labelled messages from three chapters (the user's prompts, branch reports, casual lines such as "Good night!") and the project's live memories: precision 0.77, recall 0.62, quiet on 16 of 18 messages that called for no memory. Per-memory yes/no questions over-fired on habits that hold for every message; a single choice with `none` did not. Classify answers vary by up to 0.13 between calls, so borderline messages can flip; each input is asked once.

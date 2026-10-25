@@ -43,7 +43,7 @@ available chapters. `chapter` and `project` cannot be combined. Cross-chapter li
 
 ### Other projects
 
-`conversations`, `entries`, `search`, `trace`, `traceTree` and `doc` take `{ project }` in their options object (`ultimate.conversations({ project })`, `ultimate.traceTree(id, { project })`, `ultimate.doc('todos', 1, { project })`) and then read that project instead, read-only; `doc` there reads conversation 1 unless one is named. `project` is a name (`poe2-rust`) or a key (`github.com/hazat/poe2-rust`), case-insensitive. Only a running instance answers:
+`conversations`, `entries`, `search`, `trace`, `traceTree` and `doc` take `{ project }` in their options object (`ultimate.conversations({ project })`, `ultimate.traceTree(id, { project })`, `ultimate.doc('todos', 1, { project })`) and then read that project instead, read-only; `doc` there reads conversation 1 unless one is named. `project` is a name (`my-app`) or a key (`github.com/acme/my-app`), case-insensitive. Only a running instance answers:
 
 - this project reads its own storage;
 - another running project on this machine answers over loopback (`ultimate.projects()`'s URL);
