@@ -258,13 +258,14 @@ it('delivers a stopped-input notice and agent input with distinct request ids', 
   })
 })
 
-it('answers a connection check itself in the standing Voice conversation, with only its three tools', async () => {
+it('answers a connection check itself in the standing Voice conversation, with its relay tools and codemode', async () => {
   const f = await fixture()
   expect((await f.server.harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.voice).toBe(
     f.voice,
   )
   const agent = await (await f.server.harness.conversation(f.voice, context))!.agent(context)
   expect(agent.tools.map((t) => t.name).toSorted()).toEqual([
+    'codemode',
     'voice_ask_ultimate',
     'voice_note',
     'voice_say',
