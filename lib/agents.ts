@@ -5,7 +5,7 @@ import { clampThinkingLevel } from '@earendil-works/pi-ai'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { Agent, AgentChange } from '@earendil-works/pi-durable'
 import { parseFrontmatter, resolveCliModel } from '@earendil-works/pi-coding-agent'
-import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
+import type { ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent'
 import type { Source } from '../server/project.ts'
 // oxlint-disable-next-line no-restricted-imports -- agent discovery follows the core project trust decision
 import { projectDecision, useProjectSetup } from '../server/project-setup.ts'
@@ -46,7 +46,42 @@ export function previewModel(env: NodeJS.ProcessEnv = process.env) {
   return { provider: value.slice(0, slash), modelId: value.slice(slash + 1) }
 }
 
-/** The agent change a definition makes over `parent`; in a preview, its model replaces every other choice. */
+type ModelRef = { provider: string; modelId: string }
+type Listed = { provider: string; id: string }
+
+/** Whether `ref` is among `available`, the models with a login here (`ModelRuntime.getAvailableSnapshot()`). */
+export const hasLogin = (available: readonly Listed[], ref: ModelRef | undefined) =>
+  !!ref && available.some((model) => model.provider === ref.provider && model.id === ref.modelId)
+
+/**
+ * The model a conversation runs on when nothing pins one: a preview's, else Pi's default, else the first model with a
+ * login here; each only when it has a login. Undefined while no model has one.
+ */
+export function defaultModel(
+  available: readonly Listed[],
+  settings: Pick<SettingsManager, 'getDefaultProvider' | 'getDefaultModel'>,
+): ModelRef | undefined {
+  const preview = previewModel()
+  const configured = {
+    provider: settings.getDefaultProvider(),
+    modelId: settings.getDefaultModel(),
+  }
+  for (const ref of [preview, configured])
+    if (ref?.provider && ref.modelId && hasLogin(available, ref as ModelRef)) return ref as ModelRef
+  const first = available[0]
+  return first && { provider: first.provider, modelId: first.id }
+}
+
+/** `defaultModel` for a host's model runtime and Pi settings. */
+export const hostDefaultModel = (host: {
+  modelRuntime: Pick<ModelRuntime, 'getAvailableSnapshot'>
+  settings: Pick<SettingsManager, 'getDefaultProvider' | 'getDefaultModel'>
+}) => defaultModel(host.modelRuntime.getAvailableSnapshot(), host.settings)
+
+/**
+ * The agent change a definition makes over `parent`: the explicit model, else the definition's pin when it has a login
+ * here, else the parent's. In a preview, its model replaces every other choice.
+ */
 export function definitionAgent(
   definition: AgentDefinition | undefined,
   parent: Agent,
@@ -64,7 +99,10 @@ export function definitionAgent(
   } = {},
 ): AgentChange {
   const excludeTools = [...excluded, ...(definition?.denyTools ?? [])]
-  const ref = previewModel() ?? overrideModel ?? definition?.model ?? parent.model
+  const pin = hasLogin(modelRuntime.getAvailableSnapshot(), definition?.model)
+    ? definition?.model
+    : undefined
+  const ref = previewModel() ?? overrideModel ?? pin ?? parent.model
   const model = ref && modelRuntime.getModel(ref.provider, ref.modelId)
   const thinking = overrideThinking ?? definition?.thinking ?? parent.thinkingLevel
   const tools = [

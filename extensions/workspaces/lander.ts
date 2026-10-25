@@ -22,7 +22,7 @@ import type {
 import { git } from '../../lib/git.ts'
 import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
+import { definitionAgent, discoverAgents, hostDefaultModel } from '../../lib/agents.ts'
 import { CheckRan, Handoff, SubmissionLanded } from './api.ts'
 import { setup } from './setup.ts'
 import type {
@@ -118,6 +118,7 @@ type Host = Pick<
   | 'projectRoot'
   | 'userHome'
   | 'modelRuntime'
+  | 'settings'
   | 'harness'
   | 'projectSettings'
   | 'want'
@@ -132,15 +133,19 @@ type Host = Pick<
  * the main conversation's; without a definition only the main conversation's model, and no model work on failures.
  */
 export async function landerAgent(
-  host: Pick<Host, 'ultimateRoot' | 'projectRoot' | 'userHome' | 'modelRuntime' | 'harness'>,
+  host: Pick<
+    Host,
+    'ultimateRoot' | 'projectRoot' | 'userHome' | 'modelRuntime' | 'settings' | 'harness'
+  >,
   context: Context,
 ): Promise<{ onFailure?: 'fix' | 'diagnose'; change: AgentChange }> {
   const definition = (
     await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
   ).definitions.find((candidate) => candidate.name === 'lander')
-  const main = await (await host.harness().conversation(ROOT_CONVERSATION_ID, context))!.agent(
-    context,
-  )
+  const main = {
+    ...(await (await host.harness().conversation(ROOT_CONVERSATION_ID, context))!.agent(context)),
+    model: hostDefaultModel(host),
+  }
   if (!definition)
     return { change: { model: main.model ?? null, thinkingLevel: main.thinkingLevel } }
   const delegates = definition.tools?.includes('subagent')

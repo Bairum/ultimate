@@ -38,6 +38,7 @@ import {
   definitionAgent,
   deleteDefinition,
   discoverAgents,
+  hostDefaultModel,
   saveDefinition,
   saveOverlay,
 } from '../../lib/agents.ts'
@@ -509,6 +510,7 @@ export default function subagents(
     | 'harness'
     | 'metadata'
     | 'modelRuntime'
+    | 'settings'
     | 'home'
     | 'projectSettings'
     | 'need'
@@ -589,14 +591,14 @@ export default function subagents(
         const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
         let id = Object.hasOwn(index, name) ? index[name] : undefined
         let created: ConversationRecord | undefined
-        // A new conversation starts on the main conversation's model; an existing one keeps the model and thinking
-        // level chosen in it, so a refresh changes them only where the definition pins them.
-        let base = main
+        // A new conversation starts on the default model; an existing one keeps the model and thinking level chosen
+        // in it, so a refresh changes them only where the definition pins them.
+        let base = { ...main, model: hostDefaultModel(host) }
         if (id !== undefined && (await tx.conversation(id))) {
           const own = await tx.doc(AgentDoc, id)
           base = {
             ...main,
-            model: own.model ?? main.model,
+            model: own.model ?? base.model,
             thinkingLevel: own.thinkingLevel ?? main.thinkingLevel,
           }
         } else {

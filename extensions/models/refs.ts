@@ -33,6 +33,12 @@ export const CancelAction = actionRef<{ flowId: string }, null>('models', 'cance
 export const LogoutAction = actionRef<{ provider: string }, null>('models', 'logout')
 
 /**
+ * A `models.fallback` entry: the conversation's model (`provider/id`) had no login here, so its next run switched to
+ * `to`, its definition's pin or the default model.
+ */
+export type Fallback = { from: string; to: string; reason: 'pin' | 'default' }
+
+/**
  * A login or logout of model provider `provider` completed through Ultimate; react to it to drop what you knew about
  * that provider's credentials (health resets its record to unknown).
  */

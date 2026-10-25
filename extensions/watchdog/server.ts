@@ -117,6 +117,15 @@ export function diagnose(error: string, assistant?: AssistantMessage) {
     }
   if (/not logged in/i.test(error))
     return { hint: 'Run `claude auth login` in a terminal', temporary: false }
+  // The conversation's model has no login here; its next input switches it to one that has.
+  const missing = /Provider is not configured: ([\w-]+)|No API key (?:found )?for "?([\w-]+)/i.exec(
+    error,
+  )
+  if (missing)
+    return {
+      hint: `${missing[1] ?? missing[2]} has no login here. Log in again (⌘K → Log in to a provider), or message the conversation: its next run switches to a model that has one`,
+      temporary: false,
+    }
   const provider = /OAuth refresh failed for ([\w-]+)/i.exec(error)?.[1] ?? assistant?.provider
   if (/OAuth refresh failed|invalid_grant/i.test(error))
     return {

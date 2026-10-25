@@ -61,6 +61,7 @@ import { rewindActions, rewindTask } from './rewind.ts'
 import type { Tree } from './catchup.ts'
 import type { RootEvent } from './types.ts'
 import { compareUrl } from '../../lib/compare.ts'
+import { hasLogin, hostDefaultModel } from '../../lib/agents.ts'
 import { admitCompaction } from '../../lib/compaction.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
 
@@ -901,9 +902,16 @@ async function forkBranch(
     caller = `#${input.by}${name ? ` (@${name})` : ''}`
   }
   const fork = await tx.forkConversation(from, at, { ownership: { kind: 'ownerless' } })
+  // Without a model given, the fork keeps its source's as of `at` while that has a login here, else the default.
+  const source = (await tx.doc(AgentDoc, fork.id)).model
+  const model =
+    input.model ??
+    (hasLogin(host.modelRuntime.getAvailableSnapshot(), source)
+      ? undefined
+      : hostDefaultModel(host))
   await configure(tx, fork.id, {
     cwd: host.projectRoot,
-    ...(input.model ? { model: input.model } : {}),
+    ...(model ? { model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
   })
   // A branch gets ordinary tools whatever its source ran with.
