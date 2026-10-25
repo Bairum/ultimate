@@ -19,18 +19,63 @@ import { ConversationsApi } from '../conversations/api.ts'
 import { ClassifyApi } from '../classify/api.ts'
 import { Gate } from '../messages/api.ts'
 import { Roots } from '../lineage/api.ts'
-import { ConfigAction, SetConfigAction, SetRubricAction, FeedbackAction, ROLES } from './refs.ts'
+import {
+  ConfigAction,
+  SetConfigAction,
+  SetRubricAction,
+  FeedbackAction,
+  StatsAction,
+  ManageAction,
+  ROLES,
+} from './refs.ts'
 import type { Role, ReviewPoint } from './refs.ts'
 import { configuration, NAME, validateConfig } from './config.ts'
 import { docs, Runs, State, pruneRuns } from './state.ts'
 import { review, runEntries } from './review.ts'
 import type { ReviewInput } from './review.ts'
 import { signals, initialSignals } from './signals.ts'
+import { acknowledge, trackRead, stats, invalidate } from './tracking.ts'
+import { closeOut, expireNotes } from './lifecycle.ts'
+import type { CloseInput } from './lifecycle.ts'
+import { pruneNotes, selected, setStatus, validateSelection, validReason } from './manage.ts'
 
 export { docs }
-export const userActions = ['setConfig', 'setRubric', 'feedback']
+export const userActions = ['setConfig', 'setRubric', 'feedback', 'manage']
 export const hostActions = ['setConfig', 'setRubric']
 export const actions = {
+  stats: implementAction(StatsAction, async (args, { host }) => {
+    if (args !== null && (typeof args !== 'object' || Array.isArray(args)))
+      throw new Error('Invalid stats arguments')
+    const days = args?.days ?? 7
+    if (typeof days !== 'number' || !Number.isFinite(days) || days <= 0)
+      throw new Error('Invalid days')
+    const state = await host.harness().snapshot(State, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
+    return stats(state ?? State.definition.initial(), Date.now() - days * 86_400_000)
+  }),
+  manage: implementAction(ManageAction, async (args, { host }) => {
+    validateSelection(args)
+    return host.harness().commit(async (tx) => {
+      const state = await tx.doc(State, ROOT_CONVERSATION_ID)
+      const now = Date.now()
+      let changed = 0
+      for (const note of state.notes) {
+        if (!selected(note, args, now)) continue
+        if (args.do === 'archive') {
+          if (note.status === 'open' || note.archivedAt !== undefined) continue
+          note.archivedAt = now
+        } else if (args.do === 'reopen') {
+          if (note.status === 'open') continue
+          setStatus(note, 'open', now)
+        } else {
+          if (note.status !== 'open') continue
+          setStatus(note, args.do === 'resolve' ? 'resolved' : 'dismissed', now, args.reason)
+        }
+        invalidate(host, note.conversation)
+        changed++
+      }
+      return { changed }
+    }, BACKGROUND_CONTEXT)
+  }),
   config: implementAction(ConfigAction, (_args, { host }) => configuration(host)()),
   setConfig: implementAction(SetConfigAction, async (args, { host }) => {
     if (
@@ -90,6 +135,13 @@ export const actions = {
       !args ||
       typeof args !== 'object' ||
       Array.isArray(args) ||
+      !validReason(args.reason) ||
+      (args.snoozeUntil !== undefined &&
+        args.snoozeUntil !== null &&
+        (typeof args.snoozeUntil !== 'number' ||
+          !Number.isFinite(args.snoozeUntil) ||
+          args.snoozeUntil <= Date.now() ||
+          args.snoozeUntil > Date.now() + 30 * 86_400_000)) ||
       typeof args.note !== 'string' ||
       (args.feedback !== undefined &&
         args.feedback !== null &&
@@ -101,13 +153,18 @@ export const actions = {
         args.status !== 'dismissed')
     )
       throw new Error('Invalid feedback')
+    const reason = args.reason
+    const snoozeUntil = args.snoozeUntil
     return host.harness().commit(async (tx) => {
       const note = (await tx.doc(State, ROOT_CONVERSATION_ID)).notes.find((n) => n.id === args.note)
       if (!note) throw new Error('Note not found')
       if (args.feedback === null) delete note.feedback
       else if (args.feedback === 'up' || args.feedback === 'down') note.feedback = args.feedback
       if (args.status === 'open' || args.status === 'resolved' || args.status === 'dismissed')
-        note.status = args.status
+        setStatus(note, args.status, Date.now(), reason)
+      if (snoozeUntil === null) delete note.snoozedUntil
+      else if (snoozeUntil !== undefined) note.snoozedUntil = snoozeUntil
+      invalidate(host, note.conversation)
       return { ...note }
     }, BACKGROUND_CONTEXT)
   }),
@@ -185,6 +242,56 @@ export default function advisor(host: ExtensionHost) {
       },
     },
   })
+  const CloseTask = defineTask<CloseInput, { phase: 'close' }, null>({
+    name: 'advisor.close',
+    version: 1,
+    initial: () => ({ phase: 'close' }),
+    abort: async (_task, runtime, context) =>
+      runtime.commit(
+        () => ({
+          status: 'terminal' as const,
+          outcome: { status: 'completed' as const, result: null },
+        }),
+        context,
+      ),
+    phases: {
+      close: async (task, runtime, context) => {
+        try {
+          await closeOut(host, runtime, task.input, (await config(false)).effective, context)
+        } catch (error) {
+          // Lifecycle judgments are advisory and must never fail the conversation.
+          host.notice(`Advisor close-out: ${String(error)}`)
+        }
+        return runtime.commit(
+          () => ({
+            status: 'terminal' as const,
+            outcome: { status: 'completed' as const, result: null },
+          }),
+          context,
+        )
+      },
+    },
+  })
+  async function finish(api: HookApi, latest: string, context: Context) {
+    await host.harness().commit(async (tx) => {
+      const run = (await tx.doc(LiveDoc, api.conversationId)).run?.inputs[0]
+      if (run === undefined) return
+      const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
+      const key = `${api.conversationId}:${run}`
+      if (runs.closeouts?.[key] !== undefined || !Object.values(runs.readRuns ?? {}).includes(run))
+        return
+      runs.closeouts ??= {}
+      runs.closeouts[key] = await tx.createTask(
+        CloseTask,
+        { run, latest },
+        {
+          ownership: { kind: 'conversation' },
+          conversationId: api.conversationId,
+          background: true,
+        },
+      )
+    }, context)
+  }
   async function background(id: ConversationId, input: ReviewInput, context: Context) {
     await host.harness().commit(async (tx) => {
       const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
@@ -254,11 +361,21 @@ export default function advisor(host: ExtensionHost) {
   })
   async function tick() {
     const view = await config(false)
-    if (!ROLES.some((r) => view.effective.roles?.[r]?.enabled)) return
     const context = BACKGROUND_CONTEXT
     const concluded = await host.want(ConversationsApi)?.concluded(context)
+    await expireNotes(host, view.effective, concluded ?? new Set(), context)
     await host.harness().commit(async (tx) => {
       pruneRuns(await tx.doc(Runs, ROOT_CONVERSATION_ID), concluded ?? new Set(), Date.now())
+      const state = await tx.doc(State, ROOT_CONVERSATION_ID)
+      pruneNotes(state, Date.now())
+      const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
+      for (const id of Object.keys(runs.readRuns ?? {})) {
+        if (!state.notes.some((n) => n.id === id)) delete runs.readRuns![id]
+      }
+      const active = new Set(Object.values(runs.readRuns ?? {}))
+      for (const key of Object.keys(runs.closeouts ?? {})) {
+        if (!active.has(Number(key.split(':')[1]))) delete runs.closeouts![key]
+      }
     }, context)
     const runs = await host.harness().snapshot(Runs, ROOT_CONVERSATION_ID, context)
     for (const summary of host.conversations()) {
@@ -296,9 +413,31 @@ export default function advisor(host: ExtensionHost) {
   }
   return defineExtension({
     name: 'advisor',
-    tasks: [ReviewTask],
+    tasks: [ReviewTask, CloseTask],
     hooks: [
       hook(GenerationTask, {
+        beforeRequest: async (request, api, context) => {
+          try {
+            await trackRead(host, request.messages, api, context)
+          } catch (error) {
+            // Tracking must not alter or fail cache-critical agent requests.
+            host.notice(`Advisor read tracking: ${String(error)}`)
+          }
+          return undefined
+        },
+        afterResponse: async (message, api, context) => {
+          try {
+            await acknowledge(
+              host,
+              message.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n'),
+              api.conversationId,
+              context,
+            )
+          } catch (error) {
+            // Acknowledgments are best-effort and never fail the agent.
+            host.notice(`Advisor acknowledgement: ${String(error)}`)
+          }
+        },
         afterTools: async (_assistant, _results, api, context) => {
           const target = await enabled(api.conversationId, context)
           if (!target) return
@@ -329,94 +468,113 @@ export default function advisor(host: ExtensionHost) {
             )
         },
         onYield: async (answer, api, context) => {
-          const target = await enabled(api.conversationId, context)
-          if (!target) return undefined
-          const kept = await api.memo<{ continue: string } | null>('advisor:yield', context)
-          if (kept !== undefined) return settleYield(api, kept, context)
-          const run = (await api.snapshot(LiveDoc, api.conversationId, context))?.run?.inputs[0]
-          const latest = answer.content
-            .flatMap((b) => (b.type === 'text' ? [b.text] : []))
-            .join('')
-            .slice(0, 8000)
-          const detected = target.profile.at?.includes('signals')
-            ? signals(
-                await runEntries(host, api.conversationId, context),
-                host.conversations().find((c) => c.id === api.conversationId)?.cwd ??
-                  host.projectRoot,
-                latest,
-              )
-            : []
-          if (!target.profile.at?.includes('answer')) {
-            if (detected.length) {
+          const evaluate = async () => {
+            const target = await enabled(api.conversationId, context)
+            if (!target) return undefined
+            const kept = await api.memo<{ continue: string } | null>('advisor:yield', context)
+            if (kept !== undefined) return settleYield(api, kept, context)
+            const run = (await api.snapshot(LiveDoc, api.conversationId, context))?.run?.inputs[0]
+            const latest = answer.content
+              .flatMap((b) => (b.type === 'text' ? [b.text] : []))
+              .join('')
+              .slice(0, 8000)
+            const detected = target.profile.at?.includes('signals')
+              ? signals(
+                  await runEntries(host, api.conversationId, context),
+                  host.conversations().find((c) => c.id === api.conversationId)?.cwd ??
+                    host.projectRoot,
+                  latest,
+                )
+              : []
+            if (!target.profile.at?.includes('answer')) {
+              if (detected.length) {
+                await background(
+                  api.conversationId,
+                  { role: target.role, point: 'signals', run, signal: detected.join('; '), latest },
+                  context,
+                )
+              }
+              return undefined
+            }
+            if (target.role === 'ultimate') {
               await background(
                 api.conversationId,
-                { role: target.role, point: 'signals', run, signal: detected.join('; '), latest },
+                { role: target.role, point: 'answer', run, latest },
                 context,
               )
+              return undefined
             }
-            return undefined
-          }
-          if (target.role === 'ultimate') {
-            await background(
-              api.conversationId,
-              { role: target.role, point: 'answer', run, latest },
-              context,
-            )
-            return undefined
-          }
-          try {
-            await host.harness().commit(async (tx) => {
-              const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
-              runs.conversations[api.conversationId] ??= { rounds: 0, signals: [] }
-              const row = runs.conversations[api.conversationId]
-              if (row.run !== run) {
-                runs.conversations[api.conversationId] = {
-                  ...(run !== undefined ? { run } : {}),
-                  rounds: 0,
-                  signals: [],
-                  lastActivity: Date.now(),
-                  ...(row.pending !== undefined ? { pending: row.pending } : {}),
-                  ...(row.deliveries !== undefined ? { deliveries: [...row.deliveries] } : {}),
-                }
-              }
-            }, context)
-            const deadline = AbortSignal.timeout(90_000)
-            let expired!: () => void
-            const timeout = new Promise<undefined>((resolve) => {
-              expired = () => resolve(undefined)
-              deadline.addEventListener('abort', expired, { once: true })
-            })
-            const work = (async () => {
-              const view = await config()
-              deadline.throwIfAborted()
-              return review(
-                host,
-                api,
-                {
-                  role: target.role,
-                  point: 'answer',
-                  run,
-                  latest,
-                  ...(detected.length ? { signal: detected.join('; ') } : {}),
-                },
-                view.effective,
-                view.rubrics,
-                context,
-                deadline,
-              )
-            })()
             try {
-              const result = await Promise.race([work, timeout])
-              if (deadline.aborted) return undefined
-              return settleYield(api, result ?? null, context)
-            } finally {
-              deadline.removeEventListener('abort', expired)
+              await host.harness().commit(async (tx) => {
+                const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
+                runs.conversations[api.conversationId] ??= { rounds: 0, signals: [] }
+                const row = runs.conversations[api.conversationId]
+                if (row.run !== run) {
+                  runs.conversations[api.conversationId] = {
+                    ...(run !== undefined ? { run } : {}),
+                    rounds: 0,
+                    signals: [],
+                    lastActivity: Date.now(),
+                    ...(row.pending !== undefined ? { pending: row.pending } : {}),
+                    ...(row.deliveries !== undefined ? { deliveries: [...row.deliveries] } : {}),
+                  }
+                }
+              }, context)
+              const deadline = AbortSignal.timeout(90_000)
+              let expired!: () => void
+              const timeout = new Promise<undefined>((resolve) => {
+                expired = () => resolve(undefined)
+                deadline.addEventListener('abort', expired, { once: true })
+              })
+              const work = (async () => {
+                const view = await config()
+                deadline.throwIfAborted()
+                return review(
+                  host,
+                  api,
+                  {
+                    role: target.role,
+                    point: 'answer',
+                    run,
+                    latest,
+                    ...(detected.length ? { signal: detected.join('; ') } : {}),
+                  },
+                  view.effective,
+                  view.rubrics,
+                  context,
+                  deadline,
+                )
+              })()
+              try {
+                const result = await Promise.race([work, timeout])
+                if (deadline.aborted) return undefined
+                return settleYield(api, result ?? null, context)
+              } finally {
+                deadline.removeEventListener('abort', expired)
+              }
+            } catch (error) {
+              // Advisory: provider and storage failures must never hold the final answer.
+              host.notice(`Advisor answer review: ${String(error)}`)
+              return undefined
             }
-          } catch (error) {
-            // Advisory: provider and storage failures must never hold the final answer.
-            host.notice(`Advisor answer review: ${String(error)}`)
-            return undefined
           }
+          const result = await evaluate()
+          if (!result) {
+            try {
+              await finish(
+                api,
+                answer.content
+                  .flatMap((b) => (b.type === 'text' ? [b.text] : []))
+                  .join('\n')
+                  .slice(0, 8000),
+                context,
+              )
+            } catch (error) {
+              // Closing a note must never prevent the final answer.
+              host.notice(`Advisor close-out scheduling: ${String(error)}`)
+            }
+          }
+          return result
         },
       }),
     ],

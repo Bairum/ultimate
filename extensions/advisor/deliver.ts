@@ -5,7 +5,8 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import type { AdvisorNoteEntry, Role, RoleProfile, ReviewPoint, Threshold } from './refs.ts'
 import { advisory, rank } from './render.ts'
 import type { ReviewNote } from './render.ts'
-import { State } from './state.ts'
+import { State, Runs } from './state.ts'
+import { stored } from './tracking.ts'
 
 function reaches(notes: ReviewNote[], threshold: Threshold | undefined) {
   return (
@@ -45,7 +46,23 @@ export async function deliver(
   const requestId = `advisor:${entry.review}`
   // A replay after a crash finds the earlier placement: reuse it, since a steer later downgraded to a note would
   // reuse the request id with another submission type and be rejected.
-  const placed = await host.harness().commit((tx) => tx.submissionByRequest(id, requestId), context)
+  const placement = await host.harness().commit(async (tx) => {
+    const placed = await tx.submissionByRequest(id, requestId)
+    if (placed) return { placed, notes: entry.notes }
+    const state = await tx.doc(State, ROOT_CONVERSATION_ID)
+    const notes = entry.notes.filter(
+      (n) => !state.notes.some((s) => s.id === n.id && s.status === 'dismissed'),
+    )
+    const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
+    if (runs.deliveries[entry.review]) {
+      if (notes.length) runs.deliveries[entry.review] = { ...entry, notes }
+      else delete runs.deliveries[entry.review]
+    }
+    return { placed, notes }
+  }, context)
+  const placed = placement.placed
+  entry = { ...entry, notes: placement.notes }
+  if (!entry.notes.length) return undefined
   if (entry.delivered === 'steer' && !placed) {
     const live = await host.harness().snapshot(LiveDoc, id, context)
     if (!live?.run || live.run.inputs[0] !== run) entry = { ...entry, delivered: 'note' }
@@ -79,7 +96,20 @@ export async function deliver(
       const state = await tx.doc(State, ROOT_CONVERSATION_ID)
       const ids = new Set(entry.notes.map((note) => note.id))
       for (const note of state.notes)
-        if (note.conversation === id && ids.has(note.id)) note.entry = status.entry
+        if (note.conversation === id && ids.has(note.id)) {
+          note.entry = status.entry
+          note.delivered = entry.delivered
+          if (entry.delivered === 'continue') {
+            note.readAt ??= Date.now()
+            if (run !== undefined) {
+              const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
+              runs.readRuns ??= {}
+              runs.readRuns[note.id] = run
+            }
+          }
+        }
     }, context)
+  if (entry.delivered === 'continue' || entry.delivered === 'card')
+    stored(host, id, entry.notes, false)
   return entry.delivered === 'continue' ? content : undefined
 }
