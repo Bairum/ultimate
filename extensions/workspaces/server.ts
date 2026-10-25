@@ -38,6 +38,7 @@ import { Workspaces, workspaces } from './workspaces.ts'
 export const order = -200
 export const docs = [Workspaces]
 export const userActions = ['setupGit']
+export const hostActions = ['setupGit']
 /** A project trust change moves the definition roots: reopening rewatches them and reconfigures the landers. */
 export const reloadOnSettings = true
 const finish = (value: unknown) => ({

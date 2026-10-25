@@ -62,3 +62,34 @@ it('labels a request by its browser, with the Tailscale login only behind Serve'
   })
   expect(deviceOf({})).toEqual({ device: 'desktop other' })
 })
+
+it('admits only exact pairing-link cross-site document navigations with access verification', async () => {
+  const headers = {
+    host: 'ultimate.example.ts.net',
+    'x-forwarded-for': '100.64.0.1',
+    'sec-fetch-site': 'cross-site',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-dest': 'document',
+  }
+  const rules = new Set([
+    { origin: 'https://ultimate.example.ts.net', verify: () => ({ login: 'owner' }) },
+  ])
+  expect(await admit({ headers, method: 'GET', url: '/api/pair?code=x' }, '4747', rules)).toBe(true)
+  for (const url of [
+    '/api/pair',
+    '/api/pairing?code=x',
+    '/api/pair/extra?code=x',
+    '/api/pair/link?code=x',
+  ])
+    expect(await admit({ headers, method: 'GET', url }, '4747', rules)).toBe(false)
+  expect(await admit({ headers, method: 'POST', url: '/api/pair?code=x' }, '4747', rules)).toBe(
+    false,
+  )
+  expect(
+    await admit(
+      { headers: { ...headers, upgrade: 'websocket' }, method: 'GET', url: '/api/pair?code=x' },
+      '4747',
+      rules,
+    ),
+  ).toBe(false)
+})

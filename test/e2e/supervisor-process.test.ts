@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { request } from 'node:http'
 import { connect } from 'node:net'
-import { temp, sourceCopy, cleanEnv, until, post } from '../helpers.ts'
+import { temp, sourceCopy, cleanEnv, until, post, registerUserCookie } from '../helpers.ts'
 import { children, homes, copies, launch, fixture, attach } from './supervisor-helpers.ts'
 it('starts past stale lock sidecars without killing an unrelated live pid', async () => {
   const home = await temp('ultimate-stale-supervisor-')
@@ -240,6 +240,7 @@ process.on('message',(message:{type:string})=>{ if(message.type==='go')process.s
     const running = await launch(home)
     await until(() => running.output().includes('Ultimate: http://'))
     const url = /Ultimate: (http:\/\/[^\s]+)/.exec(running.output())![1]
+    await registerUserCookie(url, home)
     const stream = await attach(url)
     const file = join(running.ultimateRoot, 'test/ultimate-recovery-test.ts')
     const extensionFile = join(running.ultimateRoot, 'extensions/ultimate-swap-test.ts')

@@ -8,7 +8,7 @@ import { createAccess } from '../server/request-security.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { createServer } from '../server/main.ts'
 import { projectHome } from '../server/project.ts'
-import { copyApis, linkDependencies, post, temp, until } from './helpers.ts'
+import { copyApis, linkDependencies, post, temp, until, registerUserCookie } from './helpers.ts'
 
 // The host's own macOS app is the default CLI's fallback: hide it, so "not installed" holds on a Mac with Tailscale too.
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -157,6 +157,7 @@ it('starts on a project enable, takes the allowlist only from user settings and 
     home: join(f.home, 'state'),
     port: 0,
   })
+  await registerUserCookie(server.url, f.home)
   closes.push(async () => {
     await server.vite.watcher.close()
     await server.close()

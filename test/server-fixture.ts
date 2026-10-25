@@ -9,6 +9,7 @@ import {
   removeTemp,
   linkDependencies,
 } from './helpers.ts'
+import type { ServerOptions } from '../server/main.ts'
 
 export const servers: Awaited<ReturnType<typeof createServer>>[] = []
 const directories: string[] = []
@@ -20,7 +21,12 @@ afterEach(async () => {
   }
   for (const directory of directories.splice(0)) await removeTemp(directory)
 })
-export async function fixture(extra = false, sources?: Record<string, string>, empty = false) {
+export async function fixture(
+  extra = false,
+  sources?: Record<string, string>,
+  empty = false,
+  overrides: Partial<ServerOptions> = {},
+) {
   const directory = await temp()
   directories.push(directory)
   const ultimateRoot = join(directory, 'repo')
@@ -89,6 +95,7 @@ export async function fixture(extra = false, sources?: Record<string, string>, e
     home: join(directory, 'home'),
     faux: fauxProvider(),
     port: 0,
+    ...overrides,
   }
   const server = await createServer(options)
   servers.push(server)

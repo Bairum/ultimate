@@ -28,6 +28,13 @@
   `pnpm check` type-checks both; with plain `tsc`, run `tsc -b`.
 - The standalone server shuts down on SIGINT/SIGTERM; reopening resumes durable work.
 
+## Pairing
+
+Each browser and the app window pairs once: ask Ultimate to open a local pairing link, which sets an HttpOnly
+cookie only when visited. Page loads alone never pair (including agent browser tools). Remote devices pair with a
+link created by an already paired browser. The shared `~/.ultimate/user-key` is private (0600); a same-user process
+can still read it. An OS sandbox for agent bash is planned phase 2, not a protection this cookie provides.
+
 ## Starting fresh
 
 `pnpm reset [dir] [--dry-run] [--yes]` starts a project's Ultimate from an empty state. It deletes nothing: `state.sqlite`, `trace.sqlite`, parked `state.stale-*` databases (each with its

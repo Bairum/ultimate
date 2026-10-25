@@ -19,6 +19,7 @@ import type { Api } from '../shared/extension-api.ts'
 import type { EventData, EventToken } from '../shared/events.ts'
 import { EventFeed, eventLog } from '../server/events.ts'
 import type { Reactor } from '../server/events.ts'
+import { userCookie } from '../server/request-security.ts'
 
 vi.mock('@earendil-works/pi-ai/providers/faux', async (importOriginal) => {
   const original = await importOriginal<typeof import('@earendil-works/pi-ai/providers/faux')>()
@@ -194,7 +195,9 @@ async function isolated(options: FixtureOptions) {
   }
 }
 export async function fauxServer(options: FixtureOptions) {
+  const cookie = await userCookie(options.userHome)
   const server = await createServer(await isolated(options))
+  userCookies.set(server.url, cookie)
   const close = server.close.bind(server)
   server.close = async () => {
     await server.vite.watcher.close()
@@ -203,7 +206,10 @@ export async function fauxServer(options: FixtureOptions) {
   return server
 }
 export async function prepareFauxServer(options: FixtureOptions) {
-  return prepareServer(await isolated(options))
+  const cookie = await userCookie(options.userHome)
+  const server = await prepareServer(await isolated(options))
+  userCookies.set(server.url, cookie)
+  return server
 }
 /** A scripted answer that never arrives: its run stays busy until it is aborted. */
 export const held: FauxResponseFactory = (_context, options) =>
@@ -234,11 +240,24 @@ export async function until(
     await yieldIO()
   }
 }
+const userCookies = new Map<string, string>()
+export async function registerUserCookie(url: string, userHome: string) {
+  userCookies.set(url, await userCookie(userHome))
+}
+export function cookieHeaders(server: string | { url: string }) {
+  const url = typeof server === 'string' ? server : server.url
+  const cookie = userCookies.get(url)
+  if (!cookie) throw new Error('No test user cookie for this server')
+  return { Cookie: cookie }
+}
 export async function post(server: string | { url: string }, path: string, data: unknown = {}) {
   const url = typeof server === 'string' ? server : server.url
   const response = await fetch(url + path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: url },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(userCookies.has(url) ? cookieHeaders(server) : {}),
+    },
     body: JSON.stringify(data),
   })
   return { status: response.status, data: await response.json() }

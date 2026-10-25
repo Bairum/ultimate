@@ -80,3 +80,4 @@ export { act } from './act.ts'
 export { observeWindow } from './observe.ts'
 export { gates } from './gates.ts'
 export { actions, userActions } from './actions.ts'
+export const hostActions = ['grant', 'confirm', 'confirmTask', 'confirmChange', 'resume', 'release']

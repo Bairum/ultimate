@@ -143,8 +143,8 @@ it('reads a project on another machine through the register, with the cloud toke
     process.env.ULTIMATE_CLOUD_URL = cloud.url.replace('http', 'ws')
     process.env.ULTIMATE_CLOUD_TOKEN = 'token'
     expect(await readProject(host, 'poe2-rust', 'trace', [])).toEqual({ value: ['from haza-pc'] })
-    // The remote instance is asked with its own origin.
-    expect(seen).toContain(`/api/extensions/codemode/actions/read ${remote.url}`)
+    // Peer reads do not pretend to be browser requests.
+    expect(seen).toContain('/api/extensions/codemode/actions/read ')
     process.env.ULTIMATE_CLOUD_TOKEN = 'wrong'
     await expect(readProject(host, 'poe2-rust', 'trace', [])).rejects.toThrow(
       'GET /sync/register returned 401',

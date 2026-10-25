@@ -75,6 +75,7 @@ function running(host: ExtensionHost, args: ActionInput<{ flowId: string }>) {
 const json = <T>(value: T): Json<T> => JSON.parse(JSON.stringify(value))
 
 export const userActions = ['login', 'answer', 'cancel', 'logout']
+export const hostActions = ['login', 'answer', 'logout']
 
 /**
  * Record that `provider`'s login changed: its recorded health is meaningless now, and health resets it to unknown

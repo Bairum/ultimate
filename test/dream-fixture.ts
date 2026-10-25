@@ -32,7 +32,6 @@ export function inspection(
     async (input, init) => {
       expect(init.method).toBe('POST')
       expect(init.headers).toEqual({
-        Origin: 'http://127.0.0.1:12345',
         'Content-Type': 'application/json',
       })
       const { args } = JSON.parse(init.body as string)

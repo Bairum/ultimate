@@ -121,8 +121,7 @@ export async function postAction(
 ): Promise<unknown> {
   const response = await fetch(`${target.url}/api/extensions/${extension}/actions/${action}`, {
     method: 'POST',
-    // The instance admits its own origin; on the tailnet, Serve's identity header names who asks.
-    headers: { Origin: new URL(target.url).origin, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ args }),
     signal: AbortSignal.any([AbortSignal.timeout(30000), ...(signal ? [signal] : [])]),
   }).catch((error: unknown) => {

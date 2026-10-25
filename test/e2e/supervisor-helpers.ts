@@ -9,6 +9,7 @@ import {
   cleanEnv,
   until,
   attach as attachStream,
+  registerUserCookie,
 } from '../helpers.ts'
 import { join } from 'node:path'
 import type { ConversationView } from '@earendil-works/pi-durable'
@@ -99,7 +100,9 @@ export async function fixture() {
   homes.push(home)
   const running = await launch(home)
   await until(() => running.output().includes('Ultimate: http://'))
-  return { ...running, home, url: /Ultimate: (http:\/\/[^\s]+)/.exec(running.output())![1] }
+  const url = /Ultimate: (http:\/\/[^\s]+)/.exec(running.output())![1]
+  await registerUserCookie(url, home)
+  return { ...running, home, url }
 }
 export async function attach(url: string) {
   const stream = await attachStream(url)
