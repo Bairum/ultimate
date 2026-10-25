@@ -35,6 +35,8 @@ export type GoalDeps = {
   stopped: () => boolean
   signal: AbortSignal
   now: () => number
+  /** Waits once for the app's accessibility tree to catch up before a step is judged to have had no effect. */
+  settle?: () => Promise<void>
   thresholds?: Partial<typeof jevThresholds>
   record: (decision: JevDecision) => void
 }
@@ -104,12 +106,26 @@ function candidates(observation: Observation, goal: Goal, readback = false): Can
   })
 }
 
+/**
+ * The text the window shows outside its actionable elements, such as a calculator's display: the Driver's structured
+ * elements omit static text, its Markdown tree keeps it (`AXStaticText = "…"`).
+ */
+export function screenText(observation: Observation): string[] {
+  return observation.tree
+    .split('\n')
+    .map((line) => /AXStaticText = "(.*)"/.exec(line)?.[1])
+    .filter((text): text is string => text !== undefined)
+    .map((text) => text.replace(/[\u200E\u200F\u2066-\u2069]/g, '').slice(0, 60))
+    .slice(0, 20)
+}
+
 function outline(observation: Observation): string {
-  return JSON.stringify(
+  return JSON.stringify([
     observation.elements
       .filter((e) => e.role !== 'AXSecureTextField')
       .map((e) => [e.role, e.label, e.value]),
-  )
+    screenText(observation),
+  ])
 }
 
 function effect(
@@ -223,6 +239,7 @@ export async function runGoal(goal: Goal, deps: GoalDeps): Promise<GoalResult> {
                   ? { value: redact(e.value).slice(0, 60) }
                   : {}),
               })),
+            screen_text: screenText(observation).map(redact),
             history: history.map((h) => ({ ...h, id: redact(h.id) })),
             progress: (goal.steps ?? []).map((step) => ({
               step: redact(step),
@@ -332,6 +349,8 @@ export async function runGoal(goal: Goal, deps: GoalDeps): Promise<GoalResult> {
     history.push({ step: steps, id, outcome: 'acted' })
     observation = await deps.observe()
     if (!effect(before, observation, candidate, goal)) {
+      if (stopped()) return escalate('stopped')
+      await deps.settle?.()
       if (stopped()) return escalate('stopped')
       observation = await deps.observe()
       record('reobserved')

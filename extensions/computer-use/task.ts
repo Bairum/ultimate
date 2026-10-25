@@ -203,7 +203,9 @@ export function addEvidence(state: TaskState, subgoalId: string, evidence: Evide
   const item = structuredClone(evidence)
   if (item.kind === 'ax')
     item.excerpt = redactor(Object.values(state.spec.scope.params))(item.excerpt)
-  subgoal.evidence.push(item)
+  // The same proof recorded twice (finish re-verifying a step's predicates) adds nothing.
+  if (!subgoal.evidence.some((e) => JSON.stringify(e) === JSON.stringify(item)))
+    subgoal.evidence.push(item)
   return next
 }
 export function setSubgoals(

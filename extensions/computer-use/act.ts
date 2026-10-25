@@ -578,6 +578,12 @@ export async function act(
         stopped: () => active.stopped,
         signal,
         now: Date.now,
+        // Apps update their accessibility tree a moment after an action; wait once before judging "no effect".
+        settle: () =>
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, 400)
+            signal.addEventListener('abort', () => (clearTimeout(timer), resolve()), { once: true })
+          }),
         thresholds: config.jev,
         record: (decision) => {
           const { chose, ...fields } = decision

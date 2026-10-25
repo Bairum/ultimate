@@ -58,6 +58,30 @@ line).
   (refusal `stale_element_token`), maps the token to the same element by role, label and path, and acts only on an
   exact single match. Otherwise it returns the fresh observation.
 
+## Phase 1 live check (2026-10-25, Mac unlocked)
+
+These runs used the built extension through its own tools against the real Driver 0.37.0, with real Jev through
+`classify`. Only Calculator and a `/tmp/cu-scratch.txt` TextEdit file were touched.
+
+| Check                     | Result                                                                                                                                                                                                                              |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontmost signal          | `list_apps` marks exactly one app `active` (Google Chrome, which the user was in). Calculator and TextEdit were `active: false`. The frontmost rule works on this flag and fails closed while the screen is locked (no app active). |
+| Explicit mode, Calculator | Clear, 6, ×, 7, = were delivered in the background in ≈9 s: ≈1.8 s per step, including the per-step frontmost check, the Jev risk check and the post-act observe. `expect` was `satisfied`.                                         |
+| Goal mode, Calculator     | Jev picked 6 → × → 7 → = at p 0.98–1.0, with risk ≤ 0.03. Each step was verified, then Jev reported done at 1.0, and `done_when` was satisfied: `status: done` in ≈8.9 s with no frontier-model call.                               |
+| Task finish               | `done`, with the criterion met and its Driver evidence.                                                                                                                                                                             |
+| TextEdit scratch          | `set_value` on the text area was delivered and verified (≈2.4 s). `cmd+w` was refused with `confirm_required` and the payload `cmd+w`; nothing was sent. Task 2 finished `done`.                                                    |
+
+Bugs the live run found, all fixed before landing:
+
+- **The Driver's structured `elements` omit static text.** A calculator's display (`AXStaticText`) appears only in the Markdown tree, so pressing × looked like "no effect" and goal mode escalated. Effect checks and Jev's state now include the tree's screen text, and an unchanged tree gets one 400 ms settle before `no_effect`.
+- **`verify_state` `value_equals` checks the first matching element.** In Calculator a bare `role: AXStaticText` hits the expression line ("6×7"), not the result. Predicates must name one element (`label_contains` + `exists: true`); the operator prompt says so.
+- **Finish recorded the same evidence repeatedly.** Duplicates are now dropped.
+
+Also learned:
+
+- **With Stage Manager on, background windows report thumbnail geometry.** `window_bounds` shows about 113×105 pt at the screen edge, and screenshots are thumbnails, while AX frames keep the real window geometry. Pixel hit-testing then finds no element and asks for confirmation, which fails safe. Element-token actions are unaffected. Pixel work in background windows needs the window to be visible; this is a phase 2 note.
+- **`verify_state` takes ~0.35–0.5 s when satisfied and ~5 s when unsatisfied** (it samples until stable). It is called with `timeout_ms: 0`.
+
 ## What changes in the design
 
 1. **Dispatch steps one at a time from the extension; do not use `run_steps` for multi-step work.** Batching gains
