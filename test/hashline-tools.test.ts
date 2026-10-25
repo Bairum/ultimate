@@ -585,7 +585,7 @@ test('grep caps at 100 matches and 20 files with an explicit narrowing note', as
   expect(files.details).toMatchObject({ hashline: { matches: 20, capped: true } })
 })
 
-test('bounded provenance-bearing results are exempt from downstream output offload', async () => {
+test('bounded provenance-bearing results are exempt from downstream context offload', async () => {
   const f = await fixture()
   const read = await call(f.conversation, 'read', { path: 'a.txt' })
   const edit = await call(f.conversation, 'edit', { input: patch(f.tag, 'PUT 2.=2:\n+TWO') })

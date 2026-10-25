@@ -33,7 +33,7 @@ All counts, sizes and pass rates below were measured on this machine unless mark
   - Don't ship the 100 MB package, and don't build a slim native addon.
 - **Context hygiene is three independent extensions over one cache-aware rewrite ledger:**
   - `context-hygiene`: superseded reads and empty results;
-  - `output-offload`: large outputs stored durably, a short excerpt in context;
+  - `context-offload`: large outputs stored durably, a short excerpt in context;
   - `context-compress`: model-called compress and decompress.
 
   None of them changes stored history; each changes only what a request sends, deterministically, so the prompt
@@ -470,7 +470,7 @@ transform)`, so phase 2 reuses the same deterministic pipeline (`host.need`).
 - Pi compaction removes the elided entries: their decisions no longer match any message and are skipped. They are
   pruned on the next `afterTools`.
 
-### D.4 Phase 1b: `extensions/output-offload/`
+### D.4 Phase 1b: `extensions/context-offload/`
 
 **Problem:** Pi's bash keeps the last 2,000 lines or 50 KB, about 12k tokens, in context. It spills the rest to a
 temp file under `/tmp` that is not durable. Browser and web output have their own limits.
@@ -573,7 +573,7 @@ fork-only and there are no edits to `web/`, `server/` or `coding-tools`.
 | 1   | `extensions/hashline/` (engine v1, read/write wrap, edit, grep, renderers, parity tests) | none (adds `diff` as a direct dependency) | MIT notice for vendored engine, prompt text and fixtures                                             |
 | 2   | `extensions/hashline/` tree-sitter resolver and parse proofs                             | PR 1                                      | Adds `web-tree-sitter` plus about 8 grammar wasm files; enables `N*` and the 42 parse-proved repairs |
 | 3   | `extensions/context-hygiene/` (+ `api.ts`: ledger, gate, rewrite)                        | none                                      | Uses `details.useless` when present; no hard dependency on hashline                                  |
-| 4   | `extensions/output-offload/`                                                             | none                                      | Reuses the uploads retention pattern                                                                 |
+| 4   | `extensions/context-offload/`                                                            | none                                      | Reuses the uploads retention pattern                                                                 |
 | 5   | `extensions/context-compress/`                                                           | PR 3 (`host.need`)                        | Credits billion-context for the idea (MIT)                                                           |
 
 Fork-only and not offered upstream: the A/B runner and its reports. These live under `.ultimate/` (project tooling),

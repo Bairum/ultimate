@@ -16,14 +16,14 @@ export const actions = {
   }),
 }
 
-export default function outputOffload(host: ExtensionHost) {
+export default function contextOffload(host: ExtensionHost) {
   host.onOpen(() => pruneOutputs(host.home))
   async function options(): Promise<Options> {
     const user = await readSettings(userSettingsPath(host.userHome))
     const project = await host.projectSettings()
     const selected: Options = { ...defaults }
     for (const settings of [user, project]) {
-      const value = settings.outputOffload
+      const value = settings.contextOffload
       if (!value || typeof value !== 'object' || Array.isArray(value)) continue
       if (value.thresholdBytes !== undefined) {
         if (
@@ -31,7 +31,7 @@ export default function outputOffload(host: ExtensionHost) {
           !Number.isSafeInteger(value.thresholdBytes) ||
           value.thresholdBytes < 1
         )
-          throw new Error('outputOffload.thresholdBytes must be a positive integer')
+          throw new Error('contextOffload.thresholdBytes must be a positive integer')
         selected.thresholdBytes = value.thresholdBytes
       }
       if (value.exclude !== undefined) {
@@ -39,7 +39,7 @@ export default function outputOffload(host: ExtensionHost) {
           !Array.isArray(value.exclude) ||
           !value.exclude.every((name) => typeof name === 'string')
         )
-          throw new Error('outputOffload.exclude must be an array of tool names')
+          throw new Error('contextOffload.exclude must be an array of tool names')
         selected.exclude = value.exclude
       }
     }
@@ -49,13 +49,13 @@ export default function outputOffload(host: ExtensionHost) {
   let configured: Promise<Options> | undefined
   function configuration() {
     configured ??= options().catch((error) => {
-      host.notice(`Invalid output-offload settings; using defaults: ${String(error)}`)
+      host.notice(`Invalid context-offload settings; using defaults: ${String(error)}`)
       return defaults
     })
     return configured
   }
   return defineExtension({
-    name: 'output-offload',
+    name: 'context-offload',
     hooks: [
       hook(ToolTask, {
         afterTool: async (call, result, api) => {
@@ -72,8 +72,8 @@ export default function outputOffload(host: ExtensionHost) {
                 ...(result.diagnostics ?? []),
                 {
                   severity: 'warn',
-                  code: 'output_offload',
-                  message: `Output offload failed; original result kept: ${String(error)}`,
+                  code: 'context_offload',
+                  message: `Context offload failed; original result kept: ${String(error)}`,
                 },
               ],
             }

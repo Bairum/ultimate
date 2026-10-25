@@ -9,8 +9,8 @@ import {
   offload,
   openOutput,
   pruneOutputs,
-} from '../extensions/output-offload/store.ts'
-import { actions, userActions } from '../extensions/output-offload/server.ts'
+} from '../extensions/context-offload/store.ts'
+import { actions, userActions } from '../extensions/context-offload/server.ts'
 import type { ActionContext } from '../server/actions.ts'
 
 const call: ToolHookCall = { type: 'toolCall', id: 'call/unsafe', name: 'bash', arguments: {} }

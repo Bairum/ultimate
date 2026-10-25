@@ -1,6 +1,6 @@
 Offloads large tool outputs to durable project files before they enter model context, keeping a short excerpt and a path for follow-up reads.
 
-Enable with `extensions.enable: ["output-offload"]`. It is off by default. No system prompt section is added.
+Enable with `extensions.enable: ["context-offload"]`. It is off by default. No system prompt section is added.
 
 Model-issued results over 16 KB are stored in `<project data dir>/outputs/<conversationId>/<sanitized-callId>.txt`.
 For bash, Pi's `structuredOutput.fullOutputPath` or its `full_output` diagnostic supplies the spill path (including
@@ -20,7 +20,7 @@ User settings and trusted project settings accept (project overrides user per fi
 
 ```json
 {
-  "outputOffload": {
+  "contextOffload": {
     "thresholdBytes": 16384,
     "exclude": ["my_tool"]
   }
@@ -51,7 +51,7 @@ by the host's extension lifecycle diagnostics.
 Run the offload tests and enablement tests together with:
 
 ```sh
-pnpm vitest run test/output-offload*.test.ts test/extension-enablement.test.ts
+pnpm vitest run test/context-offload*.test.ts test/extension-enablement.test.ts
 ```
 
 ## Credits

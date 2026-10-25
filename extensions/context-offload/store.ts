@@ -140,8 +140,8 @@ export async function offload(
         ...(result.diagnostics ?? []),
         {
           severity: 'warn',
-          code: 'output_offload',
-          message: `Output offload failed; original result kept: ${String(error)}`,
+          code: 'context_offload',
+          message: `Context offload failed; original result kept: ${String(error)}`,
         },
       ],
     }

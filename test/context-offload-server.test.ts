@@ -20,7 +20,7 @@ import { expect, it, vi } from 'vitest'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { temp } from './helpers.ts'
-import outputOffload from '../extensions/output-offload/server.ts'
+import contextOffload from '../extensions/context-offload/server.ts'
 
 it.each(['success', 'timeout', 'long lines'])(
   'preserves the entire Pi bash spill before commit on %s',
@@ -43,7 +43,7 @@ it.each(['success', 'timeout', 'long lines'])(
     ])
     const registry = createRegistry()
     registry.install(
-      outputOffload({
+      contextOffload({
         home,
         userHome: home,
         projectSettings: async () => ({}),
@@ -122,10 +122,10 @@ it.each(['success', 'timeout', 'long lines'])(
 it('skips settings for empty results, caches settings, and notices invalid settings once without result diagnostics', async () => {
   const home = await temp()
   const projectSettings = vi.fn<ExtensionHost['projectSettings']>(async () => ({
-    outputOffload: { thresholdBytes: 0 },
+    contextOffload: { thresholdBytes: 0 },
   }))
   const notice = vi.fn<ExtensionHost['notice']>()
-  const extension = outputOffload({
+  const extension = contextOffload({
     home,
     userHome: home,
     projectSettings,
@@ -155,7 +155,7 @@ it('skips settings for empty results, caches settings, and notices invalid setti
 it('honors settings below the default threshold and refreshes with a new installation', async () => {
   const home = await temp()
   const projectSettings = vi.fn<ExtensionHost['projectSettings']>(async () => ({
-    outputOffload: { thresholdBytes: 100 },
+    contextOffload: { thresholdBytes: 100 },
   }))
   const host = {
     home,
@@ -166,9 +166,9 @@ it('honors settings below the default threshold and refreshes with a new install
   const call = { type: 'toolCall' as const, id: 'settings', name: 'test', arguments: {} }
   const api = { conversationId: 1 } as HookApi
   const output = [{ type: 'text' as const, text: 'x'.repeat(4000) }]
-  const hooks = outputOffload(host).hooks![0].handlers as ToolHooks
+  const hooks = contextOffload(host).hooks![0].handlers as ToolHooks
   expect(await hooks.afterTool(call, { output }, api, context)).toHaveProperty('details.offload')
-  projectSettings.mockResolvedValue({ outputOffload: { thresholdBytes: 10000 } })
-  const reloaded = outputOffload(host).hooks![0].handlers as ToolHooks
+  projectSettings.mockResolvedValue({ contextOffload: { thresholdBytes: 10000 } })
+  const reloaded = contextOffload(host).hooks![0].handlers as ToolHooks
   expect(await reloaded.afterTool(call, { output }, api, context)).toBeUndefined()
 })
