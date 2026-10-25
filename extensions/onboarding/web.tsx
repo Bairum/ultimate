@@ -102,12 +102,22 @@ function Onboarding() {
   )
 }
 
-function SetupLink({ card, children }: { card: 'project' | 'git'; children: string }) {
+function SetupLink({
+  card,
+  off,
+  children,
+}: {
+  card: 'project' | 'git'
+  off?: boolean
+  children: string
+}) {
   const ui = useUltimate()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const click = async () => {
     if (busy) return
+    // With onboarding off, the decision is the user's own: the Extensions panel shows it.
+    if (off) return ui.openPanel('extensions')
     setBusy(true)
     try {
       ui.switchConversation(await askUltimate(card))
@@ -134,24 +144,31 @@ function SetupLink({ card, children }: { card: 'project' | 'git'; children: stri
         </button>
       </TooltipTrigger>
       <TooltipContent side="top" className="text-[11px]">
-        {error ?? 'Ask @ultimate for help with this folder.'}
+        {error ??
+          (off ? "Decide on this project's setup." : 'Ask @ultimate for help with this folder.')}
       </TooltipContent>
     </Tooltip>
   )
 }
 /** Dismissing Start here quiets the setup reminders too; ⌘K Get ready… and the Extensions panel still reach them. */
 const useDismissed = () => useDocOf(1, StartsDoc)?.dismissed === true
+const useOff = () => useAction(StatusAction).data?.off === true
 function Undecided() {
   const project = useSystem()?.project
   const dismissed = useDismissed()
-  return !dismissed && project?.config && project.decision === null ? (
-    <SetupLink card="project">project setup</SetupLink>
+  // With onboarding off nothing else asks, so an undecided `.ultimate/` keeps its reminder.
+  const off = useOff()
+  return (off || !dismissed) && project?.config && project.decision === null ? (
+    <SetupLink card="project" off={off}>
+      project setup
+    </SetupLink>
   ) : null
 }
 function NoGit() {
   const reason = useIsolation()?.reason
   const dismissed = useDismissed()
-  return reason && !dismissed ? <SetupLink card="git">set up git</SetupLink> : null
+  const off = useOff()
+  return reason && !dismissed && !off ? <SetupLink card="git">set up git</SetupLink> : null
 }
 
 type Choice = { card: string; summary: string; toolCallId: string }

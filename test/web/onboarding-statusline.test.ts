@@ -3,13 +3,17 @@ import type { ComponentType } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi } from 'vitest'
 
-const state = vi.hoisted(() => ({ dismissed: false }))
+const state = vi.hoisted(() => ({ dismissed: false, off: false }))
 vi.mock('@/sdk', () => ({
   api: {},
   Card: () => null,
   defineWebExtension: (facet: unknown) => facet,
   errorMessage: String,
-  useAction: () => ({ data: { reason: 'Not a Git repository' }, refetch: async () => undefined }),
+  // One answer for isolation and onboarding status alike.
+  useAction: () => ({
+    data: { reason: 'Not a Git repository', off: state.off },
+    refetch: async () => undefined,
+  }),
   useConversation: () => false,
   useDialog: () => [false, () => {}],
   useDocOf: () => ({ roots: {}, dismissed: state.dismissed }),
@@ -29,8 +33,9 @@ vi.mock('@/components/ui/tooltip', () => ({
   TooltipContent: () => null,
 }))
 
-async function statusLine(dismissed: boolean) {
+async function statusLine(dismissed: boolean, off = false) {
   state.dismissed = dismissed
+  state.off = off
   const facet = (await import('../../extensions/onboarding/web.tsx')).default as unknown as {
     slots: { 'statusline.right': { component: ComponentType }[] }
   }
@@ -42,4 +47,12 @@ async function statusLine(dismissed: boolean) {
 it('drops project setup and set up git from the status line once Start here is dismissed', async () => {
   expect(await statusLine(false)).toMatch(/set up git.*project setup/)
   expect(await statusLine(true)).toBe('')
+})
+
+it('keeps only the undecided project setup reminder with onboarding off', async () => {
+  for (const dismissed of [false, true]) {
+    const line = await statusLine(dismissed, true)
+    expect(line).toContain('project setup')
+    expect(line).not.toContain('set up git')
+  }
 })
