@@ -16,9 +16,9 @@ import { useDoc, useDocOf, useNow, useToolDuration, useTranscript, useUltimate }
 import type { DocumentProps, ToolCallView } from '@/sdk'
 import { TeachDoc } from './refs.ts'
 import type { Teach } from './refs.ts'
-import { detailsOf, headerState, refusalText, toneOf } from './shared.tsx'
+import { detailsOf, headerState, Mark, refusalText, ScreenMark, toneOf } from './shared.tsx'
 import { live, TeachStrip, teachDialog } from './teach-live.tsx'
-import { TeachReview } from './teach-review.tsx'
+import { StepFields, TeachReview } from './teach-review.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 
@@ -50,7 +50,8 @@ export function TeachCall({ call }: { call: ToolCallView }) {
   const status = details?.status
   const summary = details?.teach
   const steps = Array.isArray(call.args.steps) ? call.args.steps.length : 0
-  // teachDetails: the result's `details.teach` names what this call produced; the live review reads the document.
+  // The newest draft carries the live, editable review from the document; an older draft shows the steps it
+  // produced, read-only, from its own `details.teach` (`teachDetails`, every string `UntrustedText`).
   if (
     action === 'draft' &&
     newest &&
@@ -88,6 +89,38 @@ export function TeachCall({ call }: { call: ToolCallView }) {
       <ToolContent>
         {details?.message && (
           <ToolSection className="text-muted-foreground">{details.message}</ToolSection>
+        )}
+        {action === 'draft' && summary && summary.steps.length > 0 && (
+          <ToolSection>
+            <ol className="space-y-2">
+              {summary.steps.map((step) => (
+                <li className="space-y-0.5" key={step.n}>
+                  <div className="flex items-baseline gap-2">
+                    <Mark
+                      outcome={
+                        step.approved === true
+                          ? 'delivered'
+                          : step.approved === false
+                            ? 'refused'
+                            : 'not_run'
+                      }
+                    />
+                    <span className="w-4 text-right text-muted-foreground">{step.n}</span>
+                    <span className="min-w-0 break-words">
+                      <span className="text-muted-foreground">{step.action}</span> “
+                      {step.label.text}”<ScreenMark />
+                      {step.consequential && (
+                        <span className="ml-2 text-warning">consequential</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="pl-11">
+                    <StepFields step={step} />
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </ToolSection>
         )}
         {call.status === 'error' && <ToolOutput isError output={call.output} />}
         <ToolDiagnostics diagnostics={call.diagnostics} />

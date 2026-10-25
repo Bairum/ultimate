@@ -58,15 +58,19 @@ const dropWords: Record<string, string> = {
   observation_unavailable: 'screen unavailable',
   recorder_failed: 'recorder failed',
 }
-/** `{total, text}`: `2 password on screen · 1 window not visible`, most frequent first. */
+/**
+ * `{total, text}` of frames left out while recording: `2 password on screen · 1 window not visible`, most frequent
+ * first. `frame_missing` is recorded by save, not the recorder; the saved card reports it on its own.
+ */
 export function dropped(segment: Segment) {
   const counts = new Map<string, number>()
-  for (const d of segment.dropped) counts.set(d.reason, (counts.get(d.reason) ?? 0) + 1)
+  const recorded = segment.dropped.filter((d) => d.reason !== 'frame_missing')
+  for (const d of recorded) counts.set(d.reason, (counts.get(d.reason) ?? 0) + 1)
   const text = [...counts]
     .toSorted((a, b) => b[1] - a[1])
     .map(([reason, count]) => `${count} ${dropWords[reason] ?? reason.replaceAll('_', ' ')}`)
     .join(' · ')
-  return { total: segment.dropped.length, text }
+  return { total: recorded.length, text }
 }
 
 /** `4:07`: minutes and seconds left before the segment's deadline. */
@@ -649,7 +653,7 @@ function StartFailure({
       <div className="space-y-2 text-[12px] leading-relaxed">
         <p className="text-warning">
           Watching needs your consent for <span className="text-foreground">{app}</span> in this
-          conversation.
+          conversation. An “allow once” grant covers one lesson only.
         </p>
         <TeachButton
           action={GrantAction}
