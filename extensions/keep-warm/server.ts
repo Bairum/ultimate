@@ -1,4 +1,9 @@
-/** Renew eligible Claude conversation caches without adding transcript entries. */
+/**
+ * Keep warm: Claude's one-hour prompt cache expires while @ultimate idles or a coordinator waits on a child or the
+ * lander. Shortly before that hour ends, one request replays the conversation's context as its next request would
+ * send it, plus a one-word question. It reads the whole prefix from the cache, which renews the hour, and leaves
+ * nothing in any transcript; its tokens count toward that conversation's usage.
+ */
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { copyJson } from '@earendil-works/chord'
 import {

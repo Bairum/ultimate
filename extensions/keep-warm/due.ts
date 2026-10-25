@@ -1,6 +1,10 @@
 /** When a keep-warm ping is due. Browser-safe: the chip reads the hour too. */
+
+/** Claude's long prompt cache lives an hour from the last request that read or wrote it. */
 export const TTL = 60 * 60_000
+/** Ping this long after the last request: late enough to be rare, early enough to land before the hour ends. */
 export const LEAD = 55 * 60_000
+/** No ping once the user has been away this long. */
 export const IDLE_STOP = 8 * 60 * 60_000
 
 export type Target = {
