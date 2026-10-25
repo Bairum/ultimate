@@ -4,6 +4,7 @@ import { expect, it } from 'vitest'
 import type { Register } from '../lib/cloud.ts'
 import { actions } from '../extensions/codemode/server.ts'
 import { readProject } from '../extensions/codemode/projects.ts'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { writeJson } from '../lib/json-file.ts'
 import { locate, resolveProject } from '../lib/remote.ts'
@@ -136,9 +137,9 @@ it('reads a project on another machine through the register, with the cloud toke
       notice: () => {},
       projects: async () => [{ name: 'ultimate', current: true }],
     } as unknown as ExtensionHost
-    // Without cloud backups other machines are unknown.
+    // Without remotes or cloud backups other machines are unknown.
     await expect(readProject(host, 'poe2-rust', 'trace', [])).rejects.toThrow(
-      'cloud backups are off',
+      'reached only through remotes in user settings or cloud backups',
     )
     process.env.ULTIMATE_CLOUD_URL = cloud.url.replace('http', 'ws')
     process.env.ULTIMATE_CLOUD_TOKEN = 'token'
@@ -185,12 +186,15 @@ it("answers another project's read of an exported document, and refuses an unkno
   )
 })
 
-it('reaches a satellite at the address the user set, since it never backs up to the register', async () => {
+it('reaches another machine at the address the user set in remotes, with no cloud', async () => {
   const userHome = await temp()
   await writeJson(join(userHome, '.ultimate/settings.json'), {
-    cloud: {
-      machine: 'rog',
-      satellites: { mac: { Ultimate: 'https://mac.tail.ts.net:4747' } },
+    remotes: {
+      laptop: {
+        Ultimate: 'https://laptop.tail.ts.net:4747',
+        blog: 'https://laptop.tail.ts.net:4748',
+      },
+      desktop: { blog: 'https://desktop.tail.ts.net:4747' },
     },
   })
   const host = {
@@ -198,15 +202,19 @@ it('reaches a satellite at the address the user set, since it never backs up to 
     notice: () => {},
     projects: async () => [{ name: 'ultimate', current: true }],
   } as unknown as ExtensionHost
-  // The project runs here too; naming the satellite still reaches the satellite, with no cloud configured.
-  expect(await locate(host, 'ultimate', 'mac')).toEqual({
-    url: 'https://mac.tail.ts.net:4747',
-    label: 'Ultimate on mac',
+  // The project runs here too, so it answers here, unless the other machine is named.
+  expect(await locate(host, 'ultimate')).toEqual({ current: true })
+  expect(await locate(host, 'ultimate', 'laptop')).toEqual({
+    url: 'https://laptop.tail.ts.net:4747',
+    label: 'Ultimate on laptop',
     name: 'Ultimate',
-    machine: 'mac',
+    machine: 'laptop',
   })
-  expect(await locate(host, 'ultimate', 'rog')).toEqual({ current: true })
-  await expect(locate(host, 'blog', 'mac')).rejects.toThrow('Unknown project blog on mac')
+  expect(await locate(host, 'ultimate', hostname())).toEqual({ current: true })
+  // A project listed on several machines needs one named.
+  await expect(locate(host, 'blog')).rejects.toThrow('blog runs on laptop, desktop in remotes')
+  expect(await locate(host, 'blog', 'desktop')).toMatchObject({ machine: 'desktop' })
+  await expect(locate(host, 'shop', 'laptop')).rejects.toThrow('Unknown project shop on laptop')
 })
 
 it('names the machine when the project cannot be reached, and never offers a copy', () => {
@@ -216,7 +224,7 @@ it('names the machine when the project cannot be reached, and never offers a cop
   expect(() => resolveProject('blog', [here], register())).toThrow(
     'Unknown project blog. Known: ultimate, poe2-rust',
   )
-  expect(() => resolveProject('blog', [here], undefined)).toThrow('cloud backups are off')
+  expect(() => resolveProject('blog', [here], undefined)).toThrow('remotes in user settings')
   const stopped = { name: 'blog', root: '/p/blog', current: false }
   expect(() => resolveProject('blog', [here, stopped], register())).toThrow(
     'blog is not running on this machine; start it to query it',

@@ -35,20 +35,9 @@ Its backups then refuse before uploading anything, forced or not, for agents, Dr
 status line shows `satellite · no backups` with no backup buttons. The satellite still reads the register, so it
 reaches the owner (answers to its `tell`s included).
 
-A satellite never commits a backup, so the register holds no tailnet address for it. On each machine that reaches it,
-name its address in user settings, per machine and project:
-
-```json
-{
-  "cloud": {
-    "satellites": { "my-laptop": { "ultimate": "https://my-laptop.tail1234.ts.net:4747" } }
-  }
-}
-```
-
-`tell({ project, machine })` and codemode reads with that machine then go to that URL (`lib/remote.ts`), before the
-register is asked. The URL is the satellite's Tailscale Serve address (its status line's tailnet link), and the caller's
-tailnet login must be in the satellite's `tailscale.allow`.
+A satellite never commits a backup, so the register holds no tailnet address for it. Machines that reach it name its
+address in the general `remotes` user setting ([Discovery and settings](../../docs/settings.md)), which is asked
+before the register.
 
 `api.ts` exposes optional `CloudApi`: `status()` returns `off`, `local`, `satellite` or `on`, and `backup()` performs the same
 non-forced backup of the active chapter as the user action. Dream uses it for the final backup before falling asleep;

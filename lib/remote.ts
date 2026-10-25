@@ -1,13 +1,14 @@
 /**
  * Another running Ultimate instance of a project, reached over its own API: loopback when it runs on this machine, the
- * tailnet address its machine registered with the cloud elsewhere. Codemode reads through it and Messages’
- * Ultimate-to-Ultimate messages travel it. Nothing falls back to a copy.
+ * address the user set in `remotes` elsewhere, else the tailnet address its machine registered with the cloud.
+ * Codemode reads through it and Messages’ Ultimate-to-Ultimate messages travel it. Nothing falls back to a copy.
  */
 import { hostname } from 'node:os'
 import type { JsonValue } from '@earendil-works/chord'
-import { cloudConfig, fetchRegister, satelliteAddress } from './cloud.ts'
+import { cloudConfig, fetchRegister } from './cloud.ts'
 import type { Register } from './cloud.ts'
 import { projectIdentity } from './project-identity.ts'
+import { readSettings, userSettingsPath } from './settings.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 
 /** At most this much JSON comes back from another instance. */
@@ -66,7 +67,26 @@ export function resolveProject(
     ]),
   ]
   throw new Error(
-    `Unknown project ${project}${machine && !machine.here ? ` on ${machine.name}` : ''}${register ? '' : ' on this machine (cloud backups are off, so other machines are not listed)'}. Known: ${known.join(', ') || 'none'}`,
+    `Unknown project ${project}${machine && !machine.here ? ` on ${machine.name}` : ''}${register ? '' : ' (another machine is reached only through remotes in user settings or cloud backups)'}. Known: ${known.join(', ') || 'none'}`,
+  )
+}
+
+/**
+ * The instances the user named in `remotes` (`{ <machine>: { <project>: url } }`, user settings only: a repository must
+ * not redirect messages), as `{ machine, name, url }`.
+ */
+async function remotes(host: Pick<ExtensionHost, 'userHome'>) {
+  // Invalid user settings are reported by the settings loader; treat them as unset here.
+  const settings = await readSettings(userSettingsPath(host.userHome)).catch(() => ({}))
+  const object = (value: unknown) =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}
+  return Object.entries(object('remotes' in settings ? settings.remotes : undefined)).flatMap(
+    ([machine, projects]) =>
+      Object.entries(object(projects)).flatMap(([name, url]) =>
+        typeof url === 'string' ? [{ machine, name, url }] : [],
+      ),
   )
 }
 
@@ -82,7 +102,10 @@ export async function selfAddress(host: ExtensionHost) {
   return { project: current.name, machine: await machineName(host) }
 }
 
-/** Where `project` answers, as resolveProject decides, reading the register only when this machine cannot answer. */
+/**
+ * Where `project` answers: this machine first, then the user's `remotes`, then, as resolveProject decides, the cloud
+ * register, read only when neither can answer.
+ */
 export async function locate(host: ExtensionHost, project: string, machine?: string) {
   const projects = await host.projects()
   const local = await Promise.all(
@@ -92,15 +115,27 @@ export async function locate(host: ExtensionHost, project: string, machine?: str
     })),
   )
   const here = machine === undefined ? undefined : machine === (await machineName(host))
-  // A satellite never backs up, so its address comes from the user's settings, not the register.
-  const satellite = here === false ? await satelliteAddress(host, machine!, project) : undefined
-  if (satellite)
-    return { ...satellite, label: `${satellite.name} on ${machine}`, machine: machine! }
-  // A project this machine runs needs no cloud; anything else asks the register where it was last backed up.
-  const cloud =
-    here !== false && local.some((item) => naming(project)(item) && (item.current || item.running))
-      ? undefined
-      : await cloudConfig(host)
+  const runsHere = local.some((item) => naming(project)(item) && (item.current || item.running))
+  if (here !== false && runsHere) return resolveProject(project, local, undefined)
+  if (here !== true) {
+    const named = (await remotes(host)).filter(
+      (item) => naming(project)(item) && (machine === undefined || item.machine === machine),
+    )
+    if (named.length > 1)
+      throw new Error(
+        `${project} runs on ${named.map((item) => item.machine).join(', ')} in remotes; name the machine`,
+      )
+    const [remote] = named
+    if (remote)
+      return {
+        url: remote.url,
+        label: `${remote.name} on ${remote.machine}`,
+        name: remote.name,
+        machine: remote.machine,
+      }
+  }
+  // Anything else asks the cloud's register, when backups are on, where it was last backed up.
+  const cloud = here === true ? undefined : await cloudConfig(host)
   // A failing cloud is an error: the register is the only map of the other machines.
   const register = cloud ? await fetchRegister(cloud) : undefined
   return resolveProject(

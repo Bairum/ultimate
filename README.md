@@ -127,9 +127,8 @@ state home instead of one server for all of them.
 The building blocks that make it possible:
 
 - **Finding each other:** on one machine, every running instance shows up with its URL in `ultimate.projects()`
-  and answers over loopback; no Tailscale needed. Across machines, the cloud's register names the machine and
-  tailnet address of each backed-up project, and `cloud.satellites` adds instances that never back up
-  ([Cloud](extensions/cloud/README.md#satellites)).
+  and answers over loopback; no Tailscale needed. Across machines, list each instance in the `remotes` user setting,
+  `{ "<machine>": { "<project>": "<url>" } }` ([Discovery and settings](docs/settings.md)).
 - **Reading:** codemode's `ultimate.conversations`, `entries`, `search`, `trace` and `doc` take `{ project }` and
   read another running instance read-only ([Codemode](extensions/codemode/README.md#other-projects)).
 - **Messaging:** `ultimate.tell({ project, text })` messages another project's @ultimate, and its answer comes back
