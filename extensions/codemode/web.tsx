@@ -21,10 +21,10 @@ interface Details {
   error?: string
 }
 
-/** Nested calls while the script runs, from the `✓ tools.read {…} 12ms` lines it streams. */
+/** Nested calls while the script runs, from the `✓ tools.read {…} 12ms` and `✓ ultimate.entries […] 3ms` lines it streams. */
 function streamedCalls(output: string): NestedCall[] {
   return output.split('\n').flatMap((line) => {
-    const match = /^([✓✗]) tools\.(\S+) (.*) (\d+)ms$/.exec(line)
+    const match = /^([✓✗]) (?:tools\.)?(\S+) (.*) (\d+)ms$/.exec(line)
     return match
       ? [
           {

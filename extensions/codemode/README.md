@@ -24,11 +24,12 @@ Only inside codemode (not standalone model tools):
 - `ultimate.projects()` — project folders, their top-level conversation summaries, and URL when running (JSON manifests only, not other stores' SQLite).
 - `ultimate.uiState()` — durable root-conversation UI state, so you can see what the user is looking at.
 - `ultimate.extensions()` — folders, facets, tools, sections, documents, load errors.
-- `ultimate.trace({ trace?, conversation?, since?, limit? })` — recorded service, action, reactor, tool and model calls (the newest `limit`, default 100, oldest first) with caller, callee, duration, status and context ids; `ultimate.traceTree(traceId)` nests one trace's calls under their parents.
+- `ultimate.catalogue()` — extension APIs with each one's provider, needs and wants, plus missing providers and dependency cycles.
+- `ultimate.trace({ trace?, conversation?, since?, limit? })` — recorded service, action, reactor, tool and model calls (the newest `limit`, default 100 and at most 1000, oldest first) with caller, callee, duration, status and context ids; `ultimate.traceTree(traceId)` nests one trace's calls under their parents.
 - `ultimate.apis()` — `[{ name, summary }]` for every enabled extension (built-in, user or project) with an `api.ts` or `refs.ts`: its documented contract, summarised by the first sentence of the opening doc comment of its `api.ts` (else its `refs.ts`). `ultimate.api(name)` returns both files' sources, each under a `// <name>/<file>: …` header line (`api.ts` the server contract, `refs.ts` the documents, actions with their arguments and results, and events), and throws for a name without either. This is progressive discovery: list first, read the one you need. Services in these files are not callable from codemode; act through `ultimate.action`.
 - `ultimate.action(extension, action, args?)` — the one write: call an extension action on behalf of this conversation, with the sandbox abort signal; omitted args become null. Returns its JSON result or throws its error. Discover actions with `ultimate.extensions()` and read their args in the extension README.
 - `ultimate.conversations()` — all stored conversations with their owner, and for listed ones title, label, cwd,
-  busy, inputAt and concluded. The system prompt no longer lists other conversations; this is where agents look.
+  busy, inputAt and concluded.
 - `ultimate.entries(conversationId, { kinds?, limit?, before? })` — newest-first fork-aware history, including entries before resets/compactions; `before` is an exclusive entry ID.
 - `ultimate.search(text, { conversationId?, limit? })` — case-sensitive substring over stored entry JSON, including pre-reset/pre-compaction history.
 - `ultimate.taskGraph()` — live tasks and ownership graph.
@@ -68,7 +69,7 @@ Entry/search limits default to 100 and must be 1–1000. Pagination of raw entri
 
 `store(key, value)` / `load(key)` use the conversation document `codemode.store` (rewindable, fork as-of). Values are loaded before every script. Store writes are saved only when the script finishes successfully; a yielded wait discards them. The document is exported in `docs` for SSE subscriptions.
 
-**Crash window:** Pi Durable 1.0 has no result-transaction callback. Store writes use a separate `api.commit()` immediately before returning success. A crash between that commit and durable tool settlement retains the writes while the model may be told the script was **interrupted**. Do not treat store updates as atomic receipts of external side effects.
+**Crash window:** Pi Durable has no result-transaction callback. Store writes use a separate `api.commit()` immediately before returning success. A crash between that commit and durable tool settlement retains the writes while the model may be told the script was **interrupted**. Do not treat store updates as atomic receipts of external side effects.
 
 ## Summaries
 
@@ -77,7 +78,6 @@ Every finished or failed codemode call gets one past-tense line saying what it d
 - **Fixed labels:** a script with no call, or with one read-only call (an `ultimate.*` read, `read`, `web_search`, `web_fetch`), is labelled from that call without a model (`summary.ts` `fixedLine`), in the call's own commit; failed, it reads "Failed: <error>".
 - **Summary model:** any other script starts a background `codemode.summary` task, in its own commit just before the call returns; a call already labelled or still pending (`codemode.summaries-pending`, which a fork starts empty) gets no second one. It asks `summaryModel` (through the conversations service, as messages triage does) with only each call's name, status and arguments, clipped, plus a failure's error, as untrusted data. The script and every result stay home, since the summary model can be another provider and tool output can hold anything; values under secret-looking keys are dropped, and every string is scrubbed before serializing (`scrub`): an allowlist keeps only plain words (names, ids, paths, prose) and replaces anything else (quotes, `=`, braces, a word after `bearer`, known token prefixes, long opaque runs, `user:pass@` URLs) with `[…]`. The answer is `{ line, effect }`: a change (an action that concludes, creates, pauses or configures, a message, a write or edit) leads the line and sets `effect`, also when a later call failed. The task marks the request before sending it and memoizes the response, so a restart never asks twice: a restart between the two gives no line. Its usage is accounted to the conversation. Without a model, or when the answer does not parse, no line is written and the card keeps the script header. A yielded script gets no line.
 - **Storage:** the line lives in the conversation document `codemode.summaries` (`{ calls: { [toolCallId]: { line, effect? } } }`, the newest 1000; `api.ts` holds its token) and is recorded as the event `codemode.summarized { conversation, call, line, effect }` in the same commit, which the System surface shows.
-- **Cost:** on this host about 120 codemode calls a day, a third of them fixed labels; the model call costs about $0.00005, so under one cent a day.
 
 ## UI
 
