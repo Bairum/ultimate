@@ -15,7 +15,7 @@ import type { Conversation, ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { isolatable } from '../../lib/git.ts'
 import { writeJson } from '../../lib/json-file.ts'
-import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
+import { readSettings, updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
 import { SubagentsApi } from '../subagents/api.ts'
@@ -365,8 +365,11 @@ export const actions: Record<string, ExtensionAction> = {
   }),
   status: implementAction(StatusAction, async (_args, { host }) => {
     const folders = await host.projectExtensions()
+    // `"onboarding": false` in the user's settings: an experienced machine skips the first run and Start here.
+    const off = (await readSettings(userSettingsPath(host.userHome))).onboarding === false
     return {
-      firstRun: !existsSync(marker(host.userHome)),
+      firstRun: !off && !existsSync(marker(host.userHome)),
+      off,
       project: await host.projectSetup(),
       // The user's own lists, for the first run's checkboxes.
       user: await declared(userSettingsPath(host.userHome)),

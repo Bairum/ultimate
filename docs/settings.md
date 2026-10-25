@@ -15,8 +15,12 @@ ahead of the request. The Info tab lists skills with their scope, overrides and 
 `~/.agents/skills/` are not read: they belong to other agents, so link a skill into `~/.ultimate/skills/` to use it here.
 Built-ins are on by default, including `messages` (durable agent messages and @ultimate's messages to you), `questions` (answer cards for @ultimate's questions to the user), `lineage` (conversation trees: roots, branches, notes) and `update` (tells you when the Ultimate clone is behind `origin`, checked hourly). The ones that need something of their own ship installed but off (`defaultOff` in `shared/extension-api.ts`): `cloud` (backups; your own backup Worker), `parallel` (web tools; a Parallel API key), `tailscale` (remote access; Tailscale on this machine), `health` (provider health, reported with backups), `classify` (Jev typed judgments; a Jev key), `phase` (working phases; requires `classify`), `sounds` (notification sounds) and `voice-live` (live voice relay; an OpenAI API key and microphone). `recall` (project memories recalled for @ultimate's messages) is on but idle until `classify` is. The first-run extensions card and the Extensions tab turn them on in user settings. Settings layer defaults, `~/.ultimate/settings.json`, then `<project>/.ultimate/settings.json`:
 `extensions.enable` and `extensions.disable` are name arrays, later layers win, and changes apply live without a
-restart. User/project extension folders are on by default too; `disable` turns off any extension. Unknown names
-produce a notice. `summaryModel` (`"provider/id[:thinking]"`, default `openai-codex/gpt-6-luna:medium`; project over user)
+restart. User/project extension folders are on by default too; `disable` turns off any extension outside the core
+tier, while a core-tier name (`onboarding`, `subagents`, `lineage`, …) is ignored with a notice. Unknown names
+produce a notice. To skip onboarding on a machine whose user knows Ultimate, set `"onboarding": false` in
+`~/.ultimate/settings.json` (user settings only): no Get ready, no Start here, no setup cards and no "set up git"
+reminder, while the Extensions panel and ⌘K Get ready… stay available and an undecided project setup keeps its
+status-line reminder. `summaryModel` (`"provider/id[:thinking]"`, default `openai-codex/gpt-6-luna:medium`; project over user)
 picks the model for automatic titles, summaries, reply summaries, tree abstracts and the
 triage that decides whether an agent's update wakes @ultimate. Set it in either file or with
 the "Summary model…" command, and it applies to the next request. `fastModels` (`["openai-codex/<id>", …]`, or `openai/`; project over
