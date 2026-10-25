@@ -22,15 +22,20 @@ import type { EntryRecord, ToolCallView } from '@/sdk'
 import { Answered, Requests, Takeover } from './requests.tsx'
 import { SessionDoc, StopAction } from './refs.ts'
 import type { ActStepDetails } from './refs.ts'
+import type { Evidence } from './types.ts'
 import {
   asks,
   detailsOf,
   escalations,
+  fixes,
   headerState,
   liveSteps,
   Mark,
+  nearestLabels,
   refusalText,
   predicate,
+  ScreenList,
+  ScreenMark,
   summaryOf,
   TaskLine,
   toneClass,
@@ -50,6 +55,8 @@ const text = (value: unknown) => (typeof value === 'string' ? value : '')
 const scalar = (value: unknown) =>
   typeof value === 'string' || typeof value === 'number' ? String(value) : ''
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`
+/** Refusals of a pixel step that explain themselves on its step line, next to the label it expected. */
+const pixelRefusals = ['label_mismatch', 'window_not_visible', 'takeover_required']
 
 /**
  * `“6”`, `“Email” ← 5 chars`, `⌘+S`, `File › Save`: one step as the user reads it. The control comes from the
@@ -59,6 +66,7 @@ function describe(step: Step, done?: ActStepDetails) {
   // Labels and roles are screen text: shown verbatim, quoted, never interpreted.
   const label = done?.label?.text || done?.role?.text.replace(/^AX/, '') || undefined
   const element = label ? `“${label}”` : text(step.element) ? `element ${text(step.element)}` : ''
+  const point = typeof step.x === 'number' ? `at ${step.x},${scalar(step.y)}` : ''
   switch (step.kind) {
     case 'type':
       return `${element} ← ${plural(text(step.text).length, 'char')}`
@@ -72,11 +80,108 @@ function describe(step: Step, done?: ActStepDetails) {
       return (Array.isArray(step.path) ? step.path.map(String) : []).join(' › ')
     case 'scroll':
       return `${element || 'window'} ${text(step.direction)} ${scalar(step.amount) || '3'}`
-    case 'wait':
-      return `${scalar(step.seconds)}s`
-    default:
-      return element || (typeof step.x === 'number' ? `at ${step.x},${scalar(step.y)}` : '')
+    case 'wait': {
+      const until = (step.until && typeof step.until === 'object' ? step.until : {}) as Step
+      const what = [
+        text(until.text) && `“${text(until.text)}” appears`,
+        text(until.gone) && `“${text(until.gone)}” is gone`,
+        until.stable === true && 'the screen is still',
+      ].filter(Boolean)
+      return `${what.length ? `until ${what.join(' and ')}` : ''} · up to ${scalar(step.seconds)}s`
+    }
+    default: {
+      // A pixel click names the label it expects there; it is the agent's words, checked by OCR below.
+      const expected = done?.expectLabel?.text || text(step.expect_label)
+      if (expected) return `expects “${expected}” ${point}`.trim()
+      return element || point
+    }
   }
+}
+
+/**
+ * What the server checked for one step, under its line: the label OCR read at a pixel click, why a pixel click was
+ * refused (the nearest labels OCR saw, or what the user can do), and how a wait came out. Screen text carries the
+ * marker; the server's own messages do not. `took` is the call's duration, given only when the wait was its only
+ * step: the server does not time steps.
+ */
+function StepCheck({
+  step,
+  outcome,
+  took,
+  last,
+}: {
+  step: Step
+  outcome?: ActStepDetails
+  took?: string
+  last: boolean
+}) {
+  if (!outcome) return null
+  const line = 'block break-words text-[11px] leading-[1.6]'
+  if (outcome.wait) {
+    const seconds = scalar(step.seconds)
+    if (outcome.wait.status === 'satisfied')
+      return (
+        <span className={cn(line, 'text-success')}>
+          satisfied {took ? `after ${took}` : `within ${seconds}s`}
+        </span>
+      )
+    const seen = outcome.wait.seen.map((s) => s.text)
+    return (
+      <>
+        <span className={cn(line, 'text-warning')}>
+          timed out after {took ?? `${seconds}s`}
+          {!last && ' · the steps after it were not sent'}
+        </span>
+        {seen.length > 0 && (
+          <span className={cn(line, 'text-muted-foreground')}>
+            last saw <ScreenList items={seen} />
+          </span>
+        )}
+      </>
+    )
+  }
+  if (outcome.status === 'refused' || outcome.status === 'failed') {
+    const code = outcome.code
+    const tone = toneClass[code ? toneOf(code) : 'bad']
+    const nearest = code === 'label_mismatch' ? nearestLabels(outcome.message) : []
+    const expected = outcome.expectLabel?.text.toLowerCase()
+    const repeats = expected
+      ? nearest.filter((label) => label.toLowerCase().includes(expected)).length
+      : 0
+    const fix = code ? fixes[code] : undefined
+    const waits = !!code && asks.includes(code)
+    return (
+      <>
+        <span className={cn(line, tone)}>
+          {code ? refusalText(code) : ''}
+          {repeats > 1 && ` · it appears ${repeats} times nearby, so the click is ambiguous`}
+          {outcome.message && !waits && !nearest.length && !fix
+            ? `${code ? ' · ' : ''}${outcome.message}`
+            : ''}
+        </span>
+        {outcome.ocrMatch && (
+          <span className={cn(line, 'text-muted-foreground')}>
+            OCR read “{outcome.ocrMatch.text}”
+            <ScreenMark />
+          </span>
+        )}
+        {nearest.length > 0 && (
+          <span className={cn(line, 'text-muted-foreground')}>
+            OCR saw nearby <ScreenList items={nearest} />
+          </span>
+        )}
+        {fix && <span className={cn(line, 'text-muted-foreground')}>{fix}</span>}
+      </>
+    )
+  }
+  if (outcome.ocrMatch)
+    return (
+      <span className={cn(line, 'text-muted-foreground')}>
+        OCR read “{outcome.ocrMatch.text}”
+        <ScreenMark />
+      </span>
+    )
+  return null
 }
 
 /** The window image a result carries, by the content index its details name. */
@@ -235,11 +340,16 @@ function Raised({
   const task = details?.task?.id
   const newest = useNewestWaiting(call, task)
   if (!session || conversation === undefined || !code) return null
-  if (code === 'user_active') {
+  if (code === 'user_active' || code === 'takeover_required') {
     const granted = session.takeovers.some((t) => t.app.toLowerCase() === app.toLowerCase())
     return newest || granted ? (
       <ToolSection>
-        <Takeover app={app} conversation={conversation} granted={granted} />
+        <Takeover
+          app={app}
+          conversation={conversation}
+          granted={granted}
+          pixels={code === 'takeover_required'}
+        />
       </ToolSection>
     ) : null
   }
@@ -354,10 +464,12 @@ function Steps({
   call,
   steps,
   done,
+  duration,
 }: {
   call: ToolCallView
   steps: Step[]
   done: readonly ActStepDetails[]
+  duration?: string
 }) {
   const live = liveSteps(call.output)
   return (
@@ -370,14 +482,16 @@ function Steps({
             ? ((live.get(index + 1) === 'sending' ? 'running' : (live.get(index + 1) as Outcome)) ??
               'not_run')
             : 'not_run'
-        const waits = !!outcome?.code && asks.includes(outcome.code)
+        // Refused until the user acts (consent, takeover, a hidden window): amber, not a failure.
+        const waits = !!outcome?.code && toneOf(outcome.code) === 'wait'
+        const timedOut = outcome?.wait?.status === 'timeout'
         return (
           <div
             className="flex min-w-0 items-start gap-2 leading-[1.7]"
             data-computer-step={state}
             key={index}
           >
-            <Mark outcome={waits ? 'waiting' : state} />
+            <Mark outcome={waits ? 'waiting' : timedOut ? 'timeout' : state} />
             <span className="w-20 shrink-0 whitespace-nowrap text-foreground/90">
               {(step.kind ?? '?').replace('_', ' ')}
             </span>
@@ -388,14 +502,12 @@ function Steps({
               >
                 {describe(step, outcome)}
               </span>
-              {(state === 'refused' || state === 'failed') && (
-                <span className={cn('block break-words', waits ? 'text-warning' : 'text-error')}>
-                  {outcome?.code ? refusalText(outcome.code) : ''}
-                  {outcome?.message && !waits
-                    ? `${outcome.code ? ' · ' : ''}${outcome.message}`
-                    : ''}
-                </span>
-              )}
+              <StepCheck
+                last={index === steps.length - 1}
+                outcome={outcome}
+                step={step}
+                took={steps.length === 1 && call.status === 'done' ? duration : undefined}
+              />
               {state === 'unknown' && (
                 <span className="block text-warning">
                   May or may not have happened: observe before going on
@@ -409,8 +521,24 @@ function Steps({
   )
 }
 
-function Expect({ predicates, verdict }: { predicates: unknown[]; verdict?: string }) {
+type Proof = Extract<Evidence, { kind: 'verify' }>
+
+/**
+ * The checks after the steps. An OCR check that held links the proof the server wrote: what OCR read (screen text)
+ * and the saved screenshot, found in the task's evidence by this call's id.
+ */
+function Expect({
+  predicates,
+  verdict,
+  proof,
+}: {
+  predicates: unknown[]
+  verdict?: string
+  proof?: Proof
+}) {
   if (!predicates.length) return null
+  const file = proof?.path?.split('/').pop()
+  const read = proof?.excerpt?.split('\n').filter(Boolean) ?? []
   return (
     <ToolSection label="Expect">
       <div className="flex min-w-0 items-start gap-2">
@@ -425,10 +553,43 @@ function Expect({ predicates, verdict }: { predicates: unknown[]; verdict?: stri
         >
           {predicates.map(predicate).join(' · ')}
         </span>
-        <span className={verdict === 'satisfied' ? 'text-success' : 'text-warning'}>
-          {verdict ?? 'unknown'}
+        <span
+          className={
+            verdict === 'satisfied'
+              ? 'text-success'
+              : verdict === 'unsatisfied'
+                ? 'text-error'
+                : 'text-warning'
+          }
+        >
+          {verdict === 'unsatisfied' ? 'not met' : (verdict ?? 'unknown')}
         </span>
       </div>
+      {proof && (
+        <div className="mt-0.5 space-y-0.5 pl-5 text-[11px] leading-[1.6] text-muted-foreground">
+          {read.length > 0 && (
+            <div className="break-words">
+              OCR read{' '}
+              <ScreenList items={read.filter((line) => !line.startsWith('Absent: '))} max={8} />
+              {read.some((line) => line.startsWith('Absent: ')) && (
+                <span>
+                  {' '}
+                  · confirmed gone:{' '}
+                  {read
+                    .filter((line) => line.startsWith('Absent: '))
+                    .map((line) => `“${line.slice(8)}”`)
+                    .join(' · ')}
+                </span>
+              )}
+            </div>
+          )}
+          {file && (
+            <div className="truncate" title={proof.path}>
+              evidence screenshot saved{proof.criterion && ` for ${proof.criterion}`}
+            </div>
+          )}
+        </div>
+      )}
     </ToolSection>
   )
 }
@@ -510,6 +671,7 @@ function actTone(details: ComputerDetails | undefined, expected: boolean): Tone 
         ? 'wait'
         : toneOf(details?.status)
   if (waitingOf(details)) return 'wait'
+  if (steps.some((s) => s.wait?.status === 'timeout')) return 'wait'
   // A step that was sent and failed is a failure, even when it was the first one.
   if (steps.some((s) => s.status === 'failed')) return 'bad'
   if (!steps.some((s) => s.status === 'delivered')) return toneOf(details?.status)
@@ -558,8 +720,14 @@ export function Act({ call }: { call: ToolCallView }) {
       ? (done.find((s) => s.code)?.code ??
         (done.some((s) => s.status === 'failed') ? 'failed' : status))
       : undefined
+  // A pixel step's own refusal reads best on its step line, beside the label it expected.
+  const onStep = !!turnedDown && pixelRefusals.includes(turnedDown)
   const reason = done.find((s) => s.code || s.message)?.message ?? details?.message
   const tone = actTone(details, expected)
+  const timedOut = done.some((s) => s.wait?.status === 'timeout')
+  const proof = session?.task?.subgoals
+    .flatMap((s) => s.evidence)
+    .findLast((e): e is Proof => e.kind === 'verify' && e.ref === call.id)
   return (
     <Tool defaultOpen>
       <ToolHeader
@@ -574,6 +742,8 @@ export function Act({ call }: { call: ToolCallView }) {
               )
             ) : waiting ? (
               <span className="text-warning">{refusalText(waiting)}</span>
+            ) : timedOut ? (
+              <span className="text-warning">{refusalText('timeout')}</span>
             ) : done.some((s) => s.status === 'unknown') ? (
               <span className="text-warning">outcome unknown</span>
             ) : delivered > 0 ? (
@@ -602,8 +772,8 @@ export function Act({ call }: { call: ToolCallView }) {
             <span className="text-muted-foreground/60"> · values hidden</span>
           </ToolSection>
         )}
-        {!goal && steps.length > 0 && (!turnedDown || waiting) && (
-          <Steps call={call} done={done} steps={steps} />
+        {!goal && steps.length > 0 && (!turnedDown || waiting || onStep) && (
+          <Steps call={call} done={done} duration={duration} steps={steps} />
         )}
         {goal && <Decisions decisions={decisions} />}
         {goal && status === 'escalated' && act?.escalationReason && (
@@ -619,10 +789,11 @@ export function Act({ call }: { call: ToolCallView }) {
             </p>
           </ToolSection>
         )}
-        {turnedDown && !waiting && <Problem code={turnedDown} message={reason} />}
+        {turnedDown && !waiting && !onStep && <Problem code={turnedDown} message={reason} />}
         {!goal && delivered > 0 && (
           <Expect
             predicates={Array.isArray(call.args.expect) ? call.args.expect : []}
+            proof={proof}
             verdict={act?.verdict}
           />
         )}

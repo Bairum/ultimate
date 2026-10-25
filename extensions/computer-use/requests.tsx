@@ -24,7 +24,7 @@ import {
   ReleaseAction,
   TakeoverAction,
 } from './refs.ts'
-import { predicate } from './shared.tsx'
+import { predicate, ScreenMark } from './shared.tsx'
 import type { Pending, Session } from './shared.tsx'
 
 /** One button that calls a user-only action, spinning while it runs; a failure shows under the card. */
@@ -116,7 +116,7 @@ function Screen({ children }: { children: string }) {
   return (
     <>
       “{children}”
-      <span className="ml-1.5 text-[10.5px] text-muted-foreground/60">screen text, untrusted</span>
+      <ScreenMark />
     </>
   )
 }
@@ -409,15 +409,20 @@ function Change({ session, conversation }: { session: Session; conversation: num
   )
 }
 
-/** A takeover the agent asked for by being refused `user_active`, or one already granted (Release). */
+/**
+ * A takeover the agent asked for by being refused `user_active` (the user's frontmost app) or `takeover_required` (a
+ * window without an accessibility tree, clicked by pixel), or one already granted (Release).
+ */
 export function Takeover({
   app,
   conversation,
   granted,
+  pixels,
 }: {
   app: string
   conversation: number
   granted: boolean
+  pixels?: boolean
 }) {
   const [error, setError] = useState<string>()
   if (granted)
@@ -425,7 +430,8 @@ export function Takeover({
       <div className="flex items-center gap-2 font-mono text-[11.5px] text-muted-foreground">
         <HandIcon className="size-3 text-warning" />
         <span className="min-w-0 flex-1">
-          Agent may type into <span className="text-foreground">{app}</span> while it is in front
+          Agent may {pixels ? 'click and type in' : 'type into'}{' '}
+          <span className="text-foreground">{app}</span> while it is in front
         </span>
         <Act action={ReleaseAction} args={{ conversation, app }} onError={setError}>
           Release
@@ -437,7 +443,7 @@ export function Takeover({
     <Frame
       buttons={
         <Act action={TakeoverAction} args={{ conversation, app }} onError={setError} primary>
-          Let it type into {app}
+          {pixels ? `Let it use ${app} in front` : `Let it type into ${app}`}
         </Act>
       }
       error={error}
@@ -445,14 +451,29 @@ export function Takeover({
       kind="takeover"
       title="foreground takeover"
     >
-      <p className="font-sans text-[13px] leading-snug">
-        <span className="font-medium">{app}</span> is the app you are in, so the agent will not type
-        into it.
-      </p>
-      <p className="text-[11px] text-muted-foreground">
-        Allowing it lets keystrokes go to {app} while it is in front, until you Stop or Release.
-        Step away from the keyboard first.
-      </p>
+      {pixels ? (
+        <>
+          <p className="font-sans text-[13px] leading-snug">
+            <span className="font-medium">{app}</span> shows a remote screen with no controls to
+            read, so the agent clicks by pixel and needs the window in front.
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            Allowing it lets clicks and keystrokes go to {app} while it is in front, until you Stop
+            or Release. Step away from the mouse and keyboard first.
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="font-sans text-[13px] leading-snug">
+            <span className="font-medium">{app}</span> is the app you are in, so the agent will not
+            type into it.
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            Allowing it lets keystrokes go to {app} while it is in front, until you Stop or Release.
+            Step away from the keyboard first.
+          </p>
+        </>
+      )}
     </Frame>
   )
 }
