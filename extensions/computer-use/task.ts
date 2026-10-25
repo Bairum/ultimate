@@ -337,7 +337,14 @@ export async function checkpoint(
     }
   }
   if (scores && (scores.on_task < 0.5 || scores.progressing < 0.5)) next.replanRequired = true
-  else next.counters.sinceCheckpoint = 0
+  else {
+    next.counters.sinceCheckpoint = 0
+    // Only an independent judge clears a stall: without Jev, no progress or drift still needs a replan.
+    if (scores) {
+      next.counters.sinceProgress = 0
+      next.drift = false
+    }
+  }
   log(
     next,
     'checkpoint',

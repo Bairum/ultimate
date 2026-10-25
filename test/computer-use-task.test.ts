@@ -133,6 +133,15 @@ describe('computer task grounding', () => {
     expect('counters' in completed && completed.counters.sinceProgress).toBe(0)
   })
 
+  it('lets a positive Jev checkpoint clear a stall that the planner alone cannot', async () => {
+    let state = task()
+    for (let i = 0; i < 15; i++) state = step(state, String(i), true)
+    const alone = await checkpoint(state, { assessment: 'Still exporting', recentSteps: [] })
+    expect(checkpointGate(alone.state)?.refuse).toBe('checkpoint_due')
+    const judged = await checkpoint(state, { assessment: 'Still exporting', recentSteps: [] }, ask())
+    expect(checkpointGate(judged.state)).toBeUndefined()
+  })
+
   it('checkpoints with one Jev call; off-task cannot be cleared by another checkpoint', async () => {
     const judge = ask()
     const good = await checkpoint(
