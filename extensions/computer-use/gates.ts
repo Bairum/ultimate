@@ -301,7 +301,8 @@ export function confirmRefusal(
     message: 'The user must confirm this exact action.',
     key: confirmationKey(app, step, target, confirmationLocation(target, observation)),
     window: observation?.title ?? '',
-    label: target?.label ?? (step.kind === 'menu' ? step.path.join(' / ') : step.kind),
+    // Only screen text goes in `label`: the menu path or step kind came from the agent and is shown as the payload.
+    label: target?.label ?? '',
     payload:
       consequential(step, target).reason === 'Sensitive field'
         ? `••• (${payload.length} chars)`

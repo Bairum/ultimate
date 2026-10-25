@@ -33,7 +33,27 @@ export async function withDetails<T extends { structuredOutput?: JsonValue; deta
       [action.text, action.value].filter((v): v is string => typeof v === 'string'),
     ),
   ]
-  const data = record(value.structuredOutput)
+  const raw = record(value.structuredOutput)
+  // A plain Driver reply (listings, launches) carries `ok` and `refusal` instead of a status: name one, so a refused or
+  // failed reply never renders as a success.
+  const refusal = record(raw.refusal)
+  const data =
+    typeof raw.status !== 'string' && typeof raw.ok === 'boolean'
+      ? {
+          ...raw,
+          status: raw.ok ? 'ok' : typeof refusal.code === 'string' ? refusal.code : 'failed',
+          ...(raw.ok
+            ? {}
+            : {
+                message:
+                  typeof refusal.message === 'string'
+                    ? refusal.message
+                    : typeof raw.text === 'string'
+                      ? raw.text.slice(0, 500)
+                      : undefined,
+              }),
+        }
+      : raw
   const details = record(value.details)
   const active = state?.subgoals.find((s) => s.status === 'active')
   const task: ComputerDetails['task'] = state

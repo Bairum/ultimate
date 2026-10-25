@@ -248,7 +248,8 @@ it('requires confirmation for an exact consequential action before dispatch', as
   expect(f.fake.calls.some((c) => c.tool === 'invoke_menu')).toBe(false)
   const request = (await readSession(f.host, f.root.id)).pending[0]
   expect(request.window).toBe('Calculator')
-  expect(request.label).toBe('File / Delete')
+  expect(request.label).toBe('')
+  expect(request.payload).toBe('File / Delete')
   const key = request.key!
   await actions.confirm({ conversation: f.root.id, key }, f.ctx)
   await f.observe()
@@ -1285,6 +1286,19 @@ it('marks app, window and launch summaries as untrusted values', async () => {
       value: { [field]: expect.any(Array) },
     })
   }
+})
+
+it('names a status for plain Driver replies, so a refused launch is not shown as a success', async () => {
+  const f = await fixture()
+  await f.grant()
+  const ok = await f.invoke('computer_apps', { launch: 'Calculator' })
+  expect((ok.details as ComputerDetails).status).toBe('ok')
+  f.fake.refuseNextOf('launch_app', 'launch_refused', 'The app could not be launched.')
+  const refused = await f.invoke('computer_apps', { launch: 'Calculator' })
+  expect(refused.details as ComputerDetails).toMatchObject({
+    status: 'launch_refused',
+    message: 'The app could not be launched.',
+  })
 })
 
 it('rejects unsafe callable or deferred tools even when the offered tools are safe', async () => {

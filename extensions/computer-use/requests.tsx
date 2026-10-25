@@ -203,7 +203,7 @@ function Confirm({ request, conversation }: { request: Pending; conversation: nu
       {request.payload ? (
         <Fact label="sends">
           <pre className="max-h-40 overflow-auto rounded-sm bg-terminal px-2 py-1.5 text-[11.5px] leading-[1.5] break-words whitespace-pre-wrap">
-            {request.payload}
+            {visible(request.payload)}
           </pre>
           <span className="text-[10.5px] text-muted-foreground/70">
             {request.payload.length} characters
@@ -216,6 +216,13 @@ function Confirm({ request, conversation }: { request: Pending; conversation: nu
     </Frame>
   )
 }
+
+/** Show invisible and direction-changing characters as escapes, so the user sees every character they confirm. */
+const visible = (payload: string) =>
+  payload.replace(
+    /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`,
+  )
 
 /**
  * The task spec the agent wrote, to confirm before it acts. `compact` inside the task card, which already shows the

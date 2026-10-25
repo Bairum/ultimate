@@ -292,7 +292,7 @@ export function Observe({ call }: { call: ToolCallView }) {
         : []
   ) as Record<string, unknown>[]
   const status = details?.status
-  const failed = !!status && status !== 'ok' && !observe && !listing
+  const failed = toneOf(status) !== 'good'
   return (
     <Tool>
       <ToolHeader
@@ -308,7 +308,7 @@ export function Observe({ call }: { call: ToolCallView }) {
           </>
         }
         name="observe"
-        state={headerState(call.status, failed ? toneOf(status) : 'good')}
+        state={headerState(call.status, toneOf(status))}
         title={
           listing
             ? app
@@ -510,6 +510,8 @@ function actTone(details: ComputerDetails | undefined, expected: boolean): Tone 
         ? 'wait'
         : toneOf(details?.status)
   if (waitingOf(details)) return 'wait'
+  // A step that was sent and failed is a failure, even when it was the first one.
+  if (steps.some((s) => s.status === 'failed')) return 'bad'
   if (!steps.some((s) => s.status === 'delivered')) return toneOf(details?.status)
   if (steps.some((s) => s.status === 'refused' || s.status === 'failed')) return 'bad'
   if (steps.some((s) => s.status !== 'delivered')) return 'wait'
@@ -553,8 +555,10 @@ export function Act({ call }: { call: ToolCallView }) {
   // Nothing was sent: the whole call was turned down before its first step (no task, consent, stopped…).
   const turnedDown =
     !goal && details && !done.some((s) => s.status === 'delivered' || s.status === 'unknown')
-      ? (done.find((s) => s.code)?.code ?? status)
+      ? (done.find((s) => s.code)?.code ??
+        (done.some((s) => s.status === 'failed') ? 'failed' : status))
       : undefined
+  const reason = done.find((s) => s.code || s.message)?.message ?? details?.message
   const tone = actTone(details, expected)
   return (
     <Tool defaultOpen>
@@ -615,7 +619,7 @@ export function Act({ call }: { call: ToolCallView }) {
             </p>
           </ToolSection>
         )}
-        {turnedDown && !waiting && <Problem code={turnedDown} message={details?.message} />}
+        {turnedDown && !waiting && <Problem code={turnedDown} message={reason} />}
         {!goal && delivered > 0 && (
           <Expect
             predicates={Array.isArray(call.args.expect) ? call.args.expect : []}
@@ -650,7 +654,7 @@ export function Apps({ call }: { call: ToolCallView }) {
   const summary = summaryOf(details)
   const launch = text(call.args.launch)
   const apps = (Array.isArray(summary.apps) ? summary.apps : []) as Record<string, unknown>[]
-  const status = launch && summary.ok === true ? 'delivered' : details?.status
+  const status = details?.status
   const failed = !!status && toneOf(status) !== 'good'
   return (
     <Tool>

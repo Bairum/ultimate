@@ -167,6 +167,10 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
     refuseNext(code: string, message: string, hint?: string) {
       scripts.push({ reply: refusal(code, message, hint) })
     },
+    /** Refuse the next call of `tool` only; other calls pass. */
+    refuseNextOf(tool: string, code: string, message: string) {
+      scripts.push({ tool, reply: refusal(code, message) })
+    },
     dropNext() {
       scripts.push({ reply: 'drop' })
     },

@@ -94,6 +94,8 @@ const refusals: Record<string, string> = {
   incomplete: 'incomplete',
   awaiting_confirmation: 'waits for you',
   unknown: 'outcome unknown',
+  payload_too_large: 'too long to confirm',
+  failed: 'failed',
 }
 export const refusalText = (code: string) =>
   refusals[code] ?? (code.startsWith('task_') ? `task ${code.slice(5).replace('_', ' ')}` : code)
@@ -110,6 +112,7 @@ export const escalations: Record<string, string> = {
   unverifiable_done: 'No check to verify done',
   jev_unavailable: 'Jev is unavailable',
   stopped: 'Stopped',
+  payload_too_large: 'The text is too long to confirm',
 }
 
 /**
@@ -238,7 +241,7 @@ export const toneClass: Record<Tone, string> = {
   bad: 'text-error',
 }
 export const toneOf = (status?: string): Tone =>
-  !status || ['delivered', 'done', 'active', 'satisfied', 'completed'].includes(status)
+  !status || ['ok', 'delivered', 'done', 'active', 'satisfied', 'completed'].includes(status)
     ? 'good'
     : ['escalated', 'unknown', 'incomplete', 'stopped', 'awaiting_confirmation'].includes(status) ||
         status.endsWith('_required') ||
