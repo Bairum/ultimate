@@ -113,13 +113,13 @@ tool call.
 
 ```ts
 type Goal = {
-  text: string; // "Set Size to Large, tick 'I agree'", the planner's words
-  params?: Record<string, string>; // values Jev may place (by name); { secret: NAME } for secrets
-  steps?: string[]; // optional declared steps, used for progress and candidate ranking
-  done_when?: Predicate[]; // verify_state predicates; required for 'done'
-  budget?: { steps?: number; seconds?: number }; // default 8 steps, 30 s
-  allow?: ("press" | "toggle" | "select" | "set_value" | "type" | "menu")[]; // default all but type
-};
+  text: string // "Set Size to Large, tick 'I agree'", the planner's words
+  params?: Record<string, string> // values Jev may place (by name); { secret: NAME } for secrets
+  steps?: string[] // optional declared steps, used for progress and candidate ranking
+  done_when?: Predicate[] // verify_state predicates; required for 'done'
+  budget?: { steps?: number; seconds?: number } // default 8 steps, 30 s
+  allow?: ('press' | 'toggle' | 'select' | 'set_value' | 'type' | 'menu')[] // default all but type
+}
 ```
 
 ```mermaid
