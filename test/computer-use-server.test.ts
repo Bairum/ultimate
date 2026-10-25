@@ -1456,6 +1456,19 @@ it('delivers a label-checked degraded pixel click, settles and uses its OCR labe
   expect(small).toHaveLength(2)
 })
 
+it('refuses a labelled pixel click when OCR returns no coordinate metadata to place the label', async () => {
+  const f = await pixelFixture()
+  const call = f.driver.call.bind(f.driver)
+  f.driver.call = async (tool, args, signal) => {
+    const result = await call(tool, args, signal)
+    if (tool !== 'parse_visual_regions' || !result.structured) return result
+    const { capture: _capture, ...structured } = result.structured
+    return { ...result, structured }
+  }
+  expect(data(await f.run([f.pixel], true)).status).toBe('label_mismatch')
+  expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
+})
+
 it.each(['wrong', 'ambiguous'] as const)(
   'refuses a %s expected pixel label without sending a click',
   async (mode) => {

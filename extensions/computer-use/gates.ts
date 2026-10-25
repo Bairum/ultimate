@@ -214,10 +214,13 @@ export const dispatchGates: Gate[] = [
     if (!step.expect_label) return undefined
     const parsed = await parseRegions(ctx.driver, step.capture!, { kinds: ['text'] }, ctx.signal)
     const point = screenshotPoint(parsed.coordinateSpace, { x: step.x, y: step.y })
-    if (!point) {
-      ctx.target = undefined
-      return undefined
-    }
+    // A label the agent named but OCR cannot place is unverified: refuse rather than fall back to a blind confirmation.
+    if (!point)
+      return {
+        refuse: 'label_mismatch',
+        message:
+          'The capture has no usable coordinate metadata, so expect_label cannot be checked. Observe again.',
+      }
     const checked = matchLabel(
       parsed.regions,
       step.expect_label,
