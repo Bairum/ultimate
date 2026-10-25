@@ -1,0 +1,142 @@
+import type { EntryRecord } from '@earendil-works/pi-durable'
+import { isInput } from '../../lib/entries.ts'
+import type { Role, StoredNote, Severity } from './refs.ts'
+import { SEVERITIES } from './refs.ts'
+
+export const rank = (s: Severity) => SEVERITIES.indexOf(s)
+export function textOf(entry: EntryRecord | undefined) {
+  return (entry?.model ?? [])
+    .flatMap((m) =>
+      typeof m.content === 'string'
+        ? [m.content]
+        : m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])),
+    )
+    .join('\n')
+}
+export function renderInput(
+  entries: readonly EntryRecord[],
+  role: Role,
+  rubric: string,
+  agents: string,
+  signal?: string,
+  ledger?: unknown,
+  latest?: string,
+  compact = false,
+) {
+  const clean = entries.filter((e) => e.kind !== 'advisor.note')
+  const results = new Map(
+    clean.flatMap((e) =>
+      (e.model ?? []).flatMap((m) =>
+        m.role === 'toolResult'
+          ? [
+              [
+                m.toolCallId,
+                {
+                  entry: e.id,
+                  text: JSON.stringify(m.content).slice(0, compact ? 400 : 1600),
+                  error: m.isError,
+                },
+              ] as const,
+            ]
+          : [],
+      ),
+    ),
+  )
+  const calls = clean.flatMap((e) =>
+    (e.model ?? []).flatMap((m) =>
+      m.role === 'assistant'
+        ? m.content.flatMap((b) =>
+            b.type === 'toolCall'
+              ? [
+                  {
+                    entry: e.id,
+                    name: b.name,
+                    arguments: JSON.stringify(b.arguments).slice(0, compact ? 200 : 1200),
+                    result: results.get(b.id),
+                  },
+                ]
+              : [],
+          )
+        : [],
+    ),
+  )
+  return JSON.stringify({
+    role,
+    rubric: rubric.slice(0, 20_480),
+    signal,
+    agents: agents.slice(0, 8192),
+    request: textOf(clean.findLast(isInput)).slice(0, compact ? 1500 : 8000),
+    latest:
+      latest?.slice(0, compact ? 1500 : 8000) ??
+      clean
+        .filter((e) => e.model?.some((m) => m.role === 'assistant'))
+        .slice(-1)
+        .map((e) => ({ entry: e.id, text: textOf(e).slice(0, compact ? 1500 : 8000) })),
+    ledger: ledger === undefined ? undefined : JSON.stringify(ledger).slice(0, 8192),
+    recentTools: calls.slice(compact ? -10 : -25),
+  }).slice(0, compact ? 12_000 : 90_000)
+}
+export type ReviewNote = { severity: Severity; note: string; evidence: string }
+export const normalize = (text: string) => text.toLowerCase().replace(/\s+/g, ' ').trim()
+export function parseNotes(
+  value: unknown,
+  maxNotes: number,
+  previous: StoredNote[],
+  conversation: number,
+  now: number,
+): ReviewNote[] {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    Object.keys(value).some((k) => !['notes', 'ledger'].includes(k)) ||
+    !Array.isArray((value as { notes?: unknown }).notes)
+  )
+    throw new Error('Invalid review JSON')
+  const notes: ReviewNote[] = []
+  let regular = 0
+  for (const n of (value as { notes: unknown[] }).notes) {
+    if (!n || typeof n !== 'object') continue
+    const v = n as ReviewNote
+    if (
+      Object.keys(v).some((k) => !['severity', 'note', 'evidence'].includes(k)) ||
+      !SEVERITIES.includes(v.severity) ||
+      typeof v.note !== 'string' ||
+      !v.note.trim() ||
+      v.note.length > 500 ||
+      typeof v.evidence !== 'string' ||
+      !v.evidence.trim() ||
+      v.evidence.length > 300
+    )
+      continue
+    if (
+      previous.some(
+        (p) =>
+          p.conversation === conversation &&
+          p.at >= now - 86_400_000 &&
+          normalize(p.note) === normalize(v.note) &&
+          rank(p.severity) >= rank(v.severity),
+      ) ||
+      notes.some(
+        (p) => normalize(p.note) === normalize(v.note) && rank(p.severity) >= rank(v.severity),
+      )
+    )
+      continue
+    if (v.severity !== 'blocker' && ++regular > maxNotes) continue
+    notes.push(v)
+  }
+  return notes
+}
+export function advisory(advisor: string, notes: ReviewNote[]) {
+  const escape = (v: string) =>
+    v
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+  return notes
+    .map(
+      (n) =>
+        `<advisory advisor="${escape(advisor)}" severity="${n.severity}" guidance="weigh, don't blindly obey">${escape(n.note)} (evidence: ${escape(n.evidence)})</advisory>`,
+    )
+    .join('\n')
+}

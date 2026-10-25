@@ -1,3 +1,4 @@
+/* oxlint-disable ultimate/api-file-shape -- Shared browser-safe enum constants are part of this extension's public contract. */
 /** Advisor contract shared by server and web: config, documents, entry data, actions and events. Browser-safe. */
 import { actionRef, docRef } from '../../shared/extension-api.ts'
 import { defineEvent } from '../../shared/events.ts'
@@ -122,6 +123,7 @@ export type AdvisorStateDoc = {
   notes: StoredNote[]
   spend: Record<string, { total: number; roles: Partial<Record<Role, number>> }>
 }
+/** Root conversation activity, retained notes and daily spend. */
 export const AdvisorState = docRef<AdvisorStateDoc>('advisor.state')
 
 /** On @ultimate: open promises and user questions the `promises` advisor tracks. */
@@ -133,6 +135,7 @@ export type LedgerItem = {
   entry?: number
   dueAt?: number
 }
+/** On @ultimate: open promises and unanswered questions. */
 export const AdvisorLedger = docRef<{ items: LedgerItem[] }>('advisor.ledger')
 
 /** The effective config with the layer that set each field, rubrics and validation problems. */
@@ -144,6 +147,7 @@ export type ConfigView = {
   rubrics: { name: string; source: 'builtin' | 'user' | 'project'; text: string }[]
   problems: string[]
 }
+/** No arguments; returns effective settings, layers, rubrics and validation problems. */
 export const ConfigAction = actionRef<null, ConfigView>('advisor', 'config')
 /** User-only and host: replace the `advisor` key of one layer (null removes it). */
 export const SetConfigAction = actionRef<
@@ -161,6 +165,7 @@ export const FeedbackAction = actionRef<
   StoredNote
 >('advisor', 'feedback')
 
+/** One review or skip, including role, advisor, note count and response cost. */
 export const Reviewed = defineEvent<{
   conversation: number
   role: Role
