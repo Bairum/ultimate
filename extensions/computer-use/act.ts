@@ -712,6 +712,13 @@ export async function act(
               runtimeState.observations.set(cacheKey(conversation, args.app), observation)
               post = observation
             }
+            // value_equals is judged locally on an observation, so read the post-action state first.
+            if (
+              outcome.status === 'delivered' &&
+              !post &&
+              splitValueEquals(expectations).local.length
+            )
+              post = await observe()
             verified =
               outcome.status === 'delivered' &&
               (lastVerdict = await verify(expectations)) === 'satisfied' &&

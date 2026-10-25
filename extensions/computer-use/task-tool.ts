@@ -12,7 +12,7 @@ import { predicates } from './schemas.ts'
 
 import * as task from './task.ts'
 import { pixelDefaults } from './perception.ts'
-import { observeWindow } from './observe.ts'
+import { observeWindow, splitValueEquals, judgeValueEquals } from './observe.ts'
 import { verifyOcr, ocrEvidence } from './verify-ocr.ts'
 import { allGrants, resolveIdentity, readConsent } from './gates.ts'
 import { redactor } from './content.ts'
@@ -189,13 +189,36 @@ export async function taskTool(
                 if (checked.verdict === 'unknown') verdict = 'unknown'
                 continue
               }
-              const checked = await driver.call(
-                'verify_state',
-                { pid: window.pid!, window_id: window.window_id!, expect: preds, timeout_ms: 0 },
-                signal,
-              )
-              const value = checked.structured?.verdict ?? checked.structured?.status
-              if (checked.ok && value === 'satisfied') {
+              const { local, remote } = splitValueEquals(preds)
+              let windowVerdict: Verdict = local.length
+                ? judgeValueEquals(
+                    await observeWindow(
+                      driver,
+                      app,
+                      Number(window.window_id),
+                      'never',
+                      undefined,
+                      undefined,
+                      signal,
+                    ),
+                    local,
+                  )
+                : 'satisfied'
+              if (remote.length && windowVerdict !== 'unsatisfied') {
+                const checked = await driver.call(
+                  'verify_state',
+                  { pid: window.pid!, window_id: window.window_id!, expect: remote, timeout_ms: 0 },
+                  signal,
+                )
+                const value = checked.structured?.verdict ?? checked.structured?.status
+                windowVerdict =
+                  checked.ok && value === 'unsatisfied'
+                    ? 'unsatisfied'
+                    : checked.ok && value === 'satisfied'
+                      ? windowVerdict
+                      : 'unknown'
+              }
+              if (windowVerdict === 'satisfied') {
                 evidence.push({
                   kind: 'verify',
                   predicates: preds,
@@ -205,7 +228,7 @@ export async function taskTool(
                 })
                 return 'satisfied'
               }
-              if (!checked.ok || value !== 'unsatisfied') verdict = 'unknown'
+              if (windowVerdict !== 'unsatisfied') verdict = 'unknown'
             }
           }
           return verdict
