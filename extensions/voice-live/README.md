@@ -13,8 +13,9 @@ agent uses `openai-codex/gpt-6-luna` through Pi's existing ChatGPT login, low th
 1. The browser acquires the microphone, adds its track to a peer connection and creates `oai-events` before its
    offer. `start` looks up `subagents.standing('voice')` and exchanges SDP through OpenAI's live sessions endpoint
    (`gpt-live-1`, voice `marin`). It seeds at most ten recent Voice lines, each clipped to 200 characters.
-2. After `session.started`, remote audio plays through an autoplay element. GPT-Live only listens, backchannels
-   and speaks received commentary. It never handles work questions or decides to delegate.
+2. After `session.started`, remote audio plays through an autoplay element. GPT-Live only listens, backchannels,
+   answers connection checks and greetings itself, and speaks received commentary. It never handles work questions
+   or decides to delegate; Voice stays silent on the small talk GPT-Live already answered, so a line gets one answer.
 3. `Relay` joins transcript fragments after 1,200 ms quiet when the line ends a sentence, 2,800 ms when it trails
    off, so a breath mid-thought does not split it. The transcriber's `[unintelligible]` and `[inaudible]` markers
    become "…". GPT-Live has no transcription, language or turn-detection settings; this is the only place to tune
@@ -50,6 +51,10 @@ Each forwarded request is one @ultimate message card (`Bubble` from messages): w
 sidebar's phase and elapsed time), then the spoken answer, unfolding to @ultimate's full answer (`voice.answer`, whose
 `source` is the answer entry) with Open in @ultimate; a notice turns it failed. Heard lines and Voice's own small
 talk stay quiet, tool cards are hidden and ordinary agent prose is quiet.
+
+Collapse (or Alt+V) sends Voice back without stopping it: on @ultimate's conversation a small card at the top right
+(full width under the header on phones) shows the step and the words being heard, with Mute, End and expand. Elsewhere
+the title-bar pill says voice is live; on @ultimate the card replaces it, so there is one indicator at a time.
 
 Voice mode outlasts individual sessions. After two quiet minutes the session closes and listening pauses; an answer
 wakes it (or waits for a tap if browser activation blocks it). A pending forwarded request gets a short “Still on it”
