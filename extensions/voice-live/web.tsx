@@ -1,5 +1,6 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
+  ArrowRightIcon,
   AudioLinesIcon,
   LoaderCircleIcon,
   MicIcon,
@@ -10,7 +11,7 @@ import {
   Volume2Icon,
   XIcon,
 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { Message, MessageContent } from '@/components/ai/message'
 import { Kbd } from '@/components/ui/kbd'
@@ -23,6 +24,7 @@ import {
   events,
   formatKeys,
   formatTime,
+  provide,
   useAction,
   useConversation,
   useDocOf,
@@ -35,10 +37,12 @@ import {
 } from '@/sdk'
 import type { UltimateActions } from '@/sdk'
 import { SideChatsDoc, useSideChatFront } from '../side-chat/ui.tsx'
+import { UnderUltimate, Unlisted } from '../sidebar/ui.tsx'
 import { openAgentSource, StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import * as live from './live.tsx'
 import type { VoiceMode } from './live.tsx'
 import { StatusAction, VoiceDoc } from './refs.ts'
+import { CONFIRM } from './relay.ts'
 import type { VoiceLine, VoiceSession, VoiceUtterance } from './refs.ts'
 
 const KEYS = 'alt+v'
@@ -538,7 +542,9 @@ function VoiceDock({ core }: { core: ReactNode }) {
                   : 'Closed after two quiet minutes · an answer wakes it'
                 : mode.muted
                   ? '@ultimate keeps working · unmute to talk'
-                  : 'Talk · @ultimate answers out loud'}
+                  : CONFIRM
+                    ? 'Talk · asks before passing on to @ultimate'
+                    : 'Talk · requests go straight to @ultimate'}
           </div>
         </div>
         {off || asleep ? (
@@ -581,26 +587,126 @@ function VoiceDock({ core }: { core: ReactNode }) {
   )
 }
 
+// ---- sidebar: Voice under @ultimate ------------------------------------------------------------------------------
+
+/** Voice's row under @ultimate: its state; a click toggles it in front while on, or opens it to start. */
+function useVoiceRow(main: number | undefined): ReactNode {
+  const { voice } = useIds()
+  const mode = useMode()
+  const actions = useUltimate()
+  if (main === undefined || voice === undefined) return null
+  const on = mode.phase !== 'off'
+  const inFront = on && mode.front && actions.conversationId === main
+  const current = inFront || actions.conversationId === voice
+  const hot = mode.phase === 'live' && !mode.muted
+  const word = !on
+    ? 'off'
+    : mode.phase === 'live'
+      ? mode.muted
+        ? 'muted'
+        : 'live'
+      : mode.phase === 'paused'
+        ? mode.waiting
+          ? 'answer waiting'
+          : 'paused'
+        : mode.phase === 'starting'
+          ? 'connecting'
+          : 'ending'
+  return (
+    <button
+      aria-current={current ? 'true' : undefined}
+      className={cn(
+        'mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-1.5 rounded-md py-1.5 pr-2 pl-9 text-left outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring',
+        current && 'bg-sidebar-accent',
+      )}
+      data-voice-live-row={voice}
+      key="voice"
+      onClick={() => {
+        if (!on) return actions.switchConversation(voice)
+        toggleFront(actions)
+      }}
+      title={
+        on
+          ? `${mode.front ? 'Send Voice back' : 'Bring Voice to the front'} · ${keyHint}`
+          : 'Open Voice'
+      }
+      type="button"
+    >
+      <AudioLinesIcon
+        className={cn('size-3 shrink-0', on ? 'text-brand' : 'text-muted-foreground')}
+      />
+      <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-foreground/80">
+        Voice
+      </span>
+      <span
+        className={cn(
+          'flex shrink-0 items-center gap-1 font-mono text-[10px]',
+          hot ? 'text-error' : mode.waiting ? 'text-brand' : 'text-muted-foreground',
+        )}
+      >
+        {hot && <span className="size-1.5 rounded-full bg-error motion-safe:animate-pulse" />}
+        {word}
+      </span>
+    </button>
+  )
+}
+
+/** The Voice conversation nests under @ultimate, never in the sidebar's own sections. */
+function useVoiceIds(): ReadonlySet<number> {
+  const { voice } = useIds()
+  return useMemo(() => new Set(voice === undefined ? [] : [voice]), [voice])
+}
+
 // ---- transcript ----------------------------------------------------------------------------------------------------
 
-/** A line of the relay: Daniel's words as a turn of his, @ultimate's spoken answer as quiet prose with its source. */
+/**
+ * A line of the relay. Daniel's words are turns of his; the request passed on to @ultimate is marked as such. Spoken
+ * lines are prose under who spoke: @ultimate's answer with its source, the voice assistant's own words quieter.
+ */
 function LineRow({ entry }: { entry: EntryRecord }) {
   const line = entry.data as unknown as VoiceLine
   const actions = useUltimate()
   const mode = useMode()
   if (line.role === 'daniel')
     return (
-      <Message className="mt-3 first:mt-0" data-voice-line="daniel" from="user">
-        <MessageContent>
+      <Message
+        className="mt-3 first:mt-0"
+        data-voice-line={line.forwarded ? 'forwarded' : 'daniel'}
+        from="user"
+      >
+        <MessageContent
+          className={cn(
+            line.forwarded && 'group-[.is-user]:border-brand/45 group-[.is-user]:bg-brand/5',
+          )}
+        >
+          {line.forwarded && (
+            <span className="-mb-1 flex items-center gap-1 font-mono text-[10.5px] text-brand">
+              <ArrowRightIcon className="size-3" />
+              passed to @ultimate
+            </span>
+          )}
           <UserText text={line.text} />
         </MessageContent>
       </Message>
     )
+  if (line.role === 'live')
+    return (
+      <div className="mt-3 flex gap-2.5 first:mt-0" data-voice-line="live">
+        <AudioLinesIcon className="mt-[3px] size-3.5 shrink-0 text-muted-foreground/60" />
+        <div className="min-w-0 flex-1">
+          <span className="font-mono text-[10.5px] text-muted-foreground/70">voice assistant</span>
+          <p className="text-[13px] leading-relaxed break-words text-muted-foreground">
+            {line.text}
+          </p>
+        </div>
+      </div>
+    )
   const source = line.source
   return (
     <div className="mt-3 flex gap-2.5 first:mt-0" data-voice-line="ultimate">
-      <Volume2Icon className="mt-1 size-3.5 shrink-0 text-brand" />
+      <Volume2Icon className="mt-[3px] size-3.5 shrink-0 text-brand" />
       <div className="min-w-0 flex-1">
+        <span className="font-mono text-[10.5px] text-brand">@ultimate</span>
         <p className="text-[14px] leading-relaxed break-words">{line.text}</p>
         {source && (
           <button
@@ -685,6 +791,7 @@ export default defineWebExtension({
     overlay: [Relay],
   },
   composer: VoiceDock,
+  provides: [provide(UnderUltimate, useVoiceRow), provide(Unlisted, useVoiceIds)],
   entries: { 'voice.line': LineRow, 'voice.session': SessionRow, 'voice.utterance': UtteranceRow },
   commands: [
     {

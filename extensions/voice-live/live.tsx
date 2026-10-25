@@ -5,6 +5,8 @@
  */
 import { api, errorMessage, events } from '@/sdk'
 import type { ActionRef } from '@/sdk'
+import { playNotes } from '../sounds/ui.tsx'
+import type { Note } from '../sounds/ui.tsx'
 import { StatusAction } from './refs.ts'
 import type { VoiceStatus } from './refs.ts'
 import { IDLE_MS } from './relay.ts'
@@ -39,8 +41,40 @@ let closing: Promise<void> | undefined
 let ticker: ReturnType<typeof setInterval> | undefined
 const listeners = new Set<() => void>()
 
+/**
+ * Cues for the ear, softer and shorter than the notification bells: ready rises a fourth (G5, C6), paused falls back
+ * (C6, G5), ended steps down to rest (G5, E5, C5). Part of using voice, so the sounds switch does not mute them.
+ */
+const cues: Record<'ready' | 'paused' | 'ended', Note[]> = {
+  ready: [
+    [0, 783.99, 0.25],
+    [0.1, 1046.5, 0.45],
+  ],
+  paused: [
+    [0, 1046.5, 0.25],
+    [0.12, 783.99, 0.5],
+  ],
+  ended: [
+    [0, 783.99, 0.22],
+    [0.11, 659.25, 0.22],
+    [0.22, 523.25, 0.6],
+  ],
+}
+
+/** The cue a phase change sounds: going live, an idle or dropped session pausing, voice mode ending. */
+function cueOf(from: Phase, to: Phase) {
+  if (from === to) return undefined
+  if (to === 'live') return cues.ready
+  if (to === 'paused' && from === 'live') return cues.paused
+  if (to === 'off' && from !== 'starting') return cues.ended
+  return undefined
+}
+
 function set(next: Partial<VoiceMode>) {
+  const cue = next.phase && cueOf(mode.phase, next.phase)
   mode = { ...mode, ...next }
+  // The indicator already shows the phase; a cue the browser refuses is only worth a warning.
+  if (cue) playNotes(cue, 0.08).catch((error: unknown) => console.warn('Voice cue failed', error))
   for (const listener of listeners) listener()
 }
 

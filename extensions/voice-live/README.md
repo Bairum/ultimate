@@ -104,11 +104,16 @@ of protocol events. Also show session expiry/closure and prevent multiple local 
   lines already there on mount. Their delegation is passed only if one of this session's own utterances carried it.
   While `paused`, an answer starts a new session and speaks it with `null`; without an earlier gesture on the page
   (`navigator.userActivation`) or when the start fails, it shows "Answer waiting · Tap to hear" instead.
-- **Transcript**: `voice.line` from Daniel is a user turn, from @ultimate a spoken line with a "full answer" link to
-  its `source` entry; `voice.session` is a dashed divider ("Live · 14:02", "Ended · 3 min"); `voice.utterance` in
-  @ultimate is Daniel's turn with a small "by voice" mark.
-- Voice has no row under @ultimate in the sidebar: `sidebar.under-ultimate` and `sidebar.unlisted` have one provider
-  each, and side chat is it. It shows as an ownerless conversation titled Voice.
+- **Transcript**: `voice.line` from Daniel is a user turn; a `forwarded` one is tinted and labelled "→ passed to
+  @ultimate". A `live` line is GPT-Live's own speech, quiet and labelled "voice assistant"; an `ultimate` line is the
+  answer read out, labelled @ultimate, with a "full answer" link to its `source` entry. `voice.session` is a dashed
+  divider ("Live · 14:02", "Ended · 3 min"); `voice.utterance` in @ultimate is Daniel's turn with a "by voice" mark.
+  While live, Voice's controls say "asks before passing on to @ultimate" (`CONFIRM` in `relay.ts`).
+- **Sidebar**: Voice is a row under @ultimate, beside open side chats (`sidebar.under-ultimate`), with its state (live,
+  muted, paused, answer waiting, off); a click toggles it in front, or opens it while off. It names Voice to
+  `sidebar.unlisted`, so no other section lists it.
+- **Cues**: soft bells through `playNotes` from `sounds/ui.tsx`, quieter than the notification sounds and outside their
+  switch: rising when a session goes live, falling when a live session pauses, stepping down when voice mode ends.
 
 ## Costs and verification
 
