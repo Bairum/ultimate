@@ -137,17 +137,25 @@ export function parseNotes(
   }
   return notes
 }
-export function advisory(advisor: string, notes: ReviewNote[]) {
+export function advisory(advisor: string, notes: (ReviewNote & { ref?: string })[]) {
   const escape = (v: string) =>
     v
       .replaceAll('&', '&amp;')
       .replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;')
-  return notes
-    .map(
-      (n) =>
-        `<advisory advisor="${escape(advisor)}" severity="${n.severity}" guidance="weigh, don't blindly obey">${escape(n.note)} (evidence: ${escape(n.evidence)})</advisory>`,
-    )
-    .join('\n')
+  return (
+    notes
+      .map(
+        (n) =>
+          `<advisory${n.ref ? ` id="${escape(n.ref)}"` : ''} advisor="${escape(advisor)}" severity="${n.severity}" guidance="weigh, don't blindly obey">${escape(n.note)} (evidence: ${escape(n.evidence)})</advisory>`,
+      )
+      .join('\n') +
+    (notes.some((n) => n.ref)
+      ? `\nAnswer each advisory in your next reply with a line: advisor ${notes
+          .map((n) => n.ref)
+          .filter(Boolean)
+          .join('|')}: addressed|deferred|disputed — reason.`
+      : '')
+  )
 }

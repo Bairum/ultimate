@@ -16,7 +16,7 @@ import type { JsonValue } from '@earendil-works/chord'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
-import advisor from '../extensions/advisor/server.ts'
+import advisor, { actions } from '../extensions/advisor/server.ts'
 import { deliver, route } from '../extensions/advisor/deliver.ts'
 import { mergeConfig } from '../extensions/advisor/config.ts'
 import { Runs, State, Ledger, utcDay } from '../extensions/advisor/state.ts'
@@ -24,6 +24,7 @@ import { review, runEntries } from '../extensions/advisor/review.ts'
 import { renderInput } from '../extensions/advisor/render.ts'
 import { Standing, Profile } from '../extensions/subagents/api.ts'
 import type { AdvisorNoteEntry, Role } from '../extensions/advisor/refs.ts'
+import { closeOut } from '../extensions/advisor/lifecycle.ts'
 vi.mock('../lib/exec.ts', () => ({
   exec: async () => {
     throw Object.assign(new Error('not ignored'), { code: 1 })
@@ -465,3 +466,310 @@ it.each(['idle', 'new run'] as const)(
     }
   },
 )
+
+async function lifecycleNote(
+  f: Awaited<ReturnType<typeof fixture>>,
+  delivery: AdvisorNoteEntry['delivered'] = 'note',
+) {
+  const api = f.api()
+  await review(
+    f.host,
+    api,
+    { role: 'worker', point: 'rounds', run: 100 },
+    {
+      ...f.config,
+      roles: {
+        worker: {
+          enabled: true,
+          advisors: ['verification'],
+          delivery: delivery === 'card' ? 'card' : 'note',
+          steerOn: 'never',
+        },
+      },
+    },
+    [],
+    context,
+  )
+  return (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes.at(-1)!
+}
+it('tracks request reads without changing messages; continuations are read at delivery, cards never are', async () => {
+  const f = await fixture()
+  const note = await lifecycleNote(f)
+  const messages = [
+    { role: 'user' as const, content: `<advisory id="${note.ref}">test</advisory>`, timestamp: 0 },
+  ]
+  const original = structuredClone(messages)
+  expect(await f.hooks.beforeRequest({ messages }, f.api(), context)).toBeUndefined()
+  expect(messages).toEqual(original)
+  expect((await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0].readAt).toEqual(
+    expect.any(Number),
+  )
+  const g = await fixture()
+  await g.hooks.onYield(fauxAssistantMessage([fauxText('done')]), g.api(), context)
+  expect((await g.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0]).toMatchObject({
+    delivered: 'continue',
+    readAt: expect.any(Number),
+  })
+  const h = await fixture()
+  const card = await lifecycleNote(h, 'card')
+  await h.hooks.beforeRequest(
+    { messages: [{ ...messages[0], content: `<advisory id="${card.ref}">test</advisory>` }] },
+    h.api(),
+    context,
+  )
+  expect(
+    (await h.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0].readAt,
+  ).toBeUndefined()
+})
+it.each(['addressed', 'deferred', 'disputed'])(
+  'records %s acknowledgements and lets a later ack replace them',
+  async (status) => {
+    const f = await fixture()
+    const note = await lifecycleNote(f)
+    await f.hooks.beforeRequest(
+      {
+        messages: [
+          { role: 'user', content: `<advisory id="${note.ref}">test</advisory>`, timestamp: 0 },
+        ],
+      },
+      f.api(),
+      context,
+    )
+    await f.hooks.afterResponse(
+      fauxAssistantMessage([
+        fauxText(`ADVISOR ${note.ref}: ${status.toUpperCase()} — because tests`),
+      ]),
+      f.api(),
+      context,
+    )
+    expect(
+      (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0].response,
+    ).toMatchObject({ status, source: 'ack', reason: 'because tests' })
+    await f.hooks.afterResponse(
+      fauxAssistantMessage([fauxText(`advisor ${note.ref}: deferred: later`)]),
+      f.api(),
+      context,
+    )
+    expect(
+      (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0].response,
+    ).toMatchObject({ status: 'deferred', reason: 'later' })
+  },
+)
+it('judges read notes once, resolves acknowledgements without a model, and preserves user closes', async () => {
+  const f = await fixture()
+  const note = await lifecycleNote(f)
+  await f.hooks.beforeRequest(
+    {
+      messages: [
+        { role: 'user', content: `<advisory id="${note.ref}">test</advisory>`, timestamp: 0 },
+      ],
+    },
+    f.api(),
+    context,
+  )
+  f.response.content = [
+    fauxText(JSON.stringify({ status: 'addressed', reason: 'check rerun', evidence: '#23' })),
+  ]
+  f.response.usage.cost.total = 0.02
+  const api = f.api()
+  const before = f.stream.mock.calls.length
+  expect((await f.harness.snapshot(Runs, ROOT_CONVERSATION_ID, context))?.readRuns).toEqual({
+    [note.id]: 100,
+  })
+  await closeOut(f.host, api, { run: 100, latest: 'check passed' }, f.config, context)
+  await closeOut(f.host, api, { run: 100, latest: 'check passed' }, f.config, context)
+  expect(f.stream.mock.calls.length - before).toBe(1)
+  const state = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
+  expect(state.notes[0]).toMatchObject({
+    status: 'resolved',
+    closedBy: 'auto',
+    response: { status: 'addressed', source: 'judged', evidence: '#23' },
+  })
+  expect(state.spend[utcDay(Date.now())].roles.worker).toBe(0.02)
+  expect(f.stream.mock.calls.at(-1)![1].tools).toBeUndefined()
+  const g = await fixture()
+  const ack = await lifecycleNote(g)
+  await g.hooks.beforeRequest(
+    {
+      messages: [
+        { role: 'user', content: `<advisory id="${ack.ref}">test</advisory>`, timestamp: 0 },
+      ],
+    },
+    g.api(),
+    context,
+  )
+  await g.hooks.afterResponse(
+    fauxAssistantMessage([fauxText(`advisor ${ack.ref}: disputed - not relevant`)]),
+    g.api(),
+    context,
+  )
+  await actions.feedback({ note: ack.id, status: 'dismissed', reason: 'false-alarm' }, {
+    host: g.host,
+  } as never)
+  const calls = g.stream.mock.calls.length
+  await closeOut(g.host, g.api(), { run: 100, latest: 'done' }, g.config, context)
+  expect(g.stream).toHaveBeenCalledTimes(calls)
+  expect((await g.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0]).toMatchObject({
+    status: 'dismissed',
+    closedBy: 'user',
+    dismissReason: 'false-alarm',
+    response: { status: 'disputed', source: 'ack' },
+  })
+})
+it('records late and unread notes on the five-minute tick and reports lifecycle stats', async () => {
+  const interval = vi.spyOn(globalThis, 'setInterval')
+  const f = await fixture()
+  const tick = interval.mock.calls.at(-1)![0] as () => void
+  interval.mockRestore()
+  const note = await lifecycleNote(f)
+  await f.harness.commit(async (tx) => {
+    const state = await tx.doc(State, ROOT_CONVERSATION_ID)
+    state.notes.push({ ...state.notes[0], id: 'unread', ref: 'unred', at: note.at - 100 })
+  }, context)
+  vi.spyOn(f.host, 'want').mockReturnValue({ concluded: async () => new Set([f.id]) })
+  vi.spyOn(f.host, 'conversations').mockReturnValue([
+    {
+      id: f.id,
+      label: 'worker',
+      busy: false,
+      answerAt: note.at - 1,
+      inputAt: note.at - 10,
+      cwd: f.host.projectRoot,
+    },
+  ] as never)
+  tick()
+  await until(async () =>
+    (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes.every(
+      (n) => n.response,
+    ),
+  )
+  const state = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
+  expect(state.notes.map((n) => n.response?.status)).toEqual(['late', 'unread'])
+  expect(state.notes.every((n) => n.status === 'resolved' && n.closedBy === 'auto')).toBe(true)
+  expect(await actions.stats({ days: 7 }, { host: f.host } as never)).toMatchObject({
+    roles: { worker: { delivered: 2, read: 0, late: 1, unread: 1, pending: 0 } },
+  })
+})
+it('skips a pending delivery dismissed by the user', async () => {
+  const f = await fixture()
+  const note = {
+    ...notes[0],
+    id: 'pending-note',
+    ref: 'pend1',
+    conversation: f.id,
+    advisor: 'verification',
+    role: 'worker' as const,
+    point: 'rounds' as const,
+    at: Date.now(),
+    status: 'open' as const,
+    delivered: 'note' as const,
+  }
+  const entry: AdvisorNoteEntry = {
+    review: 'pending',
+    advisor: 'verification',
+    role: 'worker',
+    point: 'rounds',
+    model: 'faux/faux',
+    delivered: 'note',
+    notes: [{ ...notes[0], id: note.id, ref: note.ref }],
+  }
+  await f.harness.commit(async (tx) => {
+    ;(await tx.doc(State, ROOT_CONVERSATION_ID)).notes.push(note)
+    ;(await tx.doc(Runs, ROOT_CONVERSATION_ID)).deliveries.pending = entry
+  }, context)
+  await actions.feedback({ note: note.id, status: 'dismissed', reason: 'handled' }, {
+    host: f.host,
+  } as never)
+  const conversation = (await f.harness.conversation(f.id, context))!
+  const before = (await conversation.entries({ order: 'ascending' }, 100, undefined, context)).items
+    .length
+  await deliver(f.host, f.id, entry, context)
+  expect(
+    (await f.harness.snapshot(Runs, ROOT_CONVERSATION_ID, context))!.deliveries.pending,
+  ).toBeUndefined()
+  expect(
+    (await conversation.entries({ order: 'ascending' }, 100, undefined, context)).items,
+  ).toHaveLength(before)
+})
+it('manages explicit notes or all matching filters, archives only closed notes, and reopens cleanly', async () => {
+  const f = await fixture()
+  const note = await lifecycleNote(f)
+  await f.harness.commit(async (tx) => {
+    const state = await tx.doc(State, ROOT_CONVERSATION_ID)
+    state.notes[0].at = Date.now() - 3 * 86_400_000
+    state.notes.push(
+      { ...state.notes[0], id: 'newer', at: Date.now() },
+      { ...state.notes[0], id: 'other-role', role: 'scout' },
+      { ...state.notes[0], id: 'other-conversation', conversation: 999 },
+    )
+  }, context)
+  const ctx = { host: f.host } as never
+  const snoozeUntil = Date.now() + 60_000
+  expect(await actions.feedback({ note: note.id, snoozeUntil }, ctx)).toMatchObject({
+    snoozedUntil: snoozeUntil,
+  })
+  expect(await actions.feedback({ note: note.id, snoozeUntil: null }, ctx)).not.toHaveProperty(
+    'snoozedUntil',
+  )
+  await expect(
+    actions.feedback({ note: note.id, snoozeUntil: Date.now() + 31 * 86_400_000 }, ctx),
+  ).rejects.toThrow('Invalid feedback')
+  await expect(
+    actions.feedback({ note: note.id, status: 'dismissed', reason: 'bad' }, ctx),
+  ).rejects.toThrow('Invalid feedback')
+  expect(await actions.manage({ do: 'archive', notes: [note.id] }, ctx)).toEqual({ changed: 0 })
+  expect(
+    await actions.manage(
+      {
+        do: 'dismiss',
+        conversation: f.id,
+        role: 'worker',
+        status: 'open',
+        olderThanDays: 2,
+        reason: 'wont-fix',
+      },
+      ctx,
+    ),
+  ).toEqual({ changed: 1 })
+  expect(await actions.manage({ do: 'archive', notes: [note.id, 'newer'] }, ctx)).toEqual({
+    changed: 1,
+  })
+  expect(await actions.stats(null, ctx)).toMatchObject({ roles: { worker: { dismissed: 1 } } })
+  expect(await actions.manage({ do: 'reopen', notes: [note.id] }, ctx)).toEqual({ changed: 1 })
+  const reopened = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0]
+  expect(reopened.status).toBe('open')
+  for (const key of ['closedBy', 'closedAt', 'dismissReason', 'archivedAt'])
+    expect(reopened).not.toHaveProperty(key)
+  await expect(actions.manage({ do: 'resolve' }, ctx)).rejects.toThrow('Invalid note selection')
+})
+
+it('starts only one durable close-out after the final answer, not the advisor continuation', async () => {
+  const f = await fixture()
+  const notices = vi.spyOn(f.host, 'notice')
+  await f.hooks.onYield(fauxAssistantMessage([fauxText('first answer')]), f.api(), context)
+  expect((await f.harness.snapshot(Runs, ROOT_CONVERSATION_ID, context))?.closeouts).toBeUndefined()
+  await writeFile(
+    join(f.host.userHome, '.ultimate/settings.json'),
+    JSON.stringify({
+      advisor: { model: 'faux/faux', roles: { worker: { enabled: true, at: [] } } },
+    }),
+  )
+  f.response.content = [
+    fauxText(JSON.stringify({ status: 'ignored', reason: 'no follow-up', evidence: '' })),
+  ]
+  await f.hooks.onYield(fauxAssistantMessage([fauxText('final answer')]), f.api(), context)
+  await f.hooks.onYield(fauxAssistantMessage([fauxText('final answer')]), f.api(), context)
+  expect(
+    Object.keys((await f.harness.snapshot(Runs, ROOT_CONVERSATION_ID, context))!.closeouts!),
+  ).toHaveLength(1)
+  f.harness.resume()
+  await until(
+    async () =>
+      !!(await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0].response,
+  )
+  expect((await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0]).toMatchObject({
+    status: 'resolved',
+    response: { source: 'judged', status: 'ignored' },
+  })
+  expect(notices).not.toHaveBeenCalledWith(expect.stringContaining('close-out'))
+})

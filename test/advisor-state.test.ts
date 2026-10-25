@@ -1,7 +1,8 @@
 import { expect, it } from 'vitest'
-import { Runs, pruneRuns } from '../extensions/advisor/state.ts'
+import { Runs, State, pruneRuns } from '../extensions/advisor/state.ts'
 import { initialSignals, signals } from '../extensions/advisor/signals.ts'
 import type { EntryRecord } from '@earendil-works/pi-durable'
+import { stats } from '../extensions/advisor/tracking.ts'
 
 it('drops concluded rows and operational settlements older than 24 hours', () => {
   const now = 2 * 86_400_000
@@ -39,4 +40,64 @@ it('carries deterministic signal counts across rounds without reprocessing earli
   expect(signals([round(3)], '/checkout', '', state)).toContain('repeated tool call')
   expect(state.rounds).toBe(3)
   expect(state.cursor).toBe(3)
+})
+
+it('counts retained lifecycle outcomes per role and excludes cards from delivery/pending totals', () => {
+  const state = State.definition.initial()
+  const base = {
+    id: 'n',
+    ref: '00001',
+    conversation: 2,
+    advisor: 'verification',
+    role: 'worker' as const,
+    point: 'answer' as const,
+    severity: 'concern' as const,
+    note: 'check',
+    evidence: '#1',
+    at: 10,
+    status: 'resolved' as const,
+    delivered: 'note' as const,
+  }
+  state.notes = [
+    {
+      ...base,
+      readAt: 11,
+      response: { status: 'addressed', source: 'ack', at: 12 },
+      archivedAt: 13,
+    },
+    {
+      ...base,
+      id: 'deferred',
+      readAt: 11,
+      response: { status: 'deferred', source: 'ack', at: 12 },
+    },
+    {
+      ...base,
+      id: 'disputed',
+      readAt: 11,
+      response: { status: 'disputed', source: 'judged', at: 12 },
+    },
+    { ...base, id: 'ignored', readAt: 11, response: { status: 'ignored', source: 'auto', at: 12 } },
+    { ...base, id: 'pending', status: 'open' },
+    { ...base, id: 'card', delivered: 'card' },
+    { ...base, id: 'dismissed', status: 'dismissed', closedBy: 'user' },
+    { ...base, id: 'old', at: 0 },
+  ]
+  expect(stats(state, 5)).toEqual({
+    since: 5,
+    roles: {
+      worker: {
+        delivered: 6,
+        read: 4,
+        addressed: 1,
+        deferred: 1,
+        disputed: 1,
+        ignored: 1,
+        unread: 0,
+        late: 0,
+        dismissed: 1,
+        pending: 2,
+      },
+    },
+  })
 })
