@@ -45,6 +45,12 @@ export async function windowFor(
   return {
     pid: Number(matches[0].pid),
     window_id: Number(matches[0].window_id),
+    title:
+      typeof matches[0].title === 'string'
+        ? matches[0].title
+        : typeof matches[0].window_title === 'string'
+          ? matches[0].window_title
+          : '',
     isOnScreen: typeof matches[0].is_on_screen === 'boolean' ? matches[0].is_on_screen : undefined,
   }
 }

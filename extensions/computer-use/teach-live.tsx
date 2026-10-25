@@ -88,6 +88,7 @@ export function TeachButton<A>({
   args,
   children,
   onError,
+  onSuccess,
   tone,
   title,
   className,
@@ -96,6 +97,7 @@ export function TeachButton<A>({
   args: A
   children: ReactNode
   onError: (message: string | undefined) => void
+  onSuccess?: () => void
   tone?: 'primary' | 'danger'
   title?: string
   className?: string
@@ -115,6 +117,7 @@ export function TeachButton<A>({
         onError(undefined)
         api
           .action(action, args)
+          .then(() => onSuccess?.())
           .catch((error: unknown) => onError(errorMessage(error)))
           .finally(() => setBusy(false))
       }}

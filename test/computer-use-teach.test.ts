@@ -386,7 +386,7 @@ it('frames wraps screen text and narration, selects at most eight images; draft 
   expect(draft.steps![0].approved).toBeUndefined()
   expect(draft.segment!.status).toBe('review')
   expect(() =>
-    validateSteps([{ ...step(), target: { label: 'x', anchors: 'bad' } }], draft),
+    validateSteps([{ ...step(), target: { label: 'x', anchors: 'bad' } }], draft.segment!.frames),
   ).toThrow('Invalid taught step')
   const edited = await editTeaching(f.host, f.root.id, [{ ...step(), approved: true }])
   expect(edited.steps![0].approved).toBe(true)
@@ -772,7 +772,7 @@ it.each([
         consequential: false,
       },
     ],
-    doc,
+    doc.segment!.frames,
   )
   expect(steps[0].consequential).toBe(true)
 })

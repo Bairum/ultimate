@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ClassifyApi } from '../classify/api.ts'
-import { confirmationKey, consequential, consentFor, consume, denyList } from './policy.ts'
+import {
+  confirmationKey,
+  consequential,
+  sensitiveField,
+  consentFor,
+  consume,
+  denyList,
+} from './policy.ts'
 import type { Driver, Element, Observation, Step } from './types.ts'
 import { readSession, isStopped, hasConfirmation } from './session.ts'
 import type { Session } from './session.ts'
@@ -17,6 +24,7 @@ import {
   parseRegions,
   matchLabel,
   screenshotPoint,
+  normalizeLabel,
 } from './perception.ts'
 
 export const hash = (value: unknown) =>
@@ -166,9 +174,21 @@ export const preflightGates: Gate[] = [
         }
   },
 ]
+function inApproval(ctx: GateContext) {
+  return (
+    !!ctx.session.task &&
+    !!ctx.identity &&
+    !!ctx.observation &&
+    task.approvalScope(ctx.session.task, ctx.identity, ctx.observation, ctx.step.kind)
+  )
+}
+export function runTakeover(ctx: GateContext) {
+  return !!ctx.session.task?.runTakeover && inApproval(ctx)
+}
 export async function frontmostGate(ctx: GateContext): Promise<Refusal | undefined> {
   const takeover =
-    ctx.foreground && ctx.session.takeovers.some((t) => matchesApp(ctx.identity!, t.app))
+    ctx.foreground &&
+    (runTakeover(ctx) || ctx.session.takeovers.some((t) => matchesApp(ctx.identity!, t.app)))
   if (ctx.foreground && !takeover)
     return { refuse: 'user_active', message: 'Foreground delivery requires a user takeover.' }
   const { apps } = await listApps(ctx.driver, ctx.signal)
@@ -185,8 +205,10 @@ export async function frontmostGate(ctx: GateContext): Promise<Refusal | undefin
 }
 export const conversationBudgetGate: Gate = (ctx) =>
   ctx.count >= 20 ||
-  ctx.session.budget.steps >= 60 ||
-  (ctx.session.budget.startedAt > 0 && Date.now() - ctx.session.budget.startedAt >= 15 * 60_000)
+  ctx.session.budget.steps >= (inApproval(ctx) ? ctx.session.task!.spec.approval!.steps : 60) ||
+  (ctx.session.budget.startedAt > 0 &&
+    Date.now() - ctx.session.budget.startedAt >=
+      (inApproval(ctx) ? ctx.session.task!.spec.approval!.minutes : 15) * 60_000)
     ? {
         refuse: 'budget',
         message:
@@ -204,7 +226,10 @@ export const dispatchGates: Gate[] = [
     if (
       ctx.observation.degraded &&
       config.foregroundForDegraded !== 'background' &&
-      !(ctx.foreground && ctx.session.takeovers.some((t) => matchesApp(ctx.identity!, t.app)))
+      !(
+        ctx.foreground &&
+        (runTakeover(ctx) || ctx.session.takeovers.some((t) => matchesApp(ctx.identity!, t.app)))
+      )
     )
       return {
         refuse: 'takeover_required',
@@ -276,7 +301,23 @@ export const dispatchGates: Gate[] = [
       ctx.confirmationUsed = true
       return undefined
     }
-    let risky = ctx.unlabelledPixel || consequential(ctx.step, ctx.target).hit
+    const consequence = consequential(ctx.step, ctx.target)
+    let risky = ctx.unlabelledPixel || consequence.hit
+    // Approving a label never approves another risk or bypasses the independent Jev check.
+    if (
+      // Menus never qualify: their risk comes from the whole path, which a single approved label cannot cover.
+      ['click', 'double_click', 'right_click'].includes(ctx.step.kind) &&
+      consequence.reason?.startsWith('Consequential label: ') &&
+      !sensitiveField(ctx.target) &&
+      !ctx.unlabelledPixel &&
+      ctx.target?.label &&
+      inApproval(ctx) &&
+      ctx.session.task!.spec.scope.consequential.some(
+        (label) =>
+          !!normalizeLabel(label) && normalizeLabel(label) === normalizeLabel(ctx.target!.label!),
+      )
+    )
+      risky = false
     const classify = ctx.host.want(ClassifyApi)
     if (!risky && classify) {
       const redact = redactor([

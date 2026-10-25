@@ -1,7 +1,15 @@
 import { isDeepStrictEqual } from 'node:util'
 import { redactor } from './content.ts'
 import type { ClassifyService } from '../classify/api.ts'
-import type { Escalation, Predicate, Step, Verdict } from './types.ts'
+import type {
+  Approval,
+  Escalation,
+  Observation,
+  Predicate,
+  PracticeCheck,
+  Step,
+  Verdict,
+} from './types.ts'
 import type { Evidence, Replan, TaskSpec, TaskState, Refusal } from './types.ts'
 export type { Evidence, Replan, Subgoal, TaskSpec, TaskState, Refusal } from './types.ts'
 
@@ -19,6 +27,68 @@ function unique(ids: string[]) {
   if (ids.some((id) => !id.trim()) || new Set(ids).size !== ids.length)
     throw new Error('Empty or duplicate ids')
 }
+export function validateApproval(raw: unknown): asserts raw is Approval {
+  const value = raw as Record<string, unknown>
+  const kinds = [
+    'click',
+    'double_click',
+    'right_click',
+    'type',
+    'set_value',
+    'key',
+    'scroll',
+    'menu',
+    'wait',
+  ]
+  if (
+    !raw ||
+    typeof raw !== 'object' ||
+    Array.isArray(raw) ||
+    typeof value.app !== 'string' ||
+    !value.app.trim() ||
+    (value.appName !== undefined && (typeof value.appName !== 'string' || !value.appName.trim())) ||
+    value.pixel !== true ||
+    typeof value.foreground !== 'boolean' ||
+    !Array.isArray(value.actions) ||
+    !value.actions.length ||
+    value.actions.some((kind) => !kinds.includes(kind)) ||
+    typeof value.steps !== 'number' ||
+    !Number.isSafeInteger(value.steps) ||
+    value.steps < 1 ||
+    value.steps > 200 ||
+    typeof value.minutes !== 'number' ||
+    !Number.isFinite(value.minutes) ||
+    value.minutes <= 0 ||
+    value.minutes > 60 ||
+    (value.window !== undefined &&
+      !(typeof value.window === 'string'
+        ? value.window.trim()
+        : typeof value.window === 'number' &&
+          Number.isSafeInteger(value.window) &&
+          value.window > 0))
+  )
+    throw new Error('Invalid task approval')
+}
+export function approvalScope(
+  state: TaskState,
+  identity: { name: string; bundle?: string },
+  observation: Pick<Observation, 'windowId' | 'title'>,
+  kind: Step['kind'],
+) {
+  const approval = state.spec.approval
+  return (
+    state.status === 'active' &&
+    !!approval &&
+    [identity.name, identity.bundle].some(
+      (name) => name?.toLowerCase() === approval.app.toLowerCase(),
+    ) &&
+    approval.actions.includes(kind) &&
+    (approval.window === undefined ||
+      (typeof approval.window === 'number'
+        ? observation.windowId === approval.window
+        : observation.title.includes(approval.window)))
+  )
+}
 function validate(spec: TaskSpec) {
   if (!spec.id.trim() || !spec.intent.trim() || !spec.goal.trim())
     throw new Error('Task id, intent and goal are required')
@@ -29,6 +99,7 @@ function validate(spec: TaskSpec) {
     throw new Error('Each criterion needs text and a check')
   if (Object.values(spec.stop).some((n) => !Number.isFinite(n) || n <= 0))
     throw new Error('Invalid stop budget')
+  if (spec.approval) validateApproval(spec.approval)
 }
 const stopwords = new Set(
   'a an the to of in on at for and or with from as is it my me please this that i you'.split(' '),
@@ -46,8 +117,13 @@ export function startTask(
     ...input,
     stop: { steps: 60, minutes: 15, escalations: 6, ...input.stop },
   })
+  if (spec.approval) {
+    spec.stop.steps = spec.approval.steps
+    spec.stop.minutes = spec.approval.minutes
+  }
   validate(spec)
   const needsConfirmation: string[] = []
+  if (spec.approval) needsConfirmation.push('Scoped computer approval')
   if (spec.criteria.some((c) => c.check === 'evidence'))
     needsConfirmation.push('Evidence-only criterion')
   if (spec.scope.apps.length > 3) needsConfirmation.push('More than three apps')
@@ -72,11 +148,15 @@ export function confirmTask(state: TaskState, now?: number): TaskState {
     throw new Error('No initial confirmation pending')
   const next = copy(state)
   next.status = 'active'
+  next.runTakeover = !!next.spec.approval?.foreground
+  next.counters.startedAt = now ?? Date.now()
   log(next, 'confirmed', 'User confirmed task', now)
   return next
 }
 export function requireActiveTask(state?: TaskState): Refusal | undefined {
   if (!state) return refuse('no_task', 'Start a computer task first')
+  if (state.practiceMismatch)
+    return refuse('practice_mismatch', 'Practice mismatched; finish partial or blocked')
   if (state.status !== 'active') return refuse(`task_${state.status}`, 'Task is not active')
   return undefined
 }
@@ -164,6 +244,7 @@ export function markInterrupted(
   now?: number,
 ) {
   const next = copy(state)
+  next.runTakeover = false
   next.needsObserve = true
   if (event === 'stop') next.status = 'stopped'
   if (event === 'takeover') {
@@ -330,6 +411,12 @@ function applyReplan(state: TaskState, change: Replan, now?: number): TaskState 
   if (change.subgoals) next = setSubgoals(next, change.subgoals, now)
   if (change.criteria) next.spec.criteria = structuredClone(change.criteria)
   if (change.scope) next.spec.scope = structuredClone(change.scope)
+  if (change.approval) {
+    next.spec.approval = structuredClone(change.approval)
+    next.spec.stop.steps = change.approval.steps
+    next.spec.stop.minutes = change.approval.minutes
+    if (!change.approval.foreground) next.runTakeover = false
+  }
   next.drift = false
   next.replanRequired = false
   next.loopDetected = false
@@ -350,6 +437,7 @@ export function replan(state: TaskState, change: Replan, now?: number): TaskStat
     ...state.spec,
     criteria: change.criteria ?? state.spec.criteria,
     scope: change.scope ?? state.spec.scope,
+    approval: change.approval ?? state.spec.approval,
   })
   if (change.subgoals) unique(change.subgoals.map((s) => s.id))
   const changedCriteria =
@@ -363,7 +451,24 @@ export function replan(state: TaskState, change: Replan, now?: number): TaskStat
     (['apps', 'actions', 'consequential'] as const).some((key) =>
       change.scope![key].some((value) => !(state.spec.scope[key] as string[]).includes(value)),
     )
-  if (changedCriteria || widened) {
+  const previous = state.spec.approval
+  const proposed = change.approval
+  const approvalWidened =
+    proposed &&
+    (!previous ||
+      proposed.app.toLowerCase() !== previous.app.toLowerCase() ||
+      (previous.window !== undefined &&
+        proposed.window !== previous.window &&
+        !(
+          typeof proposed.window === 'string' &&
+          typeof previous.window === 'string' &&
+          proposed.window.includes(previous.window)
+        )) ||
+      proposed.actions.some((kind) => !previous.actions.includes(kind)) ||
+      proposed.steps > previous.steps ||
+      proposed.minutes > previous.minutes ||
+      (proposed.foreground && !previous.foreground))
+  if (changedCriteria || widened || approvalWidened) {
     let next = copy(state)
     if (change.subgoals) next = setSubgoals(next, change.subgoals, now)
     const existing = new Set(next.spec.criteria.map((c) => c.id))
@@ -383,6 +488,7 @@ export function confirmChange(state: TaskState, now?: number): TaskState {
     throw new Error('No change pending')
   const next = applyReplan(state, state.pendingChange, now)
   next.status = 'active'
+  next.runTakeover = !!next.spec.approval?.foreground
   log(next, 'confirmed', 'User confirmed replan', now)
   return next
 }
@@ -393,15 +499,49 @@ export async function finish(
   ask?: Ask,
   signal: AbortSignal = new AbortController().signal,
   now?: number,
+  proof?: { criteria: TaskSpec['criteria']; checks: PracticeCheck[] },
 ) {
   const next = copy(state)
+  if (outcome === 'done' && state.practiceMismatch)
+    return { state: next, refuse: 'practice_mismatch', criteria: [] }
+  if (proof && outcome === 'done') {
+    let previous = -Infinity
+    const valid =
+      isDeepStrictEqual(proof.criteria, state.spec.criteria) &&
+      proof.checks.length === proof.criteria.length * 2 &&
+      proof.checks.every((check, i) => {
+        const ordered =
+          check.step === Math.floor(i / 2) + 1 &&
+          check.phase === (i % 2 ? 'after' : 'before') &&
+          Number.isFinite(check.at) &&
+          check.at > previous &&
+          !!check.capture &&
+          !!check.ref
+        previous = check.at
+        return (
+          ordered &&
+          (i % 2 === 0 ||
+            isDeepStrictEqual(check.predicates, proof.criteria[Math.floor(i / 2)].check))
+        )
+      })
+    if (!valid) return { state: next, refuse: 'practice_checks_required', criteria: [] }
+  }
   const evidence = next.subgoals
     .filter((s) => s.status !== 'needs_reverify')
     .flatMap((s) => s.evidence)
   const criteria = await Promise.all(
-    next.spec.criteria.map(async (c) => {
+    next.spec.criteria.map(async (c, index) => {
       let verdict: Verdict = 'unknown'
-      if (c.check === 'evidence')
+      if (proof && !(outcome === 'done' && index === next.spec.criteria.length - 1))
+        verdict = proof.checks.some(
+          (check) =>
+            check.step === index + 1 &&
+            check.phase === 'after' &&
+            isDeepStrictEqual(check.predicates, c.check),
+        )
+          ? 'satisfied'
+          : 'unknown'
+      else if (c.check === 'evidence')
         verdict = evidence.some((e) => e.criterion === c.id) ? 'satisfied' : 'unsatisfied'
       else {
         try {
@@ -444,6 +584,7 @@ export async function finish(
   if (outcome === 'done' && unmet.length)
     return { state: next, refuse: 'criteria_unmet', unmet, criteria }
   next.status = outcome
+  next.runTakeover = false
   log(next, 'finish', outcome, now)
   return { state: next, criteria }
 }

@@ -24,6 +24,7 @@ import {
   ReleaseAction,
   TakeoverAction,
 } from './refs.ts'
+import type { ComputerDetails } from './refs.ts'
 import { predicate, ScreenMark } from './shared.tsx'
 import type { Pending, Session } from './shared.tsx'
 
@@ -224,6 +225,215 @@ const visible = (payload: string) =>
     (c) => `\\u${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`,
   )
 
+type Approval = NonNullable<NonNullable<ComputerDetails['task']>['approval']>
+const wrap = (text: string) => ({ text, untrusted: true as const })
+const approvalApp = (approval: Approval) =>
+  approval.appName ? `${approval.appName.text} (${approval.app.text})` : approval.app.text
+/**
+ * A task's approval in the `details.task.approval` shape (`details.ts` maps it the same way), for the live session the
+ * confirmation reads. App, window title and consequential labels are untrusted text.
+ */
+export function approvalOf(task: Session['task']): Approval | undefined {
+  const approval = task?.spec.approval
+  if (!approval) return undefined
+  return {
+    ...approval,
+    app: wrap(approval.app),
+    appName: approval.appName === undefined ? undefined : wrap(approval.appName),
+    window: typeof approval.window === 'string' ? wrap(approval.window) : approval.window,
+    takeover: !!task.runTakeover,
+    consequential: task.spec.scope.consequential.map(wrap),
+  }
+}
+
+/**
+ * What a scoped pre-approval lets the agent do without asking again, exactly: the app and window, the action kinds,
+ * the budgets, whether the window may be brought to the front, and every consequential label that will run without its
+ * own card, one per line. Outside this scope the usual cards still ask.
+ */
+export function ApprovalScope({ approval }: { approval: Approval }) {
+  return (
+    <div
+      className="space-y-1 rounded-sm border border-border/70 bg-background/50 px-2.5 py-2"
+      data-computer-approval
+    >
+      <p className="pb-0.5 text-[10.5px] tracking-wider text-muted-foreground uppercase">
+        Pre-approved for this run
+      </p>
+      <Fact label="app">
+        <Screen>{approvalApp(approval)}</Screen>
+      </Fact>
+      <Fact label="window">
+        {approval.window === undefined ? (
+          <span className="text-warning">any window of the app</span>
+        ) : typeof approval.window === 'number' ? (
+          `window ${approval.window}`
+        ) : (
+          <>
+            title contains <Screen>{approval.window.text}</Screen>
+          </>
+        )}
+      </Fact>
+      <Fact label="actions">
+        {approval.actions.join(' · ')}
+        <span className="text-muted-foreground"> · by pixel</span>
+      </Fact>
+      <Fact label="budget">
+        up to {approval.steps} steps · {approval.minutes} min
+      </Fact>
+      <Fact label="front">
+        {approval.foreground ? (
+          <span className="font-sans text-[12.5px] text-warning" data-computer-run-takeover>
+            The agent may take the foreground in{' '}
+            <span className="text-foreground">“{approvalApp(approval)}”</span> for this whole run:
+            it brings the window to the front and clicks there until the run ends, you Stop, or you
+            type here.
+          </span>
+        ) : (
+          <span className="text-muted-foreground">
+            no foreground takeover: works in the background only
+          </span>
+        )}
+      </Fact>
+      <div className="pt-1">
+        <p className="text-[11px] text-muted-foreground">Will run without asking:</p>
+        {approval.consequential.length ? (
+          <ul className="mt-1 space-y-1">
+            {approval.consequential.map((label, index) => (
+              <li
+                className="flex items-center gap-1.5 rounded-sm border border-warning/40 bg-warning/10 px-2 py-1 text-warning"
+                data-computer-preapproved
+                key={index}
+              >
+                <ShieldAlertIcon className="size-3 shrink-0" />
+                <span className="min-w-0 break-words">“{label.text}”</span>
+                <span className="ml-auto shrink-0 text-[10.5px] text-muted-foreground/70">
+                  screen text
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-[11px] text-foreground/80">
+            nothing consequential: upload, send, delete and the like still ask each time
+          </p>
+        )}
+      </div>
+      <p className="pt-1 text-[11px] text-muted-foreground/80">
+        Outside this app, window and these actions, every step asks as usual. Unlabelled clicks
+        always ask.
+      </p>
+    </div>
+  )
+}
+
+const windowText = (window: Approval['window']) =>
+  window === undefined
+    ? 'any window'
+    : typeof window === 'number'
+      ? `window ${window}`
+      : `title contains “${window.text}”`
+
+/** One approval field, before → after; the row is warning-tinted when it changed. */
+function DiffRow({ label, before, after }: { label: string; before: string; after: string }) {
+  const changed = before !== after
+  return (
+    <Fact label={label}>
+      {changed ? (
+        <span className="text-warning">
+          <span className="text-diff-del line-through decoration-diff-del/40">{before}</span> →{' '}
+          {after}
+        </span>
+      ) : (
+        <span className="text-muted-foreground">{after}</span>
+      )}
+    </Fact>
+  )
+}
+
+/**
+ * Every approval field of a pending change, before → after, changed rows warning-tinted; unchanged rows stay so the
+ * user sees the whole scope they approve. Consequential labels list one per line: added ones under "Will run without
+ * asking", removed ones struck through. Without a previous approval, `before` reads as "none".
+ */
+function ApprovalDiff({ before, after }: { before?: Approval; after: Approval }) {
+  const was = (pick: (a: Approval) => string) => (before ? pick(before) : 'none')
+  const old = before?.consequential.map((c) => c.text) ?? []
+  const next = after.consequential.map((c) => c.text)
+  const gone = old.filter((label) => !next.includes(label))
+  return (
+    <div
+      className="space-y-1 rounded-sm border border-border/70 bg-background/50 px-2.5 py-2"
+      data-computer-approval-diff
+    >
+      <p className="pb-0.5 text-[10.5px] tracking-wider text-muted-foreground uppercase">
+        Pre-approval {before ? 'changes' : 'added'}
+        <span className="ml-1.5 normal-case">
+          <ScreenMark />
+        </span>
+      </p>
+      <DiffRow
+        after={`“${approvalApp(after)}”`}
+        before={was((a) => `“${approvalApp(a)}”`)}
+        label="app"
+      />
+      <DiffRow
+        after={windowText(after.window)}
+        before={was((a) => windowText(a.window))}
+        label="window"
+      />
+      <DiffRow
+        after={after.actions.join(' · ')}
+        before={was((a) => a.actions.join(' · '))}
+        label="actions"
+      />
+      <DiffRow after={`${after.steps}`} before={was((a) => `${a.steps}`)} label="steps" />
+      <DiffRow
+        after={`${after.minutes} min`}
+        before={was((a) => `${a.minutes} min`)}
+        label="minutes"
+      />
+      <DiffRow
+        after={after.foreground ? 'takes the foreground for the whole run' : 'background only'}
+        before={was((a) =>
+          a.foreground ? 'takes the foreground for the whole run' : 'background only',
+        )}
+        label="front"
+      />
+      <div className="pt-1">
+        <p className="text-[11px] text-muted-foreground">Will run without asking:</p>
+        {next.length ? (
+          <ul className="mt-1 space-y-1">
+            {next.map((label, index) => (
+              <li
+                className="flex items-center gap-1.5 rounded-sm border border-warning/40 bg-warning/10 px-2 py-1 text-warning"
+                data-computer-preapproved={old.includes(label) ? 'kept' : 'added'}
+                key={index}
+              >
+                <ShieldAlertIcon className="size-3 shrink-0" />
+                <span className="min-w-0 break-words">“{label}”</span>
+                <span className="ml-auto shrink-0 text-[10.5px]">
+                  {old.includes(label) ? 'already approved' : 'new'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-[11px] text-foreground/80">nothing consequential</p>
+        )}
+        {gone.map((label, index) => (
+          <p
+            className="mt-1 px-2 text-[11px] text-diff-del line-through decoration-diff-del/40"
+            key={index}
+          >
+            “{label}”
+          </p>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /**
  * The task spec the agent wrote, to confirm before it acts. `compact` inside the task card, which already shows the
  * intent and criteria: only why it asks, the scope, and the button.
@@ -241,6 +451,7 @@ function TaskConfirm({
 }) {
   const [error, setError] = useState<string>()
   const task = session.task
+  const approval = approvalOf(task)
   const why = reasons?.length
     ? reasons.join(' · ')
     : task?.ledger.findLast((entry) => entry.kind === 'start')?.reason
@@ -248,7 +459,7 @@ function TaskConfirm({
     <Frame
       buttons={
         <Act action={ConfirmTaskAction} args={{ conversation }} onError={setError} primary>
-          Confirm task
+          {approval ? 'Confirm task and pre-approval' : 'Confirm task'}
         </Act>
       }
       error={error}
@@ -275,12 +486,19 @@ function TaskConfirm({
               </Fact>
             </>
           )}
-          <Fact label="apps">{task.spec.scope.apps.join(', ')}</Fact>
-          <Fact label="actions">{task.spec.scope.actions.join(' ')}</Fact>
-          {task.spec.scope.consequential.length > 0 && (
-            <Fact label="risky">
-              <span className="text-warning">{task.spec.scope.consequential.join(', ')}</span>
-            </Fact>
+          {approval ? (
+            <ApprovalScope approval={approval} />
+          ) : (
+            <>
+              <Fact label="apps">{task.spec.scope.apps.join(', ')}</Fact>
+              <Fact label="actions">{task.spec.scope.actions.join(' ')}</Fact>
+              {task.spec.scope.consequential.length > 0 && (
+                <Fact label="asks first">
+                  {/* Without an approval these labels skip nothing: each still raises its own card. */}
+                  <span className="text-warning">{task.spec.scope.consequential.join(', ')}</span>
+                </Fact>
+              )}
+            </>
           )}
           {compact && task.spec.criteria.some((c) => c.check === 'evidence') && (
             <p className="text-[11px] text-muted-foreground">
@@ -327,9 +545,29 @@ function Change({ session, conversation }: { session: Session; conversation: num
     ? {
         apps: added(task?.spec.scope.apps, scope.apps),
         actions: added(task?.spec.scope.actions, scope.actions),
-        risky: added(task?.spec.scope.consequential, scope.consequential),
       }
-    : { apps: [], actions: [], risky: [] }
+    : { apps: [], actions: [] }
+  const current = approvalOf(task)
+  // The pending approval in the same shape: its consequential labels are the pending scope's, else today's. A change
+  // to the consequential labels alone (same approval) is diffed too: those labels run without asking.
+  const proposed =
+    task && (change?.approval || (current && scope))
+      ? approvalOf({
+          ...task,
+          spec: {
+            ...task.spec,
+            approval: change?.approval ?? task.spec.approval,
+            scope: {
+              ...task.spec.scope,
+              consequential: scope?.consequential ?? task.spec.scope.consequential,
+            },
+          },
+          runTakeover: (change?.approval ?? task.spec.approval)?.foreground,
+        })
+      : undefined
+  const approvalChanged =
+    !!proposed &&
+    !same({ ...proposed, takeover: false }, current && { ...current, takeover: false })
   return (
     <Frame
       buttons={
@@ -342,7 +580,13 @@ function Change({ session, conversation }: { session: Session; conversation: num
       kind="change"
       title="weaker task or wider scope"
     >
-      {change && <p className="font-sans text-[13px] leading-snug">{change.reason}</p>}
+      {change && (
+        <p className="font-sans text-[13px] leading-snug">
+          <span className="text-muted-foreground">The agent says: </span>
+          {change.reason}
+        </p>
+      )}
+      {approvalChanged && <ApprovalDiff after={proposed} before={current} />}
       {dropped.map((criterion) => (
         <Fact key={criterion.id} label="drops">
           <span className="text-diff-del line-through decoration-diff-del/40">
@@ -397,11 +641,15 @@ function Change({ session, conversation }: { session: Session; conversation: num
           <span className="text-warning">{widen.actions.join(' ')}</span>
         </Fact>
       )}
-      {widen.risky.length > 0 && (
-        <Fact label="+risky">
-          <span className="text-warning">{widen.risky.join(', ')}</span>
-        </Fact>
-      )}
+      {!proposed &&
+        scope &&
+        added(task?.spec.scope.consequential, scope.consequential).length > 0 && (
+          <Fact label="+asks first">
+            <span className="text-warning">
+              {added(task?.spec.scope.consequential, scope.consequential).join(', ')}
+            </span>
+          </Fact>
+        )}
       <p className="text-[11px] text-muted-foreground">
         The task waits until you approve. Without approval it can only finish as partial.
       </p>

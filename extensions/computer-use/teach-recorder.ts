@@ -9,6 +9,7 @@ export const teachLimits = { frames: 150, bytes: 300 * 1024 * 1024 }
 const cue =
   /\b(password|passcode|pin|secret|token|one[- ]time|otp|(?:verification|security|auth(?:entication)?|access)\s+code|mfa|2fa|passwort|kennwort|mot de passe|contraseña|senha)\b|[•*●]{4,}/i
 const loginCue = /\buser\s*name\b/i
+export const credentialCue = (label: string) => cue.test(label)
 const signin = /\b(sign in|log in|login|submit)\b/
 const near = (a: Region, b: Region) =>
   Math.max(a.bounds.x - b.bounds.x - b.bounds.width, b.bounds.x - a.bounds.x - a.bounds.width, 0) <
@@ -18,6 +19,20 @@ const near = (a: Region, b: Region) =>
     b.bounds.y - a.bounds.y - a.bounds.height,
     0,
   ) < 80
+export function teachingOcr(regions: Region[], redact: (value: string) => string) {
+  const cues = regions.filter((region) => credentialCue(region.label))
+  return {
+    password: cues.length > 0,
+    ocr: regions
+      .filter((region) => region.kind === 'text' && !cues.some((c) => near(c, region)))
+      .slice(0, 200)
+      .map((region) => ({
+        text: redact(region.label).slice(0, 80),
+        bounds: region.bounds,
+        confidence: region.confidence,
+      })),
+  }
+}
 
 export function frameDiff(
   previous: FrameMeta['ocr'],
@@ -144,13 +159,13 @@ export async function recordTeaching(options: {
           if (options.signal.aborted || (await options.read()).segment?.status !== 'recording')
             return
           if (time.now() >= segment.endsAt || (await options.stopped())) break
-          const cues = regions.filter((r) => cue.test(r.label))
+          const cues = regions.filter((r) => credentialCue(r.label))
           storedHash = hash
           const logins = regions
             .filter((r) => signin.test(normalizeLabel(r.label)))
             .map((r) => normalizeLabel(r.label))
           const signedIn = priorLogin.some((label) => !logins.includes(label))
-          const loginCues = regions.filter((r) => cue.test(r.label) || loginCue.test(r.label))
+          const loginCues = regions.filter((r) => credentialCue(r.label) || loginCue.test(r.label))
           priorLogin = loginCues.length
             ? regions
                 .filter(
@@ -159,14 +174,7 @@ export async function recordTeaching(options: {
                 .map((r) => normalizeLabel(r.label))
             : []
           // Do not persist cue text or neighbouring field contents, even as OCR or diff metadata.
-          const ocr = regions
-            .filter((r) => r.kind === 'text' && !cues.some((c) => near(c, r)))
-            .slice(0, 200)
-            .map((r) => ({
-              text: options.redact(r.label).slice(0, 80),
-              bounds: r.bounds,
-              confidence: r.confidence,
-            }))
+          const { ocr } = teachingOcr(regions, (value) => options.redact(value))
           if (skip > 0) {
             skip--
             await drop('post_signin')

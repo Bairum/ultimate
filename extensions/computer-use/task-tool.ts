@@ -4,7 +4,7 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ClassifyApi } from '../classify/api.ts'
-import type { Verdict } from './types.ts'
+import type { Approval, Verdict } from './types.ts'
 import { readSession, updateSession, isStopped } from './session.ts'
 import { result, anchored, plainTask, activatePending, object } from './tool-helpers.ts'
 import { runtime, setup, cacheKey, settings } from './runtime.ts'
@@ -16,6 +16,7 @@ import { observeWindow, splitValueEquals, judgeValueEquals } from './observe.ts'
 import { verifyOcr, ocrEvidence } from './verify-ocr.ts'
 import { allGrants, resolveIdentity, readConsent } from './gates.ts'
 import { redactor } from './content.ts'
+import { readTeach } from './teach.ts'
 
 export type TaskArgs =
   | { action: 'start'; spec: Parameters<typeof task.startTask>[0] }
@@ -28,6 +29,16 @@ export type TaskArgs =
   | { action: 'status' }
 export const subgoalsSchema = Type.Array(Type.Object({ id: Type.String(), text: Type.String() }), {
   minItems: 1,
+})
+export const approvalSchema = Type.Object({
+  app: Type.String(),
+  // No appName here: the display name is server-set from a saved lesson, never written by the model.
+  window: Type.Optional(Type.Union([Type.String(), Type.Integer({ minimum: 1 })])),
+  pixel: Type.Literal(true),
+  actions: Type.Array(Type.String(), { minItems: 1 }),
+  steps: Type.Integer({ minimum: 1, maximum: 200 }),
+  minutes: Type.Number({ exclusiveMinimum: 0, maximum: 60 }),
+  foreground: Type.Boolean(),
 })
 export const criteriaSchema = Type.Array(
   Type.Object({
@@ -48,6 +59,8 @@ export async function taskTool(
   call: string,
   args: TaskArgs,
   signal: AbortSignal,
+  /** Server-only facts a model cannot supply, such as a saved lesson's app display name. */
+  trusted: { appName?: string } = {},
 ) {
   const planned =
     args.action === 'subgoals' ? args.list : args.action === 'replan' ? args.subgoals : undefined
@@ -70,7 +83,20 @@ export async function taskTool(
         }),
       )
     signal.throwIfAborted()
-    const started = task.startTask(args.spec, Date.now())
+    // The display name is server-set from a saved lesson; a model-written one would mislabel the approval card.
+    const { appName: _ignored, ...approval } = args.spec.approval ?? { appName: undefined }
+    const started = task.startTask(
+      args.spec.approval
+        ? {
+            ...args.spec,
+            approval: {
+              ...approval,
+              ...(trusted.appName ? { appName: trusted.appName } : {}),
+            } as Approval,
+          }
+        : args.spec,
+      Date.now(),
+    )
     started.state = task.activate(
       task.setSubgoals(started.state, [{ id: 'S1', text: started.state.spec.goal }], Date.now()),
       'S1',
@@ -133,10 +159,16 @@ export async function taskTool(
   if (args.action === 'finish') {
     return setup(host, conversation, async (driver) => {
       const evidence: task.Evidence[] = []
+      const taught = (await readTeach(host, conversation)).practice
+      const practice =
+        taught?.task === state.spec.id && state.practiceRun === taught.task ? taught : undefined
+      const practiceModule = practice ? await import('./practice.ts') : undefined
       const finished = await task.finish(
         state,
         args.outcome,
         async (preds) => {
+          if (practice && practiceModule)
+            return practiceModule.finalPracticeCheck(host, conversation, driver, practice, signal)
           let verdict: Verdict = 'unsatisfied'
           for (const app of state.spec.scope.apps) {
             const listed = await driver.call('list_windows', { app }, signal)
@@ -238,6 +270,9 @@ export async function taskTool(
           : undefined,
         signal,
         Date.now(),
+        practice && practiceModule
+          ? { criteria: practiceModule.practiceCriteria(practice.steps), checks: practice.checks }
+          : undefined,
       )
       const lastDone = finished.state.ledger.findLast(
         (entry) => entry.kind === 'subgoal_done',
@@ -252,8 +287,15 @@ export async function taskTool(
         doc.confirmed = []
         doc.pending = doc.pending.filter((p) => p.kind !== 'confirm')
         // Stop can arrive during verification; completion must never overwrite it.
-        if (doc.task?.status === state.status) doc.task = finished.state
-        else if (doc.task) finished.state = plainTask(doc.task)
+        if (doc.task?.status === state.status) {
+          // Own input can revoke run authority without changing task status while verification awaits.
+          if (!doc.task.runTakeover) finished.state.runTakeover = false
+          if (doc.task.practiceMismatch) {
+            finished.state.practiceMismatch = true
+            finished.state.runTakeover = false
+          }
+          doc.task = finished.state
+        } else if (doc.task) finished.state = plainTask(doc.task)
       })
       return result({
         status: finished.refuse ?? finished.state.status,
@@ -285,21 +327,54 @@ export async function taskTool(
     next = checked.state
     scores = checked.scores
   }
+  const replanLesson =
+    args.action === 'replan' && args.scope
+      ? (await readTeach(host, conversation)).practice
+      : undefined
+  const validateLabels =
+    args.action === 'replan' && args.scope
+      ? (await import('./practice.ts')).taughtConsequential
+      : undefined
+  let rejectedLabels = false
   await updateSession(host, conversation, (doc) => {
     if (!doc.task) throw new Error('No computer task')
     if (doc.task.status !== 'active') {
       next = plainTask(doc.task)
       return
     }
+    if (
+      args.action === 'replan' &&
+      args.scope &&
+      doc.task.practiceRun === doc.task.spec.id &&
+      (replanLesson?.task !== doc.task.spec.id ||
+        !validateLabels?.(replanLesson.steps, args.scope.consequential))
+    ) {
+      rejectedLabels = true
+      return
+    }
     if (args.action === 'subgoals')
       next = task.setSubgoals(plainTask(doc.task), args.list, Date.now())
     if (args.action === 'activate') next = task.activate(plainTask(doc.task), args.id, Date.now())
-    if (args.action === 'replan') next = task.replan(plainTask(doc.task), args, Date.now())
+    if (args.action === 'replan') {
+      const current = plainTask(doc.task)
+      const kept = current.spec.approval
+      let change = args
+      if (args.approval) {
+        // Keep the lesson's display name only while the canonical app is unchanged; never take the model's.
+        const { appName: _ignored, ...approval } = args.approval
+        const appName = kept && kept.app === approval.app ? kept.appName : undefined
+        change = { ...args, approval: { ...approval, ...(appName ? { appName } : {}) } }
+      }
+      next = task.replan(current, change, Date.now())
+    }
     next = activatePending(next)
+    if (!doc.task.runTakeover) next.runTakeover = false
     doc.task = next
     if (next.pendingChange && !doc.pending.some((p) => p.kind === 'change'))
       doc.pending.push({ kind: 'change', app: next.spec.scope.apps.join(', '), at: Date.now() })
   })
+  if (rejectedLabels)
+    return anchored(host, conversation, result({ status: 'consequential_not_taught' }))
   return anchored(
     host,
     conversation,
@@ -323,6 +398,7 @@ export function taskToolDefinition(host: ExtensionHost) {
             goal: Type.String(),
             criteria: criteriaSchema,
             scope: scopeSchema,
+            approval: Type.Optional(approvalSchema),
             stop: Type.Optional(
               Type.Object({
                 steps: Type.Optional(Type.Number()),
@@ -349,6 +425,7 @@ export function taskToolDefinition(host: ExtensionHost) {
           subgoals: Type.Optional(subgoalsSchema),
           criteria: Type.Optional(criteriaSchema),
           scope: Type.Optional(scopeSchema),
+          approval: Type.Optional(approvalSchema),
         }),
         Type.Object({
           action: Type.Literal('finish'),
@@ -377,10 +454,31 @@ export function taskToolDefinition(host: ExtensionHost) {
   })
 }
 
+function parameterInText(text: string, value: string) {
+  const explicit = [...text.split(/\r?\n/), ...text.split(/(?<=[.!?])\s+/)].map((part) =>
+    part.trim(),
+  )
+  if (explicit.includes(value)) return true
+  const quoted =
+    /"([^"]*)"|(?<![\p{L}\p{N}_])'([^']*)'(?![\p{L}\p{N}_])|`([^`]*)`|“([^”]*)”|(?<![\p{L}\p{N}_])‘([^’]*)’(?![\p{L}\p{N}_])/gu
+  if ([...text.matchAll(quoted)].some((match) => match.slice(1).includes(value))) return true
+  if (
+    Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value.trim()))
+      .length < 3
+  )
+    return false
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  // Keep identifiers, paths and contractions intact; trailing sentence punctuation is a boundary.
+  const before = '(?:^|[\\s"“”`(\\[{: =]|(?<![\\p{L}\\p{N}_])[\'‘’])'
+  const after = '(?=$|[\\s"“”`)\\]}]|[\'‘’](?![\\p{L}\\p{N}_])|[.,!?;:](?:\\s|$))'
+  return new RegExp(before + escaped + after, 'u').test(text)
+}
+
 export async function intentInConversation(
   host: ExtensionHost,
   conversation: number,
   intent: string,
+  parameter = false,
 ) {
   const target = await host.harness().conversation(conversation as ConversationId, context)
   if (!target || !intent.trim()) return false
@@ -393,12 +491,16 @@ export async function intentInConversation(
       if (entry.kind !== 'pi.user' && entry.kind !== 'subagents.instruction') continue
       for (const message of entry.model ?? []) {
         if (message.role !== 'user') continue
-        const text =
+        const blocks =
           typeof message.content === 'string'
-            ? message.content
-            : message.content
-                .flatMap((block) => (block.type === 'text' ? [block.text] : []))
-                .join(' ')
+            ? [message.content]
+            : message.content.flatMap((block) => (block.type === 'text' ? [block.text] : []))
+        // Never manufacture value bytes between text blocks; only intent allows normalization.
+        if (parameter) {
+          if (blocks.some((text) => parameterInText(text, intent))) return true
+          continue
+        }
+        const text = blocks.join(' ')
         const whole = normalized(text)
         const candidates = [
           whole,

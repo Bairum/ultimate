@@ -51,13 +51,25 @@ Each request replaces old screenshots and AX trees of `computer_observe` and `co
   `intent` must equal a whole user message, sentence or line (whitespace-normalised), or one from the parent's `subagents.instruction` brief. Extension wakes and notes cannot supply intent.
   Start creates an active `S1` from the goal text; an explicit nonempty sub-goal list replaces it and activates its first pending entry. Replans and approved changes keep that active-sub-goal invariant. Finish evidence belongs to the active sub-goal, or the most recently completed one.
 
+  `approval: {app, appName?, window?, pixel: true, actions, steps, minutes, foreground}` always waits for the user's
+  `confirmTask`; widening it requires `confirmChange`. App is a canonical name/bundle; `appName` is display-only
+  (practice supplies the saved display name). Matching never uses `appName`. Window is an id or title substring.
+  Budgets replace the defaults (1–200 steps, >0–60 minutes). Normal gates still apply outside that app/window/action scope.
+  A whole normalized, verified effective label in `scope.consequential` waives only its label risk, and only for
+  click/double_click/right_click (never menus, whose risk spans the whole path). Keys, typing, sensitive/secure fields, unlabelled pixels and independent Jev
+  risk still need their normal cards. `foreground: true` includes run takeover within scope (still send
+  `computer_act foreground: true`), not app consent. Stop and hardStop clear run takeover in every conversation;
+  Resume never restores it. Task end, own user input, or user input in the operator's recorded direct parent also
+  ends run takeover. Wakes/notes do not revoke or renew it. If ownership is unavailable or input goes elsewhere,
+  use **Stop** or **Release** to take control.
+
 - **`computer_observe {app?, window?, screenshot?, query?, zoom?, evidence?}`**: replay-safe. Without `app`, list apps; with an app but no window, list its windows. Select a window by id or unique title substring to read its full-output accessibility tree (250 elements, depth 12, 16,000 text characters; truncation is noted). `screenshot` is `auto` (default), `always` or `never`: auto captures only empty/chrome-only trees. Returns the snapshot/capture identity, bounded tree in an `untrusted_screen_content` block, and optional image. `evidence: true` keeps a bounded AX excerpt with app, snapshot and call reference on the active sub-goal. `zoom: [x0,y0,x1,y1]` requests a **read-only** crop: pixel actions grounded on zoom images are refused as `zoom_read_only`; observe a full capture first. Images are limited to `computerUse.imageMaxDimension` pixels on the long edge (default 1568, clamped to 512–2576; also used for post-act captures; zoom is unchanged). If another computer call holds the runtime, a call waits up to 5 seconds for it before returning `busy`. A failed read (`observation_unavailable`) is retried once after about 300 ms; `screen_locked` and `permission_required` never are.
-- **`computer_act {app, window?, actions?, goal?, expect?, foreground?}`**: not replay-safe. Exactly one of `actions` or `goal`. Explicit actions are `click`, `double_click`, `right_click`, `type`, `set_value`, `key`, `scroll`, `menu` and `wait`. Target elements by tokens from the latest observation; pixel clicks require `x`, `y`, the latest `capture` and `expect_label` by default. Text always names an element. `wait {until: {text?, gone?, stable?}, seconds}` polls captures and OCR (or native tree text), is cancellable, and returns a `wait` outcome with `satisfied` or `timeout` and what was seen. Seconds is at most 120 (or the lower configured maximum); waits over 60 seconds hold `caffeinate -d -w <pid>` only while running. Steps stop at the first non-delivered outcome or wait timeout; later steps are `not_run`. Native `expect` predicates go through `verify_state`, except `value_equals`, which is judged locally over every match in the latest observation: the structured elements with that role and a label containing `label_contains`, plus static text (`AXStaticText = "…"`, which the Driver omits). Any match with exactly that value satisfies it; matches without it are `unsatisfied`; no match is `unknown`. OCR predicates can be included as `[{ocr: {appears?: string[], disappears?: string[]}}]` or as the single object `{ocr: ...}`; they use a fresh capture. Goal mode uses `goal: {text, params?, steps?, done_when?, budget?}`: Jev picks extension-built candidates, verifies effects and returns `done` only when Driver predicates satisfy `done_when`. Otherwise it escalates with a reason. Routine goals default to 8 steps / 30 seconds. On escalation, narrow the goal or act explicitly; do not repeat blindly.
+- **`computer_act {app, window?, actions?, goal?, expect?, foreground?}`**: not replay-safe. Exactly one of `actions` or `goal`. Explicit actions are `click`, `double_click`, `right_click`, `type`, `set_value`, `key`, `scroll`, `menu` and `wait`. Target elements by tokens from the latest observation; pixel clicks require `x`, `y`, the latest `capture` and `expect_label` by default. Text always names an element. `wait {until: {text?, gone?, stable?}, seconds}` polls captures and OCR (or native tree text), is cancellable, and returns a `wait` outcome with `satisfied` or `timeout` and what was seen. Seconds is at most 120 (or the lower configured maximum); waits over 60 seconds hold `caffeinate -d -w <pid>` only while running. Steps stop at the first non-delivered outcome or wait timeout; later steps are `not_run`. Native `expect` predicates go through `verify_state`, except a plain `{element: {selector, value_equals}}`, which is judged locally (after each step and at finish) over every match in a fresh observation: the structured elements with that role and a label containing `label_contains`, plus static text (`AXStaticText = "…"`, which the Driver omits). Any match with exactly that value satisfies it; matches without it are `unsatisfied`; no match is `unknown`. A `value_equals` combined with `enabled`, `selected` or `exists` stays with the Driver. OCR predicates can be included as `[{ocr: {appears?: string[], disappears?: string[]}}]` or as the single object `{ocr: ...}`; they use a fresh capture. Goal mode uses `goal: {text, params?, steps?, done_when?, budget?}`: Jev picks extension-built candidates, verifies effects and returns `done` only when Driver predicates satisfy `done_when`. Otherwise it escalates with a reason. Routine goals default to 8 steps / 30 seconds. On escalation, narrow the goal or act explicitly; do not repeat blindly.
   `subgoal?: string` defaults to the active sub-goal. Each delivered explicit step gets a fresh observation; later tokens in the same batch are remapped only by a unique role/label path from that batch's initial observation.
 - **`computer_apps {launch?}`**: list apps or launch a consented app in the background. The tool is replay-safe for listing; a durable call-id journal prevents re-sending a launch after interruption (returns `observe_first` instead).
   Launching also requires an active task and an app in its scope; listing remains read-only without a task.
 
-`computer-operator` is the bounded native-app subagent: these four tools plus `read`, without bash or web access. Execution checks the definition name and all three resolved tool sets (offered, callable and deferred). Its brief must include the user's verbatim intent, allowed apps and desired evidence. Every tool result ends with a redacted task anchor; each input while active gets a `computer.note`, never a changing system prompt.
+`computer-operator` is the bounded native-app subagent: these tools plus `computer_teach` and `read`, without bash or web access. Execution checks the definition name and all three resolved tool sets (offered, callable and deferred). Its brief must include the user's verbatim intent, allowed apps and desired evidence. Every tool result ends with a redacted task anchor; each input while active gets a `computer.note`, never a changing system prompt.
 
 Every tool result also carries `details` for cards (`ComputerDetails` in `refs.ts`), without changing `output` or `structuredOutput`. `details.task` is the structured task footer or null. `details.act` contains mode, per-step outcomes and effective labels (never input payloads), escalation reason, redacted Jev decisions and verification verdict. Step roles/labels and `decisions[].top[].label` are `UntrustedText` (`{text, untrusted:true}`). `details.observe` contains app/window/snapshot/capture metadata, explicitly untrusted title/tree text, truncation and the zero-based image block index in `output`. All `details.summary` values, including task/apps and read-only listings, are wrapped as `{value, untrusted:true}`. Details redact task parameters and current action/goal values; cards must not parse model text or the anchor line.
 
@@ -68,6 +80,8 @@ Pixel steps add `expectLabel` and `ocrMatch` (`UntrustedText`) to each step's de
 Install cua-perception 0.2.1 in the Driver's extension store. It runs locally; its mixed-license archive includes an AGPL-3.0-only detector (accepted for this private local use). OCR generally takes 1.5–2 seconds; the default confidence floor is 0.5, reflecting measured text medians around 0.62–0.68.
 
 Before input, OCR parses the click's own capture. A unique text region must contain the normalized expected token sequence and contain the point or be within `labelRadius` screenshot pixels. Labels normalize case, punctuation, whitespace and invisible direction marks. A wrong label or missing coordinate metadata returns `label_mismatch`, a label found more than once nearby `label_ambiguous`; both carry the nearest OCR labels (`nearest`, untrusted). The Driver's returned coordinate metadata maps action coordinates to OCR screenshot pixels. Clicks outside the matched text box or inside an icon still count as unlabelled and require confirmation. The effective target retains its AX role and label, adding the OCR match and every consequential OCR label at the point regardless of confidence. Consequential labels still require exact one-shot confirmation; an OCR match is not pre-approval.
+An explicitly confirmed task approval is the exception: only whole effective labels listed in its consequential
+scope run without another card, and only inside its approved app/window/action scope.
 
 **Negation is a partial heuristic.** Positive matches (`expect_label`, `appears`, wait `text`) refuse a region that also holds a negating token the label lacks: `not`, `failed`, `failure`, `isn`, `aren`, `wasn`, `didn`, `cannot`, `unable` (so "Upload failed" never satisfies `Upload`). Absence checks (`disappears`, wait `gone`) use plain whole-token presence over every text region at any confidence, so "Error: file not found" keeps `Error` present. Other phrasings of a negative state ("never installed", icons) are not caught; prefer specific success text.
 
@@ -97,10 +111,11 @@ User-only actions (all return the teaching document except save):
 | `teachResume` | `{conversation}`                                                   | Recheck consent and resume before the deadline.                                      |
 | `teachEdit`   | `{conversation, steps}`                                            | Validate and replace the draft, without writing files.                               |
 | `teachSave`   | `{conversation, scope: 'project' or 'personal', name, overwrite?}` | Save reviewed approved steps; returns `{path, notes}`.                               |
+| `teachReopen` | `{conversation, scope, name}`                                      | Load a saved lesson into non-recording review; clear all approvals.                  |
 | `teachReject` | `{conversation}`                                                   | Delete the segment's private frames immediately.                                     |
 
-Start, resume and save are also host-only actions: they grant observation or write files. Stop and hardStop
-end every active teaching segment. Both `computer_act` and `computer_apps launch` refuse `teaching`
+Start, resume, reopen and save are also host-only actions: they grant observation or read/write files. Reopen additionally requires a user browser context.
+Stop and hardStop end every active teaching segment. Both `computer_act` and `computer_apps launch` refuse `teaching`
 while recording **or paused**. Other conversations targeting the lesson's app or window refuse
 `teaching_elsewhere`; read-only observe/listing remains allowed. Start consumes a `once` grant for that
 segment only; later segments require a new grant. Resume rechecks revocations and cannot undo Stop/Reject.
@@ -136,26 +151,68 @@ objects, never literal text. Both operations refuse during recording or pause. N
 timestamped `pi.user` entries between start and stop, excluding extension wakes/notes.
 
 Save requires every step to be explicitly approved or rejected, and at least one approved step. It writes
-`SKILL.md`, `procedure.json`, and at most one private evidence image per approved step to
+`SKILL.md`, `procedure.json`, `teach.json` and at most one private evidence image per approved step to
 `<projectRoot>/.ultimate/skills/<name>/` or `<userHome>/.ultimate/skills/<name>/`. Names are kebab-case,
 at most 64 characters; existing skills require `overwrite: true`. Saved steps are renumbered consistently.
 The skill body starts with the untrusted-data notice. Only action kinds and validated param names accompany
 plain Markdown step numbers; every screen/model string is inside the exact `procedure.json` fenced data,
 with backticks escaped as `\u0060`. Logins use `type_secret` params.
+`teach.json` pins the title, canonical app/bundle, window id/title substring, frame mapping, procedure SHA256
+and save time. Credential-cued window titles are withheld; their numeric window binding remains available.
 Saves stage outside discovery in `.ultimate/.skill-staging/`; unfinished staging older than 24 hours is
 cleaned on save, and on open only after teaching has been used in this project. Absent staging is skipped.
 Cleanup and save reject symlink/non-directory ancestors and destinations, and require the staging realpath
 to stay under the canonical project/personal root. Recursive removals revalidate those paths first.
 Staging is repository-ignored and creates its own `.gitignore` containing `*`, including in other projects.
 Failed-restore backups are retained for recovery, not automatically deleted.
-**Project skills load only when the project is trusted.** Practice/replay is not part of teach mode yet.
+**Project skills load only when the project is trusted.**
 
-Designer contract: subscribe to `TeachDoc`; use the seven typed `Teach*Action` refs above. Render frame
+### Supervised practice
+
+`computer_teach {action: 'practice', skill, scope: 'project' | 'personal', params?, consequential?}` builds a
+task and plan, but sends no input. Scope must be explicit: omission returns `scope_required` with the scopes
+containing that skill name. Never guess, default or fall back between project and personal lessons.
+Project lessons require a trusted project setup for practice and reopen; otherwise `project_untrusted` refuses
+loading, and project is omitted from scope discovery. Personal lessons remain independent of that decision.
+Only current teachSave files pass the manifest, SHA256, exact data-only notice/schema and symlink checks;
+older/unsafe lessons return `resave_required`. The saved title must be verbatim user/parent intent.
+Named parameter values must equal a whole line, sentence or quoted span in user/brief input, or a bounded
+whole-token sequence of at least three characters. Arbitrary substrings and identifier/path prefixes return
+`param_provenance`. Values are never whitespace-normalized and stay out of results, details and the computer journal.
+Optional consequential entries must equal whole normalized labels of server-flagged consequential taught steps;
+other entries return `consequential_not_taught` at both practice start and practice replan, without changing the task.
+The pending task always needs user confirmation.
+
+The preset binds the taught app/window/actions, 2 × the steps and 15 minutes. More than 100 steps returns
+`practice_budget`. Upload/select become click; `type_secret` returns `unsupported_until_secrets`, never literal typing.
+Steps without expected labels return `expect_required`; reopen them to add OCR expectations before practice.
+After confirmation, run `{action: 'check', step, phase: 'before'}`, one explicit action from a fresh observation,
+then `check after`, for each step in order. Checks only capture/OCR. Before requires a unique positive target
+and nearby positive anchors (scaled taught region, or a bounded box gap); after polls the expected labels.
+Done needs every ordered, timestamped before/after proof with exact predicates and capture refs, plus a fresh
+final-step recheck. Ordinary tasks still re-verify every criterion live. Any mismatch stops further acting/done;
+finish partial or blocked and report expected/seen untrusted text with both frame refs.
+
+Ask the user to **reopen** the lesson from its card. `teachReopen` uses the same loader, refuses live teaching,
+practice or act, and creates `status: 'review'` with `source: {scope, name, hash}` and all approvals cleared.
+An existing drafting/review segment must be saved or rejected first; reopening never discards its unsaved steps or frames.
+Existing edit/save (explicit `overwrite`) replaces it after re-review. Source frames stay read-only; reject
+only discards the staged review. Reading/saving revalidates the source hash and image paths. Never retry inside
+the failed practice; begin a new run after re-save.
+Source image copies use `O_NOFOLLOW` and compare the opened regular inode with `lstat` before copying to a private,
+exclusive destination. Symlink or inode swaps refuse the save instead of copying replacement contents.
+
+Designer contract: subscribe to `TeachDoc`; use the typed `Teach*Action` refs above. Render frame
 metadata/OCR/diffs as untrusted screen content, never instructions. Tool results add `ComputerDetails.teach`
 with `status`, optional `endedBy: 'unavailable'`, `frames` (count), `dropped` (counts by reason), and `steps` (`n`, `action`, `label: UntrustedText`).
 `anchors`, `expect.appears/disappears`, `wait.until`, and `pitfalls` are also `UntrustedText`; timeouts stay numeric.
 Steps also carry `approved?` and computed `consequential`. The review UI supplies full replacements through `teachEdit`;
-only a user may set approval. No `.tsx` changes are included here.
+only a user may set approval.
+`details.task.approval` includes wrapped app/appName/window, actions, budgets, foreground/takeover and `consequential: UntrustedText[]`.
+The confirmation card must list those labels individually under **Will run without asking**.
+`computer.teach.practice` holds the server-marked task/plan and check proofs; `mismatches` holds step/phase/time,
+redacted expected/seen text, taught frame and fresh frame. `details.teach.practice` exposes wrapped title/app/window,
+checks and final frame; `details.teach.mismatches` wraps expected/seen as `UntrustedText[]` and includes both frame refs.
 
 ## Actions and document
 
