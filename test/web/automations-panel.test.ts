@@ -8,7 +8,6 @@ const shell = vi.hoisted(() => ({
   requested: undefined as number | undefined,
   list: [] as AutomationListItem[],
   expanded: [] as string[],
-  switches: new Map<string, { checked: boolean; onCheckedChange: (checked: boolean) => void }>(),
   action: vi.fn<(ref: { name: string }) => Promise<unknown>>(),
 }))
 vi.mock('react', async (original) => ({
@@ -82,18 +81,12 @@ vi.mock('@/components/ai/message', () => ({
   MessageResponse: ({ children }: { children: ReactNode }) => children,
 }))
 vi.mock('@/components/ui/switch', () => ({
-  Switch: (props: {
-    'aria-label': string
-    checked: boolean
-    onCheckedChange: (checked: boolean) => void
-  }) => {
-    shell.switches.set(props['aria-label'], props)
-    return createElement('button', {
+  Switch: (props: { 'aria-label': string; checked: boolean }) =>
+    createElement('button', {
       role: 'switch',
       'aria-label': props['aria-label'],
       'aria-checked': props.checked,
-    })
-  },
+    }),
 }))
 // Inline the dialog for static rendering; no browser portal is available in these component tests.
 vi.mock('@/components/ui/dialog', () => ({
@@ -147,7 +140,6 @@ beforeEach(() => {
   shell.requested = undefined
   shell.list = [schedule, watching, failed]
   shell.expanded = []
-  shell.switches.clear()
   shell.action
     .mockReset()
     .mockImplementation((ref) => Promise.resolve(ref.name === 'list' ? shell.list : schedule))

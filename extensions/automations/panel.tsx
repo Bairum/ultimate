@@ -458,7 +458,7 @@ function AutomationRow({
           <ChevronRightIcon
             className={cn('size-3 transition-transform', expanded && 'rotate-90')}
           />
-          {automation.runs.length} run{automation.runs.length === 1 ? '' : 's'} · permissions
+          {automation.runs.length} run{automation.runs.length === 1 ? '' : 's'}
           {running && <BusyDot className="ml-0.5" />}
         </Button>
         <span className="min-w-0 truncate pl-1 font-mono text-[10.5px] text-muted-foreground/60">
