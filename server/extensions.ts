@@ -656,8 +656,8 @@ export async function loadExtensions(
       enqueue(() => reload())
       return
     }
-    chain = chain
-      .then(async () => {
+    enqueue(async () => {
+      try {
         const selected = new Set<string>()
         const modules = vite.moduleGraph.getModulesByFile(file)
         const visited = new Set<import('vite-plus').ModuleNode>()
@@ -677,12 +677,12 @@ export async function loadExtensions(
           if (directory && file === join(directory, name, 'server.ts')) servers.add(name)
         }
         await reload(selected, servers)
-      })
-      .catch((error) => {
+      } catch (error) {
         for (const record of records.values())
           if (record.server) record.server.error = String(error)
-        return changed()
-      })
+        throw error
+      }
+    })
   }
   const onStructure = (file: string) => {
     const directory = directories.find((root) => file.startsWith(root + '/'))
