@@ -21,13 +21,12 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { AutomationsApi } from '../automations/api.ts'
 import { Standing } from '../subagents/api.ts'
 import { deliver, deliverTask } from './delivery.ts'
+import { reminderTask } from './reminder.ts'
 import { EndAction, GoalDoc, ImagesAction, StartAction } from './refs.ts'
 import type { Criterion, Decision, Ending, Goal } from './refs.ts'
 
 /** Failed tries after which a criterion is blocked; work goes on with the others. */
 export const TRIES = 3
-/** The automation that wakes @ultimate while a goal is open, so a stalled goal never waits silently. */
-export const REMINDER = { name: 'Goal reminder', schedule: 'every 30m' }
 const TEXT_CHARS = 2000
 const SCAN_PAGE = 200
 
@@ -198,7 +197,7 @@ export async function act(tx: Tx, ultimate: ConversationId, args: ToolArgs, now:
     goal.waiting = { reason: text(args.reason, 'reason'), at: now }
     return {
       answer: `Goal ${goal.id} waits on the user; the reminder is paused. Ask them now.`,
-      reminder: goal.reminder && { id: goal.reminder, on: false },
+      sync: goal.id,
     }
   }
   if (args.action === 'resume') {
@@ -206,7 +205,7 @@ export async function act(tx: Tx, ultimate: ConversationId, args: ToolArgs, now:
     delete goal.waiting
     return {
       answer: `Goal ${goal.id} goes on; the reminder wakes you again.`,
-      reminder: goal.reminder && { id: goal.reminder, on: true },
+      sync: goal.id,
     }
   }
   if (args.outcome !== 'met' && args.outcome !== 'blocked')
@@ -250,53 +249,37 @@ async function card(host: ExtensionHost, tx: Tx, kind: 'goal.started' | 'goal.re
 const field = (args: unknown, name: string) =>
   args && typeof args === 'object' ? (args as Record<string, unknown>)[name] : undefined
 
-/**
- * Make the reminder of goal `goal`, which wakes @ultimate every 30 minutes, and record it on the goal; one made after
- * the goal already ended is deleted again.
- */
-async function remind(host: ExtensionHost, goal: Goal) {
-  const harness = host.harness()
-  const ultimate = await harness.commit(ultimateOf, context)
-  const automations = host.need(AutomationsApi)
-  const { id } = await automations.create({ ...REMINDER, subscribers: [ultimate] })
-  const kept = await harness.commit(async (tx) => {
-    const open = await openGoal(tx)
-    if (open?.id !== goal.id) return false
-    open.reminder = id
-    return true
-  }, context)
-  if (!kept) await automations.delete(id)
-  return { ...goal, ...(kept ? { reminder: id } : {}) }
-}
-
-/** Delete the reminder of an ended goal; one the user already deleted in the Automations panel is gone already. */
-async function forget(host: ExtensionHost, goal: Goal) {
-  if (!goal.reminder) return
-  const automations = host.need(AutomationsApi)
-  if (await host.harness().commit((tx) => automations.read(tx, goal.reminder!), context))
-    await automations.delete(goal.reminder)
-}
+/** In the commit that changes goal `goal`: a task that brings its reminder in line once the change is durable. */
+const sync = (host: ExtensionHost, tx: Tx, goal: number) =>
+  tx.createTask(
+    reminderTask(host, Goals),
+    { goal },
+    {
+      conversationId: ROOT_CONVERSATION_ID,
+      ownership: { kind: 'conversation' },
+      background: true,
+    },
+  )
 
 /** Starting and ending a goal is the user's grant; @ultimate only finishes one through its tool. */
 export const userActions = ['start', 'end']
 export const actions = {
-  start: implementAction(StartAction, async (args, { host }) => {
-    const goal = await host.harness().commit(async (tx) => {
-      const started = await start(tx, field(args, 'text'), Date.now())
-      await card(host, tx, 'goal.started', started)
-      return copy(started)
-    }, context)
-    return remind(host, goal)
-  }),
-  end: implementAction(EndAction, async (_args, { host }) => {
-    const goal = await host.harness().commit(async (tx) => {
-      const ended = await end(tx, { at: Date.now(), by: 'user', outcome: 'ended' })
-      await card(host, tx, 'goal.report', ended)
-      return ended
-    }, context)
-    await forget(host, goal)
-    return goal
-  }),
+  start: implementAction(StartAction, (args, { host }) =>
+    host.harness().commit(async (tx) => {
+      const goal = await start(tx, field(args, 'text'), Date.now())
+      await card(host, tx, 'goal.started', goal)
+      await sync(host, tx, goal.id)
+      return copy(goal)
+    }, context),
+  ),
+  end: implementAction(EndAction, (_args, { host }) =>
+    host.harness().commit(async (tx) => {
+      const goal = await end(tx, { at: Date.now(), by: 'user', outcome: 'ended' })
+      await card(host, tx, 'goal.report', goal)
+      await sync(host, tx, goal.id)
+      return goal
+    }, context),
+  ),
   images: implementAction(ImagesAction, async (args, { host }) =>
     host.harness().commit(async (tx) => {
       const goal = (await tx.doc(Goals, ROOT_CONVERSATION_ID)).goals.find(
@@ -318,7 +301,7 @@ export default function goalExtension(host: ExtensionHost) {
   host.need(AutomationsApi)
   return defineExtension({
     name: 'goal',
-    tasks: [deliverTask(host)],
+    tasks: [deliverTask(host), reminderTask(host, Goals)],
     hooks: [
       hook(GenerationTask, {
         // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched transactional beforeInput hook.
@@ -383,14 +366,10 @@ export default function goalExtension(host: ExtensionHost) {
               throw new Error('Only @ultimate keeps the hands-off goal.')
             const acted = await act(tx, caller, args, Date.now())
             if (acted.ended) await card(host, tx, 'goal.report', acted.ended)
+            const changed = acted.sync ?? acted.ended?.id
+            if (changed !== undefined) await sync(host, tx, changed)
             return acted
           }, ctx)
-          if (result.ended) await forget(host, result.ended)
-          if (result.reminder) {
-            const automations = host.need(AutomationsApi)
-            if (result.reminder.on) await automations.resume(result.reminder.id)
-            else await automations.pause(result.reminder.id)
-          }
           return { output: [{ type: 'text', text: result.answer }] }
         },
       }),
