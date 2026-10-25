@@ -160,7 +160,7 @@ value-free outline of the window (role and label per element; values only for no
 candidate table, and `history: [{step, id, outcome}]` plus `progress` per declared step. It never gets pixels,
 secure values or param values. The TypeSafe request carries on-screen labels, which the consent card discloses.
 
-**Decision rules** (initial values; settings `computerUse.jev.*`, tuned in phase 5 from the journal):
+**Decision rules** (initial values; settings `computerUse.jev.*`, tuned in phase 3 from the journal):
 
 | Signal                                                    | Threshold                                  | Then                                                             |
 | --------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------- |
