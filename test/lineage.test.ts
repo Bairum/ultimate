@@ -553,7 +553,7 @@ it.concurrent('delivers a branch’s prompt once when the process stops before i
 
 it.concurrent('defaults a branch to its source’s configuration', async () => {
   const { server } = await fixture()
-  const model = { provider: 'faux', modelId: 'faux-b' }
+  const model = { provider: 'faux', modelId: 'faux-1' }
   const other = await server.harness.createConversation(
     { ownership: { kind: 'ownerless' }, agent: { model, thinkingLevel: 'high' } },
     context,
@@ -562,7 +562,7 @@ it.concurrent('defaults a branch to its source’s configuration', async () => {
     ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.push(other.id)
   }, context)
   await seedTally(server.harness, other.id)
-  // Without a choice, the branch keeps its source's configuration.
+  // Without a choice, the branch keeps its source's configuration while its model has a login here.
   const agentOf = async (id: ConversationId) =>
     (await server.harness.conversation(id, context))!.agent(context)
   const followed = await branchFrom(server, { from: other.id, prompt: 'Follow B', isolated: false })

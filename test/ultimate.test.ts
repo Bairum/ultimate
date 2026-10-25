@@ -100,6 +100,8 @@ async function fixture(onRequest?: (text: string, home: string) => Promise<void>
   }
   return { home, root, server, subagents, requests, open }
 }
+/** A model Pi knows, on a provider with no login in tests. */
+const dead = 'anthropic/claude-opus-5.5'
 async function entries(server: Server, id: ConversationId) {
   return server.harness.commit(
     async (tx) => (await tx.scanEntries({ conversationId: id }, 1000)).items,
@@ -263,7 +265,13 @@ it.concurrent('starts a lineage branch with a message input and caller attributi
     (tx) => configure(tx, branch, { modelTools: { add: [agentBranch] } }),
     context,
   )
-  // A user definition without a pin: the branch inherits the root's model and thinking level.
+  // A user definition without a pin: the branch starts on the default model, never on a root model that lost its
+  // login (rog, 2026-10-25: branches inherited the root's OpenRouter model after its login was removed).
+  await f.server.harness.commit(
+    (tx) =>
+      configure(tx, ROOT_CONVERSATION_ID, { model: { provider: 'openrouter', modelId: dead } }),
+    context,
+  )
   await rm(overlay)
   await writeFile(
     join(f.home, '.ultimate/agents/coordinator.md'),
@@ -281,7 +289,6 @@ it.concurrent('starts a lineage branch with a message input and caller attributi
   ))!.agent(context)
   expect(overridden.instructions).toBe('Use the project procedure.')
   const rootAgent = await f.server.root.agent(context)
-  expect(overridden.model).toEqual(rootAgent.model)
   expect(overridden.model).toEqual({ provider: 'faux', modelId: 'faux-1' })
   expect(overridden.thinkingLevel).toBe(rootAgent.thinkingLevel)
   expect(overridden.tools.map((tool) => tool.name)).toEqual(
@@ -457,4 +464,31 @@ it.concurrent('re-applies an updated @ultimate definition on a typed input and n
         entry.kind === 'prompt.build' && JSON.stringify(entry.data).includes('instructions'),
     ),
   ).toBe(false)
+})
+
+it.concurrent('switches a conversation whose pinned model lost its login to its definition pin at the next input, with a notice', async () => {
+  const f = await fixture()
+  await writeFile(
+    join(f.home, '.ultimate/agents/dice.md'),
+    '---\nname: dice\ndescription: Dice\nresident: true\nmodel: faux/faux-think\ntools: [message]\n---\nAnswer concisely.',
+  )
+  const dice = await f.subagents.standing('dice', context)
+  // The model it ran on lost its login (rog, 2026-10-25: conversations stuck on OpenRouter after its logout).
+  await f.server.harness.commit(
+    (tx) => configure(tx, dice, { model: { provider: 'openrouter', modelId: dead } }),
+    context,
+  )
+  await ask(f.server, dice, 'roll')
+  const agent = await (await f.server.harness.conversation(dice, context))!.agent(context)
+  expect(agent.model).toEqual({ provider: 'faux', modelId: 'faux-think' })
+  const fallbacks = (await entries(f.server, dice)).filter((e) => e.kind === 'models.fallback')
+  expect(fallbacks.map((e) => e.data)).toEqual([
+    { from: `openrouter/${dead}`, to: 'faux/faux-think', reason: 'pin' },
+  ])
+  // The run answered on the switched model, and a model with a login is left alone.
+  expect(f.requests).toContain('roll')
+  await ask(f.server, dice, 'again')
+  expect((await entries(f.server, dice)).filter((e) => e.kind === 'models.fallback')).toHaveLength(
+    1,
+  )
 })

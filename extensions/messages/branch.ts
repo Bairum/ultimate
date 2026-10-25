@@ -3,7 +3,7 @@ import { Type } from '@earendil-works/pi-ai'
 import { configure, defineTool, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { definitionAgent, discoverAgents } from '../../lib/agents.ts'
+import { definitionAgent, discoverAgents, hostDefaultModel } from '../../lib/agents.ts'
 import { LineageApi, Roots } from '../lineage/api.ts'
 import { actingAs } from '../../lib/acting-as.ts'
 import { imagesParameter } from './images.ts'
@@ -47,14 +47,14 @@ export const branchTool = (host: ExtensionHost) =>
         )
         const coordinator = definitions.find((definition) => definition.name === 'coordinator')
         if (!coordinator) throw new Error('Missing coordinator definition')
-        // The model and thinking level the definition pins, thinking clamped to what the model supports; without a
-        // pin, the root's own, which the fork inherits anyway.
+        // The model and thinking level the definition pins when its provider has a login here, thinking clamped to
+        // what the model supports; without one, the current default model, never the one the root last stored.
         const rootAgent = await (await host
           .harness()
           .conversation(root as ConversationId, ctx))!.agent(ctx)
         const { model, thinkingLevel, modelTools } = definitionAgent(
           coordinator,
-          rootAgent,
+          { ...rootAgent, model: hostDefaultModel(host) },
           host.modelRuntime,
         )
         const branch = await lineage.branch(

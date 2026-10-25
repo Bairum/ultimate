@@ -20,6 +20,7 @@ import { ModelPicker } from './picker.tsx'
 import { nextThinking, openLogin, openPicker, thinkingDialog, useCurrentModel } from './state.tsx'
 import type { ThinkingLevel } from './state.tsx'
 import { switchAt } from './switches.ts'
+import type { Fallback } from './refs.ts'
 
 const toolbarButton =
   'flex h-7 max-w-56 shrink-0 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground'
@@ -154,8 +155,52 @@ function Switched({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   )
 }
 
+/** A conversation whose model had no login here switched to another as its next run started. */
+function FellBack({ entry }: { entry: EntryRecord }) {
+  const { from, to, reason } = entry.data as Fallback
+  const actions = useUltimate()
+  return (
+    <section
+      className="min-w-0 rounded-md border border-border border-l-2 border-l-warning/60 bg-muted/20"
+      data-models-fallback
+    >
+      <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+        <CpuIcon className="size-3.5 text-warning" />
+        <span>model switched</span>
+      </header>
+      <div className="space-y-2 px-3 py-3 text-[13px] leading-relaxed">
+        <p className="font-mono text-[12px]">
+          <span className="text-muted-foreground line-through">{from}</span>
+          {' → '}
+          <span className="text-foreground">{to}</span>
+        </p>
+        <p className="text-muted-foreground">
+          {from.split('/')[0]} has no login here, so this conversation now runs on{' '}
+          {reason === 'pin' ? 'the model its agent definition pins' : 'the default model'}.{' '}
+          <button
+            className="cursor-pointer text-foreground hover:underline"
+            onClick={() => openPicker(actions)}
+            type="button"
+          >
+            Pick another
+          </button>{' '}
+          or{' '}
+          <button
+            className="cursor-pointer text-foreground hover:underline"
+            onClick={() => openLogin(actions)}
+            type="button"
+          >
+            log in
+          </button>
+          .
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default defineWebExtension({
-  entries: { 'pi.assistant': Switched },
+  entries: { 'pi.assistant': Switched, 'models.fallback': FellBack },
   slots: { 'composer.toolbar': [ModelButton, ThinkingButton], overlay: [ModelPicker, LoginDialog] },
   commands: [
     {

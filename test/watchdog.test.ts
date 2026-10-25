@@ -820,6 +820,12 @@ it.each([
     undefined,
   ],
   ['Overloaded (529)', true, undefined],
+  // A conversation pinned to a provider whose login was removed (rog, 2026-10-25).
+  [
+    'Provider is not configured: openrouter',
+    false,
+    'openrouter has no login here. Log in again (⌘K → Log in to a provider), or message the conversation: its next run switches to a model that has one',
+  ],
   [
     'Claude Code is not installed. Install it with `npm install -g @anthropic-ai/claude-code` or set PI_CLAUDE_CODE_COMMAND to the executable.',
     false,
