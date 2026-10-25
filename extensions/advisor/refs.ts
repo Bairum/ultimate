@@ -228,9 +228,18 @@ export const SetRubricAction = actionRef<
   { scope: 'user' | 'project'; name: string; text: string | null },
   ConfigView
 >('advisor', 'setRubric')
-/** User-only: thumbs on a note, or change its status. */
+/**
+ * User-only: thumbs on a note, change its status (a dismissal takes an optional `reason`), or snooze it until a time
+ * (`snoozeUntil: null` wakes it).
+ */
 export const FeedbackAction = actionRef<
-  { note: string; feedback?: Feedback | null; status?: NoteStatus },
+  {
+    note: string
+    feedback?: Feedback | null
+    status?: NoteStatus
+    reason?: DismissReason
+    snoozeUntil?: number | null
+  },
   StoredNote
 >('advisor', 'feedback')
 
