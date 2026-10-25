@@ -49,6 +49,7 @@ import { exec } from '../../lib/exec.ts'
 import { shortTitle } from '../../lib/title.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { Pin } from '../models/api.ts'
 import { Profile, Standing, Subagents, SubagentsApi } from './api.ts'
 import {
   DefinitionAction,
@@ -567,6 +568,21 @@ export default function subagents(
       }
     }, ctx)
   }
+  // The definition a conversation runs as: children and standing agents record it, branches and the lander carry it
+  // as a label. Its pin, read fresh, is what a conversation whose model lost its login switches to first.
+  host.implement(Pin, {
+    async pin(tx, id) {
+      const name = (await tx.doc(Profile, id)).definition ?? (await tx.doc(host.metadata, id)).label
+      if (!name) return undefined
+      const { definitions } = await discoverAgents(
+        host.ultimateRoot,
+        host.projectRoot,
+        host.userHome,
+        host.modelRuntime,
+      )
+      return definitions.find((definition) => definition.name === name)?.model
+    },
+  })
   host.implement(SubagentsApi, {
     async createChild(tx, options) {
       const child = await createChild(host, tx, options)

@@ -6,8 +6,8 @@ import { clampThinkingLevel } from '@earendil-works/pi-ai'
 import { AgentDoc } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryDraft, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { defaultModel, discoverAgents, hasLogin } from '../../lib/agents.ts'
-import { Profile } from '../subagents/api.ts'
+import { defaultModel, hasLogin } from '../../lib/agents.ts'
+import { Pin } from './api.ts'
 import type { Fallback } from './refs.ts'
 
 const name = (ref: { provider: string; modelId: string }) => `${ref.provider}/${ref.modelId}`
@@ -21,15 +21,7 @@ export async function fallback(
   const available = host.modelRuntime.getAvailableSnapshot()
   // Nothing has a login yet (an empty snapshot says nothing about this model), or this one still has one.
   if (!agent.model || !available.length || hasLogin(available, agent.model)) return undefined
-  // The definition it runs as: children and standing agents record it, branches and the lander carry it as a label.
-  const definitionName =
-    (await tx.doc(Profile, conversationId)).definition ??
-    (await tx.doc(host.metadata, conversationId)).label
-  const pin = definitionName
-    ? (
-        await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
-      ).definitions.find((definition) => definition.name === definitionName)?.model
-    : undefined
+  const pin = await host.want(Pin)?.pin(tx, conversationId)
   const usable = hasLogin(available, pin) ? pin : undefined
   const to = usable ?? defaultModel(available, host.settings)
   if (!to) return undefined

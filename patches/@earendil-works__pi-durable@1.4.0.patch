@@ -1,5 +1,5 @@
 diff --git a/dist/harness/generation.js b/dist/harness/generation.js
-index d046232..a1614c6 100644
+index d046232b140f91542879ecd60d05f5796449bf31..880eae8e83327df330ea6e6bbd85fe6d64ba9671 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
 @@ -129,7 +129,8 @@ export const GenerationTask = defineTask({
@@ -12,6 +12,15 @@ index d046232..a1614c6 100644
              const request = { attempt, compacted, model: ref, cutoff, messages: view.messages };
              await classify(runtime, request, message, context);
          },
+@@ -283,7 +284,7 @@ async function prepareFailure(tx, runtime) {
+     const policy = settings.afterFailedRun;
+     if (policy !== "continue")
+         return { policy };
+-    return { policy, boundary: await prepareBoundary(tx, runtime.conversationId, settings) };
++    return { policy, boundary: await prepareBoundary(tx, runtime.conversationId, settings, "final", runtime.now()) };
+ }
+ /**
+  * End a failed run, settling its inputs with `settlement`, and do with the inputs queued behind it what
 @@ -465,7 +466,7 @@ async function answer(runtime, message, context) {
      const conversationId = runtime.conversationId;
      await runtime.commit(async (tx) => {
@@ -31,7 +40,7 @@ index d046232..a1614c6 100644
              await addTools(tx, conversationId, added);
          const live = await tx.doc(LiveDoc, conversationId);
 diff --git a/dist/harness/harness.js b/dist/harness/harness.js
-index 29ef22e..6bfa40b 100644
+index 29ef22e06d97ad482c0286c0f67f3e37f8fc39bf..6bfa40b16c990b3d140a0ab81e14986a0b52ce6e 100644
 --- a/dist/harness/harness.js
 +++ b/dist/harness/harness.js
 @@ -5,7 +5,7 @@ import { ResetEntry } from "../entries.js";
@@ -73,7 +82,7 @@ index 29ef22e..6bfa40b 100644
          this.assertUsable();
          return this.#tasks.wake();
 diff --git a/dist/harness/inbox.d.ts b/dist/harness/inbox.d.ts
-index 553a165..855af6f 100644
+index 553a1655c75da4bc08e7051c41375aef701882a9..855af6fa690716e9919a75b8e207f6b901496139 100644
 --- a/dist/harness/inbox.d.ts
 +++ b/dist/harness/inbox.d.ts
 @@ -23,6 +23,7 @@ export declare const InboxDoc: import("../types.ts").ConversationDocToken<InboxS
@@ -102,7 +111,7 @@ index 553a165..855af6f 100644
  /** The kind and data of an input's entry as strict JSON, without other fields an untyped caller might pass. */
  export declare function pickInputEntry({ kind, data }: InputEntry): JsonRepresentation<InputEntry>;
 diff --git a/dist/harness/inbox.js b/dist/harness/inbox.js
-index 5ef33aa..ef12da3 100644
+index 5ef33aa67d8435deecfb92dcbae0a987e8332976..ef12da360debe6d8e23155f637cc16da01369d97 100644
 --- a/dist/harness/inbox.js
 +++ b/dist/harness/inbox.js
 @@ -14,10 +14,15 @@ export const InboxDoc = defineDoc({
@@ -148,7 +157,7 @@ index 5ef33aa..ef12da3 100644
  /** The kind and data of an input's entry as strict JSON, without other fields an untyped caller might pass. */
  export function pickInputEntry({ kind, data }) {
 diff --git a/dist/harness/scheduler.d.ts b/dist/harness/scheduler.d.ts
-index be666ae..1dfa6ec 100644
+index be666ae2735d610c8363059248c1ef016ba74bf2..1dfa6ecceac7059f645a4566d199501eff1cf762 100644
 --- a/dist/harness/scheduler.d.ts
 +++ b/dist/harness/scheduler.d.ts
 @@ -92,6 +92,8 @@ export declare class TaskScheduler {
@@ -161,7 +170,7 @@ index be666ae..1dfa6ec 100644
       * Run a task parked by the restart limit again: clears its restart count and enables scheduling. Does nothing for a
       * task that is not parked; rejects for an unknown one.
 diff --git a/dist/harness/scheduler.js b/dist/harness/scheduler.js
-index ba7a016..8c94e89 100644
+index ba7a0169b9bc54cd3123a4cc770d8d7a5c61b63d..8c94e895122dee5f09b00be107da5250a6bc216d 100644
 --- a/dist/harness/scheduler.js
 +++ b/dist/harness/scheduler.js
 @@ -142,6 +142,7 @@ export class TaskScheduler {
@@ -218,7 +227,7 @@ index ba7a016..8c94e89 100644
          state.snapshot = this.#registry.snapshot();
          const next = state.snapshot.task(current.kind);
 diff --git a/dist/harness/submissions.js b/dist/harness/submissions.js
-index 8496124..d147873 100644
+index 8496124ee10b4814b27b4b6316f27d2023bcf8e4..d147873ad09049fc5f72b73c639f5f0bb7d45b86 100644
 --- a/dist/harness/submissions.js
 +++ b/dist/harness/submissions.js
 @@ -3,7 +3,7 @@ import { withTelemetry } from "@earendil-works/chord/context";
@@ -249,7 +258,7 @@ index 8496124..d147873 100644
      const input = { ...fields, type: "input", status: "placed", entry: entry.id };
      const { id } = await tx.createSubmission(input);
 diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
-index 192a9cc..5337747 100644
+index 192a9cce35ad4729009d2e3f75f475c8dffa16c8..5337747b63e659b76c1b2df92859324bd3ae9c58 100644
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
 @@ -727,6 +727,9 @@ export interface Harness extends Session {
@@ -272,7 +281,7 @@ index 192a9cc..5337747 100644
      beforeRequest(request: {
          readonly messages: readonly Message[];
 diff --git a/dist/session/session.d.ts b/dist/session/session.d.ts
-index c9f7f39..ee364e5 100644
+index c9f7f39a195faa40e436b2019e6532cf4c948dbe..ee364e5e0baa619c2b703a5da72a3ff6de97d07b 100644
 --- a/dist/session/session.d.ts
 +++ b/dist/session/session.d.ts
 @@ -1,5 +1,5 @@
@@ -291,7 +300,7 @@ index c9f7f39..ee364e5 100644
       * Runs inside every transaction that creates or forks a conversation, after the conversation record is staged. A
       * plain Session stages nothing; a Harness stages its built-in documents.
 diff --git a/dist/session/session.js b/dist/session/session.js
-index 220d7db..8c2e177 100644
+index 220d7db5f9b1a5930a1d7963b9f93a12307cebea..8c2e17792f98a718041e98bb07aec9b54c918220 100644
 --- a/dist/session/session.js
 +++ b/dist/session/session.js
 @@ -125,6 +125,7 @@ export class SessionImpl {
@@ -313,7 +322,7 @@ index 220d7db..8c2e177 100644
       * Runs inside every transaction that creates or forks a conversation, after the conversation record is staged. A
       * plain Session stages nothing; a Harness stages its built-in documents.
 diff --git a/dist/session/transaction.d.ts b/dist/session/transaction.d.ts
-index 02e3b2c..44896cc 100644
+index 02e3b2c3c3b4908badfdf0993a0b4f9435192dc9..44896ccafbf0517cfd1b11ea2afb82c339bcb338 100644
 --- a/dist/session/transaction.d.ts
 +++ b/dist/session/transaction.d.ts
 @@ -28,6 +28,7 @@ export interface TransactionHost {
@@ -333,7 +342,7 @@ index 02e3b2c..44896cc 100644
      appendEntry<D extends JsonValue>(token: Entry<D>, conversationId: ConversationId, value: TypedEntryDraft<NoInfer<D>>): Promise<TypedEntry<D>>;
      createTask<I, S extends {
 diff --git a/dist/session/transaction.js b/dist/session/transaction.js
-index 77fe301..8bce2a2 100644
+index 77fe3013c2e376b29ec7f42ee84055d3f155a673..8bce2a29a6bb0ede7817c1cb7c22e63e2f54ceb0 100644
 --- a/dist/session/transaction.js
 +++ b/dist/session/transaction.js
 @@ -148,6 +148,9 @@ export class Transaction {
@@ -347,7 +356,7 @@ index 77fe301..8bce2a2 100644
          if (typeof first === "number")
              return this.#appendEntry(first, second);
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index 746fd25..ccb8ced 100644
+index 746fd257ea8bd36fa0968b0ef6a61a98d656b31b..ccb8ced793143dfd4b844a6e8a2990175360b42e 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
 @@ -388,6 +388,8 @@ export type ContextEdit = {
