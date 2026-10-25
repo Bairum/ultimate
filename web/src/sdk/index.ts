@@ -97,6 +97,7 @@ export {
   useExtensionUiState,
   useExtensions,
   useIntro,
+  useCopy,
   useModels,
   useNotices,
   useNow,
@@ -125,6 +126,7 @@ export {
   formatDuration,
   formatTime,
   formatTokens,
+  plural,
   shortenPath,
 } from './format.ts'
 /** Class names joined, Tailwind conflicts resolved: `cn('px-2', active && 'bg-accent')`. */

@@ -23,6 +23,7 @@ import {
   useDocOf,
   useUltimate,
 } from '@/sdk'
+import { plural } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { EndAction, GoalDoc, ImagesAction } from './refs.ts'
@@ -31,8 +32,6 @@ import type { Criterion, Decision, Goal, GoalEntry } from './refs.ts'
 function useGoal(id: number) {
   return useDocOf(1, GoalDoc)?.goals.find((goal) => goal.id === id)
 }
-
-const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`
 
 /** The frame both cards share: an accent rule on the left, a mono header row. */
 function Card({

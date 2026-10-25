@@ -16,6 +16,7 @@ import {
   useSystem,
   useTranscript,
 } from '@/sdk'
+import { plural } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { AgentMark } from '../conversations/ui.tsx'
 import { DefinitionAction } from '../subagents/ui.tsx'
@@ -30,7 +31,6 @@ import {
 } from './breakdown.ts'
 import type { Breakdown, Diff, Section, Tool } from './breakdown.ts'
 
-const plural = (n: number, noun: string) => n > 0 && `${n} ${noun}${n === 1 ? '' : 's'}`
 const signed = (delta: number) =>
   delta === 0 ? '±0' : `${delta > 0 ? '+' : '−'}${formatTokens(Math.abs(delta))}`
 const percent = (part: number, total: number) =>
@@ -492,7 +492,10 @@ function SystemEntry({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   if (!systemOf(entry) || !diff) return core
   if (opensContext(entries, index, Math.max(0, ownStart(entries, id)))) return null
   if (removesAll(entry) && systemOf(entries[index + 1])) return null
-  const changes = [plural(diff.sections.length, 'section'), plural(diff.tools.length, 'tool')]
+  const changes = [
+    diff.sections.length > 0 && plural(diff.sections.length, 'section'),
+    diff.tools.length > 0 && plural(diff.tools.length, 'tool'),
+  ]
   return (
     <Marker diff={diff} id={entry.id}>
       system prompt · {changes.filter(Boolean).join(' · ') || 'unchanged'}
