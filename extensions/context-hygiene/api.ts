@@ -38,5 +38,5 @@ export type ContextHygieneService = {
   /** Replace only applied tool-result text, preserving pairing and order. */
   rewrite(messages: readonly Message[], decisions: LedgerState['decisions']): readonly Message[]
 }
-/** Optional service for subsequent context compression phases. */
+/** Hygiene's gate and rewrite, for extensions that must send what a request sends (keep-warm's pings). */
 export const ContextHygiene = defineApi<ContextHygieneService>()('context-hygiene')

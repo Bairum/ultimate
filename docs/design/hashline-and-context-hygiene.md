@@ -34,7 +34,7 @@ All counts, sizes and pass rates below were measured on this machine unless mark
 - **Context hygiene is three independent extensions over one cache-aware rewrite ledger:**
   - `context-hygiene`: superseded reads and empty results;
   - `context-offload`: large outputs stored durably, a short excerpt in context;
-  - `context-compress`: model-called compress and decompress.
+  - `context-compress`: model-called compress and decompress (built, then dropped on 2026-10-25: see D.5).
 
   None of them changes stored history; each changes only what a request sends, deterministically, so the prompt
   cache breaks at most once per decision.
@@ -502,6 +502,10 @@ the file via a user-only action.
 - The file was removed by retention: the marker's path errors on read, and the model reruns the command.
 
 ### D.5 Phase 2: `extensions/context-compress/` (model-called, after billion-context)
+
+**Dropped (2026-10-25).** It was never used, every fold breaks the cache, and agent-written summaries did no better
+than plain observation masking in published comparisons. Pressure-driven masking in `context-hygiene` replaces it.
+The design below is kept for the record.
 
 **Tools:**
 

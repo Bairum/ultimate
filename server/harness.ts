@@ -93,6 +93,10 @@ export function createHarnessSettings(
         timeoutMs: provider.timeoutMs ?? (idle === 0 ? 2147483647 : idle),
         maxRetryDelayMs: provider.maxRetryDelayMs,
         ...(provider.maxRetries === undefined ? {} : { maxRetries: provider.maxRetries }),
+        // Anthropic's one-hour prompt cache (`ttl: "1h"`): coordinators and @ultimate wait on children and the lander
+        // longer than the default five minutes, and each such gap rewrote the whole context. OpenAI Responses gets
+        // its 24-hour retention; Codex ignores it.
+        cacheRetention: 'long' as const,
       }
     },
     get compaction() {

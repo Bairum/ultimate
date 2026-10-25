@@ -68,7 +68,6 @@ export const defaultOff: readonly string[] = [
   'sounds',
   'context-offload',
   'context-hygiene',
-  'context-compress',
   'hashline',
 ]
 
