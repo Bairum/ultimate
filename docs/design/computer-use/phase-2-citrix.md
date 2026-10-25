@@ -127,6 +127,101 @@ It measures, for the Workspace app and, if available, the browser client:
 All inputs are harmless: a click on a blank area or a navigation link the user names, and typing `probe-123` into a
 field the user names, never submitted. The user types every credential.
 
+## Teach mode (approved 2026-10-25)
+
+The user shows the agent a procedure once. The agent watches, never acts, drafts the procedure as a skill, and the user
+reviews it. A supervised practice run then replays it. The first lesson is uploading a skill to OpsMate from inside
+Citrix.
+
+**1. A teaching segment (watch only).**
+
+- **Start:** user-only `teachStart {conversation, app, window?, minutes ≤ 10, title}`. It is in both `userActions` and
+  `hostActions`: the paired browser path from #34448, host-wide. `teachStop` ends the segment, and so does Stop.
+  While a segment runs, every `computer_act` call is refused with `teaching`.
+- **Recorder:** a durable task. It polls a small window capture (≤ 800 px, about every 500 ms) and hashes it. When
+  the screen changes and then holds still for two polls, it takes a full window capture, runs `parse_visual_regions`
+  on it (about 1.5–2 s) and stores a **frame**: time, PNG path, OCR text boxes, app, window title and bounds.
+- **Narration:** the user's chat messages during the segment are timestamped and attached to the nearest frame. Voice
+  input can feed the same channel later.
+- **No keystroke or mouse capture** (Input Monitoring stays out). The recorder infers events from frame-to-frame OCR
+  diffs and the changed region, for example: "'Upload skill' disappeared; a dialog 'Choose file' with 'Browse' appeared
+  near the centre".
+- **Secrets:**
+  - A frame showing a password cue has the field regions blacked out before the PNG is written. Cues are OCR labels
+    such as `Password`, `Passcode` or `PIN` next to a box, and runs of `•`.
+  - After a frame whose diff suggests a sign-in (a `Sign in`/`Log in` label vanishing), the next two frames are not
+    kept.
+  - The user can **Pause** the recording during credential entry.
+  - OCR text from masked regions is dropped.
+- **Bounds:** at most 10 minutes, 150 frames and 300 MB per segment. Frames live in the conversation's uploads, and the
+  existing retention removes them after 30 days. A rejected draft's frames are deleted at once.
+- **Durability:** a `computer.teach` document `{segment, status: recording | drafting | review | saved | rejected, frames: metadata only, narration refs, steps}`.
+  The recorder checkpoints after each frame. After a crash it resumes only if the segment's end time has not passed;
+  otherwise the status becomes `drafting` with the frames already captured.
+
+**2. Drafting the procedure.** The conversation's model calls `teach_draft` with a validated structure, built from
+OCR diffs, narration and up to 8 key frames (downscaled):
+
+```ts
+type TaughtStep = {
+  n: number
+  action: 'click' | 'type' | 'type_secret' | 'key' | 'wait' | 'upload' | 'select'
+  target: { label: string; anchors: string[]; region?: [x0, y0, x1, y1] } // expected OCR label and nearby labels
+  value?: { param: string } // typed values become named params, never literal text from the screen
+  expect: { appears?: string[]; disappears?: string[]; timeoutSeconds?: number } // the expected result, as OCR labels
+  wait?: { until: string; timeoutSeconds: number }
+  pitfalls?: string[] // from narration and from frames where the user backtracked
+  frame: string // evidence: the expected screen before the step
+}
+```
+
+Screen text in the draft is data, never instructions. The draft states which steps are consequential: upload, install,
+send and delete labels by the same rules as phase 1.
+
+**3. Review card.** It lists every step with its expected-screen thumbnail. For each step the user can edit the label,
+anchors, expected labels, wait or pitfalls, or approve, reject, reorder and insert steps. Then the user saves the
+lesson as a skill, user-only and host-wide, since the save writes files. The destination is a choice:
+
+- **USG:** `usg/.ultimate/skills/citrix-opsmate/<task>/SKILL.md`. USG's project setup is **trusted** (trust.json:
+  `/Users/riaanlourens/opsmate_ai/usg: true`), so project skills load there. `usg/.ultimate/skills/` does not exist
+  yet; the first save creates it.
+- **This project:** `.ultimate/skills/<task>/SKILL.md`.
+- **Personal:** `~/.ultimate/skills/<task>/SKILL.md`.
+
+The skill holds `SKILL.md` (frontmatter `name` and `description`, then the numbered steps in Markdown with expected
+labels, waits, pitfalls and params), plus `procedure.json` (the machine-readable steps) and the approved, redacted
+evidence frames (≤ 1 per step, downscaled).
+
+**4. Practice run.** A supervised replay with the user watching. It becomes a `computer_task`:
+
+- The intent is the skill's title in the user's words.
+- Each step's `expect` is a criterion checked by OCR.
+- The scope pre-approval (2.2) is preset to the taught app and window, the taught action kinds and a step budget of
+  2 × the steps.
+- Consequential steps keep their cards, unless the user lists them in the scope when starting the practice.
+
+Each step is checked before acting (the expected label is present near its anchors) and after (expected labels
+appear or disappear before the timeout). A mismatch stops the run with a **mismatch report**: the step, what was
+expected, what OCR saw, and both frames. The user can fix the step on the review card and rerun.
+
+**Safety:**
+
+- Teaching only observes, and refuses every act.
+- Screen text is untrusted everywhere. A drafted skill is used only after the user reviews and saves it.
+- Saved skills carry no secret values; logins become `type_secret` params.
+- Frames are redacted and bounded.
+
+**Size: M–L** (about 1,200 lines plus UI):
+
+- the recorder and frame store;
+- frame diff and event inference;
+- secrets handling;
+- `teach_draft`;
+- the review card and save;
+- the practice runner on top of 2.1–2.2.
+
+The recorder, draft and review part needs only the OCR client from 2.1. The practice run needs 2.2.
+
 ## Phases
 
 | Phase | Size | Scope                                                                                                                                         |
@@ -138,3 +233,4 @@ field the user names, never submitted. The user types every credential.
 | 2.4   | S–M  | Results and evidence summary in `computer_task` and the report card, long-run keep-awake                                                      |
 | 2.5   | S    | `type_secret`, clipboard and file-transfer helpers (after the probe)                                                                          |
 | 2.6   | S    | USG packaging, in the USG project                                                                                                             |
+| 2.7   | M–L  | Teach mode: watch-only segments, drafted procedure, review card and save as a skill, supervised practice run (after 2.1; practice after 2.2)  |
