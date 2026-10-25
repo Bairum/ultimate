@@ -100,6 +100,9 @@ end every active teaching segment. Both `computer_act` and `computer_apps launch
 while recording **or paused**. Other conversations targeting the lesson's app or window refuse
 `teaching_elsewhere`; read-only observe/listing remains allowed. Start consumes a `once` grant for that
 segment only; later segments require a new grant. Resume rechecks revocations and cannot undo Stop/Reject.
+Start and resume refuse any in-flight computer act across the project, checked again at commit. Live teaching
+guards use an in-memory index rebuilt on open, not a scan of conversation documents on each act. Window ids
+match numerically, including string arguments such as `"456"`.
 No keystroke, mouse or accessibility-tree recording is collected. The recorder
 polls captures of at most 800 pixels every `computerUse.teach.pollMs` (default 500; allowed 100–10000),
 and records a full capture plus text/icon OCR only after two unchanged polls following a change.
@@ -136,7 +139,11 @@ The skill body starts with the untrusted-data notice. Only action kinds and vali
 plain Markdown step numbers; every screen/model string is inside the exact `procedure.json` fenced data,
 with backticks escaped as `\u0060`. Logins use `type_secret` params.
 Saves stage outside discovery in `.ultimate/.skill-staging/`; unfinished staging older than 24 hours is
-cleaned on open/save. Failed-restore backups are retained for recovery, not automatically deleted.
+cleaned on save, and on open only after teaching has been used in this project. Absent staging is skipped.
+Cleanup and save reject symlink/non-directory ancestors and destinations, and require the staging realpath
+to stay under the canonical project/personal root. Recursive removals revalidate those paths first.
+Staging is repository-ignored and creates its own `.gitignore` containing `*`, including in other projects.
+Failed-restore backups are retained for recovery, not automatically deleted.
 **Project skills load only when the project is trusted.** Practice/replay is not part of teach mode yet.
 
 Designer contract: subscribe to `TeachDoc`; use the seven typed `Teach*Action` refs above. Render frame

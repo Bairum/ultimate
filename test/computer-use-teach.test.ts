@@ -6,7 +6,7 @@ import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-dura
 import { parseFrontmatter } from '@earendil-works/pi-coding-agent'
 import { afterEach, expect, it, vi } from 'vitest'
 import { mkdir, readFile, readdir, rm, symlink, utimes, writeFile } from 'node:fs/promises'
-import { join, resolve as resolvePath } from 'node:path'
+import { dirname, join, resolve as resolvePath } from 'node:path'
 import type { ExtensionHost } from '../server/extensions.ts'
 import type { ActionContext } from '../server/actions.ts'
 import type { Teach, FrameMeta, TaughtStep } from '../extensions/computer-use/refs.ts'
@@ -49,6 +49,8 @@ import {
   teachDetails,
   launchRecorder,
   cleanTeachStaging,
+  ComputerTeach,
+  teachingBlocked,
 } from '../extensions/computer-use/teach.ts'
 
 vi.mock('@earendil-works/pi-coding-agent', async (original) => ({
@@ -605,7 +607,7 @@ it.each(['recording', 'paused'] as const)(
           f.driver,
           other.id,
           'window-match',
-          { app: 'Unrelated', window: 456, actions: [] },
+          { app: 'Unrelated', window: '456', actions: [] },
           new AbortController().signal,
         )
       ).structuredOutput,
@@ -713,7 +715,7 @@ it('protects review frames from global prune, renumbers approved steps, and note
   expect(missing.notes).toEqual([expect.stringContaining('was missing')])
   expect((await readTeach(f.host, f.root.id)).segment!.dropped.at(-1)?.reason).toBe('frame_missing')
 })
-it('stages outside discovered skills and removes stale unfinished staging', async () => {
+it('stages outside discovered skills, ignores private files and removes stale unfinished staging', async () => {
   const f = await fixture()
   const root = join(f.home, '.ultimate', '.skill-staging')
   const stale = join(root, 'stale')
@@ -727,7 +729,11 @@ it('stages outside discovered skills and removes stale unfinished staging', asyn
   })
   await editTeaching(f.host, f.root.id, [{ ...step(), approved: true }])
   await saveTeaching(f.host, { conversation: f.root.id, scope: 'project', name: 'complete' })
-  expect(await readdir(root)).toEqual([])
+  expect(await readdir(root)).toEqual(['.gitignore'])
+  expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe('*\n')
+  expect((await readFile(resolvePath('.gitignore'), 'utf8')).split('\n')).toContain(
+    '.ultimate/.skill-staging/',
+  )
   expect(await readdir(join(f.home, '.ultimate', 'skills'))).toEqual(['complete'])
 })
 it('handles a recorder checkpoint double failure without an unhandled rejection', async () => {
@@ -863,4 +869,171 @@ it('enforces real user and host action boundaries before executing teaching acti
         host: false,
       }),
     ).rejects.toThrow('Pair this browser')
+})
+
+it('refuses symlinked staging without deleting a victim and skips cleanup before teach is used', async () => {
+  const f = await fixture()
+  const victim = await temp()
+  cleanup.push(() => removeTemp(victim))
+  const precious = join(victim, 'old-precious')
+  await mkdir(precious)
+  await writeFile(join(precious, 'data.txt'), 'keep me')
+  await utimes(precious, 0, 0)
+  const staging = join(f.home, '.ultimate', '.skill-staging')
+  await mkdir(dirname(staging))
+  await symlink(victim, staging)
+  await openTeaching(f.host)
+  expect(await readFile(join(precious, 'data.txt'), 'utf8')).toBe('keep me')
+  await updateTeach(f.host, f.root.id, (doc) => {
+    doc.segment = { ...segment(), status: 'drafting', frames: [frame()] }
+  })
+  await editTeaching(f.host, f.root.id, [{ ...step(), approved: true }])
+  await expect(cleanTeachStaging(staging)).rejects.toThrow('Unsafe teaching directory')
+  await expect(openTeaching(f.host)).rejects.toThrow('Unsafe teaching directory')
+  await expect(
+    saveTeaching(f.host, { conversation: f.root.id, scope: 'project', name: 'lesson' }),
+  ).rejects.toThrow('Unsafe teaching directory')
+  expect(await readFile(join(precious, 'data.txt'), 'utf8')).toBe('keep me')
+  expect(await readdir(victim)).toEqual(['old-precious'])
+})
+it.each(['.ultimate', '.ultimate/skills', '.ultimate/skills/lesson'])(
+  'refuses a symlink at %s when saving',
+  async (relative) => {
+    const f = await fixture()
+    const victim = await temp()
+    cleanup.push(() => removeTemp(victim))
+    await writeFile(join(victim, 'precious.txt'), 'keep me')
+    const path = join(f.home, relative)
+    await mkdir(dirname(path), { recursive: true })
+    await symlink(victim, path)
+    await updateTeach(f.host, f.root.id, (doc) => {
+      doc.segment = { ...segment(), status: 'drafting', frames: [frame()] }
+    })
+    await editTeaching(f.host, f.root.id, [{ ...step(), approved: true }])
+    await expect(
+      saveTeaching(f.host, {
+        conversation: f.root.id,
+        scope: 'project',
+        name: 'lesson',
+        overwrite: true,
+      }),
+    ).rejects.toThrow('Unsafe teaching directory')
+    expect(await readFile(join(victim, 'precious.txt'), 'utf8')).toBe('keep me')
+  },
+)
+it.each(['.ultimate', '.ultimate/.skill-staging', '.ultimate/skills', '.ultimate/skills/lesson'])(
+  'refuses a non-directory at %s when saving',
+  async (relative) => {
+    const f = await fixture()
+    const path = join(f.home, relative)
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, 'not a directory')
+    await updateTeach(f.host, f.root.id, (doc) => {
+      doc.segment = { ...segment(), status: 'drafting', frames: [frame()] }
+    })
+    await editTeaching(f.host, f.root.id, [{ ...step(), approved: true }])
+    await expect(
+      saveTeaching(f.host, {
+        conversation: f.root.id,
+        scope: 'project',
+        name: 'lesson',
+        overwrite: true,
+      }),
+    ).rejects.toThrow('Unsafe teaching directory')
+    expect(await readFile(path, 'utf8')).toBe('not a directory')
+  },
+)
+it('skips absent staging without creating directories', async () => {
+  const f = await fixture()
+  await cleanTeachStaging(join(f.home, '.ultimate', '.skill-staging'))
+  expect(await readdir(f.home)).toEqual([])
+})
+it.each(['start', 'resume'] as const)(
+  'refuses %s while any conversation has busy or active computer work',
+  async (operation) => {
+    for (const busy of [true, false]) {
+      const f = await fixture()
+      if (operation === 'resume')
+        await updateTeach(f.host, f.root.id, (doc) => {
+          doc.segment = { ...segment(), status: 'paused' }
+        })
+      runtime(f.host).busy = busy
+      if (!busy) runtime(f.host).active.set(999, { stopped: false, inFlight: true })
+      const run = () =>
+        operation === 'start'
+          ? startTeaching(f.host, { conversation: f.root.id, app: 'Calculator', title: 'Lesson' })
+          : resumeTeaching(f.host, f.root.id)
+      await expect(run()).rejects.toThrow('Computer act is running')
+      expect(f.fake.calls).toEqual([])
+      runtime(f.host).busy = false
+      runtime(f.host).active.clear()
+    }
+  },
+)
+it.each(['start', 'resume'] as const)(
+  'rechecks global computer work inside the %s commit',
+  async (operation) => {
+    const f = await fixture()
+    await f.grant()
+    if (operation === 'resume')
+      await updateTeach(f.host, f.root.id, (doc) => {
+        doc.segment = { ...segment(), status: 'paused' }
+      })
+    f.fake.replyFor(operation === 'start' ? 'list_windows' : 'list_apps', () => {
+      if (operation === 'start') runtime(f.host).active.set(999, { stopped: false, inFlight: true })
+      else runtime(f.host).busy = true
+      return operation === 'start'
+        ? {
+            content: [],
+            structuredContent: {
+              windows: [{ window_id: 456, pid: 123, window_title: 'Calculator' }],
+            },
+          }
+        : appReply
+    })
+    const run = () =>
+      operation === 'start'
+        ? startTeaching(f.host, { conversation: f.root.id, app: 'Calculator', title: 'Lesson' })
+        : resumeTeaching(f.host, f.root.id)
+    await expect(run()).rejects.toThrow('Computer act is running')
+    expect(f.fake.calls.some((c) => c.tool === 'get_window_state')).toBe(false)
+    runtime(f.host).busy = false
+    runtime(f.host).active.clear()
+  },
+)
+it('rebuilds live-segment guards on open, updates statuses, and checks numeric windows without document reads', async () => {
+  const f = await fixture()
+  await f.host.harness().commit(async (tx) => {
+    ;(await tx.doc(ComputerTeach, f.root.id)).segment = { ...segment(), status: 'paused' }
+  }, context)
+  const sleeping = vi.spyOn(runtime(f.host).clock!, 'sleep')
+  await openTeaching(f.host)
+  await until(() => sleeping.mock.calls.length > 0)
+  const snapshot = vi.spyOn(f.host.harness(), 'snapshot')
+  const conversations = vi.spyOn(f.host, 'conversations')
+  expect(await teachingBlocked(f.host, f.root.id)).toBe('teaching')
+  expect(await teachingBlocked(f.host, 999, { app: 'Unrelated', window: '456' })).toBe(
+    'teaching_elsewhere',
+  )
+  expect(await teachingBlocked(f.host, 999, { app: 'Unrelated', window: '457' })).toBeUndefined()
+  expect(snapshot).not.toHaveBeenCalled()
+  expect(conversations).not.toHaveBeenCalled()
+  snapshot.mockRestore()
+  conversations.mockRestore()
+  sleeping.mockRestore()
+  for (const status of [
+    'recording',
+    'paused',
+    'drafting',
+    'review',
+    'saved',
+    'rejected',
+  ] as const) {
+    await updateTeach(f.host, f.root.id, (doc) => {
+      doc.segment!.status = status
+    })
+    expect(await teachingBlocked(f.host, f.root.id)).toBe(
+      ['recording', 'paused'].includes(status) ? 'teaching' : undefined,
+    )
+  }
 })

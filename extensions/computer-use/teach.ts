@@ -4,8 +4,18 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import { Type } from '@earendil-works/pi-ai'
 import { resizeImage } from '@earendil-works/pi-coding-agent'
 import { randomUUID } from 'node:crypto'
-import { copyFile, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { TeachDoc } from './refs.ts'
 import type { Teach, TeachStart, TaughtStep, ComputerDetails } from './refs.ts'
@@ -46,9 +56,16 @@ export async function updateTeach(
   conversation: number,
   change: (doc: Teach) => void,
 ) {
+  let live: LiveSegment | undefined
   await host.harness().commit(async (tx) => {
-    change(await tx.doc(ComputerTeach, conversation as ConversationId))
+    const doc = await tx.doc(ComputerTeach, conversation as ConversationId)
+    change(doc)
+    if (doc.segment && teaching(doc))
+      live = { app: doc.segment.app, window: doc.segment.window, bundle: doc.segment.bundle }
   }, context)
+  const state = recorders(host)
+  if (live) state.live.set(conversation, live)
+  else state.live.delete(conversation)
 }
 export const teaching = (doc: Teach) => ['recording', 'paused'].includes(doc.segment?.status ?? '')
 const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim() && v.length <= 2000
@@ -141,9 +158,14 @@ export function validateSteps(value: unknown, doc: Teach): TaughtStep[] {
 }
 
 type Recorder = { abort: AbortController; done: Promise<void> }
+type LiveSegment = Pick<NonNullable<Teach['segment']>, 'app' | 'window' | 'bundle'>
 function recorders(host: ExtensionHost) {
   return host.resource('computer-use.teach', () => {
-    const state = { running: new Map<number, Recorder>(), starting: new Set<number>() }
+    const state = {
+      running: new Map<number, Recorder>(),
+      starting: new Set<number>(),
+      live: new Map<number, LiveSegment>(),
+    }
     const close = async () => {
       for (const r of state.running.values()) r.abort.abort()
       await Promise.all([...state.running.values()].map((r) => r.done))
@@ -202,17 +224,14 @@ export async function teachingBlocked(
   conversation: number,
   target?: { app: string; window?: string | number },
 ): Promise<'teaching' | 'teaching_elsewhere' | undefined> {
-  if (recorders(host).starting.has(conversation) || teaching(await readTeach(host, conversation)))
-    return 'teaching'
+  const state = recorders(host)
+  if (state.starting.has(conversation) || state.live.has(conversation)) return 'teaching'
   if (target)
-    for (const { id } of host.conversations()) {
-      if (id === conversation) continue
-      const { segment } = await readTeach(host, id)
+    for (const [id, segment] of state.live) {
       if (
-        segment &&
-        teaching({ segment }) &&
+        id !== conversation &&
         (matchesApp({ name: segment.app, bundle: segment.bundle }, target.app) ||
-          target.window === segment.window)
+          Number(target.window) === segment.window)
       )
         return 'teaching_elsewhere'
     }
@@ -302,14 +321,25 @@ export async function openTeaching(host: ExtensionHost) {
   const documents = await Promise.all(
     host.conversations().map(async ({ id }) => ({ id, doc: await readTeach(host, id) })),
   )
+  const state = recorders(host)
+  state.live.clear()
+  for (const { id, doc } of documents)
+    if (doc.segment && teaching(doc))
+      state.live.set(id, {
+        app: doc.segment.app,
+        bundle: doc.segment.bundle,
+        window: doc.segment.window,
+      })
   for (const { id, doc } of documents)
     if (doc.segment)
       protectTeachReview(host.home, id, doc.segment.id, doc.segment.status === 'review')
-  await Promise.all(
-    [...new Set([host.projectRoot, host.userHome])].map((root) =>
-      cleanTeachStaging(join(root, '.ultimate', '.skill-staging')),
-    ),
-  )
+  // Never inspect project staging merely because computer-use is enabled.
+  if (documents.some(({ doc }) => doc.segment))
+    await Promise.all(
+      [...new Set([host.projectRoot, host.userHome])].map((root) =>
+        cleanTeachStaging(join(root, '.ultimate', '.skill-staging')),
+      ),
+    )
   for (const { id, doc } of documents) {
     if (!teaching(doc)) continue
     if (doc.segment!.endsAt <= (runtime(host).clock?.now() ?? Date.now()))
@@ -335,7 +365,8 @@ export async function startTeaching(host: ExtensionHost, args: TeachStart) {
   try {
     if (teaching(await readTeach(host, args.conversation)))
       throw new Error('Teaching segment already active')
-    if (runtime(host).active.has(args.conversation)) throw new Error('Computer act is running')
+    if (runtime(host).busy || runtime(host).active.size > 0)
+      throw new Error('Computer act is running')
     await stopRecorder(host, args.conversation)
     const { driver, app, identity } = await consent(host, args.conversation, args.app)
     const target = await windowFor(driver, app, args.window)
@@ -347,7 +378,8 @@ export async function startTeaching(host: ExtensionHost, args: TeachStart) {
       doc.grants = consumed
     })
     await updateTeach(host, args.conversation, (doc) => {
-      if (runtime(host).active.has(args.conversation)) throw new Error('Computer act is running')
+      if (runtime(host).busy || runtime(host).active.size > 0)
+        throw new Error('Computer act is running')
       if (doc.segment) protectTeachReview(host.home, args.conversation, doc.segment.id, false)
       doc.segment = {
         id: randomUUID(),
@@ -427,6 +459,8 @@ export async function finishTeaching(host: ExtensionHost, conversation: number, 
 export async function resumeTeaching(host: ExtensionHost, conversation: number) {
   const doc = await readTeach(host, conversation)
   if (doc.segment?.status !== 'paused') throw new Error('Teaching is not paused')
+  if (runtime(host).busy || runtime(host).active.size > 0)
+    throw new Error('Computer act is running')
   if (doc.segment.endsAt <= (runtime(host).clock?.now() ?? Date.now()))
     return finishTeaching(host, conversation)
   await consent(host, conversation, doc.segment.app, doc.segment)
@@ -434,6 +468,8 @@ export async function resumeTeaching(host: ExtensionHost, conversation: number) 
   await updateTeach(host, conversation, (d) => {
     if (d.segment?.status !== 'paused' || d.segment.id !== doc.segment!.id)
       throw new Error('Teaching segment changed while resuming')
+    if (runtime(host).busy || runtime(host).active.size > 0)
+      throw new Error('Computer act is running')
     d.segment.status = 'recording'
   })
   await launchRecorder(host, conversation)
@@ -474,14 +510,51 @@ export async function rejectTeaching(host: ExtensionHost, conversation: number) 
   })
   return readTeach(host, conversation)
 }
+async function teachingDirectory(path: string) {
+  const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return undefined
+    throw error
+  })
+  if (info && (info.isSymbolicLink() || !info.isDirectory()))
+    throw new Error(`Unsafe teaching directory: ${path}`)
+  return info
+}
+/** Validate every project-controlled ancestor before creating, listing or removing staging. */
+async function teachingPaths(root: string, name?: string) {
+  const ultimate = join(root, '.ultimate')
+  const staging = join(ultimate, '.skill-staging')
+  const skills = join(ultimate, 'skills')
+  const hasUltimate = Boolean(await teachingDirectory(ultimate))
+  const hasStaging = hasUltimate && Boolean(await teachingDirectory(staging))
+  const hasSkills = hasUltimate && Boolean(await teachingDirectory(skills))
+  const hasDestination =
+    hasSkills && name !== undefined && Boolean(await teachingDirectory(join(skills, name)))
+  if (
+    hasStaging &&
+    (await realpath(staging)) !== join(await realpath(root), '.ultimate', '.skill-staging')
+  )
+    throw new Error('Unsafe teaching staging realpath')
+  return { ultimate, staging, skills, hasUltimate, hasStaging, hasSkills, hasDestination }
+}
+async function removeTeachStaging(root: string, path: string) {
+  const paths = await teachingPaths(root)
+  if (!paths.hasStaging) return
+  if (dirname(path) !== paths.staging) throw new Error('Unsafe teaching staging child')
+  if (!(await teachingDirectory(path))) return
+  if ((await realpath(path)) !== join(await realpath(paths.staging), basename(path)))
+    throw new Error('Unsafe teaching staging child realpath')
+  // Node rm unlinks child symlinks rather than traversing them; all directory ancestors were checked above.
+  await rm(path, { recursive: true, force: true })
+}
 /** Staging is outside skill discovery. Failed restores retain their backup for recovery. */
 export async function cleanTeachStaging(directory: string, now = Date.now()) {
-  const entries = await readdir(directory, { withFileTypes: true }).catch(
-    (error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return []
-      throw error
-    },
-  )
+  if (basename(directory) !== '.skill-staging' || basename(dirname(directory)) !== '.ultimate')
+    throw new Error('Invalid teaching staging path')
+  const root = dirname(dirname(directory))
+  if (!(await teachingDirectory(dirname(directory))) || !(await teachingDirectory(directory)))
+    return
+  if (!(await teachingPaths(root)).hasStaging) return
+  const entries = await readdir(directory, { withFileTypes: true })
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
     const path = join(directory, entry.name)
@@ -494,8 +567,7 @@ export async function cleanTeachStaging(directory: string, now = Date.now()) {
       if (error.code === 'ENOENT') return undefined
       throw error
     })
-    if (!previous && now - info.mtimeMs > 24 * 60 * 60 * 1000)
-      await rm(path, { recursive: true, force: true })
+    if (!previous && now - info.mtimeMs > 24 * 60 * 60 * 1000) await removeTeachStaging(root, path)
   }
 }
 export async function saveTeaching(
@@ -516,23 +588,25 @@ export async function saveTeaching(
     throw new Error('Every step must be reviewed')
   const steps = doc.steps.filter((s) => s.approved).map((s, i) => ({ ...s, n: i + 1 }))
   if (!steps.length) throw new Error('Approve at least one step')
-  const path = join(
-    args.scope === 'project' ? host.projectRoot : host.userHome,
-    '.ultimate',
-    'skills',
-    args.name,
-  )
-  const existing = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+  const root = args.scope === 'project' ? host.projectRoot : host.userHome
+  const paths = await teachingPaths(root, args.name)
+  const path = join(paths.skills, args.name)
+  const existing = paths.hasDestination
+  if (existing && !args.overwrite)
+    throw new Error('Skill already exists; explicit overwrite required')
+  if (!paths.hasUltimate) await mkdir(paths.ultimate, { mode: 0o700 })
+  if (!paths.hasStaging) await mkdir(paths.staging, { mode: 0o700 })
+  if (!paths.hasSkills) await mkdir(paths.skills, { mode: 0o700 })
+  await teachingPaths(root, args.name)
+  const staging = paths.staging
+  const ignore = join(staging, '.gitignore')
+  const ignored = await lstat(ignore).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') return undefined
     throw error
   })
-  if (existing && (!args.overwrite || !existing.isDirectory() || existing.isSymbolicLink()))
-    throw new Error('Skill already exists; explicit overwrite required')
-  const staging = join(
-    args.scope === 'project' ? host.projectRoot : host.userHome,
-    '.ultimate',
-    '.skill-staging',
-  )
+  if (ignored && (ignored.isSymbolicLink() || !ignored.isFile()))
+    throw new Error('Unsafe teaching staging gitignore')
+  if (!ignored) await writeFile(ignore, '*\n', { flag: 'wx', mode: 0o600 })
   await cleanTeachStaging(staging)
   const workspace = join(staging, randomUUID())
   const staged = join(workspace, 'skill')
@@ -540,7 +614,6 @@ export async function saveTeaching(
   const notes: string[] = []
   let restoreFailed = false
   await mkdir(join(staged, 'frames'), { recursive: true, mode: 0o700 })
-  await mkdir(join(path, '..'), { recursive: true, mode: 0o700 })
   try {
     const procedure = JSON.stringify(steps, null, 2).replace(/`/g, '\\u0060')
     const notice =
@@ -564,6 +637,7 @@ export async function saveTeaching(
           },
         )
     }
+    await teachingPaths(root, args.name)
     if (existing) await rename(path, backup)
     try {
       await rename(staged, path)
@@ -578,7 +652,7 @@ export async function saveTeaching(
       throw error
     }
   } finally {
-    if (!restoreFailed) await rm(workspace, { recursive: true, force: true })
+    if (!restoreFailed) await removeTeachStaging(root, workspace)
   }
   await updateTeach(host, args.conversation, (d) => {
     d.segment!.status = 'saved'
