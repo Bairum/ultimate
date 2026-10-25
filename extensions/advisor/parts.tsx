@@ -1,11 +1,14 @@
 import { useEffect } from 'react'
-import { api, cn, events, useConversation, useDocOf, useUltimate } from '@/sdk'
-import { AdvisorState, FeedbackAction, NOTE_ENTRY } from './refs.ts'
+import { api, cn, events, formatAgo, useConversation, useDocOf, useUltimate } from '@/sdk'
+import { AdvisorState, FeedbackAction, ManageAction, NOTE_ENTRY } from './refs.ts'
 import type {
   AdvisorNoteEntry,
   AdvisorStateDoc,
+  DismissReason,
   Feedback,
+  NoteSelection,
   NoteStatus,
+  ResponseStatus,
   Severity,
   StoredNote,
 } from './refs.ts'
@@ -17,8 +20,16 @@ export const PANEL = 'advisor'
  * dot, word and left edge, never as a filled background.
  */
 export const tones: Record<Severity, { dot: string; text: string; border: string }> = {
-  nit: { dot: 'bg-muted-foreground/50', text: 'text-muted-foreground', border: 'border-l-border' },
-  concern: { dot: 'bg-warning', text: 'text-warning', border: 'border-l-warning/60' },
+  nit: {
+    dot: 'bg-muted-foreground/50',
+    text: 'text-muted-foreground',
+    border: 'border-l-border',
+  },
+  concern: {
+    dot: 'bg-warning',
+    text: 'text-warning',
+    border: 'border-l-warning/60',
+  },
   blocker: { dot: 'bg-error', text: 'text-error', border: 'border-l-error/70' },
 }
 export const rank = (severity: Severity) => ['nit', 'concern', 'blocker'].indexOf(severity)
@@ -49,8 +60,120 @@ const empty: AdvisorStateDoc = { conversations: {}, notes: [], spend: {} }
 export function useAdvisorState() {
   return useDocOf(1, AdvisorState) ?? empty
 }
-export const openNotes = (state: AdvisorStateDoc) =>
-  state.notes.filter((note) => note.status === 'open')
+/** Open, not archived and not snoozed: what the chip counts and the panel's default view shows. */
+export const isLive = (note: StoredNote, now: number) =>
+  note.status === 'open' &&
+  note.archivedAt === undefined &&
+  !(note.snoozedUntil !== undefined && note.snoozedUntil > now)
+export const openNotes = (state: AdvisorStateDoc, now: number) =>
+  state.notes.filter((note) => isLive(note, now))
+
+/** A note's response so far; `pending` while delivered to the agent without one. Cards and old notes have none. */
+export type Outcome = ResponseStatus | 'pending'
+export function outcomeOf(note: StoredNote): Outcome | undefined {
+  if (note.delivered === 'card') return undefined
+  if (note.response) return note.response.status
+  // Closed without a response, nothing is still waiting.
+  return note.ref === undefined || note.status !== 'open' ? undefined : 'pending'
+}
+
+/**
+ * How each outcome reads: what the agent did gets a tone (addressed green, disputed in the brand colour), what it
+ * didn't stays grey. Severity owns warning and error, so responses never use them.
+ */
+export const outcomes: Record<Outcome, { word: string; title: string; text: string; bar: string }> =
+  {
+    addressed: {
+      word: 'addressed',
+      title: 'The agent acted on it',
+      text: 'text-success',
+      bar: 'bg-success',
+    },
+    deferred: {
+      word: 'deferred',
+      title: 'The agent put it off, with a reason',
+      text: 'text-foreground/80',
+      bar: 'bg-foreground/45',
+    },
+    disputed: {
+      word: 'disputed',
+      title: 'The agent disagreed, with a reason',
+      text: 'text-brand',
+      bar: 'bg-brand',
+    },
+    ignored: {
+      word: 'ignored',
+      title: 'Read, but no response by the end of the run',
+      text: 'text-muted-foreground',
+      bar: 'bg-muted-foreground/50',
+    },
+    unread: {
+      word: 'unread',
+      title: 'Never reached a model request before the conversation finished',
+      text: 'text-muted-foreground/70',
+      bar: 'bg-muted-foreground/25',
+    },
+    late: {
+      word: 'late',
+      title: "Arrived after the agent's last run had ended",
+      text: 'text-muted-foreground/70',
+      bar: 'bg-muted-foreground/25',
+    },
+    pending: {
+      word: 'waiting',
+      title: 'Delivered; the agent has not responded yet',
+      text: 'text-muted-foreground/70',
+      bar: 'bg-transparent',
+    },
+  }
+export const OUTCOMES = Object.keys(outcomes) as Outcome[]
+
+export const sources: Record<NonNullable<StoredNote['response']>['source'], string> = {
+  ack: 'acknowledged',
+  judged: 'judged',
+  auto: 'auto',
+}
+
+export const reasons: Record<DismissReason, string> = {
+  'false-alarm': 'false alarm',
+  handled: 'already handled',
+  'wont-fix': "won't fix",
+}
+
+/** "dismissed by you · false alarm · 2h ago", "resolved automatically", "snoozed until Mon 09:00". */
+export function closedPhrase(note: StoredNote, now: number) {
+  if (note.status === 'open')
+    return note.snoozedUntil !== undefined && note.snoozedUntil > now
+      ? `snoozed until ${until(note.snoozedUntil, now)}`
+      : undefined
+  return [
+    `${note.status}${note.closedBy === 'user' ? ' by you' : note.closedBy === 'auto' ? ' automatically' : ''}`,
+    note.dismissReason && reasons[note.dismissReason],
+    note.closedAt !== undefined && formatAgo(note.closedAt, now, { ago: true }),
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/** A future time: `15:40` today, `Tue 09:00` this week, else a date. */
+export function until(at: number, now: number) {
+  const date = new Date(at)
+  const time = date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  })
+  if (date.toDateString() === new Date(now).toDateString()) return time
+  if (at - now < 6 * 86_400_000)
+    return `${date.toLocaleDateString([], { weekday: 'short' })} ${time}`
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
+export const SNOOZES = [
+  { label: '1 hour', ms: 3_600_000 },
+  { label: '1 day', ms: 86_400_000 },
+  { label: '1 week', ms: 7 * 86_400_000 },
+] as const
 
 export function openAdvisorPanel(shell: {
   showSurface: (id: string) => void
@@ -71,7 +194,11 @@ let pending: { conversation: number; entry?: number; review: string } | undefine
 export function useOpenNote() {
   const { switchConversation, showSurface } = useUltimate()
   return (note: Pick<StoredNote, 'id' | 'conversation' | 'entry'>) => {
-    pending = { conversation: note.conversation, entry: note.entry, review: reviewOf(note.id) }
+    pending = {
+      conversation: note.conversation,
+      entry: note.entry,
+      review: reviewOf(note.id),
+    }
     showSurface('agent')
     switchConversation(note.conversation)
   }
@@ -90,15 +217,31 @@ export function NoteNavigation() {
       )?.id
     if (entry === undefined) return undefined
     const frame = requestAnimationFrame(() =>
-      events.emit('ultimate:reveal-entry', { conversationId: id, entryId: entry }),
+      events.emit('ultimate:reveal-entry', {
+        conversationId: id,
+        entryId: entry,
+      }),
     )
     return () => cancelAnimationFrame(frame)
   }, [id, entries, loading])
   return null
 }
 
-/** Thumbs and status for one note; the result streams back through `AdvisorState`. */
+/** Thumbs, status, dismissal reason or snooze for one note; the result streams back through `AdvisorState`. */
 export const feedback = (
   note: string,
-  change: { feedback?: Feedback | null; status?: NoteStatus },
+  change: {
+    feedback?: Feedback | null
+    status?: NoteStatus
+    reason?: DismissReason
+    snoozeUntil?: number | null
+  },
 ) => api.action(FeedbackAction, { note, ...change })
+
+/** Bulk resolve, dismiss, reopen or archive; resolves to how many notes changed. */
+export const manage = (
+  args: NoteSelection & {
+    do: 'resolve' | 'dismiss' | 'reopen' | 'archive'
+    reason?: DismissReason
+  },
+) => api.action(ManageAction, args)
