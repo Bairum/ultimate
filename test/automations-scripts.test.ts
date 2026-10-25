@@ -112,6 +112,6 @@ it('lets a project extension read, pause and resume an automation through the se
     name: 'automations',
     provider: 'automations',
     needs: [],
-    wants: ['prs'],
+    wants: ['goal', 'prs'],
   })
 })

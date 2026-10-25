@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { AuthEvent, AuthPrompt, AuthType } from '@earendil-works/pi-ai'
-import { defineDoc, defineExtension, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import {
+  defineDoc,
+  defineExtension,
+  GenerationTask,
+  hook,
+  ROOT_CONVERSATION_ID,
+} from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -9,6 +15,7 @@ import { LoginChanged } from './api.ts'
 import { implementAction } from '../../lib/actions.ts'
 import type { ActionInput } from '../../lib/actions.ts'
 import { AnswerAction, CancelAction, LoginAction, LoginDoc, LogoutAction } from './refs.ts'
+import { fallback } from './fallback.ts'
 
 /** A Pi type as a document holds it: plain JSON, arrays mutable. */
 type Json<T> = T extends readonly (infer U)[]
@@ -230,5 +237,14 @@ export default function models(host: ExtensionHost) {
       }, context)
     }
   })
-  return defineExtension({ name: 'models' })
+  return defineExtension({
+    name: 'models',
+    hooks: [
+      hook(GenerationTask, {
+        // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched transactional beforeInput hook. Every run's first
+        // input is placed through it (a typed input, a delivery, a queued follow-up), before the run reads its agent.
+        beforeInput: (_input, { tx, conversationId }) => fallback(host, tx, conversationId),
+      }),
+    ],
+  })
 }

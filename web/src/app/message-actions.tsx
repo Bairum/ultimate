@@ -1,10 +1,9 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
 import { CheckIcon, CopyIcon, LinkIcon } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { formatTime } from '../sdk/format.ts'
-import { useExtensions } from '../sdk/hooks.ts'
+import { useCopy, useExtensions } from '../sdk/hooks.ts'
 import { messageItems } from '../sdk/registry.ts'
 import { MessageReference } from '../sdk/types.ts'
 import { ExtensionBoundary, Provided } from './boundary.tsx'
@@ -82,20 +81,12 @@ function CopyButton({
   label: string
   children: ReactNode
 }) {
-  const [copied, setCopied] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  useEffect(() => () => clearTimeout(timer.current), [])
+  const { copied, copy } = useCopy()
   return (
     <button
       aria-label={label}
       className="cursor-pointer rounded p-0.5 transition-colors hover:text-foreground [&_svg]:size-3"
-      onClick={() =>
-        void navigator.clipboard.writeText(value).then(() => {
-          setCopied(true)
-          clearTimeout(timer.current)
-          timer.current = setTimeout(() => setCopied(false), 1200)
-        })
-      }
+      onClick={() => copy(value)}
       title={label}
       type="button"
     >

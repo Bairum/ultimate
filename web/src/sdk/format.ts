@@ -52,6 +52,11 @@ export function elidePath(path: string, max = 40): string {
   return `${head}/…/${tail}`
 }
 
+/** `1 page`, `3 pages`: a count with its noun, plural by `s`. */
+export function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`
+}
+
 /** What to show for a thrown value: an Error's message, anything else as a string. */
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)

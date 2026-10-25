@@ -5,7 +5,6 @@ import type {
   Automation,
   AutomationListItem,
   CreateArgs,
-  GrantAction,
   Run,
   Schedule,
   TriggerEvent,
@@ -14,9 +13,6 @@ export type {
   Automation,
   AutomationListItem,
   CreateArgs,
-  Grant,
-  GrantAction,
-  GrantedBy,
   Run,
   Schedule,
   TriggerEvent,
@@ -65,18 +61,6 @@ export const ScriptAction = actionRef<Id, { path: string; text: string }>('autom
 export const EscalateAction = actionRef<Id & { reason: string }, Automation>(
   'automations',
   'escalate',
-)
-/**
- * `{ id, actions, source? }` → the automation: set the user's grant, the things its woken agent may do on a fire
- * without asking (`dream`, `compact`, `asleep`); empty `actions` withdraws it. User-only: no agent can grant itself.
- */
-export const GrantRef = actionRef<Id & { actions: GrantAction[]; source?: string }, Automation>(
-  'automations',
-  'grant',
-)
-/** A granted automation acted for the user: `action` on its fire `fire`, by conversation `by`. */
-export const Acted = defineEvent<{ id: string; action: string; fire: number; by: number }>(
-  'automations.acted',
 )
 /** A trigger fired; fire is its lifetime count. */
 export const Fired = defineEvent<{ id: string; text: string; fire: number }>('automations.fired')

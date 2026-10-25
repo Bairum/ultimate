@@ -162,6 +162,25 @@ export async function sourceCopy(parent: string) {
   new ProjectTrustStore(join(parent, '.ultimate')).set(root, true)
   return root
 }
+/**
+ * Give the source copy `ultimateRoot` a built-in `branch-probe` extension whose `branch` action starts a branch through
+ * the lineage service, as the `branch` tool does without its message; post `{ args }` to
+ * `/api/extensions/branch-probe/actions/branch`.
+ */
+export async function branchProbe(ultimateRoot: string) {
+  const dir = join(ultimateRoot, 'extensions/branch-probe')
+  await mkdir(dir, { recursive: true })
+  await writeFile(
+    join(dir, 'server.ts'),
+    `import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
+import { LineageApi } from ${JSON.stringify(resolve('extensions/lineage/api.ts'))}
+export const actions = {
+  branch: (args, { host }) => host.need(LineageApi).branch(args, BACKGROUND_CONTEXT),
+}
+export default { name: 'branch-probe' }
+`,
+  )
+}
 type FixtureOptions = ServerOptions & {
   home: string
   userHome: string

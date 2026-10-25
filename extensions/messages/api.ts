@@ -52,6 +52,13 @@ export type MessagesService = {
    * id. Records a `user.input` event.
    */
   answer(messageId: number, text: string, ctx: Context, device?: Device): Promise<number>
+  /**
+   * The messages that wait on the user's answer, oldest first: each one's id, the conversation that asked, when, and its
+   * question in one line (the line its card's header shows).
+   */
+  openQuestions(
+    ctx: Context,
+  ): Promise<{ message: number; conversation: number; at: number; text: string }[]>
   /** Close open message `messageId` unanswered; its sender gets a one-way note. Returns the note's message id. */
   dismiss(messageId: number, ctx: Context, device?: Device): Promise<number>
   /** Send a one-way message from conversation `from` to `to` (`#id`, `@name` or `user`), once per `requestId`. */

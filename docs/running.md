@@ -20,7 +20,7 @@
   `env $(env | grep -o '^ULTIMATE_[A-Z_]*' | sed 's/^/-u /') ULTIMATE_HOME=$(mktemp -d) pnpm start --port 4799 --no-open`.
   The home must be its own: never the project's default home, which is the live server's. Tailscale follows user
   settings, so with it on there the scratch server publishes on its own tailnet port (`https://<machine>:4799`,
-  registered under the scratch home) for Daniel to open remotely, and frees only that port when it stops; the live
+  registered under the scratch home) for the user to open remotely, and frees only that port when it stops; the live
   server's address is untouched. Stop it and delete the scratch home when done.
   A state you cannot reach is reported as unverified, never faked by injecting entries.
 - `tsconfig.swap.json` is the server-only type-check gate for swaps.

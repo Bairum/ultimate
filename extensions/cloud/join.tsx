@@ -8,10 +8,10 @@ import {
   NetworkIcon,
   XIcon,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { api, cn, errorMessage, useAction, useDialog, useRestart } from '@/sdk'
+import { api, cn, errorMessage, useAction, useCopy, useDialog, useRestart } from '@/sdk'
 import { JoinAction, JoinStateAction } from './refs.ts'
 import type { JoinResult, JoinState, JoinStep } from './refs.ts'
 
@@ -71,20 +71,12 @@ function Steps({ result }: { result: JoinResult | 'running' }) {
 
 /** `pnpm setup:machine` as a code chip that copies itself. */
 function Command({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  useEffect(() => () => clearTimeout(timer.current), [])
+  const { copied, copy } = useCopy()
   return (
     <button
       aria-label={`Copy ${value}`}
       className="group flex w-full items-center gap-2 rounded-md border border-border/80 bg-background px-2 py-1.5 text-left text-foreground/90 transition-colors outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring"
-      onClick={() =>
-        void navigator.clipboard.writeText(value).then(() => {
-          setCopied(true)
-          clearTimeout(timer.current)
-          timer.current = setTimeout(() => setCopied(false), 1200)
-        })
-      }
+      onClick={() => copy(value)}
       title="Copy"
       type="button"
     >

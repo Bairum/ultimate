@@ -70,6 +70,7 @@ export const defaultOff: readonly string[] = [
   'context-hygiene',
   'hashline',
   'computer-use',
+  'voice-live',
 ]
 
 /** Who provides and who consumes each API, as `host.catalogue()` reports it. */

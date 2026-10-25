@@ -12,9 +12,8 @@ for @ultimate and the dream branch, is in [DREAM.md](DREAM.md); this file is the
    (below, "Dream before compaction"). Once the handoff is recorded (or 30 minutes passed) and nothing else works, the
    request's wait records session N and submits a `dream.started` input to @ultimate (request id `dream.started:N`, a
    follow-up when it is busy). Each input goes through a `dream.deliver` task created in the commit of the state it
-   announces, so a crash cannot strand a request or a session. A granted automation's `act {do: 'dream'}` starts the
-   session at once, without a handoff.
-3. @ultimate starts one branch that runs the five passes (memory, failures, tools, corrections, codify) as
+   announces, so a crash cannot strand a request or a session.
+3. @ultimate starts one branch that runs the six passes (memory, failures, tools, corrections, codify, project) as
    `dream-pass` subagents (`agents/dream-pass.md`), reporting each with `pass`. Its first report names it the
    session's `dreamer`.
 4. The branch files the journal with `journal`: exactly three `learned` lines, Markdown `text` and the proposals. It
@@ -43,7 +42,7 @@ below the threshold and waits an hour between fires. `@ultimate` resolves to @ul
 
 The automation from before this feature, **Dream after compaction** (an event on `conversations.compacted where
 conversation=@ultimate`), is migrated in place by `ensureAutomation` through automations' `update`, which may now
-switch a schedule, event or condition to another of these: same id, enabled state, grant and subscribers. A lost
+switch a schedule, event or condition to another of these: same id, enabled state and subscribers. A lost
 receipt is found by name and trigger target (the new name with a condition on `@ultimate`, or the old name and exact
 event), never by threshold or subscribers, so it is never made twice.
 
@@ -61,22 +60,21 @@ event), never by threshold or subscribers, so it is never made twice.
 - **Start.** The wait looks every 15 seconds. It starts the session through `startDreamIn` once the handoff is
   recorded, or 30 minutes after the request without one, and no top-level conversation other than @ultimate works
   (every refusal of the Dream button applies). The session records `handoff {task, text, at}` or `{task, missing}`
-  and, for the automation, `beforeCompaction {automation, name, at, handsOff?}`; the `dream.started` input and card
+  and, for the automation, `beforeCompaction {automation, name, at}`; the `dream.started` input and card
   say whether the handoff came. Two hours after the request the wait gives up (`waiting.gaveUp`, kept until the note
   is left, so a crash in between leaves it on the next look) and leaves @ultimate a quiet note through lineage's
-  `leaveNote`; a paused or deleted automation ends it. No grant is needed: the user decided this
-  read-only analysis runs by default; the user-only `start` stays user-only.
-- **Deciding.** The `dream.started` input says whether the user granted `dream` on that automation (`handsOff`); only
-  then does @ultimate decide the proposals itself, recording each with `decide {…, reason}` (the journal shows it).
-  Otherwise the user decides, as for any dream. The rule lives in DREAM.md and `agents/ultimate.md`.
+  `leaveNote`; a paused or deleted automation ends it. The user decided this read-only analysis runs by default; the
+  user-only `start` stays user-only.
+- **Deciding.** The user decides the proposals, as for any dream; only during a hands-off goal does @ultimate decide
+  them in the user's place, recording each with `decide {…, reason}` (the journal shows it). The rule lives in
+  DREAM.md and `agents/ultimate.md`.
 - **Worth a fresh chapter?** When the session settles (the journal filed and every proposal rejected, applied or
   landed; through `journal`, `decide` or a landing), a `dream.settled` task counts its changes: proposals `landed` or
   `applied`. Below `dream.asleepAfter` (settings, project over user, default **5**) we stay in this chapter, and a
-  normal compaction comes later. At or above it, an `asleep` grant on the enabled automation goes through the granted
-  Fall asleep (`grantedSleep`, every gate); otherwise, or when that grant is refused, @ultimate is asked to ask the
-  user, and the `dream.settled` card carries the Fall asleep section. The outcome is kept as
-  `beforeCompaction.outcome`; only `ask` wakes @ultimate, the others are passive entries. A session the user ended
-  early never settles this way. Nothing here switches chapters without the `asleep` grant or the user's tap.
+  normal compaction comes later. At or above it, @ultimate is asked to ask the user, and the `dream.settled` card
+  carries the Fall asleep section. The outcome is kept as `beforeCompaction.outcome`; only `ask` wakes @ultimate,
+  `stay` is a passive entry. A session the user ended early never settles this way. Nothing here switches chapters
+  without the user's tap.
 - **Continuing.** The seed of a session that asked for a handoff carries it as `continues.handoff`; without one (the
   30 minutes passed) it carries @ultimate's newest compaction summary as `continues.summary` (Pi's wrapper and the
   project memory lineage appends stripped, cut at 12,000 characters). Either is at most 12,000 characters, about 3k
@@ -156,25 +154,5 @@ A successful restart never returns: the new host opens the requested chapter.
 and `stats`, which reads tool calls from `<home>/trace.sqlite` read-only: calls, failures and mean duration per tool,
 the 20 most frequent errors, and enabled tools never called in the trace's window (7 days or 200k rows).
 
-## Granted by an automation
-
-The user can grant an automation `dream` and, separately, `asleep` (`extensions/automations/README.md` "Grants"). Dream
-provides the `automations.dream` point for them; the user-only actions stay user-only.
-
-Both run inside automations' `act` transaction, so the effect commits with the act's record.
-
-- `start(tx, by, acting)` is the Dream button's own path (`startDreamIn`), with the same refusals; only the acting
-  conversation's own turn does not count as busy. The session records `by`, and its started card names the automation.
-- `asleep(tx, by, {session?})` checks the session (a filed journal, every proposal settled, no sleep under way),
-  reserves it as `waiting` for this attempt and creates the durable `dream.granted-sleep` task. The task looks every
-  15 seconds, for up to 30 minutes, until no conversation works (the acting agent's turn included), then admits and runs
-  every gate of Fall asleep exactly as the user's action does: idle, seed, scratch preview with one repair, final
-  backup, idle again, journaled restart that rolls back on failure. While it waits, neither the user nor another grant
-  can start a second sleep of that session. A wait that runs out, a refusal or an abort records a failed sleep, but only
-  while this attempt still holds it; nothing switches. The task's step commits the admission itself, then leaves only
-  the gates running, so a successful switch's restart never waits on a task step and no reservation outlives its task.
-  The sleep and the seed carry `by`, so the progress, the outcome and the next chapter's morning card say which
-  automation fell asleep, under the user's grant, and when.
-
-On open, a sleep a restart stopped during its gates (`seeding`, `checking`, `backing up`), for the user or a grant,
-becomes `failed`: nothing switched, and Fall asleep can be tried again.
+On open, a sleep a restart stopped during its gates (`seeding`, `checking`, `backing up`) becomes `failed`: nothing
+switched, and Fall asleep can be tried again.

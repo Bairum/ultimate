@@ -8,12 +8,13 @@ import { defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterAll, beforeAll, expect } from 'vitest'
 import { context } from '../server/harness.ts'
-import { fauxServer, post, seedTally, sourceCopy, temp } from './helpers.ts'
+import { branchProbe, fauxServer, post, seedTally, sourceCopy, temp } from './helpers.ts'
 
 // Shared by the lineage test files: importing this registers their source fixture and server cleanup.
 let ultimateRoot: string
 beforeAll(async () => {
   ultimateRoot = await sourceCopy(await temp())
+  await branchProbe(ultimateRoot)
   await writeFile(
     join(ultimateRoot, '.ultimate/settings.json'),
     JSON.stringify({
@@ -81,7 +82,9 @@ export async function fixture(reopen?: string) {
 export const branchFrom = async (server: Server, args: Record<string, unknown>) => {
   // An empty first conversation is a root that read nothing yet; one with history stays an ordinary root.
   if (args.from === 1) await seedTally(server.harness)
-  const { status, data } = await post(server, '/api/extensions/lineage/actions/branch', { args })
+  const { status, data } = await post(server, '/api/extensions/branch-probe/actions/branch', {
+    args,
+  })
   expect([status, data.error]).toEqual([200, undefined])
   return data.result.id as ConversationId
 }

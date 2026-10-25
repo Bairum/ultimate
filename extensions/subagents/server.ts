@@ -38,6 +38,7 @@ import {
   definitionAgent,
   deleteDefinition,
   discoverAgents,
+  hostDefaultModel,
   saveDefinition,
   saveOverlay,
 } from '../../lib/agents.ts'
@@ -48,6 +49,7 @@ import { exec } from '../../lib/exec.ts'
 import { shortTitle } from '../../lib/title.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { Pin } from '../models/api.ts'
 import { Profile, Standing, Subagents, SubagentsApi } from './api.ts'
 import {
   DefinitionAction,
@@ -341,6 +343,9 @@ async function waitInterruptibly(
   }
 }
 
+/** Extension-owned standing definitions retire when their extension is disabled live. */
+export const reloadOnSettings = true
+
 /** Browser actions for the Agents tab. */
 export const actions = {
   /** `{name}`: open the current definition's standing conversation. */
@@ -397,7 +402,7 @@ export const actions = {
     const shown = definition ?? invalid
     if (!shown) throw new Error(`Unknown agent: ${name}`)
     const files: Source[] = []
-    for (const root of agentRoots(host.ultimateRoot, host.projectRoot, host.userHome))
+    for (const root of await agentRoots(host.ultimateRoot, host.projectRoot, host.userHome))
       if (existsSync(join(root.path, `${name}.md`))) files.push(root.source)
     return {
       ...(definition ? { definition } : {}),
@@ -506,6 +511,7 @@ export default function subagents(
     | 'harness'
     | 'metadata'
     | 'modelRuntime'
+    | 'settings'
     | 'home'
     | 'projectSettings'
     | 'need'
@@ -562,6 +568,21 @@ export default function subagents(
       }
     }, ctx)
   }
+  // The definition a conversation runs as: children and standing agents record it, branches and the lander carry it
+  // as a label. Its pin, read fresh, is what a conversation whose model lost its login switches to first.
+  host.implement(Pin, {
+    async pin(tx, id) {
+      const name = (await tx.doc(Profile, id)).definition ?? (await tx.doc(host.metadata, id)).label
+      if (!name) return undefined
+      const { definitions } = await discoverAgents(
+        host.ultimateRoot,
+        host.projectRoot,
+        host.userHome,
+        host.modelRuntime,
+      )
+      return definitions.find((definition) => definition.name === name)?.model
+    },
+  })
   host.implement(SubagentsApi, {
     async createChild(tx, options) {
       const child = await createChild(host, tx, options)
@@ -586,14 +607,14 @@ export default function subagents(
         const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
         let id = Object.hasOwn(index, name) ? index[name] : undefined
         let created: ConversationRecord | undefined
-        // A new conversation starts on the main conversation's model; an existing one keeps the model and thinking
-        // level chosen in it, so a refresh changes them only where the definition pins them.
-        let base = main
+        // A new conversation starts on the default model; an existing one keeps the model and thinking level chosen
+        // in it, so a refresh changes them only where the definition pins them.
+        let base = { ...main, model: hostDefaultModel(host) }
         if (id !== undefined && (await tx.conversation(id))) {
           const own = await tx.doc(AgentDoc, id)
           base = {
             ...main,
-            model: own.model ?? main.model,
+            model: own.model ?? base.model,
             thinkingLevel: own.thinkingLevel ?? main.thinkingLevel,
           }
         } else {

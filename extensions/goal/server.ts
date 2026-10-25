@@ -18,8 +18,10 @@ import { actingAs } from '../../lib/acting-as.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { imagesOf } from '../../lib/entries.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { AutomationsApi } from '../automations/api.ts'
 import { Standing } from '../subagents/api.ts'
 import { deliver, deliverTask } from './delivery.ts'
+import { reminderTask } from './reminder.ts'
 import { EndAction, GoalDoc, ImagesAction, StartAction } from './refs.ts'
 import type { Criterion, Decision, Ending, Goal } from './refs.ts'
 
@@ -86,15 +88,28 @@ const status = (criterion: Criterion) =>
     ? `open, ${criterion.tries}/${TRIES} failed tries`
     : criterion.status
 
-/** @ultimate's per-run note while a goal is open: the goal, its criteria, and how it works. */
-export function noteText(goal: Goal) {
+/**
+ * @ultimate's per-run note while a goal is open: the goal, its criteria, and how it works; on a fire of its reminder,
+ * what to check.
+ */
+export function noteText(goal: Goal, reminded = false) {
   const criteria = goal.criteria.length
     ? goal.criteria.map((item, index) => `${index + 1}. [${status(item)}] ${item.text}`).join('\n')
     : "None yet: write them first with goal {action: 'criteria', criteria}, each one you can check."
   return [
     `Hands-off goal ${goal.id}, granted by the user, who is away: ${goal.text}`,
     `Done means:\n${criteria}`,
-    `Work toward it without the user: decide what you would ask them yourself (a go, a decision, a UI preview approval against the criteria), record each with goal {action: 'decide'} and its reason, and keep going. ${goal.decisions.length} decided so far. Mark criteria met or failed as you check them; a criterion is blocked after ${TRIES} failed tries, so learn from each failure before the next try. Finish with goal {action: 'finish'} when every criterion is met or every open one is blocked.`,
+    `Work toward it without the user: decide what you would ask them yourself (a go, a decision, a UI preview approval against the criteria), record each with goal {action: 'decide'} and its reason, and keep going. ${goal.decisions.length} decided so far. Mark criteria met or failed as you check them; a criterion is blocked after ${TRIES} failed tries, so learn from each failure before the next try. Finish with goal {action: 'finish'} when every criterion is met or every open one is blocked. Only when you are truly blocked on the user, goal {action: 'pause', reason} stops the reminder that wakes you.`,
+    ...(goal.waiting
+      ? [
+          `Waiting on the user since ${new Date(goal.waiting.at).toISOString()}: ${goal.waiting.reason}. The reminder is paused. Once they answer and you can go on, goal {action: 'resume'} turns it back on.`,
+        ]
+      : []),
+    ...(reminded
+      ? [
+          "This is the goal reminder: check that the goal's branches are moving, the lander queue, reactor lag and watchdog cards. Nudge or fix what is stuck and record a decide only when you changed something; otherwise end the turn quietly.",
+        ]
+      : []),
   ].join('\n\n')
 }
 
@@ -117,7 +132,7 @@ async function imagesEntry(tx: Tx, id: ConversationId, ref: 'latest' | number) {
 }
 
 type ToolArgs = {
-  action: 'criteria' | 'decide' | 'met' | 'failed' | 'finish'
+  action: 'criteria' | 'decide' | 'met' | 'failed' | 'finish' | 'pause' | 'resume'
   criteria?: string[]
   n?: number
   question?: string
@@ -178,6 +193,21 @@ export async function act(tx: Tx, ultimate: ConversationId, args: ToolArgs, now:
           : `Criterion ${args.n}: ${found.tries}/${TRIES} failed tries. Say what you change before the next try.`,
     }
   }
+  if (args.action === 'pause') {
+    goal.waiting = { reason: text(args.reason, 'reason'), at: now }
+    return {
+      answer: `Goal ${goal.id} waits on the user; the reminder is paused. Ask them now.`,
+      sync: goal.id,
+    }
+  }
+  if (args.action === 'resume') {
+    if (!goal.waiting) throw new Error(`Goal ${goal.id} is not paused`)
+    delete goal.waiting
+    return {
+      answer: `Goal ${goal.id} goes on; the reminder wakes you again.`,
+      sync: goal.id,
+    }
+  }
   if (args.outcome !== 'met' && args.outcome !== 'blocked')
     throw new Error("finish needs outcome 'met' or 'blocked'")
   const ended = await end(tx, {
@@ -219,6 +249,18 @@ async function card(host: ExtensionHost, tx: Tx, kind: 'goal.started' | 'goal.re
 const field = (args: unknown, name: string) =>
   args && typeof args === 'object' ? (args as Record<string, unknown>)[name] : undefined
 
+/** In the commit that changes goal `goal`: a task that brings its reminder in line once the change is durable. */
+const sync = (host: ExtensionHost, tx: Tx, goal: number) =>
+  tx.createTask(
+    reminderTask(host, Goals),
+    { goal },
+    {
+      conversationId: ROOT_CONVERSATION_ID,
+      ownership: { kind: 'conversation' },
+      background: true,
+    },
+  )
+
 /** Starting and ending a goal is the user's grant; @ultimate only finishes one through its tool. */
 export const userActions = ['start', 'end']
 export const actions = {
@@ -226,6 +268,7 @@ export const actions = {
     host.harness().commit(async (tx) => {
       const goal = await start(tx, field(args, 'text'), Date.now())
       await card(host, tx, 'goal.started', goal)
+      await sync(host, tx, goal.id)
       return copy(goal)
     }, context),
   ),
@@ -233,6 +276,7 @@ export const actions = {
     host.harness().commit(async (tx) => {
       const goal = await end(tx, { at: Date.now(), by: 'user', outcome: 'ended' })
       await card(host, tx, 'goal.report', goal)
+      await sync(host, tx, goal.id)
       return goal
     }, context),
   ),
@@ -254,9 +298,11 @@ export const actions = {
 }
 
 export default function goalExtension(host: ExtensionHost) {
+  // Optional: without automations a goal runs as before, with no reminder.
+  host.want(AutomationsApi)
   return defineExtension({
     name: 'goal',
-    tasks: [deliverTask(host)],
+    tasks: [deliverTask(host), reminderTask(host, Goals)],
     hooks: [
       hook(GenerationTask, {
         // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched transactional beforeInput hook.
@@ -265,12 +311,21 @@ export default function goalExtension(host: ExtensionHost) {
           if ((await ultimateOf(tx)) !== conversationId) return undefined
           const goal = await openGoal(tx)
           if (!goal) return undefined
+          const reminded =
+            input.kind === 'automations.fired' &&
+            (input.data as { id?: string } | undefined)?.id === goal.reminder
           return {
             entries: [
               {
                 kind: 'goal.note',
                 data: { goal: goal.id },
-                model: [{ role: 'user' as const, content: noteText(goal), timestamp: Date.now() }],
+                model: [
+                  {
+                    role: 'user' as const,
+                    content: noteText(goal, reminded),
+                    timestamp: Date.now(),
+                  },
+                ],
               },
             ],
           }
@@ -282,7 +337,7 @@ export default function goalExtension(host: ExtensionHost) {
         name: 'goal',
         deferred: true,
         description:
-          "The hands-off goal the user put you on (only while one is open; the goal note names it): criteria {criteria: [...]} writes what done means, each checkable; decide {question, picked, reason, conversation?, images?} records a decision you took instead of asking the user (images: \"latest\" or an entry id of your conversation with screenshots you judged); met {n} / failed {n} mark criterion n; finish {outcome: 'met' | 'blocked', summary} ends the goal and leaves the report card.",
+          "The hands-off goal the user put you on (only while one is open; the goal note names it): criteria {criteria: [...]} writes what done means, each checkable; decide {question, picked, reason, conversation?, images?} records a decision you took instead of asking the user (images: \"latest\" or an entry id of your conversation with screenshots you judged); met {n} / failed {n} mark criterion n; finish {outcome: 'met' | 'blocked', summary} ends the goal and leaves the report card; pause {reason} when you are truly blocked on the user stops the 30-minute goal reminder and shows them what you wait on, resume turns it back on once you can go on.",
         parameters: Type.Object({
           action: Type.Union([
             Type.Literal('criteria'),
@@ -290,6 +345,8 @@ export default function goalExtension(host: ExtensionHost) {
             Type.Literal('met'),
             Type.Literal('failed'),
             Type.Literal('finish'),
+            Type.Literal('pause'),
+            Type.Literal('resume'),
           ]),
           criteria: Type.Optional(Type.Array(Type.String())),
           n: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -310,6 +367,8 @@ export default function goalExtension(host: ExtensionHost) {
               throw new Error('Only @ultimate keeps the hands-off goal.')
             const acted = await act(tx, caller, args, Date.now())
             if (acted.ended) await card(host, tx, 'goal.report', acted.ended)
+            const changed = acted.sync ?? acted.ended?.id
+            if (changed !== undefined) await sync(host, tx, changed)
             return acted
           }, ctx)
           return { output: [{ type: 'text', text: result.answer }] }

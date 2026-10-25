@@ -36,7 +36,6 @@ import { implementAction } from '../../lib/actions.ts'
 import { actingAs } from '../../lib/acting-as.ts'
 import type { ActionInput } from '../../lib/actions.ts'
 import type { ActionContext } from '../../server/actions.ts'
-import { imageMimeTypes, maxImageBytes, maxImages } from '../../shared/protocol.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import type { LandedData } from '../workspaces/api.ts'
@@ -61,6 +60,7 @@ import { rewindActions, rewindTask } from './rewind.ts'
 import type { Tree } from './catchup.ts'
 import type { RootEvent } from './types.ts'
 import { compareUrl } from '../../lib/compare.ts'
+import { hasLogin, hostDefaultModel } from '../../lib/agents.ts'
 import { admitCompaction } from '../../lib/compaction.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
 
@@ -901,9 +901,16 @@ async function forkBranch(
     caller = `#${input.by}${name ? ` (@${name})` : ''}`
   }
   const fork = await tx.forkConversation(from, at, { ownership: { kind: 'ownerless' } })
+  // Without a model given, the fork keeps its source's as of `at` while that has a login here, else the default.
+  const source = (await tx.doc(AgentDoc, fork.id)).model
+  const model =
+    input.model ??
+    (hasLogin(host.modelRuntime.getAvailableSnapshot(), source)
+      ? undefined
+      : hostDefaultModel(host))
   await configure(tx, fork.id, {
     cwd: host.projectRoot,
-    ...(input.model ? { model: input.model } : {}),
+    ...(model ? { model } : {}),
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
   })
   // A branch gets ordinary tools whatever its source ran with.
@@ -1227,32 +1234,6 @@ export function compareLinks(
   })
 }
 
-/** Validates a new branch's prompt and configuration. */
-function rootInput(args: JsonValue) {
-  const input = (args ?? {}) as Partial<BranchInput>
-  if (typeof input.prompt !== 'string') throw new Error('prompt must be a string')
-  if (input.title !== undefined && typeof input.title !== 'string')
-    throw new Error('title must be a string')
-  if (
-    input.model !== undefined &&
-    (typeof input.model?.provider !== 'string' || typeof input.model.modelId !== 'string')
-  )
-    throw new Error('model must be { provider, modelId }')
-  if (input.images !== undefined) {
-    if (!Array.isArray(input.images) || input.images.length > maxImages)
-      throw new Error(`images must be an array of at most ${maxImages}`)
-    for (const image of input.images)
-      if (
-        !imageMimeTypes.includes(image?.mimeType) ||
-        typeof image.data !== 'string' ||
-        !image.data ||
-        Buffer.byteLength(image.data, 'base64') > maxImageBytes
-      )
-        throw new Error('Expected supported image MIME type and base64 data of at most 2 MiB')
-  }
-  return input
-}
-
 export const actions = {
   ...rewindActions,
   /** The roots, and with `{ id }` that conversation's tree root and its branch state when it is a branch. */
@@ -1263,14 +1244,6 @@ export const actions = {
     const root = await rootOf(host, id, context)
     const branch = (await host.harness().snapshot(Branch, id, context))?.branch
     return { roots, ...(root === undefined ? {} : { root }), ...(branch ? { branch } : {}) }
-  },
-  async branch(args: JsonValue, { host }: ActionContext) {
-    const input = rootInput(args)
-    for (const key of ['from', 'at'] as const)
-      if (input[key] !== undefined && (!Number.isSafeInteger(input[key]) || input[key] < 1))
-        throw new Error(`${key} must be a positive integer`)
-    if (input.from === undefined) throw new Error('from must be a positive integer')
-    return startBranch(host, input as BranchInput, context)
   },
   /**
    * `{id, limit?, types?}`: the newest landings, notes, branches and compactions in root `id`, newest first (default
@@ -1407,6 +1380,17 @@ export default function lineageExtension(host: ExtensionHost) {
     leaveNote: (to, text, source) => leaveNote(host, to, text, source),
     remember: (root, ops, ctx, now) =>
       host.harness().commit((tx) => applyMemoryOps(tx, root, ops, now), ctx),
+    memoryBrief: async (id, ctx) => {
+      const roots = await rootsOf(host, ctx)
+      const root = (await rootOf(host, id, ctx)) ?? (roots.length === 1 ? roots[0] : undefined)
+      if (root === undefined) return undefined
+      return host.harness().commit(async (tx) => {
+        const brief = await memoryBrief(tx, root)
+        if (!brief) return undefined
+        const { memories } = await tx.doc(Memory, root)
+        return { root, text: brief.text, memories: Object.keys(memories).length }
+      }, ctx)
+    },
     memoriesOf: async (id, ctx) => {
       const roots = await rootsOf(host, ctx)
       const root = (await rootOf(host, id, ctx)) ?? (roots.length === 1 ? roots[0] : undefined)
@@ -1535,8 +1519,13 @@ export default function lineageExtension(host: ExtensionHost) {
             if (!agent.model) return undefined
             const root = (await rootsOf(host, ctx)).includes(api.conversationId)
             const intent = (await api.snapshot(Branch, api.conversationId, ctx))?.branch?.intent
-            // The model's view of the replaced entries, with edits applied: an omitted abstract stays omitted.
-            const replaced = new Set(compaction.entries.map((entry) => entry.id))
+            // The model's view of the replaced entries, with edits applied: an omitted abstract stays omitted. Entries
+            // marked `transient` (a voice session's brief, placed afresh each time) stay out of the summary.
+            const replaced = new Set(
+              compaction.entries
+                .filter((entry) => !(entry.data as { transient?: unknown } | undefined)?.transient)
+                .map((entry) => entry.id),
+            )
             const view = await (await host
               .harness()
               .conversation(api.conversationId, ctx))!.context(ctx)

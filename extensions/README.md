@@ -26,7 +26,7 @@ An optional `composer` renderer receives `{ core, dock? }` for the shown convers
 narrow side region). Render `core` to preserve the existing composer, optionally wrapping it. Facets compose in
 discovery order: each receives the previous rendering as `core`, behind its own extension boundary with that rendering
 as fallback. These renderers can use `useTranscript()` for the shown conversation's current entries.
-Lineage uses this to show a root's read-only context footer, or an empty root's Start here card, instead of a composer.
+Lineage uses this to show a root's read-only History banner, with the way back to @ultimate, instead of a composer.
 To send what the composer submits elsewhere, wrap `core` in `<ComposerRedirect to={{ placeholder, send }}>` (from `@/sdk`):
 while `to` is set, Enter and the send button call `send(text)` instead of submitting, with the same draft, error and
 sending states (side-chat forks @ultimate this way). Only the shown conversation's composer takes typing shortcuts
@@ -55,7 +55,7 @@ replaces the whole extension, both facets:
 
 Every extension folder is on by default, built-in, user or project: adding the folder is the opt-in. The exception is
 the built-ins listed in `defaultOff` (`shared/extension-api.ts`; see [settings](../docs/settings.md)), which need
-something of their own and ship off until `extensions.enable` names them. Turn one off
+something of their own and ship off until `extensions.enable` names them (including `voice-live`, the live voice relay). Turn one off
 with `{ "extensions": { "disable": ["hello"] } }` in `~/.ultimate/settings.json` (this machine) or
 `<project>/.ultimate/settings.json` (this project), and back on with `extensions.enable`. Settings layer defaults →
 machine → project; later layers win. Settings changes apply live without a restart; unknown names produce a notice.
@@ -78,7 +78,8 @@ Extensions outside the clone import exactly what built-ins import (`@/sdk`, `@/c
 `lucide-react`, any package installed in the clone): Ultimate resolves those from its clone, and Tailwind picks up their
 classes. In the clone, `pnpm check` type-checks and lints `extensions/` and `.ultimate/extensions/`; extensions of
 other projects are not checked by anything, so try them in the browser. Agents live in the same three places
-(`agents/`); skills load as [Discovery and settings](../docs/settings.md) describes, later scopes winning by name. A project's `.ultimate/settings.json` may set `defaultSurface` (see
+(`agents/`); an enabled extension may also ship an `agents/` folder. Those definitions load as built-ins before
+user/project definitions and overlays, and disappear when the extension is disabled. Skills load as [Discovery and settings](../docs/settings.md) describes, later scopes winning by name. A project's `.ultimate/settings.json` may set `defaultSurface` (see
 [Surfaces](#surfaces)).
 
 ## Extension host
@@ -183,7 +184,9 @@ export default defineWebExtension({ provides: [provide(Phase, (id) => usePhaseWo
 ```
 
 The provider's function is a hook, run once per `<Provided>`; the last facet in discovery order providing a point wins,
-and while none does the render prop gets `undefined`. The web core declares its own points in the SDK: `ParkedRuns`
+and while none does the render prop gets `undefined`. A point that combines its providers (the sidebar's rows under
+@ultimate) renders `<AllProvided point input>{(values) => …}</AllProvided>` instead: every provider's value in discovery
+order, a throwing one left out behind its inline error card. The web core declares its own points in the SDK: `ParkedRuns`
 (pause), `RunStart` (tasks), `ConversationKind` (the title bar's kind before a title; messages names coordinator
 branches `branch · coordinator`) and `MessageReference` (the copyable reference to a stored message; codemode). The server's counterpart is an extension point
 ([docs/extensions.md](../docs/extensions.md#extension-apis)).
@@ -318,6 +321,7 @@ title bar the host shows above every surface.
 | `composer.actions`     | Composer footer, beside Send; input helpers that write into the draft with `insertIntoComposer`              |
 | `conversation.overlay` | Over the transcript and the composer (`<Conversation />`); position it `absolute inset-0`                    |
 | `transcript.start`     | Above a transcript's first row once its whole history is loaded; `useTranscript()` inside                    |
+| `transcript.end`       | After a transcript's last row, before the working line: a turn still forming, such as live speech            |
 | `overlay`              | Always mounted at the root, above every surface: dialogs, toasts, global effects                             |
 
 ```tsx

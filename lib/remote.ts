@@ -23,7 +23,7 @@ const naming = (project: string) => (item: { name?: string; key?: string }) =>
   [item.name, item.key].some((value) => value?.toLowerCase() === project.toLowerCase())
 
 /**
- * Where `project` (a name such as `poe2-rust` or a key such as `github.com/hazat/poe2-rust`) answers: this project, a
+ * Where `project` (a name such as `my-app` or a key such as `github.com/acme/my-app`) answers: this project, a
  * running project on this machine, or the tailnet address of the machine that last backed it up. With `machine`, only
  * that machine's instance: this machine's when it is `here`, else that machine's record in the register. Throws a
  * sentence naming the machine when it registered no address.

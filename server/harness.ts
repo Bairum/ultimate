@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { FauxProviderHandle } from '@earendil-works/pi-ai/providers/faux'
 import { ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent'
-import { createRegistry, Harness } from '@earendil-works/pi-durable'
+import { AgentDoc, createRegistry, Harness } from '@earendil-works/pi-durable'
 import type { Context } from '@earendil-works/chord'
 import { UiState } from './ui-state.ts'
 import { listModels } from './models.ts'
@@ -18,7 +18,7 @@ import { callTrace } from './trace.ts'
 import { projectSkills } from './skills.ts'
 import { requestSwap } from './supervisor-protocol.ts'
 import { activeChapter, finishChapterSwitch } from '../lib/chapters.ts'
-import { previewModel } from '../lib/agents.ts'
+import { defaultModel } from '../lib/agents.ts'
 import type {
   ConversationId,
   Cursor,
@@ -161,18 +161,10 @@ export async function prepareHarness(options: HostOptions) {
     runtime.registerNativeProvider(faux.provider)
     await runtime.refresh({ allowNetwork: false })
   }
-  /** The model a new conversation starts on, read when the harness opens, after extensions registered theirs. */
+  /** The default model, read when the harness opens, after extensions registered theirs. */
   const preferred = async () => {
-    if (faux) return faux.getModel()
-    const available = await modelRuntime.getAvailable()
-    const preview = previewModel()
-    return (
-      available.find((m) => m.provider === preview?.provider && m.id === preview.modelId) ??
-      available.find(
-        (m) => m.provider === settings.getDefaultProvider() && m.id === settings.getDefaultModel(),
-      ) ??
-      available[0]
-    )
+    if (faux) return { provider: faux.getModel().provider, modelId: faux.getModel().id }
+    return defaultModel(await modelRuntime.getAvailable(), settings)
   }
   let active:
     | {
@@ -275,14 +267,13 @@ export async function prepareHarness(options: HostOptions) {
         )
         const model = await preferred()
         const root = await harness.root(context, {
-          agent: {
-            cwd: projectRoot,
-            ...(model ? { model: { provider: model.provider, modelId: model.id } } : {}),
-            thinkingLevel: settings.getDefaultThinkingLevel(),
-          },
+          agent: { cwd: projectRoot, thinkingLevel: settings.getDefaultThinkingLevel() },
         })
         await root.commit(async (tx) => {
           await tx.doc(UiState, root.id)
+          // The root runs no turns, but what reads its agent (tally compaction, inheriting callers) gets a model with a
+          // login: it follows the default each time it opens, not the one it stored when created.
+          if (model) (await tx.doc(AgentDoc, root.id)).model = model
         }, context)
         active = { harness, root, storage }
         const openedHarness = harness

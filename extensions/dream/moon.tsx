@@ -10,6 +10,7 @@ export const passLabels: Record<PassName, string> = {
   tools: 'Tools',
   corrections: 'Corrections & wishes',
   codify: 'Codify memories',
+  project: 'This project',
 }
 
 const words: Record<PassState['status'], string> = {
@@ -58,7 +59,7 @@ export function Moon({ status, className }: { status: PassState['status']; class
   )
 }
 
-/** The five passes of `session`: a moon, the pass's name and its one-line note. */
+/** The passes of `session`: a moon, the pass's name and its one-line note. */
 export function Passes({ session }: { session: Session }) {
   return (
     <ol className="space-y-1" data-dream-passes={session.id}>
@@ -95,7 +96,7 @@ export function Passes({ session }: { session: Session }) {
   )
 }
 
-/** The five moons in a row, for a one-line readout. */
+/** One moon per pass in a row, for a one-line readout. */
 export function MoonRow({ session }: { session: Session }) {
   return (
     <span className="inline-flex items-center gap-1" title="Dream passes">

@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, readlink, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { git, isolatable, noCommit, noRepository } from '../lib/git.ts'
@@ -30,6 +30,18 @@ it('writes two-space JSON with a trailing newline into new folders and leaves no
   await writeJson(path, { b: [true] })
   expect(await readFile(path, 'utf8')).toBe('{\n  "b": [\n    true\n  ]\n}\n')
   expect(await readdir(join(dir, 'nested'))).toEqual(['settings.json'])
+})
+
+it('writes through a symlinked file to its target and keeps the link', async () => {
+  const dir = await temp('ultimate-lib-')
+  await mkdir(join(dir, 'repo'))
+  await writeFile(join(dir, 'repo/settings.json'), '{}\n')
+  await symlink('repo/settings.json', join(dir, 'settings.json'))
+  await writeJson(join(dir, 'settings.json'), { a: 1 })
+  expect((await lstat(join(dir, 'settings.json'))).isSymbolicLink()).toBe(true)
+  expect(await readlink(join(dir, 'settings.json'))).toBe('repo/settings.json')
+  expect(await readFile(join(dir, 'repo/settings.json'), 'utf8')).toBe('{\n  "a": 1\n}\n')
+  expect(await readdir(join(dir, 'repo'))).toEqual(['settings.json'])
 })
 
 const readCounter = (file: string) => readJson<{ count: number }>(file, { count: 0 })

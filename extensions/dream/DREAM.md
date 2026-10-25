@@ -1,7 +1,8 @@
 # Dreaming
 
 Like people, agents need time to process what they learned. A dream is a working session: Ultimate reads back over
-the project's conversations, memory, failures and tools, writes a journal of what it learned, and proposes changes.
+the project's conversations, memory, failures and tools, writes a journal of what it learned, and proposes changes:
+to itself, and to how it works in this particular project (what it keeps doing by hand here, and what to build for it).
 The user decides each proposal with @ultimate; approved ones become ordinary branches, and the dream follows them
 until they land. Nothing changes code, memory or storage by itself.
 
@@ -16,7 +17,7 @@ errors are found in conversation entries.
 
 A dream starts with your **handoff**. The user pressed Dream (a `dream.handoff` input asks for it), or the built-in
 "Dream before compaction" automation fired because your context passed its threshold (70% by default; a `dream.handoff`
-entry beside the fire carries the same ask, and the fire's turn is the one to write it in; never `act` on the fire).
+entry beside the fire carries the same ask, and the fire's turn is the one to write it in).
 Write it in that same turn, while your context
 still holds everything: what you worked on, what is still open (branches, questions, to-dos) and how far each got,
 the decisions and why, the user's corrections, the lessons, and what you would do next. Plain Markdown, at most
@@ -25,7 +26,7 @@ line to the user. A second call replaces the first while the dream still waits. 
 handoff is recorded and no other conversation works; after 30 minutes without one it starts without it and says so.
 The dream reads the handoff first, and a new chapter wakes up from it.
 
-A `dream.started` input means the session began (after your handoff, or under a granted automation's `act`). Start one
+A `dream.started` input means the session began after your handoff. Start one
 branch with `branch`, prompt:
 
 > Dream session N. Follow "For the dream branch" in the clone's extensions/dream/DREAM.md.
@@ -33,13 +34,14 @@ branch with `branch`, prompt:
 Name the memory slugs the user cares about most in it, always including the memory about the user (`about-<name>`).
 The branch answers you with the journal's proposals as a `Decisions:` block; its card is already in your conversation.
 Relay the decisions to the user as one message with structured `questions`; at night they wait for the morning. Only
-when the `dream.started` input says the user granted "dream" on the automation that started it are you hands-off:
-decide each proposal yourself, as the user would (keep what is evidenced and small; skip what is risky or vague), and
-record it with `decide {…, reason}`, one line on why; then tell the user what you decided in one message with
-reply: false. Never decide hands-off otherwise. For each decision:
+during a hands-off goal do you decide them in the user's place: decide each proposal as the user would (keep what is
+evidenced and small; skip what is risky or vague), and record it with `decide {…, reason}`, one line on why. For each
+decision:
 
 - **Approved code, prompt or doc change:** start a branch for it (it is ordinary work: assess or build, review, land),
-  then `decide {status: 'approved', branch}`. The dream marks it landed when that branch lands.
+  then `decide {status: 'approved', branch}`. The dream marks it landed when that branch lands. A `project` proposal
+  is built into the project's `.ultimate/`: put its evidence and the existing extension or feature pull request it
+  adapts into the branch prompt, and the branch follows the integrate-ultimate skill.
 - **Approved memory change:** apply it with one `remember` batch, then `decide {status: 'applied'}`.
 - **Rejected:** `decide {status: 'rejected'}`.
 
@@ -48,10 +50,8 @@ The session ends by itself once every proposal is settled; the user can also end
 
 When the built-in automation's dream settles, a `dream.settled` entry says whether it was worth a fresh chapter (landed and
 applied changes against the `dream.asleepAfter` setting, default 5). Below it, carry on in this chapter. At or above
-it, either the automation's `asleep` grant falls asleep by itself (every gate still runs; nothing to do), or the input
-asks you to ask the user: send one message with a `choice` question (Fall asleep now / Later) and point at the card's
-Fall asleep button, which only they press. When the same turn owes the user an answer, put that question into the
-answer instead: a turn that owes an answer cannot also message the user. Never call `asleep` or `automation act {do: 'asleep'}` for it yourself.
+it, the input asks you to ask the user: send one message with a `choice` question (Fall asleep now / Later) and point
+at the card's Fall asleep button, which only they press. Never call `asleep` for it yourself.
 
 ## For the dream branch
 
@@ -62,14 +62,16 @@ dream's own bookkeeping (`pass`, `journal`) is part of the job, not a change.
    why there is none). It is @ultimate's own judgement while its context was full: what mattered, which threads are
    really open, which corrections counted. Put it in every pass brief as the primary input; the transcripts are the
    evidence behind it, and a pass checks the handoff against them rather than taking it on trust.
-1. Run the five passes in parallel, each as a `dream-pass` subagent (background), with the session number, its pass
+1. Run the six passes in parallel, each as a `dream-pass` subagent (background), with the session number, its pass
    name and the brief below. Before starting each, call `pass {session, pass, status: 'running'}`; when it reports,
    `pass {…, status: 'done', note}` with a one-line note (or `failed` with the reason).
 2. Check each report against its evidence; drop what does not hold up.
 3. Merge them into the journal and file it with `journal`: `learned` is exactly three short lines in Ultimate's own
    voice ("I learned…", "I keep…", "I'd like…"); `text` is Markdown with one section per pass; `proposals` lists each
    proposed change once: `id` (a slug), `pass`, `title` (one line saying what changes), `size` (S/M/L), `risk`, and
-   `retire` (the memory slug it makes redundant) for codify proposals. Propose `chapter`, a 2–3 word lowercase,
+   `retire` (the memory slug it makes redundant) for codify proposals. A project proposal's title asks the question
+   with its count ("Agents checked the device API by hand in 6 branches: build a `devices` tool here?"), and its
+   `text` section keeps the evidence and what it adapts. Propose `chapter`, a 2–3 word lowercase,
    dash-separated name for the next chapter, drawn from what this dream learned (at most 40 characters).
 4. Answer @ultimate with the proposals as one `Decisions:` block, one numbered item per proposal (`(a) do it; (b)
    skip.`), each naming its id, then `My picks:`.
@@ -99,3 +101,13 @@ conversation only where they point at something.
   the user). Say the memory delete or update that follows once it is
   codified. Also check the skills that exist: one that is stale, duplicated or never read gets an update or removal
   proposal.
+- **project** — what Ultimate could do better in this project's own work. Read the root's tally (abstracts and
+  landings), the project's conversations and `git log`, and look for what repeats: steps agents did by hand again and
+  again (the same commands, checks, lookups, setup), what the user asked for more than once, and where branches got
+  stuck on something specific to the project (dev server, test data, environment, deploy). Each proposal says what
+  happened and how often, with `#conversation/entry` or commit evidence, and what to build in `<project>/.ultimate/`:
+  an extension, a surface, an agent, a skill or a setting, following the integrate-ultimate skill. Before proposing
+  something new, look for one to adapt in the clone's `extensions/` and the open feature pull requests
+  (`gh pr list --repo HazAT/ultimate --label feature`). It proposes; it builds nothing. When the project is Ultimate
+  itself, leave Ultimate's tools and harness to the tools and codify passes and look only at the project's own work;
+  say "nothing project-specific" when that is what you found.

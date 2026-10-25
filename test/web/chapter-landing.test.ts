@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { emptyRoot } from '../../extensions/lineage/empty-root.ts'
+import { onboarded } from '../../extensions/onboarding/onboarded.ts'
 import { landing } from '../../extensions/subagents/landing.ts'
 
 // A new chapter opens with empty UI state and a root without history: the page showed root #1's Start here card,
@@ -17,9 +17,8 @@ it('starts @ultimate when a fresh home has none yet', () => {
   expect(landing(true, undefined, null)).toBe('create')
 })
 
-it("treats a new chapter's root with carried memories as set up, not as an empty root", () => {
-  const carried = { memories: { 'about-daniel': {} } }
-  expect(emptyRoot({}, false, carried)).toBe(false)
-  expect(emptyRoot(null, false, { memories: {} })).toBe(true)
-  expect(emptyRoot({ since: 5 }, false, null)).toBe(false)
+it("treats a new chapter's root with carried memories as onboarded", () => {
+  expect(onboarded(undefined, { memories: { 'about-daniel': {} } })).toBe(true)
+  expect(onboarded(undefined, { memories: {} })).toBe(false)
+  expect(onboarded(42, null)).toBe(true)
 })

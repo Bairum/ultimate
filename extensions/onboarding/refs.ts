@@ -32,8 +32,13 @@ export type Described = Pick<
   readme: string
 }
 
-/** `{ roots: { [root]: conversationId } }` on conversation 1: the onboarding conversation started for each root. */
-export const StartsDoc = docRef<{ roots: Record<string, number> }>('onboarding.starts')
+/**
+ * `{ roots: { [root]: conversationId }, dismissed? }` on conversation 1: the onboarding conversation started for each
+ * root, and whether the user dismissed the Start here card.
+ */
+export const StartsDoc = docRef<{ roots: Record<string, number>; dismissed?: boolean }>(
+  'onboarding.starts',
+)
 
 /** No arguments → the first-run flag, the project's setup and what it would add, and the user's extension lists. */
 export const StatusAction = actionRef<null, OnboardingStatus>('onboarding', 'status')
@@ -50,6 +55,8 @@ export const StartAction = actionRef<{ root?: number; instructions?: string }, {
   'onboarding',
   'start',
 )
+/** No arguments → `{ dismissed: true }`: hide the Start here card for this project; ⌘K Get ready… still starts setup. */
+export const DismissAction = actionRef<null, { dismissed: boolean }>('onboarding', 'dismiss')
 /** No arguments → `{ id }`: have @ultimate walk the user through how Ultimate works again, without project setup. */
 export const WalkthroughAction = actionRef<null, { id: number }>('onboarding', 'walkthrough')
 /** `{ card }` → `{ id }`: ask @ultimate for help with the project or Git card; `id` is @ultimate's conversation. */

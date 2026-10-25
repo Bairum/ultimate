@@ -18,6 +18,7 @@ import {
   errorMessage,
   events,
   useAction,
+  useCopy,
   useEvent,
   useSystem,
 } from '@/sdk'
@@ -63,19 +64,6 @@ function useStatus() {
     void refetch()
   }, [signature, refetch])
   return status
-}
-
-function useCopy() {
-  const [copied, setCopied] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  useEffect(() => () => clearTimeout(timer.current), [])
-  const copy = (value: string) =>
-    void navigator.clipboard.writeText(value).then(() => {
-      setCopied(true)
-      clearTimeout(timer.current)
-      timer.current = setTimeout(() => setCopied(false), 1200)
-    })
-  return { copied, copy }
 }
 
 /** A shell command to copy, as a code chip. */

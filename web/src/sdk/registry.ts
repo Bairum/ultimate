@@ -349,15 +349,18 @@ export function slotItems(records: readonly ExtensionRecord[], slot: SlotName): 
     .map(({ order: _order, ...item }) => item)
 }
 
+/** Every facet that provides `point`, in discovery order: for points that combine their providers' values. */
+export function provisionsOf(records: readonly ExtensionRecord[], point: string) {
+  return records.flatMap(({ name, extension, version }) =>
+    (extension?.provides ?? [])
+      .filter((provision) => provision.point === point)
+      .map((provision) => ({ extension: name, version, use: provision.use })),
+  )
+}
+
 /** The facet that provides `point`: the last in discovery order. */
 export function provisionOf(records: readonly ExtensionRecord[], point: string) {
-  return records
-    .flatMap(({ name, extension, version }) =>
-      (extension?.provides ?? [])
-        .filter((provision) => provision.point === point)
-        .map((provision) => ({ extension: name, version, use: provision.use })),
-    )
-    .at(-1)
+  return provisionsOf(records, point).at(-1)
 }
 
 export function panelItems(records: readonly ExtensionRecord[]): PanelItem[] {

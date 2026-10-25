@@ -536,6 +536,23 @@ export function useAction<Args, T>(
   return { data: current.data, error: current.error, loading: current.loading, refetch: call }
 }
 
+/** `copy(text)` puts text on the clipboard; `copied` is true for 1.2 s after, and a failure becomes an error notice. */
+export function useCopy() {
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
+  const copy = (text: string) =>
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopied(true)
+        clearTimeout(timer.current)
+        timer.current = setTimeout(() => setCopied(false), 1200)
+      })
+      .catch((error: unknown) => store.notify({ level: 'error', message: errorMessage(error) }))
+  return { copied, copy }
+}
+
 /** The current time, updated every `intervalMs` while `active`. */
 export function useNow(intervalMs = 1000, active = true): number {
   const [now, setNow] = useState(Date.now)

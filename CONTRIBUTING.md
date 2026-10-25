@@ -2,10 +2,18 @@
 
 Ultimate is a personal project, shared as inspiration, not as a library or a product with users to support.
 
-- **Issues and pull requests are not reviewed.** Please don't expect a reply or a merge.
+- **Ask Ultimate to change itself.** That is the intended way to make it work the way you want. Tell @ultimate what
+  you need; it looks through the extensions already in the clone and the open feature pull requests for something to
+  adapt, and builds the result into your project's `.ultimate/` or your `~/.ultimate/`.
+- **Keep your changes outside the clone.** Extensions, agents, skills and settings in a project's `.ultimate/` or in
+  `~/.ultimate/` survive updates. Edits to the clone itself conflict with every update (⌘K update pulls main).
+- **Pull requests:** clear-cut fixes or improvements to the core may be merged. Feature pull requests stay open and
+  unmerged as reference implementations, titled "Feature: …" and labelled `feature`: I don't want to maintain code I
+  don't need, but anyone who wants to solve the same problem can borrow from them. Browse them with
+  `gh pr list --repo HazAT/ultimate --label feature`.
+- **Issues are not reviewed.** Please don't expect a reply.
 - **Nothing is stable.** I change things as I go, fundamental ones included, without migration paths, deprecation
   periods, or regard for anyone building on top.
-- **Take what you like.** Copy pieces, fork it, rework it into your own thing; the [license](LICENSE) allows it. A fork
-  is the way to make Ultimate yours.
+- **Take what you like.** Copy pieces, fork it, rework it into your own thing; the [license](LICENSE) allows it.
 
 Whether building on it works for you is your call.

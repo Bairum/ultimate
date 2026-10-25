@@ -12,6 +12,7 @@ const session = (id: number, fields: Partial<Session> = {}): Session => ({
     tools: waiting,
     corrections: waiting,
     codify: waiting,
+    project: waiting,
   },
   proposals: [],
   ...fields,

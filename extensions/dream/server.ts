@@ -1,6 +1,6 @@
 /**
  * Dream: a working session in which Ultimate processes what it learned. The user starts it; @ultimate starts a dream
- * branch that runs five passes and files a journal here; the proposals go to the user as decisions, and the approved
+ * branch that runs six passes and files a journal here; the proposals go to the user as decisions, and the approved
  * ones are followed until their branches land. Nothing here changes code, memory or storage by itself.
  */
 import { existsSync } from 'node:fs'
@@ -8,12 +8,7 @@ import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import {
-  defineDoc,
-  defineExtension,
-  defineTask,
-  ROOT_CONVERSATION_ID,
-} from '@earendil-works/pi-durable'
+import { defineDoc, defineExtension, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Tx } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import {
@@ -28,8 +23,7 @@ import { CloudApi } from '../cloud/api.ts'
 import { InstanceApi } from '../instance/api.ts'
 import { Standing, Started as StandingStarted } from '../subagents/api.ts'
 import { SubmissionLanded } from '../workspaces/api.ts'
-import { DreamGrant, Fired } from '../automations/api.ts'
-import type { GrantedBy } from '../automations/api.ts'
+import { Fired } from '../automations/api.ts'
 import {
   AsleepAction,
   ChaptersAction,
@@ -60,17 +54,27 @@ import type { PassName } from './types.ts'
 export const Sessions = defineDoc<{ next: number; sessions: Session[]; waiting?: Waiting }>({
   kind: DreamDoc.kind,
   checkpointWhen: () => false,
-  // Version 1 named a built-in automation's session `afterCompaction`; the record itself is the same.
-  version: 2,
+  // Version 1 named a built-in automation's session `afterCompaction`; the record itself is the same. Versions before
+  // 3 ran five passes: their sessions get `project` as waiting, or as skipped once the journal is filed.
+  version: 3,
   migrate: (value) => {
     const doc = value as { next: number; sessions: (Session & { afterCompaction?: unknown })[] }
     return {
       ...doc,
-      sessions: doc.sessions.map(({ afterCompaction, ...session }) =>
-        afterCompaction
-          ? { ...session, beforeCompaction: afterCompaction as Session['beforeCompaction'] }
-          : session,
-      ),
+      sessions: doc.sessions.map(({ afterCompaction, ...session }) => ({
+        ...session,
+        ...(afterCompaction
+          ? { beforeCompaction: afterCompaction as Session['beforeCompaction'] }
+          : {}),
+        passes: {
+          ...session.passes,
+          project:
+            session.passes.project ??
+            (session.journal
+              ? { status: 'done' as const, note: 'not part of this dream' }
+              : { status: 'waiting' as const }),
+        },
+      })),
     }
   },
   scope: 'conversation',
@@ -130,7 +134,7 @@ function settle(found: Session, now: number) {
 }
 
 /** Record a new session in `tx`; refuses while one is open. */
-export async function startSession(tx: Tx, now: number, by?: GrantedBy, origin: Origin = {}) {
+export async function startSession(tx: Tx, now: number, origin: Origin = {}) {
   const doc = await tx.doc(Sessions, ROOT_CONVERSATION_ID)
   const active = doc.sessions.find((item) => item.endedAt === undefined)
   if (active)
@@ -146,7 +150,6 @@ export async function startSession(tx: Tx, now: number, by?: GrantedBy, origin: 
     startedAt: now,
     passes,
     proposals: [],
-    ...(by ? { by } : {}),
     ...(origin.beforeCompaction ? { beforeCompaction: origin.beforeCompaction } : {}),
     ...(origin.handoff ? { handoff: origin.handoff } : {}),
   }
@@ -529,8 +532,8 @@ export async function askHandoff(host: ExtensionHost) {
   return { task }
 }
 
-function refuseBusy(host: ExtensionHost, ultimate: number, acting?: number) {
-  const busy = busyElsewhere(host.conversations(), ultimate).filter((item) => item.id !== acting)
+function refuseBusy(host: ExtensionHost, ultimate: number) {
+  const busy = busyElsewhere(host.conversations(), ultimate)
   if (busy.length)
     throw new Error(
       `Wait for these to finish before dreaming: ${busy.map((item) => `#${item.id} ${item.title}`).join(', ')}`,
@@ -538,27 +541,19 @@ function refuseBusy(host: ExtensionHost, ultimate: number, acting?: number) {
 }
 
 /**
- * Start a dream session inside `tx`: for a granted automation `by` acting from conversation `acting`, or for a handoff
- * request (`origin`): the user's Dream button, or the built-in automation (`origin.beforeCompaction`). Refuses while
- * other top-level conversations work (besides @ultimate and the conversation acting) or a session is open.
+ * Start a dream session inside `tx` for a handoff request (`origin`): the user's Dream button, or the built-in
+ * automation (`origin.beforeCompaction`). Refuses while other top-level conversations work (besides @ultimate) or a
+ * session is open.
  */
-export async function startDreamIn(
-  host: ExtensionHost,
-  tx: Tx,
-  by?: GrantedBy,
-  acting?: number,
-  origin: Origin = {},
-) {
+export async function startDreamIn(host: ExtensionHost, tx: Tx, origin: Origin = {}) {
   const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
   if (ultimate === undefined) throw new Error('@ultimate has no conversation yet')
-  refuseBusy(host, ultimate, acting)
-  const session = await startSession(tx, Date.now(), by, origin)
+  refuseBusy(host, ultimate)
+  const session = await startSession(tx, Date.now(), origin)
   const before = origin.beforeCompaction
-  const who = by
-    ? `Automation ${by.automation} "${by.name}" started dream session ${session} under the user's grant`
-    : before
-      ? `Dream session ${session} started after your context passed its threshold (automation ${before.automation} "${before.name}"${before.handsOff ? `, which the user granted "dream": decide each proposal yourself and record your reason with decide {reason}` : ''})`
-      : `The user started dream session ${session}`
+  const who = before
+    ? `Dream session ${session} started after your context passed its threshold (automation ${before.automation} "${before.name}")`
+    : `The user started dream session ${session}`
   const handoff = origin.handoff
   const read = handoff?.text
     ? ` It carries your handoff: the dream branch reads it first.`
@@ -576,33 +571,26 @@ export async function startDreamIn(
 
 /**
  * Check that session `input.session` may fall asleep now and claim its sleep: a filed journal, every proposal settled,
- * a new chapter name, and no conversation at work. `by` names the granted automation that asked.
+ * a new chapter name, and no conversation at work.
  */
-async function admitSleep(
-  host: ExtensionHost,
-  input: { session?: unknown; name?: unknown },
-  attempt?: number,
-) {
+async function admitSleep(host: ExtensionHost, input: { session?: unknown; name?: unknown }) {
   const chapters = await readChapters(host.home)
   return host.harness().commit(async (tx) => {
-    const found = await sleepable(tx, input.session, attempt)
+    const found = await sleepable(tx, input.session)
     await idle(host, tx)
     const name = chapterName(input.name ?? found.journal!.chapter)
     if (chapters.chapters.some((item) => item.name === name))
       throw new Error(`Chapter ${name} already exists; use switch instead`)
-    // Only the granted attempt that holds the session carries its automation on; the user's own retry is the user's.
-    const by =
-      attempt !== undefined && found.sleep?.attempt === attempt ? found.sleep.by : undefined
-    found.sleep = { chapter: name, phase: 'seeding', at: Date.now(), ...(by ? { by } : {}) }
+    found.sleep = { chapter: name, phase: 'seeding', at: Date.now() }
     return { session: found.id, name }
   }, context)
 }
 
 /**
  * Session `id` (default: the newest with a journal) when it may fall asleep: journal filed, proposals settled, no other
- * sleep under way. A granted attempt `attempt` that reserved the session may go on with its own reservation.
+ * sleep under way.
  */
-async function sleepable(tx: Tx, id: unknown, attempt?: number) {
+async function sleepable(tx: Tx, id: unknown) {
   const found =
     id === undefined
       ? (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).sessions.findLast((item) => item.journal)
@@ -611,15 +599,14 @@ async function sleepable(tx: Tx, id: unknown, attempt?: number) {
   if (!found.journal) throw new Error(`Dream session ${found.id} has no journal`)
   if (found.proposals.some((item) => item.status === 'open' || item.status === 'approved'))
     throw new Error('Settle every dream proposal before falling asleep')
-  const own = attempt !== undefined && found.sleep?.attempt === attempt
-  if (found.sleep && found.sleep.phase !== 'failed' && !own)
+  if (found.sleep && found.sleep.phase !== 'failed')
     throw new Error(`Dream session ${found.id} is already falling asleep (${found.sleep.phase})`)
   return found
 }
 
 /**
- * Every gate of Fall asleep after admission, the same for the user and a grant: seed, scratch preview with one repair,
- * final backup, nothing at work, then the journaled restart that rolls back when it fails.
+ * Every gate of Fall asleep after admission: seed, scratch preview with one repair, final backup, nothing at work, then
+ * the journaled restart that rolls back when it fails.
  */
 async function fallAsleep(
   host: ExtensionHost,
@@ -634,11 +621,7 @@ async function fallAsleep(
   try {
     const instances = host.want(InstanceApi)
     if (!instances) throw new Error('Fall asleep needs the instance extension for its gate')
-    const by = await host.harness().commit(async (tx) => {
-      const found = (await find(tx, session)).sleep?.by
-      return found && (JSON.parse(JSON.stringify(found)) as GrantedBy)
-    }, context)
-    const build = async () => ({ ...(await buildSeed(host, session)), ...(by ? { by } : {}) })
+    const build = () => buildSeed(host, session)
     let seed = await build()
     await progress({ phase: 'checking' })
     let result = await gate(seed, name, instances)
@@ -669,144 +652,18 @@ async function fallAsleep(
   }
 }
 
-/** How long a granted Fall asleep waits for every conversation to finish before it gives up, and how often it looks. */
-export const GRANTED_SLEEP_WAIT_MS = 30 * 60_000
-export const GRANTED_SLEEP_LOOK_MS = 15_000
-
-type GrantedSleepInput = { session: number; by: GrantedBy; deadline: number }
-/**
- * A granted Fall asleep, durable: it looks every 15 seconds until no conversation works (the agent that asked included),
- * then runs every gate exactly as the user's Fall asleep does; after 30 minutes it gives up. Its session stays reserved
- * for it, as `waiting`, so neither the user nor another grant can start a second sleep meanwhile.
- */
-export const grantedSleepTask = (host: ExtensionHost) =>
-  defineTask<GrantedSleepInput, { phase: 'look' }, null>({
-    name: 'dream.granted-sleep',
-    version: 1,
-    initial: () => ({ phase: 'look' }),
-    phases: {
-      look: async (task, runtime, ctx) => {
-        const next = await sleepWhenIdle(host, task.input, Number(task.id), runtime.now())
-        if (next === 'look')
-          return runtime.sleepUntil(runtime.now() + GRANTED_SLEEP_LOOK_MS, { phase: 'look' }, ctx)
-        await runtime.commit(
-          () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
-          ctx,
-        )
-      },
-    },
-    abort: (task, runtime, ctx) =>
-      runtime.commit(async (tx) => {
-        await releaseSleep(tx, task.input, Number(task.id), 'The granted Fall asleep was stopped')
-        return { status: 'terminal', outcome: { status: 'aborted' } }
-      }, ctx),
-  })
-
-/**
- * Inside `tx`, admit a granted Fall asleep for automation `by`: check session `input.session` (default: the newest
- * with a journal) as Fall asleep would, reserve it as `waiting` for this attempt, and create the task that carries it.
- */
-export async function grantedSleep(
-  host: ExtensionHost,
-  tx: Tx,
-  by: GrantedBy,
-  input: { session?: number },
-) {
-  const found = await sleepable(tx, input.session)
-  const attempt = await tx.createTask(
-    grantedSleepTask(host),
-    { session: found.id, by, deadline: by.at + GRANTED_SLEEP_WAIT_MS },
-    { conversationId: ROOT_CONVERSATION_ID, ownership: { kind: 'conversation' }, background: true },
-  )
-  found.sleep = {
-    chapter: found.journal!.chapter ?? '',
-    phase: 'waiting',
-    at: Date.now(),
-    by,
-    attempt: Number(attempt),
-  }
-  return { session: found.id }
-}
-
-/**
- * One look of granted attempt `attempt`: `look` again while a conversation works and time is left; `done` when there
- * is nothing left to do or the wait ran out; `started` once the gates run. The gates run outside the task, as the
- * user's Fall asleep runs outside any task: a successful switch restarts the host and never returns, and a task step
- * waiting on it would hold the old process's shutdown. Only the attempt that still holds the session writes to it.
- */
-export async function sleepWhenIdle(
-  host: ExtensionHost,
-  input: GrantedSleepInput,
-  attempt: number,
-  now: number,
-): Promise<'look' | 'done' | 'started'> {
-  const held = await host.harness().commit(async (tx) => {
-    const sleep = (await find(tx, input.session)).sleep
-    // A plain copy: the document's overlay is gone once the transaction ends.
-    return sleep && (JSON.parse(JSON.stringify(sleep)) as Sleep)
-  }, context)
-  // Not ours, or already past waiting (a crash during the gates, a switch done): nothing left for this attempt.
-  if (held?.attempt !== attempt || held.phase !== 'waiting') return 'done'
-  if (busyElsewhere(host.conversations()).length) {
-    if (now < input.deadline) return 'look'
-    await host
-      .harness()
-      .commit(
-        (tx) =>
-          releaseSleep(
-            tx,
-            input,
-            attempt,
-            `Conversations kept working for ${GRANTED_SLEEP_WAIT_MS / 60_000} minutes; nothing switched`,
-          ),
-        context,
-      )
-    return 'done'
-  }
-  // Admission commits inside this step, so the task never ends while the session is still reserved as `waiting`.
-  // The lock it takes is held through the gates below; a refusal here never frees a lock someone else holds.
-  let release: (() => void) | undefined
-  let admitted: { session: number; name: string }
-  try {
-    release = lockChapter(host)
-    admitted = await admitSleep(host, { session: input.session }, attempt)
-  } catch (error) {
-    release?.()
-    // Refused before its gates began (busy again, a chapter change running): the reservation is still this attempt's.
-    await host.harness().commit((tx) => releaseSleep(tx, input, attempt, String(error)), context)
-    return 'done'
-  }
-  // Only the gates run on: fallAsleep records its own failures, and a crash in them is settled on the next open.
-  fallAsleep(host, admitted)
-    .catch((error: unknown) => host.notice(`Granted Fall asleep: ${String(error)}`))
-    .finally(release)
-  return 'started'
-}
-
-/** Record why attempt `attempt` stopped, only while it still holds its session's sleep as `waiting`. */
-async function releaseSleep(tx: Tx, input: GrantedSleepInput, attempt: number, error: string) {
-  const found = await find(tx, input.session)
-  if (found.sleep?.attempt !== attempt || found.sleep.phase !== 'waiting') return
-  found.sleep = { ...found.sleep, phase: 'failed', error, at: Date.now() }
-}
-
 /** Dream before compaction, bound to this extension's documents, lock and session start. */
 const compaction = (host: ExtensionHost) =>
   compactionDream(host, {
     Sessions,
     switching: () => switching(host).busy,
-    start: (tx, origin) => startDreamIn(host, tx, undefined, undefined, origin),
-    grantedSleep: (tx, by, input) => grantedSleep(host, tx, by, input),
+    start: (tx, origin) => startDreamIn(host, tx, origin),
   })
 
 /** Inside `tx`: the built-in automation's session that has just settled gets its "worth a fresh chapter?" check, once. */
 const settled = (host: ExtensionHost, tx: Tx, found: Session) => compaction(host).settled(tx, found)
 
 export default function dream(host: ExtensionHost) {
-  host.implement(DreamGrant, {
-    start: (tx, by, acting) => startDreamIn(host, tx, by, acting),
-    asleep: (tx, by, input) => grantedSleep(host, tx, by, input),
-  })
   const { Wait, Retired, Settle, fired } = compaction(host)
   // One at a time, across facet reloads: two concurrent checks would both make the automation.
   const queue = host.resource('dream.after-compaction', () => ({ last: Promise.resolve() }))
@@ -844,6 +701,6 @@ export default function dream(host: ExtensionHost) {
   })
   return defineExtension({
     name: 'dream',
-    tasks: [deliverTask(host), grantedSleepTask(host), Wait, Retired, Settle],
+    tasks: [deliverTask(host), Wait, Retired, Settle],
   })
 }

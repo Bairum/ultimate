@@ -1,5 +1,5 @@
 diff --git a/dist/harness/generation.js b/dist/harness/generation.js
-index d046232b140f91542879ecd60d05f5796449bf31..a1614c6de192c9e45213b781f885c4caa8b36873 100644
+index d046232b140f91542879ecd60d05f5796449bf31..880eae8e83327df330ea6e6bbd85fe6d64ba9671 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
 @@ -129,7 +129,8 @@ export const GenerationTask = defineTask({
@@ -12,6 +12,15 @@ index d046232b140f91542879ecd60d05f5796449bf31..a1614c6de192c9e45213b781f885c4ca
              const request = { attempt, compacted, model: ref, cutoff, messages: view.messages };
              await classify(runtime, request, message, context);
          },
+@@ -283,7 +284,7 @@ async function prepareFailure(tx, runtime) {
+     const policy = settings.afterFailedRun;
+     if (policy !== "continue")
+         return { policy };
+-    return { policy, boundary: await prepareBoundary(tx, runtime.conversationId, settings) };
++    return { policy, boundary: await prepareBoundary(tx, runtime.conversationId, settings, "final", runtime.now()) };
+ }
+ /**
+  * End a failed run, settling its inputs with `settlement`, and do with the inputs queued behind it what
 @@ -465,7 +466,7 @@ async function answer(runtime, message, context) {
      const conversationId = runtime.conversationId;
      await runtime.commit(async (tx) => {

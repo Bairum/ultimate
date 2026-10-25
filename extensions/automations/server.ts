@@ -13,7 +13,6 @@ import {
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
-import { admitCompaction } from '../../lib/compaction.ts'
 import type { TaskId, Tx, ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { ActionContext } from '../../server/actions.ts'
@@ -28,7 +27,7 @@ import { writeJson } from '../../lib/json-file.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { MessagesApi } from '../messages/api.ts'
 import { LineageApi } from '../lineage/api.ts'
-import { AutomationsApi, DreamGrant } from './api.ts'
+import { AutomationsApi } from './api.ts'
 import {
   CreateAction,
   DeleteAction,
@@ -45,26 +44,14 @@ import {
   EscalateAction,
   Escalated,
   EventsAction,
-  GrantRef,
-  Acted as ActedEvent,
 } from './refs.ts'
 import { describeSchedule, nextAt, parseSchedule } from './schedule.ts'
 import { scheduler } from './scheduler.ts'
 import { triggers, TRIGGER_EVENTS, describeTrigger } from './triggers.ts'
 import { supervisor } from './supervisor.ts'
 import type { Prepared } from './supervisor.ts'
-import type {
-  Acted,
-  Args,
-  Automation,
-  AutomationListItem,
-  Effect,
-  GrantAction,
-  GrantedBy,
-  Run,
-  Manifest,
-} from './types.ts'
-import { GRANT_ACTIONS, isSlug } from './types.ts'
+import type { Args, Automation, AutomationListItem, Effect, Run, Manifest } from './types.ts'
+import { isSlug } from './types.ts'
 export type { Automation, Run } from './types.ts'
 export { launchHandshake } from './supervisor.ts'
 type Ledger = { next: number; automations: Record<string, Automation> }
@@ -97,14 +84,6 @@ const Receipt = defineDoc<Partial<Change>>({
   scope: 'task',
   initial: () => ({}),
 })
-/** What one `act` tool call did, on its own tool task, written with the effect: a replay returns it, at any later time. */
-const ActReceipt = defineDoc<{ result?: Acted['result'] }>({
-  kind: 'ultimate.automation-act',
-  checkpointWhen: () => false,
-  version: 1,
-  scope: 'task',
-  initial: () => ({}),
-})
 const json = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 function required(v: unknown, field: string): string {
   if (typeof v !== 'string' || !v.trim()) throw new Error(`${field} is required`)
@@ -112,7 +91,6 @@ function required(v: unknown, field: string): string {
 }
 const operations = [
   'events',
-  'act',
   'list',
   'create',
   'update',
@@ -624,106 +602,13 @@ function backend(host: ExtensionHost) {
       0
     )
   }
-  /** Set the user's grant on `id`: the actions its woken agent may take without asking. Only the user calls this. */
-  async function grant(id: string, actions: unknown, source: unknown) {
-    if (!Array.isArray(actions) || actions.some((item) => !GRANT_ACTIONS.includes(item)))
-      throw new Error(`actions must be some of ${GRANT_ACTIONS.join(', ')}`)
-    if (source !== undefined && (typeof source !== 'string' || source.length > 500))
-      throw new Error('source must be text of at most 500 characters')
-    return host.harness().commit(async (tx) => {
-      const a = (await tx.doc(Automations)).automations[validId(id)]
-      if (!a) throw new Error(`Unknown automation: ${id}`)
-      if (!actions.length) delete a.grant
-      else
-        a.grant = {
-          actions: GRANT_ACTIONS.filter((item) => actions.includes(item)),
-          source: source?.trim() || 'Set in the Automations panel',
-          at: Date.now(),
-        }
-      a.updatedAt = Date.now()
-      return json(a)
-    }, BACKGROUND_CONTEXT)
-  }
-  /**
-   * Subscriber `caller` asks to do `action` for the user under automation `id`'s grant. Refused unless the user granted
-   * that action, the automation is enabled and fired within the last six hours, `caller` is one of the conversations it
-   * wakes, and that action was not already taken on this fire. The check, the effect (a compaction task, a dream
-   * session, a granted Fall asleep task) and the record of the act commit in one transaction, so a crash leaves either
-   * all or nothing. `task` keys the act to its tool call: a replay of that call returns the recorded result instead of
-   * acting again.
-   */
-  async function act(id: string, action: unknown, caller: number | undefined, task?: number) {
-    if (!GRANT_ACTIONS.includes(action as GrantAction))
-      throw new Error(`do must be one of ${GRANT_ACTIONS.join(', ')}`)
-    const name = action as GrantAction
-    if (caller === undefined) throw new Error('act needs the conversation that was woken')
-    const dream = name === 'compact' ? undefined : host.want(DreamGrant)
-    if (name !== 'compact' && !dream) throw new Error('The dream extension is not enabled')
-    const status = await scripts.status(id)
-    // The conversation a context trigger watches, else the woken one itself.
-    const target =
-      (status.condition && (await trigger.resolve(status.condition.of))) ??
-      (caller as ConversationId)
-    return host.harness().commit(async (tx) => {
-      const a = (await tx.doc(Automations)).automations[validId(id)]
-      if (!a) throw new Error(`Unknown automation: ${id}`)
-      // The tool call's own receipt, written with its effect: a replay returns it whatever fired since.
-      const receipt = task === undefined ? undefined : await tx.doc(ActReceipt, task as TaskId)
-      if (receipt?.result)
-        return { action: name, ...json(receipt.result), automation: a.id, name: a.name }
-      const done = a.acted?.[name]
-      if (!a.grant?.actions.includes(name))
-        throw new Error(
-          `Automation ${a.id} has no grant for ${name}: ask the user instead. Only the user grants it, in the Automations panel.`,
-        )
-      if (!a.enabled) throw new Error(`Automation ${a.id} is paused`)
-      const now = Date.now()
-      if (a.lastFireAt === undefined || now - a.lastFireAt > 6 * 3600_000)
-        throw new Error(`Automation ${a.id} has not fired in the last six hours`)
-      if (!a.subscribers.includes(caller))
-        throw new Error(
-          `#${caller} is not woken by automation ${a.id}; only its subscribers act on a grant`,
-        )
-      if (done?.fire === a.fires)
-        throw new Error(`Automation ${a.id} already used its ${name} grant on this fire`)
-      const by: GrantedBy = { automation: a.id, name: a.name, at: now }
-      // Every task scan before the first write: Pi refuses scans after a write in one transaction.
-      const result: Acted['result'] =
-        name === 'compact'
-          ? { conversation: target, taskId: Number(await admitCompaction(tx, target)) }
-          : name === 'dream'
-            ? await dream!.start(tx, by, caller)
-            : await dream!.asleep(tx, by, {})
-      a.acted = {
-        ...a.acted,
-        [name]: { fire: a.fires, at: now, by: caller, ...(task ? { task } : {}), result },
-      }
-      if (receipt) receipt.result = result
-      await host.emit(tx, ActedEvent, { id: a.id, action: name, fire: a.fires, by: caller })
-      return { action: name, ...result, automation: a.id, name: a.name }
-    }, BACKGROUND_CONTEXT)
-  }
-  return { ...schedule, ...scripts, prepare, change, apply, operate, trigger, grant, act }
+  return { ...schedule, ...scripts, prepare, change, apply, operate, trigger }
 }
 function input(args: unknown, action: string): Args {
   return { ...(args as Omit<Args, 'action'>), action }
 }
-/** The `act` operation of the automation tool, for conversation `caller` in tool task `task`. */
-export const act = (
-  host: ExtensionHost,
-  id: string,
-  action: unknown,
-  caller: number | undefined,
-  task?: number,
-) => backend(host).act(id, action, caller, task)
-/** Only the user grants: no agent may give itself or another automation the right to act without asking. */
-export const userActions = ['grant']
 export const actions = {
   events: implementAction(EventsAction, () => TRIGGER_EVENTS),
-  grant: implementAction(GrantRef, (args, { host }) => {
-    const given = (args ?? {}) as Record<string, unknown>
-    return backend(host).grant(required(given.id, 'id'), given.actions, given.source)
-  }),
   list: implementAction(
     ListAction,
     async (args, { host }) =>
@@ -806,6 +691,8 @@ export default function automations(host: ExtensionHost) {
   host.need(MessagesApi)
   const api = backend(host)
   host.implement(AutomationsApi, {
+    create: async (args) => (await api.operate({ ...args, action: 'create' })) as Automation,
+    delete: async (id) => void (await api.operate({ action: 'delete', id })),
     resume: async (id) => (await api.operate({ action: 'resume', id }), api.status(id)),
     pause: async (id) => (await api.operate({ action: 'pause', id }), api.status(id)),
     run: async (id) => (await api.operate({ action: 'run', id }), api.status(id)),
@@ -845,7 +732,7 @@ export default function automations(host: ExtensionHost) {
         // Receipts deduplicate ledger changes; process effects reuse their committed pid on replay.
         replay: 'safe',
         description:
-          'Automate background work with one trigger (schedule, ask, event or condition) and one or both actions (prompt, subscribers). create {name,schedule?|ask?|event?|condition?,once?,secrets?,prompt?,agent?,model?,thinking?,subscribers?,scope?,slug?}. ask starts a watcher that writes a supervised script: stdout FIRE wakes subscribers and/or starts a prompt run; DONE then exit 0 stops recurring scripts. event {name,where?} watches domain events; events lists names and fields. condition {metric:"context",of:"@name"|"#id",above:1-99,cooldownMs?} watches context fill. Scripts spend tokens only on setup and repair; prompt runs spend tokens every fire. Schedules: cron "0 9 * * 1-5" Europe/Vienna, at 2026-12-01T09:00:00Z, in 30m, every 15m. IDs A<n>, or lowercase slugs for project scripts in <project>/.ultimate/automations/<slug>/. Project scripts never start themselves. list; update; pause/resume; run (fire trigger now or relaunch script); runs; log {id,lines?}; abort {id,runId}; escalate {id,reason}; subscribe/unsubscribe {id,to?: "#id"|"@name"} (default caller); delete (keeps files and conversations). Without prompt or subscribers, caller subscribes. Optional agent selects an existing definition (isolates ignored), model {provider,modelId} and thinking override it; otherwise runs copy the root agent. Failures wake only the watcher; escalation notifies subscribers and @ultimate. act {id,do: "dream"|"compact"|"asleep"} does that for the user without asking, only when the user granted it on that automation (the panel shows grants) and it fired within 6 h, once per fire; without a grant, ask the user instead.',
+          'Automate background work with one trigger (schedule, ask, event or condition) and one or both actions (prompt, subscribers). create {name,schedule?|ask?|event?|condition?,once?,secrets?,prompt?,agent?,model?,thinking?,subscribers?,scope?,slug?}. ask starts a watcher that writes a supervised script: stdout FIRE wakes subscribers and/or starts a prompt run; DONE then exit 0 stops recurring scripts. event {name,where?} watches domain events; events lists names and fields. condition {metric:"context",of:"@name"|"#id",above:1-99,cooldownMs?} watches context fill. Scripts spend tokens only on setup and repair; prompt runs spend tokens every fire. Schedules: cron "0 9 * * 1-5" Europe/Vienna, at 2026-12-01T09:00:00Z, in 30m, every 15m. IDs A<n>, or lowercase slugs for project scripts in <project>/.ultimate/automations/<slug>/. Project scripts never start themselves. list; update; pause/resume; run (fire trigger now or relaunch script); runs; log {id,lines?}; abort {id,runId}; escalate {id,reason}; subscribe/unsubscribe {id,to?: "#id"|"@name"} (default caller); delete (keeps files and conversations). Without prompt or subscribers, caller subscribes. Optional agent selects an existing definition (isolates ignored), model {provider,modelId} and thinking override it; otherwise runs copy the root agent. Failures wake only the watcher; escalation notifies subscribers and @ultimate.',
         parameters: Type.Object({
           action: Type.Union(operations.map((v) => Type.Literal(v))),
           id: Type.Optional(Type.String()),
@@ -890,7 +777,6 @@ export default function automations(host: ExtensionHost) {
           to: Type.Optional(Type.String()),
           lines: Type.Optional(Type.Integer({ minimum: 1, maximum: 2000 })),
           reason: Type.Optional(Type.String()),
-          do: Type.Optional(Type.Union(GRANT_ACTIONS.map((v) => Type.Literal(v)))),
         }),
         execute: async (args, tool, context) => {
           const cached = await tool.memo<{ output: { type: 'text'; text: string }[] }>(
@@ -898,27 +784,6 @@ export default function automations(host: ExtensionHost) {
             context,
           )
           if (cached) return cached
-          if (args.action === 'act') {
-            // The grant's claim is keyed to this call's task: a replay gets its own claim, not a second act.
-            const acted = await api.act(
-              required(args.id, 'id'),
-              args.do,
-              tool.conversationId,
-              Number(tool.taskId),
-            )
-            return tool.memo(
-              'result',
-              {
-                output: [
-                  {
-                    type: 'text' as const,
-                    text: `Did ${acted.action} under the user's grant on automation ${acted.automation}: ${JSON.stringify(acted)}`,
-                  },
-                ],
-              },
-              context,
-            )
-          }
           const caller =
             args.action === 'create' || args.action === 'subscribe'
               ? await actingAs(host, tool.conversationId, context)

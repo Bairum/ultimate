@@ -2,9 +2,11 @@
 
 > [!NOTE]
 > **A personal project, shared as inspiration.** Ultimate is not a library or a product with users to support. Copy
-> what you like, fork it, do whatever you want with it. I don't review issues or pull requests, and I change things as
-> I go, fundamental ones included, without migration paths or regard for anyone building on top. Whether that works
-> for you is your call. See [CONTRIBUTING.md](CONTRIBUTING.md).
+> what you like, fork it, do whatever you want with it. To make it work your way, ask Ultimate to change itself; it
+> keeps your changes in `.ultimate/` folders that survive updates. I merge only clear-cut fixes to the core; feature
+> pull requests stay open, unmerged, as reference implementations. I change things as I go, fundamental ones
+> included, without migration paths or regard for anyone building on top. Whether that works for you is your call.
+> See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 A coding agent you specialize for the project you work on. Start it in your repository and it is Pi's coding agent in a
 web UI. Then build what this project needs into it, such as custom tools, panels, subagents, skills, or whole screens,
@@ -74,6 +76,16 @@ pnpm cli            # emergency terminal agent when the UI, server or database i
   status line, and `pnpm restore <name>` on the other machine; see
   [Cloud backups](extensions/cloud/README.md#cloud-backups).
 
+### Recommended models
+
+We recommend running @ultimate on Claude Code Opus 5.5 (`claude-code/claude-opus-5-5`), and ideally the
+coordinators too; the other agents are your choice. Coordinators inherit @ultimate's model unless a definition pins
+one, so choosing Opus 5.5 for @ultimate covers both (this repository's `.ultimate/agents/coordinator.md` overlay pins
+it with high thinking). To set it up, install the CLI (`npm install -g @anthropic-ai/claude-code`), run
+`claude auth login`, then pick the model in the model picker; ⌘K → **Claude Code setup…** shows the login status. The
+[Claude Code provider](extensions/claude-code/README.md) is experimental: it depends on Claude Code's protocol and
+account limits, and subscription coverage is not guaranteed. This is a recommendation only; no default changes.
+
 ### Terminal status
 
 `pnpm start` / `ultimate` shows a compact live terminal dashboard: the public URL, supervisor/core lifecycle,
@@ -126,7 +138,7 @@ stays docked on every surface, and the choice is durable: reloads, other tabs, a
 
 ## What to try
 
-- Start a new project with **Set up with @ultimate** on Start here (or Continue on the first-run Get ready page).
+- Start a new project with **Set up with @ultimate** on the Start here card in @ultimate's conversation (or Continue on the first-run Get ready page).
   Choose setup on the inline cards, steer its reading, then start your first coordinator branch from the project's context.
 - Ask it anything about this repository; watch tool calls, diffs, and thinking stream in.
 - "Build a surface for …" — a whole app with its UI, server actions, and the agent docked beside it; switch to it while

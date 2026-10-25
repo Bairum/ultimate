@@ -30,7 +30,7 @@ The user authorizes the top-level agent to commit verified changes, land them, a
 (normally `main`) to this repository's GitHub remote, `origin` (`HazAT/ultimate`), without asking again. This permission
 applies to this repository whether public or private, not to other repositories. `workspace submit` covers this: the
 lander pushes after its checks because `lander.push` is set. After a synchronous `workspace land`, which never pushes,
-push the landed branch explicitly (for example, `git -C /home/haza/Projects/ultimate push origin main`). Subagents commit and report; only the top-level agent pushes after verification and integration.
+push the landed branch explicitly (for example, `git -C <clone> push origin main`). Subagents commit and report; only the top-level agent pushes after verification and integration.
 
 Use normal, non-force pushes only. Remote advancement or a non-fast-forward rejection is normal: fetch, inspect the
 incoming log and diff, and merge non-destructively in an isolated workspace, preserving both histories. Rerun checks,

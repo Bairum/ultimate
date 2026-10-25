@@ -11,14 +11,21 @@ focus to the composer. An automated browser (`navigator.webdriver`) does not get
 
 ## Onboarding with @ultimate
 
-Continue on Get ready, or **Set up with @ultimate** on an empty root's Start here card, calls the user-only action
+Continue on Get ready, or **Set up with @ultimate** on the Start here card, calls the user-only action
 `start { root?, instructions? }` and opens @ultimate's standing conversation. An omitted root resolves to the shown
 conversation's tree, or conversation 1. The optional focus is passed verbatim as instructions. The action submits a
 quiet `onboarding.start` input with `{ root, instructions?, facts }`: project name/path, first-run state, undecided
 project setup, Git isolation reason (if any), root id and emptiness. Model text names the event, lists those facts
 and preserves the instructions. Request id `onboarding:<root>` ensures one input per root; repeated calls return
-`{ id }` without sending again. The root conversation's `onboarding.starts` document maps roots to that standing id
-so Start here can show **@ultimate is setting up this project · open** across reloads.
+`{ id }` without sending again: the root conversation's `onboarding.starts` document maps roots to that standing id.
+
+Start here is a card above @ultimate's composer (`survey.tsx`, through the SDK's `composer` renderer) until
+onboarding has run for the project's root: `onboarding.starts` names the root, or the root carries memories (a new
+chapter's root, set up long ago; `onboarded.ts`). Its one button, **Set up with @ultimate**, calls `start { root }`,
+like Get ready's Continue; once that records the root, the card is gone for good. Its × calls the user-only
+`dismiss`, which sets `dismissed` on `onboarding.starts` and hides the card for the project on every device; ⌘K
+**Get ready…** still starts setup. The History page (the root) takes
+no input.
 
 @ultimate greets and first walks the user through how Ultimate works with the `how-ultimate-works` skill
 (`skills/how-ultimate-works/SKILL.md`): five short beats, each a message with one question card and a Skip the rest
@@ -71,10 +78,10 @@ same idempotent setting and admits exactly one input. Only the matching typed ch
 as **Chosen: …**, never the current settings or a local success flag. A quiet input card displays the summary.
 
 The status line keeps **project setup** while the project decision is open and **set up git** while isolation is
-unavailable. Clicking calls `help { card: 'project' | 'git' }`, which submits "Help me decide whether to use this
+unavailable, until Start here is dismissed: then both stay quiet, and ⌘K **Get ready…** and the Extensions panel
+still reach the decision. Clicking calls `help { card: 'project' | 'git' }`, which submits "Help me decide whether to use this
 project's setup." or "Help me set up git for this folder." directly in @ultimate's standing conversation and returns
-its id. The browser opens that conversation on the Agent surface. First-run Continue and Start here's start/open links also select the Agent surface. While onboarding is
-in progress, Start here shows only the open link, without the focus textarea or keyboard hint.
+its id. The browser opens that conversation on the Agent surface. First-run Continue also selects the Agent surface.
 The Extensions panel's About this setup routes there too rather than opening a setup dialog.
 The Git status is read again whenever the shown conversation finishes a run, including an agent's first Git commit.
 

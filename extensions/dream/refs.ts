@@ -20,7 +20,7 @@ export type Proposal = {
   status: 'open' | 'approved' | 'rejected' | 'applied' | 'landed'
   branch?: number
   sha?: string
-  /** Why @ultimate decided it, when it decided under a hands-off grant. */
+  /** Why @ultimate decided it, when it decided in the user's place (a hands-off goal). */
   reason?: string
 }
 
@@ -28,19 +28,10 @@ export type Proposal = {
 export type Journal = { learned: string[]; text: string; chapter?: string; at: number }
 
 export type GateResult = { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] }
-/** A granted automation that acted for the user: its id, name and when it acted. */
-export type GrantedBy = { automation: string; name: string; at: number }
 export type Sleep = {
   chapter: string
-  /**
-   * `waiting`: a granted Fall asleep holds the session until no conversation works. `asleep`: the switch happened;
-   * this session's chapter is the one it left.
-   */
-  phase: 'waiting' | 'seeding' | 'checking' | 'backing up' | 'switching' | 'asleep' | 'failed'
-  /** The granted automation that started this Fall asleep; absent when the user did. */
-  by?: GrantedBy
-  /** The granted attempt (its task) that holds this sleep; only it writes the sleep while `waiting`. */
-  attempt?: number
+  /** `asleep`: the switch happened; this session's chapter is the one it left. */
+  phase: 'seeding' | 'checking' | 'backing up' | 'switching' | 'asleep' | 'failed'
   checks?: GateResult['checks']
   backup?: { id?: string; skipped?: string }
   error?: string
@@ -58,13 +49,11 @@ export type Session = {
   proposals: Proposal[]
   /** Every proposal settled, or the user ended the session. */
   endedAt?: number
-  /** The granted automation that started this session; absent when the user did. */
-  by?: GrantedBy
   /** Set when the built-in "Dream before compaction" automation started this session. */
   beforeCompaction?: BeforeCompaction
   /**
-   * @ultimate's handoff, the dream's primary input, when a handoff request (`task`, its wait) started this session:
-   * its `text`, or why there is none (`missing`). Absent when a granted automation started the session directly.
+   * @ultimate's handoff, the dream's primary input, from the handoff request (`task`, its wait) that started this
+   * session: its `text`, or why there is none (`missing`).
    */
   handoff?: Handoff
 }
@@ -86,25 +75,16 @@ export type Waiting = {
 
 /**
  * A dream that the built-in automation `automation` (`name`) started at `at`, once @ultimate's context passed its
- * threshold; `handsOff` when the user granted that automation `dream`, so @ultimate decides the proposals itself.
- * `settling` is the task that checks the settled session; `outcome` records whether it was worth a fresh chapter:
- * `changes` (landed and applied proposals) against `threshold`; `stay` in this chapter, `ask` the user to Fall asleep,
- * or `asleep` under the automation's grant (`error` when that grant's Fall asleep was refused, and the user is asked
- * instead).
+ * threshold. `settling` is the task that checks the settled session; `outcome` records whether it was worth a fresh
+ * chapter: `changes` (landed and applied proposals) against `threshold`; `stay` in this chapter, or `ask` the user to
+ * Fall asleep.
  */
 export type BeforeCompaction = {
   automation: string
   name: string
   at: number
-  handsOff?: boolean
   settling?: number
-  outcome?: {
-    changes: number
-    threshold: number
-    result: 'stay' | 'ask' | 'asleep'
-    error?: string
-    at: number
-  }
+  outcome?: { changes: number; threshold: number; result: 'stay' | 'ask'; at: number }
 }
 
 /** `{ next, sessions, waiting? }` on conversation 1, sessions oldest first. */
@@ -161,7 +141,7 @@ export const ChaptersAction = actionRef<
 export const SwitchAction = actionRef<{ chapter: string }, never>('dream', 'switch')
 /**
  * `{ session, proposal, status, branch?, reason? }`: @ultimate records the user's decision on one proposal, or its own
- * with `reason` under a hands-off grant.
+ * with `reason` when it decides in the user's place (a hands-off goal).
  */
 export const DecideAction = actionRef<
   {

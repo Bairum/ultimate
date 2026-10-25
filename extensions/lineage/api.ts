@@ -49,6 +49,14 @@ export type LineageService = {
   ) => ReturnType<typeof leaveNote>
   /** Apply memory `ops` to root `root` in one atomic batch, written at `now`; returns what changed. */
   remember: (root: number, ops: readonly unknown[], ctx: Context, now?: number) => Promise<string>
+  /**
+   * The memory brief a branch starts from (memory index and recent landings) of conversation `id`'s tree root, else
+   * of the project's only root; undefined without either or while it has no memories.
+   */
+  memoryBrief: (
+    id: number,
+    ctx: Context,
+  ) => Promise<{ root: number; text: string; memories: number } | undefined>
   /** The memories of conversation `id`'s tree root, else of the project's only root; undefined without either. */
   memoriesOf: (
     id: number,
