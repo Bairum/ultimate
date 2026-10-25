@@ -1,29 +1,41 @@
 /** When a keep-warm ping is due. Browser-safe: the chip reads the hour too. */
-
-/** Claude's long prompt cache lives an hour from the last request that read or wrote it. */
 export const TTL = 60 * 60_000
-/** Ping this long after the last request: late enough to be rare, early enough to land before the hour ends. */
 export const LEAD = 55 * 60_000
-/** No ping once the user has been away this long. */
 export const IDLE_STOP = 8 * 60 * 60_000
 
-export type Activity = {
-  now: number
-  /** The latest request on @ultimate's cache: its last answer or the last ping (ms). */
-  lastRequest?: number
-  /** The user's latest input (ms). */
-  inputAt?: number
-  /** A ping failed after this request: none again until a newer one. */
-  failedAfter?: number
+export type Target = {
+  provider: string
+  standing: boolean
+  definition?: string
+  running: boolean
+  child: boolean
+  submission: boolean
 }
 
-/**
- * Whether to ping now: the cache is still warm but about to expire, the user wrote within `IDLE_STOP`, and no ping
- * failed since the last request. A cache already past its hour is cold; a ping would only pay to rebuild it.
- */
-export function due({ now, lastRequest, inputAt, failedAfter }: Activity) {
+/** Only @ultimate or an idle coordinator waiting for delegated work. */
+export const eligible = (target: Target) =>
+  ['claude-code', 'anthropic'].includes(target.provider) &&
+  !target.running &&
+  (target.standing || (target.definition === 'coordinator' && (target.child || target.submission)))
+
+export type Activity = Target & {
+  now: number
+  lastRequest?: number
+  /** Latest user input to @ultimate, shared by all targets. */
+  inputAt?: number
+  failedAfter?: number
+  /** Every attempt counts, even on another model or after a crash. */
+  pingAt?: number
+  paused?: boolean
+}
+
+/** Renew once near the end of each cache window; never rebuild or retry a failed ping. */
+export function due(activity: Activity) {
+  const { now, lastRequest, inputAt, failedAfter, pingAt, paused } = activity
+  if (!eligible(activity) || paused) return false
   if (lastRequest === undefined || inputAt === undefined) return false
   if (failedAfter !== undefined && failedAfter >= lastRequest) return false
+  if (pingAt !== undefined && now - pingAt < LEAD) return false
   const age = now - lastRequest
   return age >= LEAD && age < TTL && now - inputAt < IDLE_STOP
 }

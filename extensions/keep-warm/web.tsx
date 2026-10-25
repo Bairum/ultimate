@@ -5,7 +5,7 @@ import { Switch } from '@/components/ui/switch'
 import { api, cn, defineWebExtension, formatAgo, useAction, useDocOf, useNow } from '@/sdk'
 import { TTL } from './due.ts'
 import { SetAction, StateAction, WarmDoc } from './refs.ts'
-import type { WarmState } from './refs.ts'
+import type { WarmConversation } from './refs.ts'
 
 const tokens = (count = 0) => (count >= 1000 ? `${Math.round(count / 1000)}k` : String(count))
 
@@ -13,20 +13,19 @@ const clock = (at: number) =>
   new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
 /** Where the cache stands: warm until the hour after @ultimate's last request ends, else cold. */
-function cacheLine(state: WarmState, now: number) {
+function cacheLine(state: WarmConversation, now: number) {
   if (state.lastRequest === undefined) return 'No Claude request yet'
   const until = state.lastRequest + TTL
   return until > now ? `Warm until ${clock(until)}` : `Cold since ${clock(until)}`
 }
 
 /** Why no ping is coming, or when the next one is. */
-function nextLine(state: WarmState, now: number) {
-  if (!state.on) return 'Off'
+function nextLine(state: WarmConversation, now: number) {
   if (state.nextAt !== undefined) return `Next ping ${clock(Math.max(now, state.nextAt))}`
   if (state.last?.error && state.lastRequest !== undefined && state.last.at >= state.lastRequest)
-    return 'Waiting for @ultimate’s next answer'
+    return 'Waiting for next answer'
   if (state.lastRequest !== undefined && state.lastRequest + TTL <= now) return 'Cache is cold'
-  return 'Stopped: no input from you for 8 h'
+  return 'No ping scheduled'
 }
 
 /**
@@ -47,8 +46,10 @@ function Chip() {
     void refetch()
   }, [doc, now, refetch])
   if (!state) return null
-  const warm = state.lastRequest !== undefined && state.lastRequest + TTL > now
-  const failed = state.last?.error !== undefined
+  const warm = state.conversations.some(
+    (item) => item.lastRequest !== undefined && item.lastRequest + TTL > now,
+  )
+  const failed = state.conversations.some((item) => item.last?.error !== undefined)
   const toggle = (on: boolean) =>
     api
       .action(SetAction, { on })
@@ -58,7 +59,7 @@ function Chip() {
     <Popover>
       <PopoverTrigger asChild>
         <button
-          aria-label="Keep @ultimate's cache warm"
+          aria-label="Keep conversation caches warm"
           className={cn(
             '-mx-1 flex cursor-pointer items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground',
             !state.on && 'text-muted-foreground/60',
@@ -74,22 +75,27 @@ function Chip() {
       </PopoverTrigger>
       <PopoverContent align="end" className="w-64 p-1 font-mono" side="top">
         <label className="flex h-8 cursor-pointer items-center justify-between px-2 text-[12px]">
-          Keep @ultimate warm
+          Keep caches warm
           <Switch checked={state.on} onCheckedChange={(on) => void toggle(on)} />
         </label>
         <div className="space-y-1 border-t border-border/70 px-2 pt-1.5 pb-1 text-[11px] text-muted-foreground">
-          <div className="text-foreground/80">{cacheLine(state, now)}</div>
-          <div>{nextLine(state, now)}</div>
-          {state.last && (
-            <div className={cn(failed && 'text-red-500')}>
-              Last ping {formatAgo(state.last.at)}
-              {failed
-                ? `: ${state.last.error}`
-                : ` · read ${tokens(state.last.read)}, wrote ${tokens(state.last.write)}`}
+          {state.conversations.map((item) => (
+            <div key={item.id} className="space-y-1 py-1">
+              <div className="truncate text-foreground/80">{item.title}</div>
+              <div>{cacheLine(item, now)}</div>
+              <div>{state.on ? nextLine(item, now) : 'Off'}</div>
+              {item.last && (
+                <div className={cn(item.last.error && 'text-red-500')}>
+                  Last ping {formatAgo(item.last.at)}
+                  {item.last.error
+                    ? `: ${item.last.error}`
+                    : ` · read ${tokens(item.last.read)}, wrote ${tokens(item.last.write)}`}
+                </div>
+              )}
             </div>
-          )}
+          ))}
           <div className="pt-1 text-muted-foreground/70">
-            One small request 55 min after the last, until you have been away 8 h.
+            One ping near the end of each cache hour; stops after 8 h away.
           </div>
         </div>
       </PopoverContent>

@@ -1,9 +1,18 @@
 import { expect, it } from 'vitest'
-import { due, IDLE_STOP, LEAD, TTL } from '../extensions/keep-warm/due.ts'
+import { due as decide, IDLE_STOP, LEAD, TTL } from '../extensions/keep-warm/due.ts'
+import type { Activity } from '../extensions/keep-warm/due.ts'
 import * as keepWarm from '../extensions/keep-warm/server.ts'
 
 const now = Date.parse('2026-10-24T12:00:00Z')
 const minutes = (count: number) => count * 60_000
+const target = {
+  provider: 'anthropic',
+  standing: true,
+  running: false,
+  child: false,
+  submission: false,
+}
+const due = (input: Partial<Activity>) => decide({ now, ...target, ...input })
 
 it('pings in the last minutes of the cache hour while the user was here recently', () => {
   expect(due({ now, lastRequest: now - LEAD, inputAt: now - minutes(70) })).toBe(true)
@@ -39,6 +48,7 @@ it('counts only answers that read or wrote the current model’s cache', () => {
       ...change,
     }) as unknown as Parameters<typeof keepWarm.cached>[0]
   expect(keepWarm.cached(answer({}), 'claude-opus-5-5')).toBe(true)
+  expect(keepWarm.cached(answer({ provider: 'anthropic' }), 'claude-opus-5-5')).toBe(true)
   expect(keepWarm.cached(answer({ stopReason: 'error' }), 'claude-opus-5-5')).toBe(false)
   expect(keepWarm.cached(answer({ model: 'claude-fable-5-1' }), 'claude-opus-5-5')).toBe(false)
   expect(keepWarm.cached(answer({ provider: 'openai-codex' }), 'claude-opus-5-5')).toBe(false)
@@ -56,4 +66,29 @@ it('sends only while not paused and within the hour, checked right before the re
 
 it('leaves the switch to the user', () => {
   expect(keepWarm.userActions).toEqual(['set'])
+})
+
+it('warms only idle coordinators waiting on a running child or pending submission', () => {
+  const base = {
+    now,
+    lastRequest: now - LEAD,
+    inputAt: now,
+    standing: false,
+    definition: 'coordinator',
+  }
+  expect(due({ ...base, child: true })).toBe(true)
+  expect(due({ ...base, submission: true })).toBe(true)
+  expect(due(base)).toBe(false)
+  for (const definition of ['worker', 'reviewer', 'scout', 'other'])
+    expect(due({ ...base, child: true, submission: true, definition })).toBe(false)
+  expect(due({ ...base, child: true, running: true })).toBe(false)
+  expect(due({ ...base, child: true, paused: true })).toBe(false)
+  expect(due({ ...base, child: true, provider: 'openai' })).toBe(false)
+  expect(due({ ...base, child: true, provider: 'claude-code' })).toBe(true)
+})
+
+it('renews only once per cache window, about 55 minutes after a successful ping', () => {
+  const base = { lastRequest: now - LEAD, inputAt: now }
+  expect(due({ ...base, pingAt: now - LEAD + 1 })).toBe(false)
+  expect(due({ ...base, pingAt: now - LEAD })).toBe(true)
 })
