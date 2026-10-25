@@ -11,6 +11,7 @@ import {
   formatAgo,
   ParkedRuns,
   projectTitle,
+  AllProvided,
   Provided,
   Slot,
   useDocOf,
@@ -113,11 +114,9 @@ export function Conversations() {
       {(waiting) => (
         <Provided input={null} point={ParkedRuns}>
           {(parked) => (
-            <Provided input={ultimateId} point={Unlisted}>
-              {(unlisted) => (
-                <Tree parked={parked ?? none} unlisted={unlisted ?? none} waiting={waiting} />
-              )}
-            </Provided>
+            <AllProvided input={ultimateId} point={Unlisted}>
+              {(sets) => <Tree parked={parked ?? none} unlisted={sets} waiting={waiting} />}
+            </AllProvided>
           )}
         </Provided>
       )}
@@ -134,7 +133,8 @@ function Tree({
 }: {
   waiting: number
   parked: ReadonlySet<number>
-  unlisted: ReadonlySet<number>
+  /** Each provider's conversations no section lists. */
+  unlisted: readonly ReadonlySet<number>[]
 }) {
   const overview = useOverview()
   const log = useDocOf(1, MessagesDoc) ?? emptyMessages
@@ -168,7 +168,7 @@ function Tree({
       : undefined
   const [expanded, setExpanded] = useSidebarState<number[]>('expanded', [])
   const working = workingByTop(conversations)
-  const topLevel = topLevelRows(conversations, unlisted)
+  const topLevel = topLevelRows(conversations, new Set(unlisted.flatMap((set) => [...set])))
   // @ultimate first, then the lander and other standing agents: pinned above the rest and never concluded.
   const standingIds = useDocOf(1, StandingDoc)
   const ultimateId = standingIds?.ultimate
@@ -521,9 +521,9 @@ function Tree({
       <nav aria-label="Conversations" className="flex flex-col gap-px">
         <div className="mb-1 border-b border-border/60 pb-1">
           {ultimate ? tree(ultimate) : standingRow(undefined)}
-          <Provided input={ultimateId} point={UnderUltimate}>
+          <AllProvided input={ultimateId} point={UnderUltimate}>
             {(rows) => rows}
-          </Provided>
+          </AllProvided>
         </div>
         {agents.length > 0 && (
           <div

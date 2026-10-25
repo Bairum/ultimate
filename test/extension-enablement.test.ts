@@ -212,7 +212,7 @@ it.concurrent('layers settings live, installs and uninstalls tools and web facet
   await writeFile(settings, JSON.stringify({ extensions: { disable: ['automations'] } }))
   await until(async () => !(await tools(server)).includes('automation'))
   await until(async () => !(await web(server)).some((path) => path.includes('/automations/')))
-  expect(server.host.build().id).not.toBe(initialBuild)
+  await until(() => server.host.build().id !== initialBuild)
   expect(server.host.build().extensions.automations).toBeUndefined()
   expect(server.extensions.info().find((entry) => entry.name === 'prompt')?.server?.loadedAt).toBe(
     promptLoaded,
@@ -220,7 +220,7 @@ it.concurrent('layers settings live, installs and uninstalls tools and web facet
   await rm(settings)
   await until(async () => (await tools(server)).includes('automation'))
   await until(async () => (await web(server)).some((path) => path.includes('/automations/')))
-  expect(server.host.build().id).toBe(initialBuild)
+  await until(() => server.host.build().id === initialBuild)
   const folder = join(config, 'extensions/local')
   await mkdir(folder, { recursive: true })
   await writeFile(
@@ -361,10 +361,12 @@ it.concurrent('enables every built-in by default except the default-off ones', a
   const home = await temp()
   homes.push(home)
   const root = await sourceCopy(home)
-  const discovered = await discoverExtensions(root, root, home)
+  const projectRoot = join(home, 'project')
+  await mkdir(projectRoot)
+  const discovered = await discoverExtensions(root, projectRoot, home)
   const server = await fauxServer({
     ultimateRoot: root,
-    projectRoot: root,
+    projectRoot,
     userHome: home,
     home: join(home, 'state'),
   })

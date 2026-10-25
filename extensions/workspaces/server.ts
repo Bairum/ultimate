@@ -138,7 +138,7 @@ export const actions = {
   disk: implementAction(DiskAction, (_args, { host }) => workspaces(host).disk()),
 }
 /** Call `changed` on any change to a definition folder, also one that appears later. */
-function watchDefinitions(
+async function watchDefinitions(
   host: Pick<ExtensionHost, 'ultimateRoot' | 'projectRoot' | 'userHome'>,
   changed: () => void,
 ) {
@@ -150,7 +150,7 @@ function watchDefinitions(
       // Gone again; watchRoots reports it when it reappears.
     }
   }
-  const roots = agentRoots(host.ultimateRoot, host.projectRoot, host.userHome).map(
+  const roots = (await agentRoots(host.ultimateRoot, host.projectRoot, host.userHome)).map(
     (root) => root.path,
   )
   for (const root of roots) if (existsSync(root)) attach(root)
@@ -223,7 +223,7 @@ export default function workspaceExtension(host: ExtensionHost) {
     })
     // A definition edit reconfigures every lander conversation before anyone writes to it again.
     stopWatching?.()
-    stopWatching = watchDefinitions(host, () => {
+    stopWatching = await watchDefinitions(host, () => {
       clearTimeout(pending)
       pending = setTimeout(() => void stand(), 200)
     })

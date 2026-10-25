@@ -9,6 +9,8 @@ import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import type { Source } from '../server/project.ts'
 // oxlint-disable-next-line no-restricted-imports -- agent discovery follows the core project trust decision
 import { projectDecision, useProjectSetup } from '../server/project-setup.ts'
+// oxlint-disable-next-line no-restricted-imports -- extension-owned definitions follow the same enabled folders as their facets
+import { discoverExtensions } from '../server/discovery.ts'
 
 export interface AgentDefinition {
   name: string
@@ -257,10 +259,14 @@ function readDefinition(text: string, path: string, modelRuntime: ModelRuntime):
   return { ...definition, ...resolveModel(model, thinking, modelRuntime) }
 }
 
-/** The `agents/` folders discovery reads, in order; the project's only once its setup is chosen as local. */
-export function agentRoots(ultimateRoot: string, projectRoot: string, userHome: string) {
+/** Enabled extensions' definitions are built-ins, before user/project definitions and overlays. */
+export async function agentRoots(ultimateRoot: string, projectRoot: string, userHome: string) {
+  const extensions = await discoverExtensions(ultimateRoot, projectRoot, userHome)
   return [
     { source: 'builtin' as const, path: join(ultimateRoot, 'agents') },
+    ...extensions
+      .filter((extension) => extension.enabled && extension.files.includes('agents'))
+      .map((extension) => ({ source: 'builtin' as const, path: join(extension.path, 'agents') })),
     { source: 'user' as const, path: join(userHome, '.ultimate/agents') },
     ...(useProjectSetup(projectRoot, userHome)
       ? [{ source: 'project' as const, path: join(projectRoot, '.ultimate/agents') }]
@@ -284,7 +290,7 @@ export async function discoverAgents(
   const errors: AgentDiscovery['errors'] = []
   const builtins = new Set<string>()
   const replaced: AgentDiscovery['replaced'] = []
-  for (const { source, path: directory } of agentRoots(ultimateRoot, projectRoot, userHome)) {
+  for (const { source, path: directory } of await agentRoots(ultimateRoot, projectRoot, userHome)) {
     let files: string[]
     try {
       files = await readdir(directory)
@@ -462,8 +468,8 @@ export async function saveOverlay(
   const base = definitions.find((definition) => definition.name === name)
   if (!base) throw new Error(`No definition named ${name} for an overlay to extend`)
   // A project file applies over a user overlay, so the form shows it; saving it to the user file would copy it there.
-  const later = agentRoots(ultimateRoot, projectRoot, userHome)
-    .slice(scope === 'user' ? 2 : 3)
+  const later = (await agentRoots(ultimateRoot, projectRoot, userHome))
+    .filter((root) => scope === 'user' && root.source === 'project')
     .map((root) => root.path)
   const shadowing = [base.path, ...(base.overlays ?? [])].find((file) =>
     later.includes(dirname(file)),

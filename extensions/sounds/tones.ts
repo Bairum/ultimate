@@ -1,7 +1,10 @@
 import type { Sound } from './cues.ts'
 
-/** Notes as [start in seconds, frequency in Hz, length in seconds]: soft bells, synthesized, no audio files. */
-const tunes: Record<Sound, [number, number, number][]> = {
+/** A note as [start in seconds, frequency in Hz, length in seconds]. */
+export type Note = readonly [number, number, number]
+
+/** Soft bells, synthesized, no audio files. */
+const tunes: Record<Sound, Note[]> = {
   // A fifth up, asking: D5, A5.
   input: [
     [0, 587.33, 0.5],
@@ -30,14 +33,17 @@ const partials = [
 let context: AudioContext | undefined
 
 /** Plays `sound`; a browser lets a page play once someone has clicked or typed in it. */
-export async function play(sound: Sound) {
+export const play = (sound: Sound) => playNotes(tunes[sound])
+
+/** Plays `notes` as bells at `volume` (the notification sounds use 0.18); the same rule on clicks applies. */
+export async function playNotes(notes: readonly Note[], volume = 0.18) {
   context ??= new AudioContext()
   if (context.state === 'suspended') await context.resume()
   const now = context.currentTime + 0.02
   const out = context.createGain()
-  out.gain.value = 0.18
+  out.gain.value = volume
   out.connect(context.destination)
-  for (const [start, frequency, length] of tunes[sound]) {
+  for (const [start, frequency, length] of notes) {
     for (const [ratio, level] of partials) {
       const oscillator = context.createOscillator()
       const gain = context.createGain()

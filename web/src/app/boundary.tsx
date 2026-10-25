@@ -4,7 +4,7 @@ import { Component, Fragment, useContext } from 'react'
 import type { ErrorInfo, ReactNode } from 'react'
 import { errorMessage, shortenPath } from '../sdk/format.ts'
 import { ExtensionNameContext, useExtensions, useSystem } from '../sdk/hooks.ts'
-import { provisionOf, slotItems } from '../sdk/registry.ts'
+import { provisionOf, provisionsOf, slotItems } from '../sdk/registry.ts'
 import type { Point, SlotName } from '../sdk/types.ts'
 
 /** A compact card naming the extension that failed. `inline` fits a status line or toolbar. */
@@ -139,6 +139,50 @@ export function Provided<Input, Value>({
       <Provide input={input} key={provision.version} render={own} use={use} />
     </ExtensionBoundary>
   )
+}
+/**
+ * Renders `children` with the values every facet providing `point` computes for `input`, in discovery order; for points
+ * that combine contributions, such as rows several extensions add. Each provider runs behind its own boundary: one that
+ * throws shows an inline error card and is left out.
+ */
+export function AllProvided<Input, Value>({
+  point,
+  input,
+  children,
+}: {
+  point: Point<Input, Value>
+  input: Input
+  children: (values: readonly Value[]) => ReactNode
+}) {
+  const caller = useContext(ExtensionNameContext)
+  const provisions = provisionsOf(useExtensions(), point.point)
+  // Each provider's hook runs inside the one before it, so the values arrive together at the end of the chain.
+  const chain = (index: number, values: readonly Value[]): ReactNode => {
+    const provision = provisions[index]
+    if (!provision)
+      return (
+        <ExtensionNameContext.Provider value={caller}>
+          {children(values)}
+        </ExtensionNameContext.Provider>
+      )
+    return (
+      <ExtensionBoundary
+        extension={provision.extension}
+        fallback={chain(index + 1, values)}
+        key={provision.extension}
+        variant="inline"
+        version={provision.version}
+      >
+        <Provide
+          input={input}
+          key={provision.version}
+          render={(value) => chain(index + 1, [...values, value])}
+          use={provision.use as (input: Input) => Value}
+        />
+      </ExtensionBoundary>
+    )
+  }
+  return chain(0, [])
 }
 function Provide<Input, Value>({
   use,

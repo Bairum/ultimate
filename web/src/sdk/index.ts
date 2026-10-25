@@ -66,7 +66,7 @@ export { MessageActions } from '../app/message-actions.tsx'
 /** A turn of the user's as the transcript shows a typed one; `text` gives the words a delivered message carries. */
 export { UserText, UserView } from '../app/user-turn.tsx'
 /** Renders with the value another extension provides for your point; see `definePoint`. */
-export { Provided } from '../app/boundary.tsx'
+export { AllProvided, Provided } from '../app/boundary.tsx'
 export { ConversationScope } from './conversation-scope.tsx'
 /** Sends what the composer inside it submits somewhere else, such as a new side chat; see `composer` renderers. */
 export { ComposerRedirect, fillComposer, insertIntoComposer } from '../app/composer.tsx'

@@ -154,8 +154,9 @@ function Status({ message, perspective }: { message: Message; perspective: numbe
 
 /**
  * A message to you in compact mode: a bubble on the left in the sender's accent, its text, and whether it waits on you.
- * `children` mount beneath the text; that is where the answer card of a question goes. `running` is whether the call
- * that sends it is still running. With `entry`, the stored answer or the response that sent the message, its footer
+ * `children` mount beneath the text; that is where the answer card of a question goes. `lead` mounts above it: what the
+ * message answers. Without `text`, `children` alone are its body (a reply still being worked on). `running` is whether
+ * the call that sends it is still running. With `entry`, the stored answer or the response that sent the message, its footer
  * carries the transcript's message actions: usage, time, copy, go back and a reference link.
  */
 export function Bubble({
@@ -165,15 +166,17 @@ export function Bubble({
   running,
   entry,
   at = message?.at,
+  lead,
   children,
 }: {
   from: number
   message: Message | undefined
-  text: string
+  text?: string
   running: boolean
   entry?: EntryRecord
   /** When it was said; a message's own time by default. */
   at?: number
+  lead?: ReactNode
   children?: ReactNode
 }) {
   const now = useNow(60000)
@@ -208,7 +211,7 @@ export function Bubble({
             bubble
             className="ml-auto"
             entry={entry}
-            text={text}
+            text={text ?? ''}
             timestamp={at ?? (stored && 'timestamp' in stored ? stored.timestamp : 0)}
           />
         ) : (
@@ -223,7 +226,8 @@ export function Bubble({
           )
         )}
       </header>
-      <Body text={text} />
+      {lead}
+      {text !== undefined && <Body text={text} />}
       {message?.images && <MessageImages conversation={from} entry={message.images.entry} />}
       {children}
       {answer && <AttachedAnswer answer={answer} question={message!} />}
@@ -420,7 +424,10 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
             <button
               className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground"
               onClick={() => {
-                events.emit('messages:open', { conversation: message.to, entry: message.entry })
+                events.emit('messages:open', {
+                  conversation: message.to,
+                  entry: message.entry,
+                })
                 showSurface('agent')
                 switchConversation(message.to as number)
               }}
@@ -516,7 +523,10 @@ export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode
               className="ml-auto flex shrink-0 cursor-pointer items-center gap-1 hover:text-foreground"
               onClick={() => {
                 if (message?.entry !== undefined)
-                  events.emit('messages:open', { conversation: id, entry: message.entry })
+                  events.emit('messages:open', {
+                    conversation: id,
+                    entry: message.entry,
+                  })
                 showSurface('agent')
                 switchConversation(id)
               }}
