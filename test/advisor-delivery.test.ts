@@ -19,10 +19,16 @@ import type { ExtensionHost } from '../server/extensions.ts'
 import advisor from '../extensions/advisor/server.ts'
 import { deliver, route } from '../extensions/advisor/deliver.ts'
 import { mergeConfig } from '../extensions/advisor/config.ts'
-import { Runs, State, utcDay } from '../extensions/advisor/state.ts'
-import { review } from '../extensions/advisor/review.ts'
+import { Runs, State, Ledger, utcDay } from '../extensions/advisor/state.ts'
+import { review, runEntries } from '../extensions/advisor/review.ts'
+import { renderInput } from '../extensions/advisor/render.ts'
 import { Standing, Profile } from '../extensions/subagents/api.ts'
 import type { AdvisorNoteEntry, Role } from '../extensions/advisor/refs.ts'
+vi.mock('../lib/exec.ts', () => ({
+  exec: async () => {
+    throw Object.assign(new Error('not ignored'), { code: 1 })
+  },
+}))
 
 import { until } from './helpers.ts'
 const cleanups: (() => Promise<void>)[] = []
@@ -285,6 +291,144 @@ it.each(['brief', 'steer', 'parent note'] as const)(
       ).toBe(intervention !== 'brief')
     } finally {
       submission.mockRestore()
+    }
+  },
+)
+it('keeps the original brief after an advisor continuation and never counts its own text as intervention', async () => {
+  const f = await fixture()
+  const brief = await f.harness.commit(
+    (tx) =>
+      tx.appendEntry(f.id, {
+        kind: 'pi.user',
+        model: [
+          {
+            role: 'user',
+            content: 'Verify the actual requested change',
+            timestamp: Date.now() - 120_000,
+          },
+        ],
+      }),
+    context,
+  )
+  const submission = vi.spyOn(f.harness, 'submission').mockResolvedValue({
+    status: async () => ({ type: 'input', status: 'placed', entry: brief.id }),
+  } as never)
+  try {
+    const first = await f.hooks.onYield(fauxAssistantMessage('Done'), f.api(), context)
+    expect(first).toBeDefined()
+    const runs = await f.harness.snapshot(Runs, ROOT_CONVERSATION_ID, context)
+    expect(Object.values(runs!.deliveries).some((e) => e.delivered === 'continue')).toBe(false)
+    const continuation = await f.harness.commit(
+      (tx) =>
+        tx.appendEntry(f.id, {
+          kind: 'pi.user',
+          model: [{ role: 'user', content: first!.continue, timestamp: Date.now() - 60_000 }],
+        }),
+      context,
+    )
+    const entries = await runEntries(f.host, f.id, context)
+    expect(entries.map((e) => e.id)).not.toContain(continuation.id)
+    const recorded = runs!.conversations[f.id].continuations!
+    expect(
+      JSON.parse(
+        renderInput(
+          [brief, continuation],
+          'worker',
+          '',
+          '',
+          undefined,
+          undefined,
+          undefined,
+          false,
+          recorded,
+        ),
+      ).request,
+    ).toBe('Verify the actual requested change')
+    f.response.content = [
+      fauxText(JSON.stringify({ notes: [{ ...notes[0], note: 'Still needs verification' }] })),
+    ]
+    await f.hooks.onYield(fauxAssistantMessage('Done again'), f.api(), context)
+    expect(JSON.stringify(f.stream.mock.calls.at(-1)?.[1].messages)).not.toContain('<advisory')
+    expect(
+      (await f.harness.snapshot(Runs, ROOT_CONVERSATION_ID, context))?.conversations[f.id]
+        ?.lastInput,
+    ).toBeUndefined()
+  } finally {
+    submission.mockRestore()
+  }
+})
+it('does not let newly invented ledger items authorize a passive ultimate note, and bounds the ledger', async () => {
+  const f = await fixture('ultimate')
+  await f.harness.commit(async (tx) => {
+    const ledger = await tx.doc(Ledger, f.id)
+    ledger.items = Array.from({ length: 50 }, (_, i) => ({
+      id: `old${i}`,
+      kind: 'question' as const,
+      text: `Old question ${i}`,
+      since: i,
+    }))
+  }, context)
+  f.response.content = [
+    fauxText(
+      JSON.stringify({
+        notes: [{ ...notes[0], evidence: '#123' }],
+        ledger: {
+          add: Array.from({ length: 10 }, (_, i) => ({
+            kind: 'question',
+            text: `Invented question ${i}`,
+            entry: 123,
+          })),
+          resolve: [],
+        },
+      }),
+    ),
+  ]
+  await review(
+    f.host,
+    f.api(),
+    { role: 'ultimate', point: 'answer', run: 100 },
+    f.config,
+    [],
+    context,
+  )
+  const conversation = (await f.harness.conversation(f.id, context))!
+  const entries = (await conversation.entries({ order: 'ascending' }, 20, undefined, context)).items
+  expect(entries.find((e) => e.kind === 'advisor.note')?.data).toMatchObject({ delivered: 'card' })
+  const ledger = (await f.harness.snapshot(Ledger, f.id, context))!.items
+  expect(ledger).toHaveLength(50)
+  expect(ledger.filter((i) => i.text.startsWith('Invented'))).toHaveLength(5)
+  expect(ledger.some((i) => i.id === 'old0')).toBe(false)
+})
+it.each(['idle', 'new run'] as const)(
+  'downgrades a stale steer to a passive note: %s',
+  async (state) => {
+    const f = await fixture()
+    await f.harness.commit(async (tx) => {
+      const live = await tx.doc(LiveDoc, f.id)
+      if (state === 'idle') delete live.run
+      else live.run!.inputs = [200 as never]
+    }, context)
+    const recipient = (await f.harness.conversation(f.id, context))!
+    const submit = vi.spyOn(recipient, 'submit').mockResolvedValue({} as never)
+    const conversation = vi.spyOn(f.harness, 'conversation').mockResolvedValue(recipient)
+    try {
+      const entry: AdvisorNoteEntry = {
+        review: 'stale',
+        advisor: 'verification',
+        role: 'worker',
+        point: 'rounds',
+        model: 'faux/faux',
+        delivered: 'steer',
+        notes: notes.map((n) => ({ ...n, id: 'stale-note' })),
+      }
+      await deliver(f.host, f.id, entry, context, 100)
+      expect(submit.mock.calls[0]?.[0]).toMatchObject({
+        type: 'write',
+        entry: { data: { delivered: 'note' }, model: [{ role: 'user' }] },
+      })
+    } finally {
+      submit.mockRestore()
+      conversation.mockRestore()
     }
   },
 )

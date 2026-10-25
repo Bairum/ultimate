@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -145,6 +145,7 @@ export type ConfigHost = Pick<
   'userHome' | 'projectRoot' | 'projectSetup' | 'projectSettings' | 'notice'
 >
 const notices = new WeakMap<ConfigHost, Set<string>>()
+const parsed = new WeakMap<ConfigHost, { key: string; base: Omit<ConfigView, 'rubrics'> }>()
 export function configuration(host: ConfigHost) {
   const noticed = notices.get(host) ?? new Set<string>()
   notices.set(host, noticed)
@@ -166,14 +167,40 @@ export function configuration(host: ConfigHost) {
         return {}
       }
     }
-    const trusted = (await host.projectSetup()).decision === true
-    const user = await layer(
-      'user',
-      async () => (await readSettings(userSettingsPath(host.userHome))).advisor,
-    )
-    const project = trusted
-      ? await layer('project', async () => (await host.projectSettings()).advisor)
-      : {}
+    const paths = [
+      userSettingsPath(host.userHome),
+      join(host.projectRoot, '.ultimate/settings.json'),
+      join(host.userHome, '.ultimate/trust.json'),
+    ]
+    const key = (
+      await Promise.all(
+        paths.map(async (path) => {
+          try {
+            const info = await stat(path, { bigint: true })
+            return `${info.mtimeNs}:${info.size}`
+          } catch (error) {
+            return String(error)
+          }
+        }),
+      )
+    ).join('|')
+    let base = parsed.get(host)?.key === key ? parsed.get(host)!.base : undefined
+    if (!base) {
+      const trusted = (await host.projectSetup()).decision === true
+      const user = await layer('user', async () => (await readSettings(paths[0])).advisor)
+      const project = trusted
+        ? await layer('project', async () => (await host.projectSettings()).advisor)
+        : {}
+      base = {
+        effective: mergeConfig(user, project),
+        user,
+        project,
+        projectTrusted: trusted,
+        problems: [...problems],
+      }
+      parsed.set(host, { key, base })
+    } else problems.push(...base.problems)
+    const trusted = base.projectTrusted
     const found = new Map<string, ConfigView['rubrics'][number]>()
     if (rubrics)
       for (const [source, folder] of [
@@ -195,10 +222,7 @@ export function configuration(host: ConfigHost) {
         }
       }
     return {
-      effective: mergeConfig(user, project),
-      user,
-      project,
-      projectTrusted: trusted,
+      ...base,
       rubrics: [...found.values()],
       problems,
     }

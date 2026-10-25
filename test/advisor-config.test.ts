@@ -63,6 +63,7 @@ it('ignores untrusted project settings and rubrics; notices each invalid layer p
   await view(false)
   expect(notice).toHaveBeenCalledTimes(1)
   trusted = true
+  await writeFile(join(home, '.ultimate/trust.json'), '{}')
   const second = await view()
   expect(second.projectTrusted).toBe(true)
   expect(second.effective.model).toBe('p/m')
@@ -90,4 +91,28 @@ it('rejects invalid enums, ranges, model strings and unknown fields', () => {
       advisors: { scope: { maxToolCalls: 20, maxNotes: 10 } },
     }),
   ).toBeDefined()
+})
+it('caches parsed layers until a settings mtime changes', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'advisor-cache-'))
+  cleanups.push(home)
+  await mkdir(join(home, '.ultimate'))
+  const path = join(home, '.ultimate/settings.json')
+  await writeFile(path, '{}')
+  const projectSetup = vi.fn<() => Promise<{ config: boolean; decision: boolean }>>(async () => ({
+    config: false,
+    decision: false,
+  }))
+  const view = configuration({
+    userHome: home,
+    projectRoot: home,
+    projectSetup,
+    projectSettings: async () => ({}),
+    notice: () => {},
+  })
+  await view(false)
+  await view(false)
+  expect(projectSetup).toHaveBeenCalledTimes(1)
+  await writeFile(path, JSON.stringify({ advisor: { roles: { worker: { enabled: true } } } }))
+  expect((await view(false)).effective.roles?.worker?.enabled).toBe(true)
+  expect(projectSetup).toHaveBeenCalledTimes(2)
 })
