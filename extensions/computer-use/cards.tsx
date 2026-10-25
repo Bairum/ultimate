@@ -31,7 +31,6 @@ import {
   headerState,
   liveSteps,
   Mark,
-  nearestLabels,
   refusalText,
   predicate,
   ScreenList,
@@ -56,7 +55,12 @@ const scalar = (value: unknown) =>
   typeof value === 'string' || typeof value === 'number' ? String(value) : ''
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`
 /** Refusals of a pixel step that explain themselves on its step line, next to the label it expected. */
-const pixelRefusals = ['label_mismatch', 'window_not_visible', 'takeover_required']
+const pixelRefusals = [
+  'label_mismatch',
+  'label_ambiguous',
+  'window_not_visible',
+  'takeover_required',
+]
 
 /**
  * `“6”`, `“Email” ← 5 chars`, `⌘+S`, `File › Save`: one step as the user reads it. The control comes from the
@@ -119,6 +123,8 @@ function StepCheck({
   const line = 'block break-words text-[11px] leading-[1.6]'
   if (outcome.wait) {
     const seconds = scalar(step.seconds)
+    // The server times every wait; the call's duration is only a fallback for older results.
+    if (typeof outcome.wait.ms === 'number') took = `${(outcome.wait.ms / 1000).toFixed(1)}s`
     if (outcome.wait.status === 'satisfied')
       return (
         <span className={cn(line, 'text-success')}>
@@ -143,18 +149,13 @@ function StepCheck({
   if (outcome.status === 'refused' || outcome.status === 'failed') {
     const code = outcome.code
     const tone = toneClass[code ? toneOf(code) : 'bad']
-    const nearest = code === 'label_mismatch' ? nearestLabels(outcome.message) : []
-    const expected = outcome.expectLabel?.text.toLowerCase()
-    const repeats = expected
-      ? nearest.filter((label) => label.toLowerCase().includes(expected)).length
-      : 0
+    const nearest = outcome.nearest?.map((label) => label.text) ?? []
     const fix = code ? fixes[code] : undefined
     const waits = !!code && asks.includes(code)
     return (
       <>
         <span className={cn(line, tone)}>
           {code ? refusalText(code) : ''}
-          {repeats > 1 && ` · it appears ${repeats} times nearby, so the click is ambiguous`}
           {outcome.message && !waits && !nearest.length && !fix
             ? `${code ? ' · ' : ''}${outcome.message}`
             : ''}

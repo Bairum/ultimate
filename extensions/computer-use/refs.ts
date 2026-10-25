@@ -52,7 +52,10 @@ export type ActStepDetails = {
   label?: UntrustedText
   expectLabel?: UntrustedText
   ocrMatch?: UntrustedText
-  wait?: { status: 'satisfied' | 'timeout'; seen: UntrustedText[] }
+  /** For `label_mismatch` / `label_ambiguous`: the OCR labels nearest the click point. */
+  nearest?: UntrustedText[]
+  /** `ms`: how long the wait took. */
+  wait?: { status: 'satisfied' | 'timeout'; ms: number; seen: UntrustedText[] }
 }
 export type JevDecisionDetails = Omit<JevDecision, 'chose' | 'top'> & {
   chose?: string

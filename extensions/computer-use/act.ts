@@ -202,10 +202,19 @@ export async function act(
         ...((outcome.status === 'delivered' || outcome.status === 'refused') && outcome.ocrMatch
           ? { ocrMatch: { text: redact(outcome.ocrMatch), untrusted: true as const } }
           : {}),
+        ...(outcome.status === 'refused' && outcome.nearest
+          ? {
+              nearest: outcome.nearest.map((text) => ({
+                text: redact(text),
+                untrusted: true as const,
+              })),
+            }
+          : {}),
         ...(outcome.status === 'delivered' && outcome.wait
           ? {
               wait: {
                 status: outcome.wait.status,
+                ms: outcome.wait.ms,
                 seen: outcome.wait.seen.map((text) => ({
                   text: redact(text),
                   untrusted: true as const,
@@ -532,6 +541,7 @@ export async function act(
               code: refusal.refuse,
               message: refusal.message,
               ...(ctx.ocrMatch ? { ocrMatch: redact(ctx.ocrMatch) } : {}),
+              ...(refusal.nearest ? { nearest: refusal.nearest.map(redact) } : {}),
             }
           }
         }

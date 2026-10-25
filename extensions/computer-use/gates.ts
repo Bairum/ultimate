@@ -87,6 +87,8 @@ export type Refusal = {
   payload?: string
   x?: number
   y?: number
+  /** The OCR labels nearest a refused pixel click, redacted; screen text, untrusted. */
+  nearest?: string[]
 }
 export type Gate = (ctx: GateContext) => undefined | Refusal | Promise<undefined | Refusal>
 // Task grounding precedes authority/safety gates; canonical scope is checked again at identity resolution.
@@ -231,9 +233,12 @@ export const dispatchGates: Gate[] = [
     )
     if (!checked.match) {
       const redact = redactor(ctx.params ?? [])
+      const nearest = checked.candidates.slice(0, 8).map((r) => redact(r.label).slice(0, 60))
       return {
-        refuse: 'label_mismatch',
-        message: `Expected label did not match uniquely. Nearest labels: ${untrusted(checked.candidates.map((r) => redact(r.label)))}`,
+        // Ambiguous (the label appears more than once nearby) and wrong are both refusals; the code tells them apart.
+        refuse: checked.ambiguous ? 'label_ambiguous' : 'label_mismatch',
+        message: `Expected label did not match uniquely. Nearest labels: ${untrusted(nearest)}`,
+        nearest,
       }
     }
     const target = ctx.target ?? {

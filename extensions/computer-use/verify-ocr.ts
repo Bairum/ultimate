@@ -1,6 +1,6 @@
 import { saveEvidence } from './evidence-files.ts'
 import type { Driver, Observation, Predicate, Evidence } from './types.ts'
-import { parseRegions, matchLabel, visibleWindow, normalizeLabel } from './perception.ts'
+import { parseRegions, matchLabel, visibleWindow, presentLabel } from './perception.ts'
 import type { PixelSettings } from './perception.ts'
 
 /** OCR proof is produced only from the Driver's capture, never from planner claims. */
@@ -36,25 +36,18 @@ export async function verifyOcr(
     )
       return { verdict: 'unknown' as const }
     for (const label of appears as string[]) {
+      // matchLabel's positive match already refuses negated regions ("Not installed", "Upload failed").
       const matched = regions.find(
         (region) =>
-          !normalizeLabel(region.label)
-            .split(' ')
-            .some((token) => token === 'not' || token === 'failed') &&
           matchLabel([region], label, undefined, config.labelRadius, config.minConfidence).match,
       )
       if (!matched) return { verdict: 'unsatisfied' as const }
       excerpts.push(redact(matched.label))
     }
     for (const label of disappears as string[]) {
-      const matched = matchLabel(
-        regions,
-        label,
-        undefined,
-        config.labelRadius,
-        config.minConfidence,
-      )
-      if (matched.match || matched.ambiguous) return { verdict: 'unsatisfied' as const }
+      // Absence errs toward unsatisfied: any text region with the label's tokens, negated or low-confidence, keeps it present.
+      if (regions.some((region) => region.kind === 'text' && presentLabel(region.label, label)))
+        return { verdict: 'unsatisfied' as const }
       excerpts.push(`Absent: ${redact(label)}`)
     }
   }

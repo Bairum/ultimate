@@ -1480,8 +1480,12 @@ it.each(['wrong', 'ambiguous'] as const)(
         : [textRegion('Continue'), textRegion('Continue', 'r2')]
     const view = await f.observe()
     const result = await f.run([{ ...f.pixel, capture: view.capture!.id } as Step], true)
-    expect(data(result).status).toBe('label_mismatch')
+    expect(data(result).status).toBe(mode === 'wrong' ? 'label_mismatch' : 'label_ambiguous')
     expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
+    const step = (result as { details?: ComputerDetails }).details?.act?.steps[0]
+    expect(step?.nearest?.map((n) => n.text)).toEqual(
+      mode === 'wrong' ? ['Cancel'] : ['Continue', 'Continue'],
+    )
   },
 )
 
@@ -1744,15 +1748,29 @@ it.each([
   expect(data(finished).status).toBe('criteria_unmet')
 })
 
-it('uses whole tokens for wait text and gone conditions', async () => {
+it('uses whole tokens for wait text, and a negated label still counts as present for gone', async () => {
   const f = await pixelFixture()
   f.fake.surface.regions = [textRegion('Not installed')]
   expect(
     data(await f.run([{ kind: 'wait', until: { text: 'installed' }, seconds: 0 }])).status,
   ).toBe('timeout')
-  expect(
-    data(await f.run([{ kind: 'wait', until: { gone: 'installed' }, seconds: 0 }])).status,
-  ).toBe('satisfied')
+  // Regression (review #44269): "gone" passed while the label was on screen next to "not".
+  f.fake.surface.regions = [textRegion('Error: file not found')]
+  expect(data(await f.run([{ kind: 'wait', until: { gone: 'Error' }, seconds: 0 }])).status).toBe(
+    'timeout',
+  )
+  f.fake.surface.regions = [textRegion('Upload failed')]
+  expect(data(await f.run([{ kind: 'wait', until: { text: 'Upload' }, seconds: 0 }])).status).toBe(
+    'timeout',
+  )
+})
+
+it('keeps a negated label present for OCR disappears', async () => {
+  const { result, evidence } = await checkOcr(true, 'Error: file not found', {
+    disappears: ['Error'],
+  })
+  expect(data(result).verdict).toBe('unsatisfied')
+  expect(evidence).toHaveLength(0)
 })
 
 it('uses whole tokens for OCR disappears evidence', async () => {

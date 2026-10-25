@@ -84,9 +84,9 @@ export type StepOutcome =
       status: 'delivered'
       text: string
       ocrMatch?: string
-      wait?: { status: 'satisfied' | 'timeout'; seen: string[] }
+      wait?: { status: 'satisfied' | 'timeout'; seen: string[]; ms: number }
     }
-  | { status: 'refused'; code: string; message: string; ocrMatch?: string }
+  | { status: 'refused'; code: string; message: string; ocrMatch?: string; nearest?: string[] }
   | { status: 'failed'; message: string }
   | { status: 'not_run' }
   | { status: 'unknown' }

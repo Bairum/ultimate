@@ -97,6 +97,7 @@ const refusals: Record<string, string> = {
   payload_too_large: 'too long to confirm',
   failed: 'failed',
   label_mismatch: 'label not confirmed',
+  label_ambiguous: 'label appears more than once nearby',
   window_not_visible: 'window not visible',
   takeover_required: 'needs your foreground takeover',
   perception_unavailable: 'could not read the screen',
@@ -110,24 +111,6 @@ export const refusalText = (code: string) =>
 export const fixes: Record<string, string> = {
   window_not_visible:
     'The window is off screen or shrunk to a Stage Manager thumbnail, so its pixels cannot be read. Turn Stage Manager off or bring the window to the front; the agent then observes again.',
-}
-
-/**
- * The labels OCR saw nearest the click point of a `label_mismatch`. The server sends them only inside the refusal
- * message, as a JSON list wrapped in the untrusted-content marker; anything else yields none.
- */
-export function nearestLabels(message?: string): string[] {
-  const json = /<untrusted_screen_content>\n([\s\S]*)\n<\/untrusted_screen_content>/.exec(
-    message ?? '',
-  )?.[1]
-  if (!json) return []
-  try {
-    const labels: unknown = JSON.parse(json)
-    return Array.isArray(labels) ? labels.filter((l): l is string => typeof l === 'string') : []
-  } catch {
-    // A message that is not the server's list shape simply has no labels to show; the code still says why.
-    return []
-  }
 }
 
 /** The marker every piece of screen text carries: it is shown as plain text and never acted on. */

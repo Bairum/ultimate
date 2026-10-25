@@ -108,14 +108,24 @@ export const normalizeLabel = (label: string) =>
     .replace(/[\u200e\u200f\u2066-\u2069]/g, '')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
-/** Whole normalized token sequences; a negated state is not a positive label match. */
-export function containsLabel(text: string, label: string) {
-  const actual = normalizeLabel(text)
+/** Whole normalized token sequences, negated or not: what absence checks (`disappears`, wait `gone`) must use. */
+export function presentLabel(text: string, label: string) {
   const expected = normalizeLabel(label)
+  return Boolean(expected) && ` ${normalizeLabel(text)} `.includes(` ${expected} `)
+}
+/** Tokens that turn "Installed" into its opposite; a partial heuristic, documented in the README. */
+const negations = ['not', 'failed', 'failure', 'isn', 'aren', 'wasn', 'didn', 'cannot', 'unable']
+/**
+ * A positive match (expect_label, `appears`, wait `text`): the label's tokens, in a region that does not also negate
+ * it. Absence checks use `presentLabel`, so a negated region still counts as the label being on screen.
+ */
+export function containsLabel(text: string, label: string) {
+  const expected = normalizeLabel(label).split(' ')
   return (
-    Boolean(expected) &&
-    ` ${actual} `.includes(` ${expected} `) &&
-    !(actual.split(' ').includes('not') && !expected.split(' ').includes('not'))
+    presentLabel(text, label) &&
+    !normalizeLabel(text)
+      .split(' ')
+      .some((token) => negations.includes(token) && !expected.includes(token))
   )
 }
 const distance = (r: Region, p: { x: number; y: number }) =>

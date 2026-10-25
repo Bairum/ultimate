@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { exec } from '../../lib/exec.ts'
 import type { Driver, Observation, StepOutcome } from './types.ts'
-import { clock, containsLabel, parseRegions, requireVisible } from './perception.ts'
+import { clock, containsLabel, parseRegions, presentLabel, requireVisible } from './perception.ts'
+import { screenText } from './jev.ts'
 import type { Clock } from './perception.ts'
 
 function keepAwake() {
@@ -31,12 +32,15 @@ export async function waitFor(options: {
   const deadline = time.now() + options.seconds * 1000
   const release = options.seconds > 60 ? (options.awake ?? keepAwake)() : undefined
   let seen: string[] = []
+  let all: string[] = []
   let previous: string | undefined
+  const started = time.now()
   const outcome = (status: 'satisfied' | 'timeout'): StepOutcome => ({
     status: 'delivered',
     text: '',
     wait: {
       status,
+      ms: time.now() - started,
       seen: seen.slice(0, 20).map((s) => (options.redact ? options.redact(s) : s).slice(0, 60)),
     },
   })
@@ -54,19 +58,28 @@ export async function waitFor(options: {
           { kinds: ['text'] },
           options.signal,
         )
+        // Absence (`gone`) counts every text region, whatever its confidence; presence needs the floor.
+        all = regions.filter((r) => r.kind === 'text').map((r) => r.label)
         seen = regions
           .filter((r) => r.kind === 'text' && r.confidence >= (options.minConfidence ?? 0.5))
           .map((r) => r.label)
-      } else
-        seen = observation.elements.flatMap((e) => [e.label ?? '', e.value ?? '']).filter(Boolean)
+      } else {
+        // The Driver's elements omit static text, which the tree keeps (a calculator's display).
+        seen = [
+          ...observation.elements.flatMap((e) => [e.label ?? '', e.value ?? '']).filter(Boolean),
+          ...screenText(observation),
+        ]
+        all = seen
+      }
       const contains = (text: string) => seen.some((s) => containsLabel(s, text))
+      const present = (text: string) => all.some((s) => presentLabel(s, text))
       const hash = observation.image
         ? createHash('sha256').update(observation.image.data).digest('hex')
         : undefined
       const until = options.until
       const satisfied =
         (!until.text || contains(until.text)) &&
-        (!until.gone || !contains(until.gone)) &&
+        (!until.gone || !present(until.gone)) &&
         (!until.stable || (hash !== undefined && hash === previous))
       previous = hash
       if (satisfied) return outcome('satisfied')
