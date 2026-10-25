@@ -3,17 +3,13 @@ import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, expect, it, vi } from 'vitest'
 import type { AutomationListItem } from '../../extensions/automations/types.ts'
-import { GrantRef, ListAction } from '../../extensions/automations/refs.ts'
 
 const shell = vi.hoisted(() => ({
   requested: undefined as number | undefined,
   list: [] as AutomationListItem[],
   expanded: [] as string[],
   switches: new Map<string, { checked: boolean; onCheckedChange: (checked: boolean) => void }>(),
-  action:
-    vi.fn<
-      (ref: { name: string }, args: { actions: string[]; source: string }) => Promise<unknown>
-    >(),
+  action: vi.fn<(ref: { name: string }) => Promise<unknown>>(),
 }))
 vi.mock('react', async (original) => ({
   ...(await original<typeof import('react')>()),
@@ -109,9 +105,7 @@ vi.mock('@/components/ui/dialog', () => ({
 Object.assign(globalThis, { document: { visibilityState: 'visible' }, window: {} })
 const { AutomationsPanel } = await import('../../extensions/automations/panel.tsx')
 const { Chip } = await import('../../extensions/automations/chip.tsx')
-const { GrantEditor, refreshAutomations } = await import('../../extensions/automations/parts.tsx')
 const { AutomationForm } = await import('../../extensions/automations/form.tsx')
-const { AutomationCall } = await import('../../extensions/automations/web.tsx')
 
 const base = (id: string, createdAt: number, extra: Partial<AutomationListItem>) =>
   ({
@@ -154,18 +148,9 @@ beforeEach(() => {
   shell.list = [schedule, watching, failed]
   shell.expanded = []
   shell.switches.clear()
-  shell.action.mockReset().mockImplementation((ref, args) =>
-    Promise.resolve(
-      ref.name === 'list'
-        ? shell.list
-        : {
-            ...schedule,
-            grant: args.actions.length
-              ? { actions: args.actions, source: args.source, at: 0 }
-              : undefined,
-          },
-    ),
-  )
+  shell.action
+    .mockReset()
+    .mockImplementation((ref) => Promise.resolve(ref.name === 'list' ? shell.list : schedule))
 })
 
 it('lists both kinds, worst first: the failed script before the schedule and the watching script', () => {
@@ -229,76 +214,6 @@ it('shows bolt triggers, filters, context fill and event fire history without sc
   expect(html).toContain('re-arms below 70%')
 })
 
-it('shows grants without expanding, and the source and separate switches when expanded', () => {
-  shell.list = [
-    {
-      ...contextAutomation,
-      grant: { actions: ['dream', 'compact'], source: 'Daniel in Automations', at: 0 },
-    },
-    eventAutomation,
-  ]
-  let html = render()
-  expect(html).toContain('Acts on its own: dream, compact')
-  expect(html).toContain('No permission to act on its own')
-  expect(html).not.toContain('Daniel in Automations')
-  shell.expanded = ['A4']
-  html = render()
-  expect(html).toContain('Source: Daniel in Automations')
-  expect(html).toContain('Switch chapters after every gate passes, without asking.')
-  expect(shell.switches.get('Start a dream')?.checked).toBe(true)
-  expect(shell.switches.get('Compact')?.checked).toBe(true)
-  expect(shell.switches.get('Fall asleep (switch chapter)')?.checked).toBe(false)
-})
-
-it.each([
-  ['Start a dream', 'dream'],
-  ['Compact', 'compact'],
-  ['Fall asleep (switch chapter)', 'asleep'],
-])('sends only the independently selected %s permission to GrantRef', async (label, action) => {
-  renderToStaticMarkup(createElement(GrantEditor, { automation: contextAutomation }))
-  shell.switches.get(label)!.onCheckedChange(true)
-  expect(shell.action).toHaveBeenCalledWith(GrantRef, {
-    id: 'A4',
-    actions: [action],
-    source: 'Set in Automations',
-  })
-  await refreshAutomations()
-  expect(shell.action).toHaveBeenCalledWith(ListAction)
-})
-
-it.each([
-  ['Start a dream', 'dream'],
-  ['Compact', 'compact'],
-  ['Fall asleep (switch chapter)', 'asleep'],
-])('removes %s without withdrawing the other permissions', async (label, action) => {
-  renderToStaticMarkup(
-    createElement(GrantEditor, {
-      automation: {
-        ...contextAutomation,
-        grant: { actions: ['dream', 'compact', 'asleep'], source: 'Daniel', at: 0 },
-      },
-    }),
-  )
-  shell.switches.get(label)!.onCheckedChange(false)
-  expect(shell.action).toHaveBeenCalledWith(GrantRef, {
-    id: 'A4',
-    actions: ['dream', 'compact', 'asleep'].filter((item) => item !== action),
-    source: 'Daniel',
-  })
-  await refreshAutomations()
-})
-
-it('withdraws the final permission with an empty actions array and preserves its source', async () => {
-  renderToStaticMarkup(
-    createElement(GrantEditor, {
-      automation: { ...contextAutomation, grant: { actions: ['dream'], source: 'Daniel', at: 0 } },
-    }),
-  )
-  shell.switches.get('Start a dream')!.onCheckedChange(false)
-  expect(shell.action).toHaveBeenCalledWith(GrantRef, { id: 'A4', actions: [], source: 'Daniel' })
-  await refreshAutomations()
-})
-
 it('renders the third trigger, event descriptions and context re-arm defaults in the form', () => {
   const form = (automation?: AutomationListItem) =>
     renderToStaticMarkup(
@@ -321,50 +236,6 @@ it('renders the third trigger, event descriptions and context re-arm defaults in
   expect(event).toContain('result (optional filter)')
   expect(event).toContain('value="failed"')
   expect(event).not.toContain('Wake this conversation')
-})
-
-it.each([
-  ['dream', 'Started a dream'],
-  ['compact', 'Compacting #7'],
-  ['asleep', 'Falling asleep…'],
-])('renders %s as a distinct granted outcome with its automation link', (action, title) => {
-  const html = renderToStaticMarkup(
-    createElement(AutomationCall, {
-      call: {
-        id: 'call1',
-        name: 'automation',
-        args: { action: 'act', id: 'A4', do: action },
-        status: 'done',
-        output: `Did ${action} under the user's grant on automation A4: ${JSON.stringify({ action, automation: 'A4', name: 'Context care', conversation: 7 })}`,
-        images: [],
-        diagnostics: [],
-      },
-    }),
-  )
-  expect(html).toContain(`data-automation-act="${action}"`)
-  expect(html).toContain(title)
-  expect(html).toContain('Under your grant on Context care')
-  expect(html).toContain('open A4')
-})
-
-it('does not claim a refused granted action succeeded', () => {
-  const html = renderToStaticMarkup(
-    createElement(AutomationCall, {
-      call: {
-        id: 'call1',
-        name: 'automation',
-        args: { action: 'act', id: 'A4', do: 'asleep' },
-        status: 'error',
-        output: 'Fall asleep gate refused',
-        images: [],
-        diagnostics: [],
-      },
-    }),
-  )
-  expect(html).toContain('Automation could not act')
-  expect(html).toContain('Fall asleep gate refused')
-  expect(html).not.toContain('Falling asleep…')
-  expect(html).not.toContain('Under your grant')
 })
 
 it('colours the chip by the worst state and hides it when nothing is active', () => {

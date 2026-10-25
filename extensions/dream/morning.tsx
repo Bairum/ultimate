@@ -28,7 +28,6 @@ import type { EntryRecord } from '@/sdk'
 import { OpenAction, SideChatsDoc, useSideChatFront } from '../side-chat/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { BusyBlocker, chapterLabel, Refusal, switchChapter, useBusyElsewhere } from './chapters.tsx'
-import type { GrantedBy } from './refs.ts'
 import type { Seed } from './types.ts'
 
 /** `dream.chapter` entry data; `learned` and `carried` came later, so older entries lack them. */
@@ -39,17 +38,6 @@ export type ChapterEntry = {
   session: number
   learned?: string[]
   carried?: Seed['counts']
-  /** The granted automation that fell asleep for the user; absent when the user did. */
-  by?: GrantedBy
-}
-
-/** "Automation A4 “Dream at 80%” did this under your grant · 03:12": who acted for the user, and when. */
-export function Granted({ by, what }: { by: GrantedBy; what: string }) {
-  return (
-    <p className="font-mono text-[11px] text-warning" data-dream-granted={by.automation}>
-      Automation {by.automation} “{by.name}” {what} under your grant · {formatTime(by.at)}
-    </p>
-  )
 }
 
 /** The first input of the wake-up side chat: the four things a colleague back from leave should know. */
@@ -103,7 +91,6 @@ export function MorningCard({ entry }: { entry: EntryRecord }) {
           </ul>
         )}
         {data.carried && <Carried counts={data.carried} />}
-        {data.by && <Granted by={data.by} what="did this switch" />}
       </div>
       <Awake data={data} />
     </Card>

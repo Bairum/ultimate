@@ -10,7 +10,6 @@ import { ConversationRef } from '../conversations/ui.tsx'
 import { MoonRow, Passes, passLabels } from './moon.tsx'
 import { FallAsleep } from './sleep.tsx'
 import { sleepLeads } from './types.ts'
-import { Granted } from './morning.tsx'
 import { DreamDoc, EndAction } from './refs.ts'
 import type { Handoff, HandoffEntry, Proposal, Session, SessionEntry } from './refs.ts'
 
@@ -69,18 +68,12 @@ export function StartedCard({ entry }: { entry: EntryRecord }) {
       }
       session={id}
     >
-      {session?.by && (
-        <div className="border-b border-border/60 px-3 py-1.5">
-          <Granted by={session.by} what="started this dream" />
-        </div>
-      )}
       {session?.beforeCompaction && (
         <p
           className="border-b border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground"
           data-dream-before-compaction={session.beforeCompaction.automation}
         >
           Started as my context filled up · automation {session.beforeCompaction.automation}
-          {session.beforeCompaction.handsOff && ' · I decide the proposals under your grant'}
         </p>
       )}
       {session?.handoff && <HandoffNote handoff={session.handoff} />}
@@ -106,8 +99,7 @@ export function StartedCard({ entry }: { entry: EntryRecord }) {
 
 /**
  * `dream.settled`: a compaction's dream settled, and whether it was worth a fresh chapter. Below the threshold we stay;
- * at or above it either the automation's grant falls asleep (its progress shows here), or the user decides with the
- * Fall asleep section below.
+ * at or above it the user decides with the Fall asleep section below.
  */
 export function SettledCard({ entry }: { entry: EntryRecord }) {
   const { session: id } = entry.data as SessionEntry
@@ -133,22 +125,12 @@ export function SettledCard({ entry }: { entry: EntryRecord }) {
         <>
           <div className="space-y-1 px-4 py-3" data-dream-settled={outcome.result}>
             <p className="text-[13px] text-foreground">
-              {outcome.result === 'stay'
-                ? 'Staying in this chapter'
-                : outcome.result === 'asleep'
-                  ? 'Worth a fresh chapter: falling asleep under your grant'
-                  : 'Worth a fresh chapter'}
+              {outcome.result === 'stay' ? 'Staying in this chapter' : 'Worth a fresh chapter'}
             </p>
             <p className="font-mono text-[11px] text-muted-foreground">
               {outcome.changes} change{outcome.changes === 1 ? '' : 's'} landed or applied · a fresh
               chapter takes {outcome.threshold}
             </p>
-            {outcome.error && (
-              <p className="text-[12px] text-muted-foreground">
-                <span className="text-warning">The grant could not fall asleep:</span>{' '}
-                {outcome.error}
-              </p>
-            )}
           </div>
           {outcome.result !== 'stay' && (newest || session.sleep) && (
             <FallAsleep session={session} />

@@ -3,7 +3,7 @@ import type { MemoryItem } from '../lineage/refs.ts'
 import type { Todo } from '../todos/refs.ts'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { CreateArgs, Schedule } from '../automations/refs.ts'
-import type { GrantedBy, Journal, Proposal, Session, Waiting } from './refs.ts'
+import type { Journal, Proposal, Session, Waiting } from './refs.ts'
 
 /** Everything a dream carries to a fresh chapter; numeric trigger targets and subscribers need recreating. */
 export type Seed = {
@@ -11,8 +11,6 @@ export type Seed = {
   gate?: true
   from: { name: string; number: number }
   session: number
-  /** The granted automation that fell asleep for the user; absent when the user did. */
-  by?: GrantedBy
   journal: Journal & { proposals: Proposal[] }
   memories: Record<string, MemoryItem>
   todos: Pick<Todo, 'text' | 'owner'>[]
@@ -69,7 +67,7 @@ export function busyElsewhere(conversations: readonly ConversationSummary[], ult
 
 /**
  * The session the status line keeps in view: the open one, or the newest once every proposal settled while its Fall
- * asleep is still to come (a granted sleep under way included). A session the user ended early, or one a compaction's
+ * asleep is still to come. A session the user ended early, or one a compaction's
  * dream settled to stay, is done.
  */
 export function pinnedOf(sessions: readonly Session[] = []): Session | undefined {
@@ -128,8 +126,6 @@ export function stepOf(doc?: { sessions: Session[]; waiting?: Waiting }): DreamS
   if (sleep?.phase === 'failed')
     return { ...at, stage: 'asleep', text: 'Falling asleep failed', action: 'failed' }
   if (sleep) {
-    if (sleep.phase === 'waiting')
-      return { ...at, stage: 'asleep', text: 'Waiting for every conversation to finish' }
     const step = ['seeding', 'checking', 'backing up', 'switching'].indexOf(sleep.phase) + 1
     return { ...at, stage: 'asleep', text: `Falling asleep · step ${step} of 4` }
   }
@@ -140,14 +136,12 @@ export function stepOf(doc?: { sessions: Session[]; waiting?: Waiting }): DreamS
   const open = session.proposals.filter((item) => item.status === 'open').length
   const approved = session.proposals.filter((item) => item.status === 'approved').length
   if (open > 0)
-    return session.beforeCompaction?.handsOff
-      ? { ...at, stage: 'deciding', text: `I'm deciding ${open} under your grant` }
-      : {
-          ...at,
-          stage: 'deciding',
-          text: `${open} proposal${open === 1 ? '' : 's'} to decide`,
-          action: 'decide',
-        }
+    return {
+      ...at,
+      stage: 'deciding',
+      text: `${open} proposal${open === 1 ? '' : 's'} to decide`,
+      action: 'decide',
+    }
   if (approved > 0) return { ...at, stage: 'deciding', text: `${approved} on branches, landing` }
   const compaction = session.beforeCompaction
   if (compaction && !compaction.outcome)
