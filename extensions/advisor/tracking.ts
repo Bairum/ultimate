@@ -90,7 +90,8 @@ export async function acknowledge(
 ) {
   const matches = [
     ...text.matchAll(
-      /^\s*advisor ([a-z0-9]+):\s*(addressed|deferred|disputed)\s*[—\-:]\s*(.+)$/gim,
+      // Tolerates list markers, quotes and inline code around the line, as agents format replies.
+      /^[\s>*\-•`]*advisor\s+`?([a-z0-9]+)`?\s*:\s*`?(addressed|deferred|disputed)`?\s*[—–\-:]\s*(.+)$/gim,
     ),
   ]
   if (!matches.length) return
