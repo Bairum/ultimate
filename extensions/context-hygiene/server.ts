@@ -14,6 +14,7 @@ import {
   safe,
   text,
   suffixPositions,
+  placeholder,
 } from './rewrite.ts'
 
 export const docs = [Ledger]
@@ -153,7 +154,11 @@ export default function contextHygiene(
               for (const [id, decision] of Object.entries(masked)) {
                 if (ledger.decisions[id]) continue
                 ledger.decisions[id] = decision
-                ledger.stats.appliedTokens += decision.tokens
+                // Stats count what the mask saves: the output less its placeholder.
+                ledger.stats.appliedTokens += Math.max(
+                  0,
+                  decision.tokens - estimateTextTokens(placeholder(decision)),
+                )
                 applied = true
               }
               // Gate costs describe the bytes already shortened by earlier applied decisions.
