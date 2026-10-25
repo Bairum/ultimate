@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-import { createRegistry, Harness, MemoryStorage } from '@earendil-works/pi-durable'
+import { createRegistry, defineTool, Harness, MemoryStorage } from '@earendil-works/pi-durable'
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
 import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
@@ -11,7 +11,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import computerUse, { actions, act, userActions } from '../extensions/computer-use/server.ts'
 import { readSession, updateSession } from '../extensions/computer-use/session.ts'
 import { createDriver } from '../extensions/computer-use/driver.ts'
-import { createFakeDriver } from './computer-use-fake-driver.ts'
+import { createFakeDriver, pngHeader } from './computer-use-fake-driver.ts'
 import { fauxServer, removeTemp, temp } from './helpers.ts'
 import { resolve } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -19,7 +19,11 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { Profile } from '../extensions/subagents/api.ts'
 import type { ComputerDetails } from '../extensions/computer-use/refs.ts'
 import { withDetails } from '../extensions/computer-use/details.ts'
-import { resizeImage } from '@earendil-works/pi-coding-agent'
+import { ModelRuntime, resizeImage } from '@earendil-works/pi-coding-agent'
+import { Type } from '@earendil-works/pi-ai'
+import { createChild } from '../extensions/subagents/children.ts'
+import { discoverAgents } from '../lib/agents.ts'
+import { Metadata } from '../server/metadata.ts'
 
 vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@earendil-works/pi-coding-agent')>()
@@ -30,7 +34,7 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).toReversed()) await close()
   vi.useRealTimers()
 })
-async function fixture(classify?: ClassifyService) {
+async function fixture(classify?: ClassifyService, extraTools: ToolRegistration[] = []) {
   const stopCommand = vi.fn<() => Promise<void>>(async () => {})
   const fake = createFakeDriver()
   const driver = await createDriver({
@@ -67,6 +71,7 @@ async function fixture(classify?: ClassifyService) {
   } as unknown as ExtensionHost
   const extension = computerUse(host)
   registry.install(extension)
+  if (extraTools.length) registry.install({ name: 'computer-test-tools', tools: extraTools })
   harness = await Harness.open(new MemoryStorage(), { models, registry }, context)
   const root = await harness.root(context, {
     agent: { model: { provider: 'faux', modelId: 'faux-1' } },
@@ -373,9 +378,15 @@ it('runs a routine goal through fake classify and journals Jev decisions', async
   expect(data(output).status).toBe('done')
   expect((output.details as ComputerDetails).act).toMatchObject({
     mode: 'goal',
-    steps: [{ kind: 'click', status: 'delivered', label: '6' }],
+    steps: [{ kind: 'click', status: 'delivered', label: { text: '6', untrusted: true } }],
     decisions: expect.any(Array),
   })
+  const tops = (output.details as ComputerDetails).act!.decisions.flatMap(
+    (decision) => decision.top,
+  )
+  expect(tops.length).toBeGreaterThan(0)
+  for (const top of tops)
+    expect(top.label).toMatchObject({ text: expect.any(String), untrusted: true })
   expect(f.fake.display).toBe('6')
   expect((await readSession(f.host, f.root.id)).journal.some((j) => j.kind === 'jev')).toBe(true)
 })
@@ -511,13 +522,19 @@ function labelButton(f: Awaited<ReturnType<typeof fixture>>, index: number, labe
 it('hit-tests pixel clicks before consequence checks and confirms no-hit clicks', async () => {
   const f = await fixture()
   labelButton(f, 7, 'Send')
+  const call = f.driver.call.bind(f.driver)
+  f.driver.call = async (tool, args, signal) => {
+    const reply = await call(tool, args, signal)
+    if (tool === 'get_window_state') reply.images = [pngHeader(800, 200)]
+    return reply
+  }
   await f.grant()
   const view = await f.observe()
   expect(
     data(await f.run([{ kind: 'click', x: 370, y: 90, capture: view.capture!.id }])).status,
   ).toBe('confirm_required')
   const pending = (await readSession(f.host, f.root.id)).pending[0]
-  expect(pending.label).toBe('Send')
+  expect(pending).toMatchObject({ label: 'Send', x: 370, y: 90 })
   const fresh = await f.observe()
   expect(
     data(await f.run([{ kind: 'click', x: 799, y: 199, capture: fresh.capture!.id }])).status,
@@ -926,6 +943,7 @@ it('requires pixel confirmation when a downscaled capture disagrees with its rep
         screenshot_height: 100,
         screenshot_scale: 2,
       })
+      reply.images = [pngHeader(1000, 100)]
       const elements = reply.structured!.elements as unknown as {
         element_index: number
         frame: { x: number; y: number; w: number; h: number }
@@ -1107,8 +1125,8 @@ it('returns structured act and observe details with task progress, untrusted scr
       {
         kind: 'type',
         status: 'delivered',
-        role: 'AXTextField',
-        label: 'email Field Address [param]',
+        role: { text: 'AXTextField', untrusted: true },
+        label: { text: 'email Field Address [param]', untrusted: true },
       },
     ],
     decisions: [],
@@ -1130,7 +1148,10 @@ it('adds details to apps, task and refusal results without changing either model
   ] as const) {
     const result = await f.invoke(name, args)
     expect((result.details as ComputerDetails).task?.id).toBe('T1')
-    expect((result.details as ComputerDetails).summary).toBeDefined()
+    expect((result.details as ComputerDetails).summary).toMatchObject({
+      value: expect.anything(),
+      untrusted: true,
+    })
   }
   await updateSession(f.host, f.root.id, (doc) => {
     doc.task!.spec.scope.params = { Email: 'bob@x.com' }
@@ -1149,4 +1170,212 @@ it('adds details to apps, task and refusal results without changing either model
   const refused = await f.invoke('computer_observe', {})
   expect((refused.details as ComputerDetails).status).toBe('operator_required')
   expect((refused.details as ComputerDetails).task?.id).toBe('T1')
+})
+
+it('stores the full confirmation payload through 4,000 characters and refuses longer payloads without creating a request', async () => {
+  const f = await fixture()
+  await f.grant()
+  let view = await f.observe()
+  const text = 'a'.repeat(3995) + '\nTAIL'
+  expect(data(await f.run([{ kind: 'type', element: `${view.snapshot}:1`, text }])).status).toBe(
+    'confirm_required',
+  )
+  expect((await readSession(f.host, f.root.id)).pending[0].payload).toBe(text)
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.pending = []
+  })
+  view = await f.observe()
+  expect(
+    data(await f.run([{ kind: 'type', element: `${view.snapshot}:1`, text: text + '!' }])).status,
+  ).toBe('payload_too_large')
+  expect((await readSession(f.host, f.root.id)).pending).toEqual([])
+  expect(f.fake.calls.some((c) => c.tool === 'type_text')).toBe(false)
+})
+
+it('refuses an oversized goal confirmation without persisting its payload', async () => {
+  const f = await fixture({
+    ask: async (request) => {
+      const id = request.questions.next
+        ? Object.keys(
+            (request.questions.next as { criteria: Record<string, string> }).criteria,
+          ).find((k) => k.includes('"name"'))!
+        : ''
+      return {
+        model: 'fake',
+        usage: { inputTokens: 1 },
+        answers: {
+          next: { type: 'choice', choice: id, confidence: 1, probabilities: { [id]: 1 } },
+          done: { type: 'noul', noul: 0 },
+          risk: { type: 'noul', noul: 1 },
+        },
+      }
+    },
+  })
+  const call = f.driver.call.bind(f.driver)
+  f.driver.call = async (tool, args, signal) => {
+    const reply = await call(tool, args, signal)
+    if (tool === 'get_window_state') {
+      const elements = reply.structured!.elements as unknown as {
+        element_index: number
+        role: string
+        label: string
+      }[]
+      Object.assign(
+        elements.find((e) => e.element_index === 1)!,
+        { role: 'AXTextField', label: 'Name' },
+      )
+    }
+    return reply
+  }
+  await f.grant()
+  await f.observe()
+  const result = await f.invoke('computer_act', {
+    app: 'Calculator',
+    window: 456,
+    goal: { text: 'Fill Name', steps: ['Fill Name'], params: { Name: 'x'.repeat(4001) } },
+  })
+  expect(data(result).status).toBe('payload_too_large')
+  expect((result.details as ComputerDetails).act?.escalationReason).toBe('payload_too_large')
+  expect((await readSession(f.host, f.root.id)).pending).toEqual([])
+  expect(f.fake.calls.some((c) => c.tool === 'set_value')).toBe(false)
+})
+
+it('masks a secure field with an innocuous label and confirms it even without newline text', async () => {
+  const f = await fixture()
+  const call = f.driver.call.bind(f.driver)
+  f.driver.call = async (tool, args, signal) => {
+    const reply = await call(tool, args, signal)
+    if (tool === 'get_window_state') {
+      const elements = reply.structured!.elements as unknown as {
+        element_index: number
+        role: string
+        label: string
+      }[]
+      Object.assign(
+        elements.find((e) => e.element_index === 1)!,
+        { role: 'AXSecureTextField', label: 'PIN' },
+      )
+    }
+    return reply
+  }
+  await f.grant()
+  const view = await f.observe()
+  const text = 'private-code'
+  expect(data(await f.run([{ kind: 'type', element: `${view.snapshot}:1`, text }])).status).toBe(
+    'confirm_required',
+  )
+  const state = await readSession(f.host, f.root.id)
+  expect(state.pending[0].payload).toBe(`••• (${text.length} chars)`)
+  expect(JSON.stringify(state)).not.toContain(text)
+  expect(f.fake.calls.some((c) => c.tool === 'type_text')).toBe(false)
+})
+
+it('marks app, window and launch summaries as untrusted values', async () => {
+  const f = await fixture()
+  await f.grant()
+  for (const [name, args, field] of [
+    ['computer_observe', {}, 'apps'],
+    ['computer_apps', {}, 'apps'],
+    ['computer_observe', { app: 'Calculator' }, 'windows'],
+    ['computer_apps', { launch: 'Calculator' }, 'windows'],
+  ] as const) {
+    const result = await f.invoke(name, args)
+    expect((result.details as ComputerDetails).summary).toMatchObject({
+      untrusted: true,
+      value: { [field]: expect.any(Array) },
+    })
+  }
+})
+
+it('rejects unsafe callable or deferred tools even when the offered tools are safe', async () => {
+  const f = await fixture()
+  const tool = f.tools.find((t) => t.name === 'computer_observe')!
+  const agent = await f.root.agent(context)
+  for (const field of ['callable', 'deferred'] as const) {
+    const result = await tool.execute(
+      {},
+      {
+        conversationId: f.root.id,
+        callId: field,
+        output: () => {},
+        agent: async () => ({
+          ...agent,
+          [field]: [...agent[field], { ...agent.tools[0], name: 'bash' }],
+        }),
+      } as unknown as ToolExecutionApi,
+      context,
+    )
+    expect(data(result).status).toBe('operator_required')
+  }
+  expect(f.fake.calls).toEqual([])
+})
+
+it('accepts the real computer-operator definition resolved by the subagents child creation path', async () => {
+  const extra = ['read', 'bash', 'web_fetch'].map((name) =>
+    defineTool({
+      name,
+      description: name,
+      parameters: Type.Object({}),
+      ...(name === 'web_fetch' ? { deferred: true as const } : {}),
+      execute: async () => ({ output: [] }),
+    }),
+  )
+  const f = await fixture(undefined, extra)
+  const modelRuntime = await ModelRuntime.create()
+  const found = await discoverAgents(resolve('.'), f.host.userHome, f.host.userHome, modelRuntime)
+  const definition = found.definitions.find((d) => d.name === 'computer-operator')!
+  expect(definition.path).toBe(resolve('agents/computer-operator.md'))
+  const parentAgent = await f.root.agent(context)
+  expect(parentAgent.callable.some((t) => t.name === 'bash')).toBe(true)
+  expect(parentAgent.deferred.some((t) => t.name === 'web_fetch')).toBe(true)
+  const child = await f.harness.commit(
+    (tx) =>
+      createChild(f.host, tx, {
+        owner: { kind: 'ownerless' },
+        definition,
+        parentAgent,
+        modelRuntime,
+        metadata: Metadata,
+        label: 'operator',
+        title: 'Operator test',
+      }),
+    context,
+  )
+  const childConversation = (await f.harness.conversation(child.id, context))!
+  const agent = await childConversation.agent(context)
+  for (const tools of [agent.tools, agent.callable])
+    expect(tools.map((t) => t.name).toSorted()).toEqual([
+      'computer_act',
+      'computer_apps',
+      'computer_observe',
+      'computer_task',
+      'read',
+    ])
+  expect(agent.deferred).toEqual([])
+  const result = await f.invoke('computer_observe', {}, childConversation)
+  expect(data(result).status).not.toBe('operator_required')
+  expect((result.details as ComputerDetails).summary).toMatchObject({
+    untrusted: true,
+    value: { apps: expect.any(Array) },
+  })
+})
+
+it('fails closed on capture dimensions that disagree with the PNG header and records screenshot-pixel confirmation coordinates', async () => {
+  const f = await fixture()
+  const call = f.driver.call.bind(f.driver)
+  f.driver.call = async (tool, args, signal) => {
+    const reply = await call(tool, args, signal)
+    if (tool === 'get_window_state') reply.images = [pngHeader(400, 100)] // Metadata still claims 800 × 200 at 2×.
+    return reply
+  }
+  await f.grant()
+  const view = await f.observe()
+  const step: Step = { kind: 'click', x: 370, y: 90, capture: view.capture!.id }
+  expect(data(await f.run([step])).status).toBe('confirm_required')
+  expect((await readSession(f.host, f.root.id)).pending[0]).toMatchObject({
+    kind: 'confirm',
+    x: 370,
+    y: 90,
+  })
+  expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
 })

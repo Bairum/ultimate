@@ -64,7 +64,9 @@ export async function operatorOnly(host: ExtensionHost, api: ToolExecutionApi) {
   const agent = await api.agent(context)
   const profile = await host.harness().snapshot(Profile, api.conversationId, context)
   return profile?.definition === 'computer-operator' &&
-    agent.tools.every((tool) => tool.name.startsWith('computer_') || tool.name === 'read')
+    [agent.tools, agent.callable, agent.deferred].every((tools) =>
+      tools.every((tool) => tool.name.startsWith('computer_') || tool.name === 'read'),
+    )
     ? undefined
     : result({ status: 'operator_required', message: 'delegate to the computer-operator agent' })
 }

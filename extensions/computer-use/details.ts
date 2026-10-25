@@ -60,7 +60,7 @@ export async function withDetails<T extends { structuredOutput?: JsonValue; deta
     }
   }
   if (name !== 'computer_act' && !details.observe)
-    details.summary = data.structured ?? value.structuredOutput
+    details.summary = { value: data.structured ?? value.structuredOutput ?? null, untrusted: true }
   const redact = redactor(params)
   const safe = JSON.parse(
     JSON.stringify(

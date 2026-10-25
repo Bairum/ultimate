@@ -10,6 +10,7 @@ import {
 } from '../extensions/computer-use/policy.ts'
 import type { Grant } from '../extensions/computer-use/policy.ts'
 import type { Element, Observation, Step } from '../extensions/computer-use/types.ts'
+import { pngHeader } from './computer-use-fake-driver.ts'
 
 const target: Element = {
   token: 's1:1',
@@ -157,6 +158,7 @@ it('uses descendant labels for pixel hits, confirms unlabelled clicks, and separ
     truncated: false,
     bounds: { x: 100, y: 200, w: 100, h: 100 },
     capture: { id: 'c1', width: 200, height: 200, scale: 2 },
+    image: pngHeader(200, 200),
     elements: [
       button,
       { ...target, index: 2, parent: 1, depth: 1, role: 'AXStaticText', label: 'Send' },

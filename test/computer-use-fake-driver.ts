@@ -7,6 +7,15 @@ import type { JsonValue } from '@earendil-works/chord'
 export type FakeCall = { tool: string; args: Record<string, JsonValue> }
 type Reply = CallToolResult | ((call: FakeCall) => CallToolResult | Promise<CallToolResult>)
 
+/** Header-only PNG fixture for capture-dimension checks; no native codec needed. */
+export function pngHeader(width: number, height: number) {
+  const header = Buffer.alloc(24)
+  Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').copy(header)
+  header.writeUInt32BE(width, 16)
+  header.writeUInt32BE(height, 20)
+  return { mimeType: 'image/png', data: header.toString('base64') }
+}
+
 /** A fresh MCP server per connection, with Calculator state and scripts shared across reconnects. */
 export function createFakeDriver(options: { version?: string; name?: string } = {}) {
   const calls: FakeCall[] = []

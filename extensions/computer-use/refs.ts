@@ -19,6 +19,9 @@ export type Session = {
     window?: string
     label?: string
     payload?: string
+    /** Screenshot pixels, present together for pixel-click confirmations. */
+    x?: number
+    y?: number
   }[]
   journal: {
     call: string
@@ -45,8 +48,12 @@ export type ActStepDetails = {
   status: StepOutcome['status']
   code?: string
   message?: string
-  role?: string
-  label?: string
+  role?: UntrustedText
+  label?: UntrustedText
+}
+export type JevDecisionDetails = Omit<JevDecision, 'chose' | 'top'> & {
+  chose?: string
+  top: { id: string; label: UntrustedText; p: number }[]
 }
 export type ComputerDetails = {
   task: {
@@ -60,12 +67,12 @@ export type ComputerDetails = {
   } | null
   status?: string
   message?: string
-  summary?: JsonValue
+  summary?: { value: JsonValue; untrusted: true }
   act?: {
     mode: 'explicit' | 'goal'
     steps: ActStepDetails[]
     escalationReason?: string
-    decisions: (Omit<JevDecision, 'chose'> & { chose?: string })[]
+    decisions: JevDecisionDetails[]
     verdict?: Verdict
   }
   observe?: {

@@ -75,6 +75,8 @@ export type Refusal = {
   window?: string
   label?: string
   payload?: string
+  x?: number
+  y?: number
 }
 export type Gate = (ctx: GateContext) => undefined | Refusal | Promise<undefined | Refusal>
 // Task grounding precedes authority/safety gates; canonical scope is checked again at identity resolution.
@@ -173,9 +175,9 @@ export const dispatchGates: Gate[] = [
   frontmostGate,
   async (ctx) => {
     const refusal = confirmRefusal(ctx.app, ctx.step, ctx.target, ctx.observation)
-    const key = refusal.key
+    const key = refusal.refuse === 'confirm_required' ? refusal.key : undefined
     ctx.confirmation = key
-    if (hasConfirmation(ctx.session, key)) {
+    if (key && hasConfirmation(ctx.session, key)) {
       ctx.confirmationUsed = true
       return undefined
     }
@@ -288,8 +290,14 @@ export function confirmRefusal(
           : step.kind === 'menu'
             ? step.path.join(' / ')
             : ''
+  if (payload.length > 4000)
+    return {
+      refuse: 'payload_too_large' as const,
+      message:
+        'Payload exceeds the 4,000-character confirmation limit; it cannot be confirmed blind.',
+    }
   return {
-    refuse: 'confirm_required',
+    refuse: 'confirm_required' as const,
     message: 'The user must confirm this exact action.',
     key: confirmationKey(app, step, target, confirmationLocation(target, observation)),
     window: observation?.title ?? '',
@@ -297,6 +305,9 @@ export function confirmRefusal(
     payload:
       consequential(step, target).reason === 'Sensitive field'
         ? `••• (${payload.length} chars)`
-        : payload.slice(0, 200),
+        : payload,
+    ...('x' in step && !step.element && step.x !== undefined && step.y !== undefined
+      ? { x: step.x, y: step.y }
+      : {}),
   }
 }

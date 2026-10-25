@@ -95,7 +95,8 @@ export function consequential(
     return { hit: true, reason: 'Unlabelled click' }
   if (
     (step.kind === 'type' || step.kind === 'set_value') &&
-    /password|passcode|secret|token/i.test(labelWords(target?.label ?? ''))
+    (target?.role === 'AXSecureTextField' ||
+      /password|passcode|secret|token/i.test(labelWords(target?.label ?? '')))
   )
     return { hit: true, reason: 'Sensitive field' }
   if (step.kind === 'type' && /[\r\n]/.test(step.text))
@@ -224,6 +225,18 @@ export function hitTest(step: Step, observation: Observation): Element | undefin
   if (!('x' in step) || step.x === undefined || step.y === undefined) return undefined
   const { capture, bounds } = observation
   if (!capture || !bounds || capture.scale <= 0 || bounds.w <= 0 || bounds.h <= 0) return undefined
+  // Driver capture dimensions must describe the actual PNG, not just agree with its scale.
+  if (observation.image?.mimeType !== 'image/png') return undefined
+  const header = Buffer.from(observation.image.data.slice(0, 44), 'base64')
+  if (
+    header.length < 24 ||
+    !header.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) ||
+    header.toString('ascii', 12, 16) !== 'IHDR' ||
+    header.readUInt32BE(8) !== 13 ||
+    header.readUInt32BE(16) !== capture.width ||
+    header.readUInt32BE(20) !== capture.height
+  )
+    return undefined
   const sx = capture.width / bounds.w
   const sy = capture.height / bounds.h
   if (

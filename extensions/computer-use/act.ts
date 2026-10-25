@@ -75,6 +75,9 @@ export async function pending(
         ...(step === undefined ? {} : { step }),
         ...(refusal.key ? { key: refusal.key } : {}),
         ...(refusal.payload === undefined ? {} : { payload: refusal.payload }),
+        ...(refusal.x === undefined || refusal.y === undefined
+          ? {}
+          : { x: refusal.x, y: refusal.y }),
         ...(refusal.window !== undefined
           ? { window: refusal.window, label: refusal.label ?? '' }
           : {}),
@@ -181,7 +184,12 @@ export async function act(
           ? { code: redact(outcome.code), message: redact(outcome.message) }
           : {}),
         ...(outcome.status === 'failed' ? { message: redact(outcome.message) } : {}),
-        ...(target ? { role: redact(target.role), label: redact(target.label ?? '') } : {}),
+        ...(target
+          ? {
+              role: { text: redact(target.role), untrusted: true },
+              label: { text: redact(target.label ?? ''), untrusted: true },
+            }
+          : {}),
       })
     }
     let count = 0
@@ -535,6 +543,7 @@ export async function act(
     if (args.goal) {
       const config = await settings(host)
       const decisions: Promise<void>[] = []
+      let confirmationFailure: Refusal | undefined
       const outcome = await runGoal(args.goal, {
         app: args.app,
         observe,
@@ -543,6 +552,8 @@ export async function act(
           const action = candidateStep(c)
           const delivered = await step(action)
           describe(action, delivered, { ...c.element, label: c.label })
+          if (delivered.status === 'refused' && delivered.code === 'payload_too_large')
+            confirmationFailure = { refuse: delivered.code, message: delivered.message }
           return delivered
         },
         verify,
@@ -556,6 +567,10 @@ export async function act(
           const target = stepTarget(next, observation!)
           const app = observation!.app
           const refusal = confirmRefusal(app, next, target, observation)
+          if (refusal.refuse === 'payload_too_large') {
+            confirmationFailure = refusal
+            return false
+          }
           if (hasConfirmation(await readSession(host, conversation), refusal.key)) return true
           await pending(host, conversation, app, refusal, count)
           return false
@@ -615,13 +630,31 @@ export async function act(
           const completed = task.completeSubgoal(state, subgoal!, Date.now())
           return 'refuse' in completed ? state : completed
         })
+      const visible = confirmationFailure
+        ? {
+            ...outcome,
+            status: confirmationFailure.refuse,
+            reason: confirmationFailure.refuse,
+            detail: confirmationFailure.message,
+          }
+        : outcome
       const summary = result({
-        ...outcome,
+        ...visible,
         ...('observation' in outcome ? { observation: undefined } : {}),
       })
       const view = observation ? await observedOutput(observation) : undefined
       const uiDecisions = (await readSession(host, conversation)).journal.flatMap((j) =>
-        j.call === call && j.decision ? [j.decision] : [],
+        j.call === call && j.decision
+          ? [
+              {
+                ...j.decision,
+                top: j.decision.top.map((top) => ({
+                  ...top,
+                  label: { text: top.label, untrusted: true as const },
+                })),
+              },
+            ]
+          : [],
       )
       return {
         ...summary,
@@ -633,7 +666,11 @@ export async function act(
             steps: uiSteps,
             decisions: uiDecisions,
             ...(outcome.status === 'done' ? { verdict: outcome.verdict } : {}),
-            ...(outcome.status === 'escalated' ? { escalationReason: outcome.reason } : {}),
+            ...(confirmationFailure
+              ? { escalationReason: confirmationFailure.refuse }
+              : outcome.status === 'escalated'
+                ? { escalationReason: outcome.reason }
+                : {}),
           },
           ...(view?.details.observe
             ? {
@@ -647,7 +684,7 @@ export async function act(
             : {}),
         },
         structuredOutput: json({
-          ...outcome,
+          ...visible,
           ...('observation' in outcome
             ? { observation: { ...outcome.observation, image: undefined } }
             : {}),
