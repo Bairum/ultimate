@@ -74,6 +74,19 @@ export type ComputerDetails = {
   status?: string
   message?: string
   summary?: { value: JsonValue; untrusted: true }
+  teach?: {
+    status: TeachStatus
+    endedBy?: 'unavailable'
+    frames: number
+    dropped: Record<string, number>
+    steps: {
+      n: number
+      action: string
+      label: UntrustedText
+      approved?: boolean
+      consequential: boolean
+    }[]
+  }
   act?: {
     mode: 'explicit' | 'goal'
     steps: ActStepDetails[]
@@ -144,4 +157,90 @@ export const ConfirmTaskAction = actionRef<{ conversation: number }, Session>(
 export const ConfirmChangeAction = actionRef<{ conversation: number }, Session>(
   'computer-use',
   'confirmChange',
+)
+
+export type TeachStatus = 'recording' | 'paused' | 'drafting' | 'review' | 'saved' | 'rejected'
+export type TaughtStep = {
+  n: number
+  action: 'click' | 'type' | 'type_secret' | 'key' | 'wait' | 'upload' | 'select'
+  target: { label: string; anchors: string[]; region?: [number, number, number, number] }
+  value?: { param: string }
+  expect: { appears?: string[]; disappears?: string[]; timeoutSeconds?: number }
+  wait?: { until: string; timeoutSeconds: number }
+  pitfalls?: string[]
+  frame: string
+  approved?: boolean
+  consequential?: boolean
+}
+export type FrameMeta = {
+  id: string
+  at: number
+  file?: string
+  width: number
+  height: number
+  ocr: {
+    text: string
+    bounds: { x: number; y: number; width: number; height: number }
+    confidence: number
+  }[]
+  diff: { appeared: string[]; disappeared: string[]; region?: [number, number, number, number] }
+  inferred: string
+}
+export type Teach = {
+  segment?: {
+    id: string
+    app: string
+    window: number
+    title: string
+    startedAt: number
+    endsAt: number
+    status: TeachStatus
+    endedBy?: 'unavailable'
+    frames: FrameMeta[]
+    narration: { at: number; entry: number }[]
+    dropped: { reason: string; at: number }[]
+  }
+  steps?: TaughtStep[]
+  saved?: { path: string; at: number }
+}
+/** Forks start fresh: recording consent and private frame files must not spread to children. */
+export const TeachDoc = docRef<Teach>('computer.teach')
+export type TeachStart = {
+  conversation: number
+  app: string
+  window?: string | number
+  minutes?: number
+  title: string
+}
+/** TeachStart → teaching document; user-only observation authority. */
+export const TeachStartAction = actionRef<TeachStart, Teach>('computer-use', 'teachStart')
+/** {conversation} → teaching document in drafting; stops observation. */
+export const TeachStopAction = actionRef<{ conversation: number }, Teach>(
+  'computer-use',
+  'teachStop',
+)
+/** {conversation} → teaching document paused; captures nothing. */
+export const TeachPauseAction = actionRef<{ conversation: number }, Teach>(
+  'computer-use',
+  'teachPause',
+)
+/** {conversation} → teaching document recording; rechecks consent. */
+export const TeachResumeAction = actionRef<{ conversation: number }, Teach>(
+  'computer-use',
+  'teachResume',
+)
+/** {conversation, steps} → teaching document; validated full replacement, no files. */
+export const TeachEditAction = actionRef<{ conversation: number; steps: TaughtStep[] }, Teach>(
+  'computer-use',
+  'teachEdit',
+)
+/** {conversation, scope, name, overwrite?} → {path}; saves reviewed skill files. */
+export const TeachSaveAction = actionRef<
+  { conversation: number; scope: 'project' | 'personal'; name: string; overwrite?: boolean },
+  { path: string }
+>('computer-use', 'teachSave')
+/** {conversation} → rejected teaching document; deletes segment frames. */
+export const TeachRejectAction = actionRef<{ conversation: number }, Teach>(
+  'computer-use',
+  'teachReject',
 )

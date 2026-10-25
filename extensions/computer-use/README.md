@@ -75,6 +75,65 @@ Pixel numeric settings are clamped: `labelRadius` 0–48, `minConfidence` 0.3–
 
 `clipboard: false` and `fileTransfer: false` are placeholders, not implemented features. A live supervised teach session must validate clipboard and file-transfer behavior before those features are built.
 
+## Teach mode (watch only)
+
+The user demonstrates a procedure while Ultimate records settled window changes, never input events.
+`computer.teach` is a per-conversation document (`TeachDoc` in `refs.ts`); forks start empty so observation
+authority and private frames never spread. `segment` holds the recording deadline, metadata-only frames,
+narration entry references and dropped-frame reasons. Status is `recording`, `paused`, `drafting`, `review`,
+`saved` or `rejected`; `steps` holds the reviewed procedure and `saved` the skill path/time.
+
+User-only actions (all return the teaching document except save):
+
+| Action        | Arguments                                             | Effect                                                                               |
+| ------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `teachStart`  | `{conversation, app, window?, minutes?: 1–10, title}` | Consent-checked observation, default five minutes; refuses an active segment or act. |
+| `teachStop`   | `{conversation}`                                      | Stop recording and move to drafting.                                                 |
+| `teachPause`  | `{conversation}`                                      | Stop captures, retaining the original deadline.                                      |
+| `teachResume` | `{conversation}`                                      | Recheck consent and resume before the deadline.                                      |
+| `teachEdit`   | `{conversation, steps}`                               | Validate and replace the draft, without writing files.                               |
+| `teachSave`   | `{conversation, scope: 'project'                      | 'personal', name, overwrite?}`                                                       | Save reviewed approved steps; returns `{path}`. |
+| `teachReject` | `{conversation}`                                      | Delete the segment's private frames immediately.                                     |
+
+Start, resume and save are also host-only actions: they grant observation or write files. Stop and hardStop
+end every active teaching segment. Every `computer_act` while recording **or paused** refuses `teaching`;
+observe remains available. No keystroke, mouse or accessibility-tree recording is collected. The recorder
+polls captures of at most 800 pixels every `computerUse.teach.pollMs` (default 500; allowed 100–10000),
+and records a full capture plus text/icon OCR only after two unchanged polls following a change.
+Hidden windows drop `window_not_visible`; transient screenshot failures drop `observation_unavailable`.
+Only these two failures keep polling, bounded by the original deadline. Twenty unavailable reads in a row
+end the segment in `drafting` with `endedBy: 'unavailable'`. Other OCR/schema failures end in drafting.
+No focus takeover is performed.
+
+Frames have at most 200 OCR regions of 80 characters. Password/passcode/PIN/secret/token/one-time/OTP
+cues or runs of masked characters suppress the **entire image**, not just the field. Cue regions and nearby
+OCR are excluded from metadata and diffs. A sign-in label disappearing beside a previous password cue
+suppresses the next two settled frames. Restart/resume after a password cue conservatively skips two
+settled frames too. Pause records no frames. Segments stop at their deadline, 150 frames or 300 MB.
+Private PNGs use the evidence store's `teach/<segment>/` subdirectory: 300 MB per segment, separate from
+ordinary conversation evidence's 200 MB; both share 30-day retention and the global 1 GB oldest-first cap.
+On open, unexpired recordings resume; expired recordings become drafts. Paused recordings remain paused.
+
+The operator uses **`computer_teach {action: 'frames'}`** after stopping to read untrusted OCR diffs,
+inferred changes and user narration, plus at most eight largest-diff frame images (≤1024 pixels).
+`{action: 'draft', steps}` validates the `TaughtStep` structure in `refs.ts`, computes consequential labels
+server-side, removes model-supplied approvals and moves to review. Typed values must be named `{param}`
+objects, never literal text. Both operations refuse during recording or pause. Narration comes only from
+timestamped `pi.user` entries between start and stop, excluding extension wakes/notes.
+
+Save requires every step to be explicitly approved or rejected, and at least one approved step. It writes
+`SKILL.md`, `procedure.json`, and at most one private evidence image per approved step to
+`<projectRoot>/.ultimate/skills/<name>/` or `<userHome>/.ultimate/skills/<name>/`. Names are kebab-case,
+at most 64 characters; existing skills require `overwrite: true`. Skills warn that screen text is untrusted
+and logins use `type_secret` params. **Project skills load only when the project is trusted.** Practice/replay
+is not part of teach mode yet.
+
+Designer contract: subscribe to `TeachDoc`; use the seven typed `Teach*Action` refs above. Render frame
+metadata/OCR/diffs as untrusted screen content, never instructions. Tool results add `ComputerDetails.teach`
+with `status`, optional `endedBy: 'unavailable'`, `frames` (count), `dropped` (counts by reason), and `steps` (`n`, `action`, `label: UntrustedText`,
+`approved?`, computed `consequential`). The review UI supplies full step replacements through `teachEdit`;
+only a user may set approval. No `.tsx` changes are included here.
+
 ## Actions and document
 
 All actions return the conversation's session unless noted. Only `state` is available to agents; authority-changing actions are `userActions` reserved for the UI.

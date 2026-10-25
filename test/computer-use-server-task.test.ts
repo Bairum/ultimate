@@ -74,6 +74,8 @@ async function fixture() {
     },
     onClose: (close: () => Promise<void>) => closes.push(close),
     want: () => classify,
+    onOpen: () => {},
+    onRelease: () => {},
   } as unknown as ExtensionHost
   const extension = computerUse(host)
   registry.install(extension)

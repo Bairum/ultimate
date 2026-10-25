@@ -1,3 +1,4 @@
+import { teachingBlocked } from './teach.ts'
 import { windowSchema, predicates, prepare } from './schemas.ts'
 import { settings, runtime, driverFor, setup, cacheKey } from './runtime.ts'
 import { json, result, anchored, plainTask, changeTask } from './tool-helpers.ts'
@@ -139,6 +140,11 @@ export async function act(
   signal: AbortSignal,
   progress: (text: string) => void = () => {},
 ) {
+  if (await teachingBlocked(host, conversation))
+    return result({
+      status: 'teaching',
+      message: 'Teaching is watch-only; stop teaching before acting.',
+    })
   if ((args.actions === undefined) === (args.goal === undefined))
     return result({
       status: 'invalid_arguments',
@@ -156,6 +162,11 @@ export async function act(
   runtimeState.busy = true
   runtimeState.active.set(conversation, active)
   try {
+    if (await teachingBlocked(host, conversation))
+      return result({
+        status: 'teaching',
+        message: 'Teaching is watch-only; stop teaching before acting.',
+      })
     await pruneEvidence(host.home)
     let session = await readSession(host, conversation)
     const taskRefusal = task.requireActiveTask(session.task)

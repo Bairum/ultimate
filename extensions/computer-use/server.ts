@@ -9,12 +9,14 @@ import { observeTool } from './observe.ts'
 import { actTool, appsTool } from './act.ts'
 import { taskToolDefinition } from './task-tool.ts'
 import { withDetails } from './details.ts'
+import { ComputerTeach, teachTool, openTeaching } from './teach.ts'
 
 import * as task from './task.ts'
 
-export const docs = [ComputerSession]
+export const docs = [ComputerSession, ComputerTeach]
 export default function computerUse(host: ExtensionHost) {
   runtime(host)
+  host.onOpen(() => openTeaching(host))
   return defineExtension({
     name: 'computer-use',
     hooks: [
@@ -49,30 +51,33 @@ export default function computerUse(host: ExtensionHost) {
     ],
     // Keep these registered for parents: delegation requires the child's tools to be a subset
     // of the parent's stored tools. Restrict execution, not registration, to computer-operator.
-    tools: [taskToolDefinition(host), observeTool(host), actTool(host), appsTool(host)].map(
-      (tool) => {
-        const registered = tool as ToolRegistration
-        const execute: ToolRegistration['execute'] = (args, api, ctx) =>
-          registered.execute(args, api, ctx)
-        return {
-          ...registered,
-          execute: async (args, api, ctx) => {
-            const refusal = await operatorOnly(host, api)
-            if (refusal)
-              return withDetails(host, api.conversationId, registered.name, args, refusal)
-            const abort = new AbortController()
-            const state = runtime(host)
-            state.calls.set(abort, api.conversationId)
-            try {
-              const value = await execute(args, api, withAbortSignal(abort.signal, ctx))
-              return await withDetails(host, api.conversationId, registered.name, args, value)
-            } finally {
-              state.calls.delete(abort)
-            }
-          },
-        }
-      },
-    ),
+    tools: [
+      taskToolDefinition(host),
+      observeTool(host),
+      actTool(host),
+      appsTool(host),
+      teachTool(host),
+    ].map((tool) => {
+      const registered = tool as ToolRegistration
+      const execute: ToolRegistration['execute'] = (args, api, ctx) =>
+        registered.execute(args, api, ctx)
+      return {
+        ...registered,
+        execute: async (args, api, ctx) => {
+          const refusal = await operatorOnly(host, api)
+          if (refusal) return withDetails(host, api.conversationId, registered.name, args, refusal)
+          const abort = new AbortController()
+          const state = runtime(host)
+          state.calls.set(abort, api.conversationId)
+          try {
+            const value = await execute(args, api, withAbortSignal(abort.signal, ctx))
+            return await withDetails(host, api.conversationId, registered.name, args, value)
+          } finally {
+            state.calls.delete(abort)
+          }
+        },
+      }
+    }),
   })
 }
 
@@ -82,6 +87,9 @@ export { gates } from './gates.ts'
 export { actions, userActions } from './actions.ts'
 // Each one lets agents operate the real Mac (takeover: the user's frontmost app); deny, stop, hardStop and release only take authority away.
 export const hostActions = [
+  'teachStart',
+  'teachResume',
+  'teachSave',
   'grant',
   'confirm',
   'confirmTask',
