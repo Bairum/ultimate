@@ -6,7 +6,7 @@ import { createRegistry, defineTool, Harness, MemoryStorage } from '@earendil-wo
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
-import { mkdir, writeFile, readFile, stat } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, stat, lstat, rename, symlink, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { ActionContext } from '../server/actions.ts'
@@ -18,8 +18,14 @@ import codexComputer, {
 } from '../extensions/codex-computer/server.ts'
 import type { Child } from '../extensions/codex-computer/app-server.ts'
 import type { CodexDetails } from '../extensions/codex-computer/refs.ts'
-import { readState } from '../extensions/codex-computer/state.ts'
+import { readState, updateState } from '../extensions/codex-computer/state.ts'
 import { removeTemp, temp, until } from './helpers.ts'
+import { pruneEvidence, resultsDirectory } from '../extensions/codex-computer/evidence.ts'
+
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs, lstat: vi.fn<typeof fs.lstat>(fs.lstat) }
+})
 
 class FakeServer extends EventEmitter {
   stdout = new PassThrough()
@@ -84,6 +90,10 @@ class FakeServer extends EventEmitter {
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
   for (const close of cleanup.splice(0).toReversed()) await close()
+  vi.mocked(lstat).mockReset()
+  vi.mocked(lstat).mockImplementation(
+    (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).lstat,
+  )
   vi.useRealTimers()
 })
 async function fixture(acknowledged = true) {
@@ -95,11 +105,11 @@ async function fixture(acknowledged = true) {
   const spawn = vi.fn<import('../extensions/codex-computer/app-server.ts').Spawn>(
     () => fake as unknown as Child,
   )
-  const codesign = vi.fn<(path: string) => Promise<string>>(
-    async () => 'TeamIdentifier=2DC432GLL2\n',
-  )
+  const codesign = vi.fn<(path: string) => Promise<void>>(async () => {})
   const resources = new Map<string, unknown>()
-  const closes: (() => Promise<void>)[] = []
+  const processCloses: (() => Promise<void>)[] = []
+  const facetCloses: (() => Promise<void>)[] = []
+  let creatingResource = false
   const models = createModels()
   const faux = fauxProvider({ tokensPerSecond: 0 })
   models.setProvider(faux.provider)
@@ -111,9 +121,17 @@ async function fixture(acknowledged = true) {
     userHome: home,
     projectSettings: async () => ({ codexComputer: { screensToOpenAI: true, codexPath: path } }),
     harness: () => harness,
-    onClose: (close: () => Promise<void>) => closes.push(close),
+    onClose: (close: () => Promise<void>) =>
+      (creatingResource ? processCloses : facetCloses).push(close),
     resource: (key: string, create: () => unknown) => {
-      if (!resources.has(key)) resources.set(key, create())
+      if (!resources.has(key)) {
+        creatingResource = true
+        try {
+          resources.set(key, create())
+        } finally {
+          creatingResource = false
+        }
+      }
       return resources.get(key)
     },
   } as unknown as ExtensionHost
@@ -155,8 +173,16 @@ async function fixture(acknowledged = true) {
       } as unknown as ToolExecutionApi,
       signal ? withAbortSignal(signal, context) : context,
     )
+  const closeResources = async () => {
+    for (const close of processCloses.splice(0)) await close()
+  }
+  const reload = async () => {
+    for (const close of facetCloses.splice(0)) await close()
+    return codexComputer(host, { spawn, codesign })
+  }
   cleanup.push(async () => {
-    for (const close of closes) await close()
+    for (const close of facetCloses.splice(0)) await close()
+    await closeResources()
     await harness.close(context)
     await removeTemp(home)
   })
@@ -172,6 +198,8 @@ async function fixture(acknowledged = true) {
     codesign,
     progress,
     tools,
+    closeResources,
+    reload,
     grant: (scope: 'once' | 'conversation' | 'project' = 'conversation') =>
       actions.grant({ conversation: root.id, app: 'calculator', scope }, ctx),
   }
@@ -203,9 +231,9 @@ it('requires project screen opt-in AND a paired-browser acknowledgement before s
   expect(userActions).toEqual(['acknowledge', 'grant', 'deny', 'continue', 'stop'])
   expect(hostActions).toEqual(['acknowledge', 'grant', 'continue'])
 })
-it('refuses unsigned Codex without spawning', async () => {
+it('refuses Codex when strict signature verification fails, without spawning', async () => {
   const f = await fixture()
-  f.codesign.mockResolvedValue('TeamIdentifier=NOT_OPENAI\n')
+  f.codesign.mockRejectedValue(new Error('failed to satisfy specified code requirement(s)'))
   expect(data(await f.invoke()).status).toBe('codex_unsigned')
   expect(f.spawn).not.toHaveBeenCalled()
 })
@@ -389,4 +417,80 @@ it('refuses a resolved agent with any extra tool, even if named as an operator',
   })
   expect(data(await f.invoke()).status).toBe('declined')
   expect(f.spawn).not.toHaveBeenCalled()
+})
+
+it('keeps a live run across facet reloads, but process close fences pending and future starts', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  await f.reload()
+  expect(f.fake.kills).toEqual([])
+  f.fake.complete()
+  expect(data(await promise).status).toBe('done')
+
+  const signing = Promise.withResolvers<void>()
+  const entered = Promise.withResolvers<void>()
+  f.codesign.mockImplementationOnce(async () => {
+    entered.resolve()
+    await signing.promise
+  })
+  const pending = f.invoke()
+  await entered.promise
+  await f.closeResources()
+  signing.resolve()
+  expect(data(await pending).status).toBe('stopped')
+  expect(data(await f.invoke()).status).toBe('stopped')
+  expect(f.spawn).toHaveBeenCalledOnce()
+})
+
+it('leaves Continue pending when its wake throws, so the user can retry', async () => {
+  const f = await fixture()
+  await updateState(f.host, f.root.id, (doc) => {
+    doc.pending.push({ kind: 'continue', session: 'thread-1', at: Date.now() })
+  })
+  vi.spyOn(f.harness, 'conversation').mockResolvedValueOnce(undefined)
+  await expect(actions.continue({ conversation: f.root.id }, f.ctx)).rejects.toThrow(
+    'Conversation not found',
+  )
+  expect((await readState(f.host, f.root.id)).pending[0]?.kind).toBe('continue')
+  vi.spyOn(f.harness, 'conversation').mockResolvedValueOnce(f.root)
+  const submit = vi.spyOn(f.root, 'submit').mockRejectedValueOnce(new Error('wake failed'))
+  await expect(actions.continue({ conversation: f.root.id }, f.ctx)).rejects.toThrow('wake failed')
+  expect((await readState(f.host, f.root.id)).pending[0]?.kind).toBe('continue')
+  submit.mockRestore()
+  await actions.continue({ conversation: f.root.id }, f.ctx)
+  expect((await readState(f.host, f.root.id)).pending).toEqual([])
+  await f.harness.waitForIdle(context)
+})
+
+it('skips pruning when an evidence parent is swapped after its last metadata check', async () => {
+  const home = await temp()
+  cleanup.push(() => removeTemp(home))
+  const directory = await resultsDirectory(home, 1)
+  const outside = join(home, 'outside')
+  await mkdir(outside)
+  const filename = 'expired.png'
+  const path = join(directory, filename)
+  const victim = join(outside, filename)
+  await writeFile(path, 'evidence')
+  await writeFile(victim, 'must survive')
+  const now = Date.now()
+  await utimes(path, 0, 0)
+  const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  let scanned = false,
+    swapped = false
+  vi.mocked(lstat).mockImplementation(async (...args) => {
+    const info = await fs.lstat(...args)
+    if (String(args[0]) === path) scanned = true
+    // Return the old directory's metadata after replacing it: only a fresh realpath detects the escape.
+    if (scanned && String(args[0]) === directory && !swapped) {
+      swapped = true
+      await rename(directory, `${directory}-old`)
+      await symlink(outside, directory)
+    }
+    return info
+  })
+  await pruneEvidence(home, now)
+  expect(swapped).toBe(true)
+  expect(await readFile(victim, 'utf8')).toBe('must survive')
+  expect(await readFile(join(`${directory}-old`, filename), 'utf8')).toBe('evidence')
 })

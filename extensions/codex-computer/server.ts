@@ -20,13 +20,23 @@ export const docs = [State]
 export const userActions = ['acknowledge', 'grant', 'deny', 'continue', 'stop']
 // These grant authority over the real desktop and send its screen contents outside the instance.
 export const hostActions = ['acknowledge', 'grant', 'continue']
-export type Dependencies = { spawn: Spawn; codesign: (path: string) => Promise<string> }
+export type Dependencies = { spawn: Spawn; codesign: (path: string) => Promise<void> }
 function runtime(host: ExtensionHost) {
-  return host.resource('codex-computer.runs', () => ({
-    live: new Set<Run>(),
-    epoch: 0,
-    stops: new Map<number, number>(),
-  }))
+  return host.resource('codex-computer.runs', () => {
+    const state = {
+      live: new Set<Run>(),
+      epoch: 0,
+      closed: false,
+      stops: new Map<number, number>(),
+    }
+    // Registered inside the resource: facet reinstalls must not end an in-flight run.
+    host.onClose(async () => {
+      state.closed = true
+      state.epoch++
+      for (const run of state.live) run.kill()
+    })
+    return state
+  })
 }
 const config = (settings: Record<string, unknown>) => {
   const value = settings.codexComputer
@@ -72,14 +82,19 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
   const deps: Dependencies = {
     spawn: spawnServer,
     codesign: async (path) => {
-      const value = await exec('codesign', ['-dv', '--verbose=2', path], { timeout: 10_000 })
-      return value.stdout + value.stderr
+      await exec(
+        '/usr/bin/codesign',
+        [
+          '--verify',
+          '--strict',
+          '-R=anchor apple generic and certificate leaf[subject.OU] = "2DC432GLL2"',
+          path,
+        ],
+        { timeout: 10_000 },
+      )
     },
     ...seams,
   }
-  host.onClose(async () => {
-    for (const run of state.live) run.kill()
-  })
   return defineExtension({
     name: 'codex-computer',
     tools: [
@@ -151,8 +166,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
           if (!path)
             return refuse('codex_missing', 'Install signed Codex or set codexComputer.codexPath')
           try {
-            if (!/^TeamIdentifier=2DC432GLL2\s*$/m.test(await deps.codesign(path)))
-              return refuse('codex_unsigned', 'Codex must be signed by OpenAI (team 2DC432GLL2)')
+            await deps.codesign(path)
           } catch {
             return refuse('codex_unsigned', 'Could not verify the OpenAI Codex signature')
           }
@@ -166,6 +180,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
             )
           }
           if (
+            state.closed ||
             state.epoch !== epoch ||
             state.stops.get(conversation) !== stoppedAt ||
             ctx.abortSignal?.aborted
@@ -175,6 +190,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
           await pruneEvidence(host.home)
           // Recheck after filesystem work: Stop must not race a fresh process into existence.
           if (
+            state.closed ||
             state.epoch !== epoch ||
             state.stops.get(conversation) !== stoppedAt ||
             ctx.abortSignal?.aborted
@@ -259,18 +275,22 @@ export const actions = {
   }),
   continue: implementAction(ContinueAction, async (args, { host }) => {
     validate(args)
-    let session = ''
-    await updateState(host, args.conversation, (doc) => {
-      const pending = doc.pending.find((p) => p.kind === 'continue')
-      if (!pending) throw new Error('No budget continuation pending')
-      session = pending.session ?? ''
-      doc.pending = doc.pending.filter((p) => p.kind !== 'continue')
-    })
+    const pending = (await readState(host, args.conversation)).pending.find(
+      (p) => p.kind === 'continue',
+    )
+    if (!pending) throw new Error('No budget continuation pending')
+    const session = pending.session
     await wake(
       host,
       args.conversation,
       `The user approved another Codex computer budget. ${session ? `Resume with codex_operate session ${JSON.stringify(session)}` : 'Codex did not return a session; call codex_operate again'} with the remaining brief.`,
     )
+    // submit() durably admits the wake before resolving; failures leave Continue retryable.
+    await updateState(host, args.conversation, (doc) => {
+      doc.pending = doc.pending.filter(
+        (p) => p.kind !== 'continue' || p.at !== pending.at || p.session !== pending.session,
+      )
+    })
     return readState(host, args.conversation)
   }),
   stop: implementAction(StopAction, async (args, { host }) => {

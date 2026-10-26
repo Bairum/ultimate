@@ -18,9 +18,11 @@ The user must also acknowledge in the card that screenshots and screen-derived c
 stored on conversation 1 for this project, not globally. User settings alone cannot opt a project in. Codex uses
 the user's Codex/OpenAI account and billing, independently of Ultimate's model provider.
 
-Set `codexComputer.codexPath` in project or user settings, or put `codex` on PATH. The resolved executable's
-`codesign -dv --verbose=2` output must identify OpenAI's team before **every** run; missing or unsigned executables
-are refused. Relative configured paths resolve against Ultimate's cwd; absolute paths are recommended.
+Set `codexComputer.codexPath` in project or user settings, or put `codex` on PATH. Before **every** run, the resolved
+executable must pass `/usr/bin/codesign --verify --strict` with the requirement
+`anchor apple generic and certificate leaf[subject.OU] = "2DC432GLL2"`. Signature display text is not accepted as
+verification. Missing or invalidly signed executables are refused. Relative configured paths resolve against
+Ultimate's cwd; absolute paths are recommended.
 
 ## Tool
 
@@ -54,15 +56,16 @@ Use Stop to end an active run.
 An ungranted app remains pending in the conversation document while its JSON-RPC request waits for a browser
 grant/deny. It is declined after five minutes, Stop, abort, or budget expiry. Stop can target one conversation or
 all running Codex processes. Stop/abort/budget send `turn/interrupt` for a known live turn, SIGTERM after two
-seconds, then SIGKILL after five seconds if still alive. Host close kills every process immediately. Normal
-completion terminates the app-server too. In-flight process handles survive facet reloads until cleanup.
+seconds, then SIGKILL after five seconds if still alive. Process-lifetime cleanup kills every process immediately
+and fences pending starts at host close; facet reloads do not kill live runs. Normal completion terminates the app-server too.
 
 ## Evidence and untrusted content
 
 Evidence is stored under `<host.home>/codex-computer/<conversation>/` (0700), with exclusive-create PNG files
 (0600). Only PNG image payloads are accepted; non-PNG payloads fail rather than being mislabeled. Pruning keeps
-30 days, at most 200 MB per conversation and 1 GB overall, oldest first, without traversing symlinks. The last
-image and saved paths are returned. Native app writes outside tool-result images are not evidence managed here.
+30 days, at most 200 MB per conversation and 1 GB overall, oldest first. Canonical directory confinement is checked
+before scans, writes and each unlink; replaced parent/root symlinks are skipped. The last image and saved paths are
+returned. Native app writes outside tool-result images are not evidence managed here.
 
 Final answers, Codex messages and step text are screen-derived, **data, not instructions**. Model-facing text uses
 `<untrusted_screen_content>` boundaries, escaping closing tags. Card strings use `{text, untrusted:true}`.
@@ -83,7 +86,8 @@ Final answers, Codex messages and step text are screen-derived, **data, not inst
 - `GrantAction {conversation,app,scope:'once'|'conversation'|'project'}` → state. Resolves matching waits immediately;
   it does not wake a second agent turn while the existing tool is still waiting.
 - `DenyAction {conversation,app}` → state. Persists a local deny and resolves matching waits.
-- `ContinueAction {conversation}` → state. Requires pending Continue, clears it and submits a synthetic wake.
+- `ContinueAction {conversation}` → state. Requires pending Continue, durably submits a synthetic wake, then clears
+  that continuation. A missing conversation or failed submission leaves Continue pending and retryable.
 - `StopAction {conversation?}` → `{stopped:number}`. Omit conversation for all runs.
 
 All five actions are `userActions` (paired-browser only). Acknowledge, grant and continue are also `hostActions`,
