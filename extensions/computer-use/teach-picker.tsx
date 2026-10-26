@@ -1,17 +1,16 @@
 /**
  * The start dialog's window picker: every titled window of every running app and helper process, searchable, ticked
- * explicitly (1–6), with an inline grant for apps this conversation may not watch yet. Picking from the live list
+ * explicitly (1–6), with an inline Allow for apps this conversation may not watch yet. Picking from the live list
  * replaces typing an app and a title fragment, which broke on helper processes (Citrix Viewer) and invisible
  * characters in titles. Each picked window can narrow `match`, the part of its title a saved lesson finds it by.
  */
-import { LoaderCircleIcon, RotateCwIcon } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { RotateCwIcon } from 'lucide-react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, cn, errorMessage } from '@/sdk'
+import { cn } from '@/sdk'
 import type { ActionState } from '@/sdk'
-import { GrantAction } from './refs.ts'
 import type { PickableWindow, TeachStart } from './refs.ts'
 import { normalizeTitle, titleMatches } from './windows.ts'
 
@@ -20,6 +19,19 @@ export const maxWindows = 6
 
 /** One ticked window, in the order ticked: its id and the title fragment a saved lesson finds it by. */
 export type Pick = { window: number; match: string }
+
+/** An app the user allowed watching in the start dialog: `TeachStart.allow`, sent only with the start. */
+export type Allowed = NonNullable<TeachStart['allow']>[number]
+
+/** What Allow on `w` permits: its app, and for a window-only helper (no bundle id) only its process. */
+export const allowFor = (w: PickableWindow): Allowed => ({
+  app: w.app,
+  ...(w.bundle ? {} : { pid: w.pid }),
+})
+
+/** Whether `w`'s app (and, for a helper, its process) was allowed in this dialog. */
+export const isAllowed = (allow: readonly Allowed[], w: PickableWindow) =>
+  allow.some((a) => a.app === w.app && a.pid === allowFor(w).pid)
 
 /** Windows whose app, title or pid contain `query`, compared normalised; an empty query keeps them all. */
 export function filterWindows(windows: readonly PickableWindow[], query: string) {
@@ -80,44 +92,20 @@ const away = (w: PickableWindow) =>
   !w.currentSpace ? 'other Space' : !w.onScreen ? 'hidden' : undefined
 
 export function WindowPicker({
-  conversation,
   listed,
   picks,
   onPicks,
+  allow,
+  onAllow,
 }: {
-  conversation: number
   listed: ActionState<{ windows: PickableWindow[] }>
   picks: readonly Pick[]
   onPicks: (picks: Pick[]) => void
+  /** The apps allowed in this dialog: sent with the start, so closing the dialog leaves no grant behind. */
+  allow: readonly Allowed[]
+  onAllow: (w: PickableWindow) => void
 }) {
   const [query, setQuery] = useState('')
-  const [grantError, setGrantError] = useState<string>()
-  const [granting, setGranting] = useState<string>()
-  // The grant settles after later renders: tick against the picks and list of the latest one, not this one's.
-  const latest = useRef({ picks, windows: listed.data?.windows ?? [] })
-  latest.current = { picks, windows: listed.data?.windows ?? [] }
-  /** Grant the app for this conversation, list again so its flag flips, and tick the window it was asked from. */
-  const grant = (w: PickableWindow) => {
-    setGranting(w.app)
-    setGrantError(undefined)
-    api
-      // A window-only helper has no bundle id: the grant covers this process only.
-      .action(GrantAction, {
-        conversation,
-        app: w.app,
-        scope: 'conversation',
-        ...(w.bundle ? {} : { pid: w.pid }),
-      })
-      .then(() => listed.refetch())
-      .then(() => {
-        const { picks: current, windows: now } = latest.current
-        const count = current.filter((p) => now.some((o) => o.window === p.window)).length
-        if (!current.some((p) => p.window === w.window) && count < maxWindows)
-          onPicks([...current, { window: w.window, match: w.title }])
-      })
-      .catch((error: unknown) => setGrantError(errorMessage(error)))
-      .finally(() => setGranting(undefined))
-  }
   const windows = listed.data?.windows ?? []
   const shown = filterWindows(windows, query)
   const ticked = picks.filter((p) => windows.some((w) => w.window === p.window))
@@ -188,8 +176,11 @@ export function WindowPicker({
               const where = away(w)
               const problem = pick && matchProblem(w, pick.match, windows)
               // One Allow per app: its first row in the shown list.
+              const allowedHere = w.consent === 'required' && isAllowed(allow, w)
               const asks =
-                w.consent === 'required' && shown.findIndex((o) => o.app === w.app) === index
+                w.consent === 'required' &&
+                !allowedHere &&
+                shown.findIndex((o) => o.app === w.app) === index
               return (
                 <li data-teach-window={w.window} key={w.window}>
                   <div className="flex items-center gap-2 pr-2">
@@ -232,21 +223,29 @@ export function WindowPicker({
                       {denied && (
                         <span className="shrink-0 font-mono text-[10.5px] text-error">denied</span>
                       )}
+                      {allowedHere && (
+                        <span
+                          className="shrink-0 font-mono text-[10.5px] text-muted-foreground"
+                          title="Watched for this lesson only, once you start it"
+                        >
+                          allowed
+                        </span>
+                      )}
                     </label>
                     {asks && (
                       <Button
                         className="h-6 shrink-0 gap-1 border-brand/50 px-1.5 font-sans text-[11px] text-foreground hover:border-brand max-md:h-8"
                         data-teach-allow={w.app}
-                        disabled={!!granting}
-                        onClick={() => grant(w)}
+                        onClick={() => {
+                          onAllow(w)
+                          if (!pick && !full)
+                            onPicks([...picks, { window: w.window, match: w.title }])
+                        }}
                         size="sm"
-                        title={`Let the agent watch ${w.app} in this conversation, then tick this window`}
+                        title={`Let the agent watch ${w.app} for this lesson (never act in it), then tick this window`}
                         type="button"
                         variant="outline"
                       >
-                        {granting === w.app && (
-                          <LoaderCircleIcon className="size-3 motion-safe:animate-spin" />
-                        )}
                         Allow
                       </Button>
                     )}
@@ -281,7 +280,6 @@ export function WindowPicker({
       {listed.error && listed.data && (
         <p className="text-[11px] break-words text-error">Refresh failed: {listed.error.message}</p>
       )}
-      {grantError && <p className="text-[11px] break-words text-error">{grantError}</p>}
     </fieldset>
   )
 }

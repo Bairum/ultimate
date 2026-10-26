@@ -17,10 +17,12 @@ function Heading({ children }: { children: string }) {
 }
 
 type Grant = Session['grants'][number]
-/** The grants still in force, newest per app: project ones from conversation 1, then this conversation's. */
+/** The grants still in force, newest per app: project ones from conversation 1, then this conversation's; teach grants only let a lesson watch. */
 function standing(project: readonly Grant[], local: readonly Grant[]) {
   const latest = new Map<string, Grant>()
-  for (const grant of [...project, ...local].toSorted((a, b) => a.at - b.at))
+  for (const grant of [...project, ...local]
+    .filter((g) => !g.teach)
+    .toSorted((a, b) => a.at - b.at))
     latest.set(grant.app.toLowerCase(), grant)
   return [...latest.values()].filter((g) => g.scope !== 'deny' && !(g.scope === 'once' && g.used))
 }

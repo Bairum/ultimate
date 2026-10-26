@@ -32,7 +32,7 @@ import { createFakeDriver } from './computer-use-fake-driver.ts'
 import { temp, removeTemp, until, fauxServer } from './helpers.ts'
 import { appsTool } from '../extensions/computer-use/act.ts'
 import { Profile } from '../extensions/subagents/api.ts'
-import { approvalScope, startTask } from '../extensions/computer-use/task.ts'
+import { activate, approvalScope, setSubgoals, startTask } from '../extensions/computer-use/task.ts'
 import type { TaskState } from '../extensions/computer-use/types.ts'
 import { windowFor } from '../extensions/computer-use/observe.ts'
 import {
@@ -1174,6 +1174,73 @@ it('keeps once observation authority for its segment but respects later revocati
     doc.grants.push({ app: 'Calculator', scope: 'deny', at: 1 })
   })
   await expect(resumeTeaching(f.host, f.root.id)).rejects.toThrow('consent_required')
+})
+it('lets the start dialog Allow only watch, for one lesson: nothing before Start, never acting, no wake', async () => {
+  const f = await fixture()
+  const started = startTask(
+    {
+      id: 'task',
+      intent: 'Use Calculator',
+      goal: 'Use Calculator',
+      criteria: [{ id: 'C', text: 'Ready', check: [{ ready: true }] }],
+      scope: { apps: ['Calculator'], actions: ['click'], params: {}, consequential: [] },
+    },
+    Date.now(),
+  ).state
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.task = activate(setSubgoals(started, [{ id: 'S1', text: 'Use Calculator' }]), 'S1')
+  })
+  const wakes = async () => {
+    const target = await f.host.harness().conversation(f.root.id, context)
+    const page = await target!.entries({}, 64, undefined, context)
+    return page.items.filter((e) => e.kind === 'computer.wake').length
+  }
+  const acting = async () =>
+    (
+      await act(
+        f.host,
+        f.driver,
+        f.root.id,
+        'act',
+        { app: 'Calculator', window: 456, actions: [{ kind: 'click', element: 's1:1' }] },
+        new AbortController().signal,
+      )
+    ).structuredOutput
+  const lesson = (extra: object = {}) =>
+    actions.teachStart(
+      {
+        conversation: f.root.id,
+        title: 'Lesson',
+        windows: [{ app: 'Calculator', window: 456 }],
+        ...extra,
+      },
+      f.ctx,
+    )
+  // Allow then "Not now" sends nothing, so nothing is granted; a start that fails records nothing either.
+  await expect(lesson()).rejects.toThrow('consent_required: Calculator')
+  await expect(
+    lesson({
+      windows: [{ app: 'Calculator', window: 456, match: 'Nope' }],
+      allow: [{ app: 'Calculator' }],
+    }),
+  ).rejects.toThrow('window_title')
+  expect((await readSession(f.host, f.root.id)).grants).toEqual([])
+  expect(await acting()).toMatchObject({ status: 'consent_required' })
+  // Starting with it watches the app, held by that segment only.
+  await lesson({ allow: [{ app: 'Calculator' }] })
+  await until(() => f.fake.calls.some((c) => c.tool === 'get_window_state'))
+  expect((await readSession(f.host, f.root.id)).grants).toMatchObject([
+    { app: 'Calculator', scope: 'once', teach: true, used: true },
+  ])
+  await finishTeaching(f.host, f.root.id)
+  await rejectTeaching(f.host, f.root.id)
+  // Neither another lesson nor the operator may use it, and nothing woke the operator.
+  await expect(lesson()).rejects.toThrow('consent_required: Calculator')
+  expect(await acting()).toMatchObject({ status: 'consent_required' })
+  expect(await wakes()).toBe(0)
+  // A grant to act still wakes the operator.
+  await actions.grant({ conversation: f.root.id, app: 'Calculator', scope: 'once' }, f.ctx)
+  expect(await wakes()).toBe(1)
 })
 it('restricts computer_teach execution to computer-operator', async () => {
   const f = await fixture()

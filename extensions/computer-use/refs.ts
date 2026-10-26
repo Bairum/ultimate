@@ -301,13 +301,16 @@ export const TeachDoc = docRef<Teach>('computer.teach')
 /**
  * Either `app` with an optional `window` (a numeric id or title fragment), or `windows`: 1–6 windows picked from
  * `teachWindows`, possibly of different apps. Each is `{app, window}` with the picked window id, and optionally
- * `match`: the part of its title a saved lesson finds it by later (default the whole title). Every app needs consent.
+ * `match`: the part of its title a saved lesson finds it by later (default the whole title). Every app needs consent:
+ * a grant, or with `windows` an entry in `allow`, the apps the user allowed watching in the start dialog (`pid` for a
+ * window-only helper). `allow` authorises this segment only and is recorded only when it starts.
  */
 export type TeachStart = {
   conversation: number
   app?: string
   window?: string | number
   windows?: { app: string; window: number; match?: string }[]
+  allow?: { app: string; pid?: number }[]
   minutes?: number
   title: string
 }

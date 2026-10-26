@@ -61,17 +61,24 @@ it('suggests the frontmost window of the last app, never a denied one', () => {
 })
 
 it('offers Allow for an app needing consent, badges off-screen windows, and locks denied ones', () => {
-  const html = renderToStaticMarkup(
-    createElement(WindowPicker, {
-      conversation: 1,
-      listed: { data: { windows }, loading: false, refetch: async () => undefined },
-      picks: [{ window: 2, match: 'OpsMate AI' }],
-      onPicks: () => {},
-    }),
-  )
+  const picker = (allow: { app: string; pid?: number }[]) =>
+    renderToStaticMarkup(
+      createElement(WindowPicker, {
+        listed: { data: { windows }, loading: false, refetch: async () => undefined },
+        picks: [{ window: 2, match: 'OpsMate AI' }],
+        onPicks: () => {},
+        allow,
+        onAllow: () => {},
+      }),
+    )
+  const html = picker([])
   expect(html.match(/data-teach-allow="([^"]+)"/g)).toEqual(['data-teach-allow="Notes"'])
   expect(html).toContain('other Space')
   expect(html).toContain('denied')
   expect(html).toContain('value="OpsMate AI"')
   expect(html).toContain('1 of 6')
+  // Allowed in this dialog: no grant yet, so the row says so instead of asking again.
+  const allowed = picker([{ app: 'Notes', pid: 104 }])
+  expect(allowed).not.toContain('data-teach-allow')
+  expect(allowed).toContain('>allowed<')
 })

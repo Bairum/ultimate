@@ -769,10 +769,13 @@ export function Requests({
   )
 }
 
-/** After the user answered: one quiet line saying what they decided. `grants` include project grants (conversation 1). */
+/**
+ * After the user answered: one quiet line saying what they decided. `grants` include project grants (conversation 1);
+ * teach grants only let a lesson watch, so they are not an answer to the operator's request.
+ */
 export function Answered({ grants, app }: { grants: Session['grants']; app: string }) {
   const grant = grants
-    .filter((g) => g.app.toLowerCase() === app.toLowerCase())
+    .filter((g) => g.app.toLowerCase() === app.toLowerCase() && !g.teach)
     .reduce<Session['grants'][number] | undefined>(
       (latest, g) => (!latest || g.at >= latest.at ? g : latest),
       undefined,

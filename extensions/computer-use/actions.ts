@@ -143,16 +143,18 @@ export const actions = {
         typeof args.window !== 'string' &&
         typeof args.window !== 'number') ||
       (args.windows !== undefined && !Array.isArray(args.windows)) ||
+      (args.allow !== undefined && !Array.isArray(args.allow)) ||
       (args.minutes !== undefined && typeof args.minutes !== 'number')
     )
       throw new Error('Invalid teaching arguments')
-    // startTeaching validates each picked window.
+    // startTeaching validates each picked window and allowed app.
     return startTeaching(host, {
       conversation: args.conversation,
       app: args.app,
       title: args.title,
       window: args.window,
       windows: args.windows as TeachStart['windows'],
+      allow: args.allow as TeachStart['allow'],
       minutes: args.minutes,
     })
   }),

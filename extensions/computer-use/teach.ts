@@ -248,13 +248,16 @@ export async function captureWindow(
   observation.isOnScreen ??= target.isOnScreen
   return observation
 }
-/** Whether `identity` may be observed. Start consumes once; only the segment holding that grant keeps observing. */
+/**
+ * Whether `identity` may be observed. Start consumes once (a teach grant is always once); only the segment holding
+ * that grant keeps observing, so the start dialog's "Allow" lasts one segment and never lets the operator act.
+ */
 function granted(identity: Identity, grants: Session['grants'], onceGrantAt?: number) {
   const authorized = grants.map((g) =>
     g.scope === 'once' && g.at === onceGrantAt ? { ...g, used: false } : g,
   )
   // The canonical name lets the start dialog grant the real app, even when a pid was typed.
-  return canonicalConsent(identity, authorized) === 'granted'
+  return canonicalConsent(identity, authorized, true) === 'granted'
 }
 async function consent(host: ExtensionHost, conversation: number, app: string) {
   if (await isStopped(host, conversation)) throw new Error('Computer use is stopped')
@@ -388,7 +391,7 @@ export async function pickableWindows(
       title,
       onScreen: w.is_on_screen !== false,
       currentSpace: w.on_current_space !== false,
-      consent: canonicalConsent(identity, grants),
+      consent: canonicalConsent(identity, grants, true),
       z: typeof w.z_index === 'number' ? w.z_index : -1,
     })
   }
@@ -536,10 +539,17 @@ const picked = (v: unknown) =>
   Number.isSafeInteger(v.window) &&
   Number(v.window) > 0 &&
   (v.match === undefined || (text(v.match) && v.match.length <= 200))
+const allowedApp = (v: unknown) =>
+  obj(v) &&
+  only(v, ['app', 'pid']) &&
+  text(v.app) &&
+  (v.pid === undefined || (Number.isSafeInteger(v.pid) && Number(v.pid) > 0))
 /**
  * Start watching `windows` (or the legacy `app` and optional `window`): each window is found by id in one
  * unfiltered listing and its app resolved from the owning pid, so two processes sharing a name stay apart. Every
- * distinct app needs consent; a once-grant is consumed per app and recorded on that app's windows.
+ * distinct app needs consent; a once-grant is consumed per app and recorded on that app's windows. An app in `allow`
+ * (the start dialog's "Allow") needs no grant: starting records a used teach grant for it, so it covers this segment
+ * only, never acting, and a dialog closed without starting leaves nothing behind.
  */
 export async function startTeaching(host: ExtensionHost, args: TeachStart) {
   const state = recorders(host)
@@ -547,6 +557,7 @@ export async function startTeaching(host: ExtensionHost, args: TeachStart) {
     !text(args.title) ||
     (args.windows === undefined
       ? !text(args.app) ||
+        args.allow !== undefined ||
         (args.window !== undefined &&
           typeof args.window !== 'string' &&
           (!Number.isSafeInteger(args.window) || args.window < 1))
@@ -556,7 +567,11 @@ export async function startTeaching(host: ExtensionHost, args: TeachStart) {
         !args.windows.length ||
         args.windows.length > 6 ||
         !args.windows.every(picked) ||
-        new Set(args.windows.map((w) => w.window)).size !== args.windows.length) ||
+        new Set(args.windows.map((w) => w.window)).size !== args.windows.length ||
+        (args.allow !== undefined &&
+          (!Array.isArray(args.allow) ||
+            args.allow.length > 6 ||
+            !args.allow.every(allowedApp)))) ||
     !timeout(args.minutes ?? 5) ||
     (args.minutes ?? 5) < 1 ||
     (args.minutes ?? 5) > 10
@@ -622,13 +637,36 @@ export async function startTeaching(host: ExtensionHost, args: TeachStart) {
       args.conversation,
       await readSession(host, args.conversation),
     )
+    const allowedAt = Date.now()
+    const allowance = (identity: Identity): Session['grants'] =>
+      args.allow?.some(
+        (a) =>
+          matchesApp(identity, a.app) && (identity.pid === undefined || a.pid === identity.pid),
+      )
+        ? [
+            {
+              app: identity.name,
+              scope: 'once',
+              teach: true,
+              ...(identity.pid === undefined ? {} : { pid: identity.pid }),
+              at: allowedAt,
+            },
+          ]
+        : []
     for (const identity of apps.values())
-      if (!granted(identity, grants)) throw new Error(`consent_required: ${identity.name}`)
+      if (!granted(identity, [...grants, ...allowance(identity)]))
+        throw new Error(`consent_required: ${identity.name}`)
     const now = runtime(host).clock?.now() ?? Date.now()
     const onceGrants = new Map<string, number>()
     await updateSession(host, args.conversation, (doc) => {
       for (const [key, identity] of apps) {
-        const consumed = consumeCanonical(identity, doc.grants)
+        const [allowed] = allowance(identity)
+        if (allowed) {
+          doc.grants.push({ ...allowed, used: true })
+          onceGrants.set(key, allowed.at)
+          continue
+        }
+        const consumed = consumeCanonical(identity, doc.grants, true)
         const at = consumed.find((g, i) => g.scope === 'once' && g.used && !doc.grants[i].used)?.at
         if (at !== undefined) onceGrants.set(key, at)
         doc.grants = consumed

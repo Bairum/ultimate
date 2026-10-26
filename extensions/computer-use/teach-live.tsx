@@ -30,7 +30,6 @@ import {
 } from '@/sdk'
 import type { ActionRef } from '@/sdk'
 import {
-  GrantAction,
   SessionDoc,
   TeachDoc,
   TeachPauseAction,
@@ -41,8 +40,15 @@ import {
   TeachWindowsAction,
 } from './refs.ts'
 import type { PickableWindow, Teach } from './refs.ts'
-import { matchProblem, startWindows, suggestedPick, WindowPicker } from './teach-picker.tsx'
-import type { Pick } from './teach-picker.tsx'
+import {
+  allowFor,
+  isAllowed,
+  matchProblem,
+  startWindows,
+  suggestedPick,
+  WindowPicker,
+} from './teach-picker.tsx'
+import type { Allowed, Pick } from './teach-picker.tsx'
 
 export type Segment = NonNullable<Teach['segment']>
 
@@ -543,23 +549,40 @@ export function TeachStartForm({
   const [minutes, setMinutes] = useState(5)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string>()
+  // Apps allowed here go out with the start only: closing the dialog without starting leaves no grant behind.
+  const [allow, setAllow] = useState<Allowed[]>([])
   const windows = listed.data?.windows ?? []
   // Until the user ticks or unticks, the frontmost window of the app the session used last is ticked for them.
   const suggestion = listed.data && suggestedPick(windows, suggested)
   const picks = chosen ?? (suggestion ? [suggestion] : [])
   const payload = startWindows(windows, picks)
   const picked = payload.map((p) => windows.find((w) => w.window === p.window)!)
-  const needs = [...new Set(picked.filter((w) => w.consent !== 'granted').map((w) => w.app))]
+  const needs = [
+    ...new Set(
+      picked.filter((w) => w.consent !== 'granted' && !isAllowed(allow, w)).map((w) => w.app),
+    ),
+  ]
+  const allowed = allow.filter((a) => picked.some((w) => isAllowed([a], w)))
   const invalid = picked.some((w) =>
     matchProblem(w, picks.find((p) => p.window === w.window)!.match, windows),
   )
   const ready = !!title.trim() && payload.length > 0 && !needs.length && !invalid && !busy
+  const onAllow = (next: Allowed) => {
+    setFailure(undefined)
+    setAllow((current) => [...current, next])
+  }
   const start = () => {
     if (!ready) return
     setBusy(true)
     setFailure(undefined)
     api
-      .action(TeachStartAction, { conversation, title: title.trim(), minutes, windows: payload })
+      .action(TeachStartAction, {
+        conversation,
+        title: title.trim(),
+        minutes,
+        windows: payload,
+        ...(allowed.length ? { allow: allowed } : {}),
+      })
       .then(onClose)
       .catch((error: unknown) => setFailure(errorMessage(error)))
       .finally(() => setBusy(false))
@@ -597,8 +620,9 @@ export function TeachStartForm({
           />
         </label>
         <WindowPicker
-          conversation={conversation}
+          allow={allow}
           listed={listed}
+          onAllow={(w) => onAllow(allowFor(w))}
           onPicks={(next) => {
             // A failure names the old selection; the consent hint below must show for the new one.
             setFailure(undefined)
@@ -629,14 +653,7 @@ export function TeachStartForm({
         </p>
       </div>
       <footer className="space-y-3 border-t border-border/60 bg-muted/30 px-6 py-4">
-        {failure && (
-          <StartFailure
-            conversation={conversation}
-            failure={failure}
-            onGranted={() => void listed.refetch()}
-            picked={picked}
-          />
-        )}
+        {failure && <StartFailure failure={failure} onAllow={onAllow} picked={picked} />}
         {!failure && needs.length > 0 && (
           <p className="text-[12px] leading-relaxed text-warning">
             Allow {needs.join(' and ')} first: watching needs your consent for each app.
@@ -656,48 +673,36 @@ export function TeachStartForm({
   )
 }
 
-/** Why starting failed, in the user's words, with the grant it needs when that is the reason. */
+/** Why starting failed, in the user's words, with the Allow it needs when that is the reason. */
 function StartFailure({
   failure,
   picked,
-  conversation,
-  onGranted,
+  onAllow,
 }: {
   failure: string
   picked: PickableWindow[]
-  conversation: number
-  onGranted: () => void
+  onAllow: (allowed: Allowed) => void
 }) {
-  const [error, setError] = useState<string>()
   const consent = failure.includes('app_identity')
     ? undefined
     : /consent_required(?:: (.+))?$/.exec(failure)
   if (consent) {
     // The canonical name the server resolved, which the picked window's app may only approximate.
     const name = consent[1]?.trim() || picked[0]?.app || ''
-    // A window-only helper has no bundle id: the grant covers the picked process only.
-    const helper = picked.find((w) => w.app === name && !w.bundle)
+    const window = picked.find((w) => w.app === name)
     return (
       <div className="space-y-2 text-[12px] leading-relaxed">
         <p className="text-warning">
-          Watching needs your consent for <span className="text-foreground">{name}</span> in this
-          conversation. An “allow once” grant covers one lesson only.
+          Watching needs your consent for <span className="text-foreground">{name}</span>. Allowing
+          covers this lesson only and never lets the agent act in it.
         </p>
-        <TeachButton
-          action={GrantAction}
-          args={{
-            conversation,
-            app: name,
-            scope: 'conversation',
-            ...(helper ? { pid: helper.pid } : {}),
-          }}
-          onError={setError}
-          onSuccess={onGranted}
-          tone="primary"
+        <Button
+          onClick={() => onAllow(window ? allowFor(window) : { app: name })}
+          size="sm"
+          type="button"
         >
-          Allow {name} in this conversation
-        </TeachButton>
-        {error && <p className="text-error">{error}</p>}
+          Allow watching {name}
+        </Button>
       </div>
     )
   }

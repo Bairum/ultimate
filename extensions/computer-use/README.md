@@ -104,23 +104,27 @@ narration entry references and dropped-frame reasons. Status is `recording`, `pa
 
 User-only actions (all return the teaching document except save):
 
-| Action         | Arguments                                                                                           | Effect                                                                                    |
-| -------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `teachStart`   | `{conversation, app, window?, minutes?: 1–10, title}` or `{conversation, windows, minutes?, title}` | Consent-checked observation, default five minutes; refuses an active segment or act.      |
-| `teachWindows` | `{conversation}`                                                                                    | Read-only: titled windows of every app and helper process, frontmost first, with consent. |
-| `teachStop`    | `{conversation}`                                                                                    | Stop recording and move to drafting.                                                      |
-| `teachPause`   | `{conversation}`                                                                                    | Stop captures, retaining the original deadline.                                           |
-| `teachResume`  | `{conversation}`                                                                                    | Recheck consent and resume before the deadline.                                           |
-| `teachEdit`    | `{conversation, steps}`                                                                             | Validate and replace the draft, without writing files.                                    |
-| `teachSave`    | `{conversation, scope: 'project' or 'personal', name, overwrite?}`                                  | Save reviewed approved steps; returns `{path, notes}`.                                    |
-| `teachReopen`  | `{conversation, scope, name}`                                                                       | Load a saved lesson into non-recording review; clear all approvals.                       |
-| `teachReject`  | `{conversation}`                                                                                    | Delete the segment's private frames immediately.                                          |
+| Action         | Arguments                                                                                                   | Effect                                                                                    |
+| -------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `teachStart`   | `{conversation, app, window?, minutes?: 1–10, title}` or `{conversation, windows, allow?, minutes?, title}` | Consent-checked observation, default five minutes; refuses an active segment or act.      |
+| `teachWindows` | `{conversation}`                                                                                            | Read-only: titled windows of every app and helper process, frontmost first, with consent. |
+| `teachStop`    | `{conversation}`                                                                                            | Stop recording and move to drafting.                                                      |
+| `teachPause`   | `{conversation}`                                                                                            | Stop captures, retaining the original deadline.                                           |
+| `teachResume`  | `{conversation}`                                                                                            | Recheck consent and resume before the deadline.                                           |
+| `teachEdit`    | `{conversation, steps}`                                                                                     | Validate and replace the draft, without writing files.                                    |
+| `teachSave`    | `{conversation, scope: 'project' or 'personal', name, overwrite?}`                                          | Save reviewed approved steps; returns `{path, notes}`.                                    |
+| `teachReopen`  | `{conversation, scope, name}`                                                                               | Load a saved lesson into non-recording review; clear all approvals.                       |
+| `teachReject`  | `{conversation}`                                                                                            | Delete the segment's private frames immediately.                                          |
 
 Start, resume, reopen and save are also host-only actions: they grant observation or read/write files. Reopen additionally requires a user browser context.
 Stop and hardStop end every active teaching segment. Both `computer_act` and `computer_apps launch` refuse `teaching`
 while recording **or paused**. Other conversations targeting the lesson's app or window refuse
 `teaching_elsewhere`; read-only observe/listing remains allowed. Start consumes a `once` grant for that
-segment only; later segments require a new grant. Resume rechecks revocations and cannot undo Stop/Reject.
+segment only; later segments require a new grant. The start dialog's **Allow** grants nothing on its own: the
+allowed apps go out with the start as `allow: [{app, pid?}]` (`pid` for a window-only helper), so closing the dialog
+leaves no grant behind. Starting records a used teach grant (`{scope: 'once', teach: true, used: true}`) for each
+allowed app, held by that segment only: acting ignores teach grants, nothing is woken, and it ends with the
+segment. Resume rechecks revocations and cannot undo Stop/Reject.
 Start and resume refuse any in-flight computer act across the project, checked again at commit. Live teaching
 guards use an in-memory index rebuilt on open, not a scan of conversation documents on each act. Window ids
 match numerically, including string arguments such as `"456"` to observe, act and `teachStart`'s `window`; title

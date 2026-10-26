@@ -242,4 +242,6 @@ export type Grant = {
   denyScope?: 'conversation' | 'project'
   /** The process a grant for a window-only helper app covers; ignored for apps with a bundle id. */
   pid?: number
+  /** A teach grant (always `once`): authorises one teach segment's observation; acting ignores it. */
+  teach?: boolean
 }

@@ -47,28 +47,43 @@ export const matchesApp = (identity: Identity, app: string) =>
   [identity.name, identity.bundle].some((name) => name?.toLowerCase() === app.toLowerCase())
 /**
  * The grants for `identity`, renamed to `name`. A window-only identity counts only grants made for its pid (a later
- * process of the same name is another app); revocations by name always count.
+ * process of the same name is another app); revocations by name always count. Teach grants count only for `teach`.
  */
 export function canonicalGrants(
   identity: Identity,
   grants: Session['grants'],
   name = identity.name,
+  teach = false,
 ) {
   return grants.map((g) =>
     !matchesApp(identity, g.app)
       ? g
-      : identity.pid !== undefined && g.scope !== 'deny' && g.pid !== identity.pid
+      : (g.teach && !teach) ||
+          (identity.pid !== undefined && g.scope !== 'deny' && g.pid !== identity.pid)
         ? { ...g, app: '' }
         : { ...g, app: name },
   )
 }
-export function canonicalConsent(identity: Identity, grants: Session['grants']) {
-  const name = consentFor(identity.name, canonicalGrants(identity, grants), Date.now())
+/** Consent to act on `identity`, or with `teach` to watch it for a teach segment (teach grants count too). */
+export function canonicalConsent(identity: Identity, grants: Session['grants'], teach = false) {
+  const name = consentFor(
+    identity.name,
+    canonicalGrants(identity, grants, identity.name, teach),
+    Date.now(),
+  )
   if (name !== 'granted' || !identity.bundle) return name
-  return consentFor(identity.bundle, canonicalGrants(identity, grants, identity.bundle), Date.now())
+  return consentFor(
+    identity.bundle,
+    canonicalGrants(identity, grants, identity.bundle, teach),
+    Date.now(),
+  )
 }
-export function consumeCanonical(identity: Identity, grants: Session['grants']) {
-  return consume(identity.name, canonicalGrants(identity, grants), Date.now()).map((g, i) => ({
+export function consumeCanonical(identity: Identity, grants: Session['grants'], teach = false) {
+  return consume(
+    identity.name,
+    canonicalGrants(identity, grants, identity.name, teach),
+    Date.now(),
+  ).map((g, i) => ({
     ...g,
     app: grants[i].app,
   }))
@@ -146,7 +161,12 @@ export const preflightGates: Gate[] = [
     // The preflight is only a negative grant check: it may refuse without contacting the Driver.
     // Authority at dispatch always uses the PID-resolved canonical name and bundle id below.
     if (!ctx.dispatch) {
-      const consent = consentFor(ctx.app, ctx.grants, Date.now())
+      // A teach grant only lets a teach segment watch: it never authorises acting.
+      const consent = consentFor(
+        ctx.app,
+        ctx.grants.filter((g) => !g.teach),
+        Date.now(),
+      )
       return consent === 'granted'
         ? undefined
         : {
