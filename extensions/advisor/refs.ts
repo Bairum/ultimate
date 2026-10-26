@@ -17,7 +17,7 @@ export const ROLES = [
   'lander',
   'watcher',
   'dream-pass',
-  'computer-operator',
+  'codex-operator',
 ] as const
 export type Role = (typeof ROLES)[number]
 

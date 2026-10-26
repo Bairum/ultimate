@@ -3,7 +3,6 @@ import { join } from 'node:path'
 import { toToolDeclaration } from '@earendil-works/pi-ai'
 import { expect, it } from 'vitest'
 import browserExtension from '../extensions/browser/server.ts'
-import computerUse from '../extensions/computer-use/server.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 
 // Anthropic rejects every request whose tool schemas are not JSON Schema draft 2020-12.
@@ -19,14 +18,13 @@ const draft07 = (node: unknown, path = ''): string[] => {
   return found
 }
 
-it('emits no draft-07 tuple schemas in browser or computer-use tools', () => {
+it('emits no draft-07 tuple schemas in browser tools', () => {
   const host = {
     resource: <T>(_name: string, create: () => T) => create(),
     onOpen() {},
     onClose() {},
   } as unknown as ExtensionHost
-  const tools = [...(browserExtension(host).tools ?? []), ...(computerUse(host).tools ?? [])]
-  expect(tools.map((tool) => tool.name)).toContain('computer_teach')
+  const tools = browserExtension(host).tools ?? []
   const found = tools
     .map(toToolDeclaration)
     .flatMap((tool) => draft07(JSON.parse(JSON.stringify(tool.parameters)), tool.name))

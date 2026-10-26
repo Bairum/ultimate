@@ -49,7 +49,7 @@ Enabled-role defaults:
 | worker, designer                    | scope, verification | answer          |                                                       |
 | scout, reviewer, dream-pass, lander | verification        | answer          |                                                       |
 | watcher                             | process             | signals         |                                                       |
-| computer-operator                   | monitor             | answer          | Card only by default; monitoring, never safety advice |
+| codex-operator                      | monitor             | answer          | Card only by default; monitoring, never safety advice |
 
 ## Rubrics and output
 

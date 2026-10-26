@@ -125,7 +125,7 @@ export function roleDefaults(role: Role): RoleProfile {
   if (role === 'coordinator') Object.assign(base, { at: ['answer', 'signals'] })
   if (role === 'worker' || role === 'designer') base.advisors = ['scope', 'verification']
   if (role === 'watcher') Object.assign(base, { advisors: ['process'], at: ['signals'] })
-  if (role === 'computer-operator') Object.assign(base, { advisors: ['monitor'], delivery: 'card' })
+  if (role === 'codex-operator') Object.assign(base, { advisors: ['monitor'], delivery: 'card' })
   return base
 }
 export function mergeConfig(user: AdvisorConfig, project: AdvisorConfig): AdvisorConfig {
