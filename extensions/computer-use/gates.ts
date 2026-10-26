@@ -253,6 +253,8 @@ export const dispatchGates: Gate[] = [
       point,
       config.labelRadius,
       config.minConfidence,
+      // OCR garbles and cuts off labels ("Decibe ." for "Describe your problem…"); uniqueness near the point still holds.
+      true,
     )
     if (!checked.match) {
       const redact = redactor(ctx.params ?? [])
@@ -272,16 +274,18 @@ export const dispatchGates: Gate[] = [
       enabled: true,
       actions: [],
     }
-    const containsPoint = (r: (typeof parsed.regions)[number]) =>
-      point.x >= r.bounds.x &&
-      point.x <= r.bounds.x + r.bounds.width &&
-      point.y >= r.bounds.y &&
-      point.y <= r.bounds.y + r.bounds.height
-    const atPoint = parsed.regions.filter(containsPoint)
+    const containsPoint = (r: (typeof parsed.regions)[number], margin = 0) =>
+      point.x >= r.bounds.x - margin &&
+      point.x <= r.bounds.x + r.bounds.width + margin &&
+      point.y >= r.bounds.y - margin &&
+      point.y <= r.bounds.y + r.bounds.height + margin
+    const atPoint = parsed.regions.filter((r) => containsPoint(r))
     const riskyLabels = atPoint
       .filter((r) => r.kind === 'text' && consequential(step, { ...target, label: r.label }).hit)
       .map((r) => r.label)
-    ctx.unlabelledPixel = !containsPoint(checked.match) || atPoint.some((r) => r.kind === 'icon')
+    // OCR boxes hug the glyphs: a click a few pixels off its matched text (a field beside its placeholder) is still on
+    // it. Further off, or on an icon, it is an unlabelled pixel that needs confirmation.
+    ctx.unlabelledPixel = !containsPoint(checked.match, 4) || atPoint.some((r) => r.kind === 'icon')
     ctx.target = {
       ...target,
       label: [

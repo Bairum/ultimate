@@ -84,7 +84,12 @@ export async function parseRegions(
       metadata?.capture_id === captureId ? metadata.action_coordinate_space : undefined,
   }
 }
-/** Convert action coordinates back to the screenshot pixels used by OCR, using only Driver metadata. */
+/**
+ * The screenshot pixel a pixel action names, once the capture's Driver metadata is usable. Click x/y and OCR regions
+ * are both screenshot pixels of the capture (the Driver maps them to the window itself), so the point is compared as
+ * given: inverting `action_coordinate_space` here put every click on a scaled capture (Citrix: 1920-point window,
+ * 1568-pixel capture) on the wrong label.
+ */
 export function screenshotPoint(space: unknown, point: { x: number; y: number }) {
   if (!space || typeof space !== 'object' || Array.isArray(space)) return undefined
   const s = space as Record<string, unknown>
@@ -96,10 +101,10 @@ export function screenshotPoint(space: unknown, point: { x: number; y: number })
     )
   )
     return undefined
-  const { m11, m12, m21, m22, tx, ty } = s as Record<string, number>
+  const { m11, m12, m21, m22 } = s as Record<string, number>
   // The live Driver reports axis-aligned affine maps; unmeasured rotations/shears are no hit.
   if (!m11 || !m22 || m12 !== 0 || m21 !== 0) return undefined
-  return { x: (point.x - tx) / m11, y: (point.y - ty) / m22 }
+  return point
 }
 export const normalizeLabel = (label: string) =>
   label
@@ -128,6 +133,49 @@ export function containsLabel(text: string, label: string) {
       .some((token) => negations.includes(token) && !expected.includes(token))
   )
 }
+/** Edit distance, for OCR-garbled words. */
+function edits(a: string, b: string) {
+  let row = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i]
+    for (let j = 1; j <= b.length; j++)
+      next[j] = Math.min(row[j] + 1, next[j - 1] + 1, row[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+    row = next
+  }
+  return row[b.length]
+}
+/**
+ * One OCR word standing for one expected word: equal, or with the same first letter and at most a quarter of the
+ * longer one's letters off. The first letter keeps a negating prefix ("Uninstalled" for "installed") from passing.
+ */
+const closeWord = (seen: string, wanted: string) =>
+  seen === wanted ||
+  (Math.min(seen.length, wanted.length) >= 3 &&
+    seen[0] === wanted[0] &&
+    edits(seen, wanted) <= Math.floor(Math.max(seen.length, wanted.length) / 4))
+/**
+ * `containsLabel`, or OCR's garbled or cut-off reading of it: the region's words (two letters or more) stand, in
+ * order, for words of the label starting with its first, at most a quarter of each word's letters off, with four
+ * letters at least ("Decibe ." for "Describe your problem or question"). A region that negates the label never
+ * matches. Only for checking a pixel click's target, never for verifying a criterion.
+ */
+export function fuzzyLabel(text: string, label: string) {
+  if (containsLabel(text, label)) return true
+  const wanted = normalizeLabel(label).split(' ').filter(Boolean)
+  const seen = normalizeLabel(text)
+    .split(' ')
+    .filter((word) => word.length >= 2)
+  if (!wanted.length || !seen.length || seen.join('').length < 4) return false
+  if (seen.some((word) => negations.includes(word) && !wanted.includes(word))) return false
+  if (!closeWord(seen[0], wanted[0])) return false
+  let next = 0
+  for (const word of seen) {
+    while (next < wanted.length && !closeWord(word, wanted[next])) next++
+    if (next === wanted.length) return false
+    next++
+  }
+  return true
+}
 const distance = (r: Region, p: { x: number; y: number }) =>
   Math.hypot(
     Math.max(r.bounds.x - p.x, 0, p.x - r.bounds.x - r.bounds.width),
@@ -139,6 +187,7 @@ export function matchLabel(
   point?: { x: number; y: number },
   radius = 12,
   minConfidence = 0.5,
+  fuzzy = false,
 ) {
   const candidates = regions
     .filter((r) => r.kind === 'text' && r.confidence >= minConfidence)
@@ -147,7 +196,10 @@ export function matchLabel(
     )
   const expected = normalizeLabel(label)
   const matches = candidates.filter(
-    (r) => expected && containsLabel(r.label, label) && (!point || distance(r, point) <= radius),
+    (r) =>
+      expected &&
+      (fuzzy ? fuzzyLabel(r.label, label) : containsLabel(r.label, label)) &&
+      (!point || distance(r, point) <= radius),
   )
   return {
     match: matches.length === 1 ? matches[0] : undefined,
