@@ -64,7 +64,6 @@ async function executable(path: string) {
 function result(details: CodexDetails, image?: { type: 'image'; mimeType: string; data: string }) {
   return {
     details,
-    structuredOutput: JSON.parse(JSON.stringify(details)),
     output: [
       {
         type: 'text' as const,

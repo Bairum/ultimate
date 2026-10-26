@@ -1,6 +1,10 @@
 import { BACKGROUND_CONTEXT as context, withAbortSignal } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from '@earendil-works/pi-ai/providers/faux'
 import { Type } from '@earendil-works/pi-ai'
 import { createRegistry, defineTool, Harness, MemoryStorage } from '@earendil-works/pi-durable'
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
@@ -138,7 +142,12 @@ async function fixture(apps?: string[]) {
       }),
     ],
   })
-  harness = await Harness.open(new MemoryStorage(), { models, registry }, context)
+  const reports: unknown[] = []
+  harness = await Harness.open(
+    new MemoryStorage(),
+    { models, registry, onReport: (error) => reports.push(error) },
+    context,
+  )
   await harness.root(context, { agent: { model: { provider: 'faux', modelId: 'faux-1' } } })
   const root = await harness.createConversation(
     { ownership: { kind: 'ownerless' }, agent: { model: { provider: 'faux', modelId: 'faux-1' } } },
@@ -186,10 +195,31 @@ async function fixture(apps?: string[]) {
     codesign,
     progress,
     tools,
+    faux,
+    reports,
     closeResources,
     reload,
   }
 }
+it('returns a result the durable tool wrapper accepts when the model calls it', async () => {
+  const f = await fixture()
+  f.faux.setResponses([
+    fauxAssistantMessage([fauxToolCall('codex_operate', { brief: 'Read Calculator' })], {
+      stopReason: 'toolUse',
+    }),
+    fauxAssistantMessage('done'),
+  ])
+  await f.root.submit({ type: 'input', content: 'go' }, context)
+  await f.fake.ready.promise
+  f.fake.complete()
+  await f.harness.waitForIdle(context)
+  // Bridgestone #22950: "returned structuredOutput but declares no structuredOutputSchema", reported on every run.
+  expect(f.reports).toEqual([])
+  const view = await f.root.viewState(context)
+  const result = view.value.entries.find((entry) => entry.kind === 'pi.tool-result')
+  view.dispose()
+  expect(JSON.stringify(result)).toContain('Codex: done')
+})
 const data = (value: { details?: unknown }) => value.details as CodexDetails
 async function running(f: Awaited<ReturnType<typeof fixture>>, signal?: AbortSignal) {
   const promise = f.invoke({ brief: 'Read Calculator' }, signal)
