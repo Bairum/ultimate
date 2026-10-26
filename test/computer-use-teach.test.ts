@@ -226,13 +226,13 @@ async function recorded(
 }
 const settled = (hash: string, labels: Region[]) =>
   Array.from({ length: 3 }, () => ({ hash, labels }))
-it('starts teaching a window-only helper app by pid once its name is granted', async () => {
+it('starts teaching a window-only helper app by pid once its process is granted', async () => {
   const f = await fixture()
   f.fake.windows = [{ window_id: 7, title: 'Desktop', app_name: 'Citrix Viewer', pid: 29200 }]
   const args = { conversation: f.root.id, app: '29200', title: 'Lesson' }
   await expect(startTeaching(f.host, args)).rejects.toThrow('consent_required: Citrix Viewer')
   await updateSession(f.host, f.root.id, (doc) => {
-    doc.grants.push({ app: 'Citrix Viewer', scope: 'conversation', at: 0 })
+    doc.grants.push({ app: 'Citrix Viewer', scope: 'conversation', at: 0, pid: 29200 })
   })
   await startTeaching(f.host, args)
   expect((await readTeach(f.host, f.root.id)).segment).toMatchObject({
@@ -294,7 +294,7 @@ it('teaches windows of two apps, tags frames by window and saves their title fra
   await updateSession(f.host, f.root.id, (doc) => {
     doc.grants.push(
       { app: 'Calculator', scope: 'conversation', at: 0 },
-      { app: 'Citrix Viewer', scope: 'conversation', at: 0 },
+      { app: 'Citrix Viewer', scope: 'conversation', at: 0, pid: 29200 },
     )
   })
   await startTeaching(f.host, {
@@ -505,7 +505,7 @@ it('lists pickable windows frontmost first with consent, leaving out tiny, untit
     },
   ]
   await updateSession(f.host, f.root.id, (doc) => {
-    doc.grants.push({ app: 'Citrix Viewer', scope: 'conversation', at: 0 })
+    doc.grants.push({ app: 'Citrix Viewer', scope: 'conversation', at: 0, pid: 29200 })
   })
   const { windows } = await actions.teachWindows({ conversation: f.root.id }, f.ctx)
   expect(windows).toEqual([

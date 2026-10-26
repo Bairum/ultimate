@@ -241,11 +241,13 @@ export const actions = {
   }),
   grant: implementAction(GrantAction, async (args, { host }) => {
     validate(args, true)
+    const pid = args.pid
     if (
       (args.scope !== 'once' && args.scope !== 'conversation' && args.scope !== 'project') ||
-      (args.always !== undefined && typeof args.always !== 'boolean')
+      (args.always !== undefined && typeof args.always !== 'boolean') ||
+      (pid !== undefined && (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 1))
     )
-      throw new Error('Invalid grant scope or always flag')
+      throw new Error('Invalid grant scope, always flag or pid')
     const scope = args.scope
     const always = args.always
     await updateSession(host, args.scope === 'project' ? 1 : args.conversation, (doc) => {
@@ -253,6 +255,7 @@ export const actions = {
         app: args.app,
         scope,
         ...(always === undefined ? {} : { always }),
+        ...(pid === undefined ? {} : { pid }),
         at: Date.now(),
       })
     })

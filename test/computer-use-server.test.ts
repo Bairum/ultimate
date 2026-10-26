@@ -552,7 +552,7 @@ const citrix = {
   pid: 29200,
   bundle: 'com.citrix.receiver.icaviewer.mac',
 }
-it('resolves a helper app that only list_windows reports, by name, bundle id or pid, without a bundle', async () => {
+it('resolves a helper app that only list_windows reports, by name, bundle id or pid, without a bundle but with its pid', async () => {
   const f = await fixture()
   f.fake.windows = [
     { ...citrix, window_id: 1, title: 'Desktop' },
@@ -564,7 +564,7 @@ it('resolves a helper app that only list_windows reports, by name, bundle id or 
     'com.citrix.receiver.icaviewer.mac',
     '29200',
   ])
-    expect(await resolveIdentity(f.driver, app)).toEqual({ name: 'Citrix Viewer' })
+    expect(await resolveIdentity(f.driver, app)).toEqual({ name: 'Citrix Viewer', pid: 29200 })
   // The driver's substring match is not an exact name.
   expect(await resolveIdentity(f.driver, 'Citrix')).toBeUndefined()
 })
@@ -617,16 +617,58 @@ it('resolves a window-only pid at dispatch and keeps the app match, scope and na
     return { refusal: await gate(ctx), ctx }
   }
   expect((await check('Citrix Viewer')).refusal?.refuse).toBe('consent_required')
-  const granted = [{ app: 'Citrix Viewer', scope: 'conversation' as const, at: 0 }]
+  const granted = [{ app: 'Citrix Viewer', scope: 'conversation' as const, at: 0, pid: 29200 }]
   const allowed = await check('citrix viewer', granted)
   expect(allowed.refusal).toBeUndefined()
-  expect(allowed.ctx.identity).toEqual({ name: 'Citrix Viewer' })
+  expect(allowed.ctx.identity).toEqual({ name: 'Citrix Viewer', pid: 29200 })
   expect(allowed.ctx.app).toBe('Citrix Viewer')
   expect((await check('Calculator', granted)).refusal?.refuse).toBe('app_identity')
   expect((await check('29200', granted)).refusal?.refuse).toBe('app_identity')
   // It never reports `active`, so even with another app frontmost it counts as the user's app.
   expect((await frontmostGate(allowed.ctx))?.refuse).toBe('user_active')
   expect(allowed.ctx.frontmost).toBe(true)
+})
+it('binds a window-only helper grant to its pid: a later same-named process needs consent again', async () => {
+  const f = await fixture()
+  f.fake.windows = [{ ...citrix, window_id: 1, title: 'Desktop' }]
+  const gate = preflightGates.at(-1)!
+  const check = async (pid: number) => {
+    const session = await readSession(f.host, f.root.id)
+    session.task!.spec.scope.apps.push('Citrix Viewer')
+    return gate({
+      session,
+      conversation: f.root.id,
+      grants: session.grants,
+      app: 'Citrix Viewer',
+      step: { kind: 'click', element: 's1:1' },
+      observation: { pid } as Observation,
+      dispatch: true,
+      foreground: false,
+      active: { stopped: false, inFlight: false },
+      count: 0,
+      signal: new AbortController().signal,
+      host: f.host,
+      driver: f.driver,
+    })
+  }
+  const refused = await check(29200)
+  expect(refused).toMatchObject({ refuse: 'consent_required', pid: 29200 })
+  // The consent card sends the refusal's pid back with the grant.
+  await actions.grant(
+    { conversation: f.root.id, app: 'Citrix Viewer', scope: 'conversation', pid: refused!.pid! },
+    f.ctx,
+  )
+  expect(await check(29200)).toBeUndefined()
+  // The granted process quits; another process of the same name (any bundle) is not covered.
+  f.fake.windows = [
+    { ...citrix, pid: 31337, bundle: 'com.evil.viewer', window_id: 2, title: 'Desktop' },
+  ]
+  expect(await check(31337)).toMatchObject({ refuse: 'consent_required', pid: 31337 })
+  // A pid-0 window owner never resolves.
+  f.fake.windows = [{ ...citrix, pid: 0, window_id: 3, title: 'Desktop' }]
+  expect(await resolveIdentity(f.driver, 'Citrix Viewer')).toBeUndefined()
+  expect(await identityForPid(f.driver, 0)).toBeUndefined()
+  expect((await check(0))?.refuse).toBe('app_identity')
 })
 
 async function otherConversation(f: Awaited<ReturnType<typeof fixture>>) {

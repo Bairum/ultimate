@@ -92,7 +92,9 @@ export async function pending(
 ) {
   if (!['consent_required', 'confirm_required'].includes(refusal.refuse)) return
   await updateSession(host, conversation, (session) => {
-    if (!session.pending.some((p) => p.app === app && p.key === refusal.key))
+    if (
+      !session.pending.some((p) => p.app === app && p.key === refusal.key && p.pid === refusal.pid)
+    )
       session.pending.push({
         kind: refusal.refuse === 'consent_required' ? 'consent' : 'confirm',
         app,
@@ -103,6 +105,7 @@ export async function pending(
         ...(refusal.x === undefined || refusal.y === undefined
           ? {}
           : { x: refusal.x, y: refusal.y }),
+        ...(refusal.pid === undefined ? {} : { pid: refusal.pid }),
         ...(refusal.window !== undefined
           ? { window: refusal.window, label: refusal.label ?? '' }
           : {}),
@@ -1168,6 +1171,7 @@ export function appsTool(host: ExtensionHost) {
           const refusal = {
             refuse: consent === 'denied' ? 'denied' : 'consent_required',
             message: `Consent required for ${identity.name}`,
+            ...(identity.pid === undefined ? {} : { pid: identity.pid }),
           }
           await pending(host, api.conversationId, identity.name, refusal)
           return result({ status: refusal.refuse })

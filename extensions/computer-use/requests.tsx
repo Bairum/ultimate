@@ -128,6 +128,7 @@ function Consent({ request, conversation }: { request: Pending; conversation: nu
     conversation,
     app: request.app,
     scope,
+    ...(request.pid === undefined ? {} : { pid: request.pid }),
   })
   return (
     <Frame

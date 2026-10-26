@@ -41,15 +41,26 @@ export function actionHash(step: Step, target?: Element, observation?: Observati
   }
   return hash([kind, target && observation ? path(target, observation) : '', hash(payload)])
 }
-export type Identity = { name: string; bundle?: string }
+/** A window-only helper (absent from `list_apps`) has no bundle id: `pid` binds its consent to that one process. */
+export type Identity = { name: string; bundle?: string; pid?: number }
 export const matchesApp = (identity: Identity, app: string) =>
   [identity.name, identity.bundle].some((name) => name?.toLowerCase() === app.toLowerCase())
+/**
+ * The grants for `identity`, renamed to `name`. A window-only identity counts only grants made for its pid (a later
+ * process of the same name is another app); revocations by name always count.
+ */
 export function canonicalGrants(
   identity: Identity,
   grants: Session['grants'],
   name = identity.name,
 ) {
-  return grants.map((g) => (matchesApp(identity, g.app) ? { ...g, app: name } : g))
+  return grants.map((g) =>
+    !matchesApp(identity, g.app)
+      ? g
+      : identity.pid !== undefined && g.scope !== 'deny' && g.pid !== identity.pid
+        ? { ...g, app: '' }
+        : { ...g, app: name },
+  )
 }
 export function canonicalConsent(identity: Identity, grants: Session['grants']) {
   const name = consentFor(identity.name, canonicalGrants(identity, grants), Date.now())
@@ -97,6 +108,8 @@ export type Refusal = {
   y?: number
   /** The OCR labels nearest a refused pixel click, redacted; screen text, untrusted. */
   nearest?: string[]
+  /** For consent: the target's pid, which a grant for a window-only helper must name. */
+  pid?: number
 }
 export type Gate = (ctx: GateContext) => undefined | Refusal | Promise<undefined | Refusal>
 // Task grounding precedes authority/safety gates; canonical scope is checked again at identity resolution.
@@ -139,6 +152,7 @@ export const preflightGates: Gate[] = [
         : {
             refuse: consent === 'denied' ? 'denied' : 'consent_required',
             message: `User consent required for ${ctx.app}.`,
+            ...(ctx.observation ? { pid: ctx.observation.pid } : {}),
           }
     }
     const identity = await identityForPid(ctx.driver, ctx.observation?.pid, ctx.signal)
@@ -166,6 +180,7 @@ export const preflightGates: Gate[] = [
       : {
           refuse: consent === 'denied' ? 'denied' : 'consent_required',
           message: `User consent required for ${identity.name}.`,
+          ...(identity.pid === undefined ? {} : { pid: identity.pid }),
         }
   },
 ]
@@ -385,21 +400,21 @@ async function windowOwners(
   const windows = reply.ok ? reply.structured?.windows : undefined
   return (Array.isArray(windows) ? windows : [])
     .map(object)
-    .filter((w) => typeof w.pid === 'number' && typeof w.app_name === 'string')
+    .filter((w) => typeof w.pid === 'number' && w.pid > 0 && typeof w.app_name === 'string')
     .map((w) => ({ pid: w.pid as number, name: w.app_name as string }))
 }
 
 /**
  * The canonical identity of a PID: its `list_apps` entry, else the owner name of its windows.
  * Helper apps such as Citrix Viewer own windows but are omitted from `list_apps`; their identity
- * has no bundle id, so consent for them binds to the app name only and covers any process of that name.
+ * has no bundle id but carries the pid, so consent for them binds to that process.
  */
 export async function identityForPid(
   driver: Driver,
   pid: number | undefined,
   signal?: AbortSignal,
 ): Promise<Identity | undefined> {
-  if (pid === undefined) return undefined
+  if (pid === undefined || pid <= 0) return undefined
   const { apps } = await listApps(driver, signal)
   const app = apps.find((a) => a.pid === pid)
   if (app) return typeof app.name === 'string' ? appIdentity(app) : undefined
@@ -408,7 +423,7 @@ export async function identityForPid(
   const name = owner?.name.toLowerCase()
   if (!owner || apps.some((a) => typeof a.name === 'string' && a.name.toLowerCase() === name))
     return undefined
-  return { name: owner.name }
+  return { name: owner.name, pid }
 }
 
 export async function resolveIdentity(

@@ -240,4 +240,6 @@ export type Grant = {
   used?: boolean
   always?: boolean
   denyScope?: 'conversation' | 'project'
+  /** The process a grant for a window-only helper app covers; ignored for apps with a bundle id. */
+  pid?: number
 }

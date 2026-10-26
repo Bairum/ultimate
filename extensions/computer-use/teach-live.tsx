@@ -40,7 +40,7 @@ import {
   TeachStopAction,
   TeachWindowsAction,
 } from './refs.ts'
-import type { Teach } from './refs.ts'
+import type { PickableWindow, Teach } from './refs.ts'
 import { matchProblem, startWindows, suggestedPick, WindowPicker } from './teach-picker.tsx'
 import type { Pick } from './teach-picker.tsx'
 
@@ -631,10 +631,10 @@ export function TeachStartForm({
       <footer className="space-y-3 border-t border-border/60 bg-muted/30 px-6 py-4">
         {failure && (
           <StartFailure
-            app={picked[0]?.app ?? ''}
             conversation={conversation}
             failure={failure}
             onGranted={() => void listed.refetch()}
+            picked={picked}
           />
         )}
         {!failure && needs.length > 0 && (
@@ -659,12 +659,12 @@ export function TeachStartForm({
 /** Why starting failed, in the user's words, with the grant it needs when that is the reason. */
 function StartFailure({
   failure,
-  app,
+  picked,
   conversation,
   onGranted,
 }: {
   failure: string
-  app: string
+  picked: PickableWindow[]
   conversation: number
   onGranted: () => void
 }) {
@@ -674,7 +674,9 @@ function StartFailure({
     : /consent_required(?:: (.+))?$/.exec(failure)
   if (consent) {
     // The canonical name the server resolved, which the picked window's app may only approximate.
-    const name = consent[1]?.trim() || app
+    const name = consent[1]?.trim() || picked[0]?.app || ''
+    // A window-only helper has no bundle id: the grant covers the picked process only.
+    const helper = picked.find((w) => w.app === name && !w.bundle)
     return (
       <div className="space-y-2 text-[12px] leading-relaxed">
         <p className="text-warning">
@@ -683,7 +685,12 @@ function StartFailure({
         </p>
         <TeachButton
           action={GrantAction}
-          args={{ conversation, app: name, scope: 'conversation' }}
+          args={{
+            conversation,
+            app: name,
+            scope: 'conversation',
+            ...(helper ? { pid: helper.pid } : {}),
+          }}
           onError={setError}
           onSuccess={onGranted}
           tone="primary"

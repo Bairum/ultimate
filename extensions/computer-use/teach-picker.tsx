@@ -101,7 +101,13 @@ export function WindowPicker({
     setGranting(w.app)
     setGrantError(undefined)
     api
-      .action(GrantAction, { conversation, app: w.app, scope: 'conversation' })
+      // A window-only helper has no bundle id: the grant covers this process only.
+      .action(GrantAction, {
+        conversation,
+        app: w.app,
+        scope: 'conversation',
+        ...(w.bundle ? {} : { pid: w.pid }),
+      })
       .then(() => listed.refetch())
       .then(() => {
         const { picks: current, windows: now } = latest.current

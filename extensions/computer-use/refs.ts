@@ -23,6 +23,8 @@ export type Session = {
     /** Screenshot pixels, present together for pixel-click confirmations. */
     x?: number
     y?: number
+    /** For consent: the target's pid, sent back with the grant so a window-only helper's grant names its process. */
+    pid?: number
   }[]
   journal: {
     call: string
@@ -144,13 +146,17 @@ export type ComputerDetails = {
 }
 /** Per-conversation state; conversation 1 also stores project grants. Journal keeps the latest 200 entries. */
 export const SessionDoc = docRef<Session>('computer.session')
-/** `{conversation, app, scope, always?}` → session; user-only consent. `always` is required for deny-listed apps. */
+/**
+ * `{conversation, app, scope, always?, pid?}` → session; user-only consent. `always` is required for deny-listed apps;
+ * `pid` is the process a grant for a window-only helper app (no bundle id) covers.
+ */
 export const GrantAction = actionRef<
   {
     conversation: number
     app: string
     scope: 'once' | 'conversation' | 'project'
     always?: boolean
+    pid?: number
   },
   Session
 >('computer-use', 'grant')

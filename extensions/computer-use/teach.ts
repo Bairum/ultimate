@@ -373,12 +373,12 @@ export async function pickableWindows(
     const owner = apps.find((a) => a.pid === w.pid)
     if (!owner && names.has(w.app_name.toLowerCase())) continue
     if (!owner && systemOwners.has(w.app_name.toLowerCase())) continue
-    const identity = owner
+    const identity: Identity = owner
       ? {
           name: typeof owner.name === 'string' ? owner.name : w.app_name,
           ...(typeof owner.bundle_id === 'string' ? { bundle: owner.bundle_id } : {}),
         }
-      : { name: w.app_name }
+      : { name: w.app_name, pid: w.pid }
     if (denyList.some((name) => matchesApp(identity, name))) continue
     windows.push({
       app: identity.name,
