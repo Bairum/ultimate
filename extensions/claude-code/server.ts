@@ -28,20 +28,28 @@ export function createUltimateClaudeCodeProvider() {
   return { ...provider, getModels, getAllModels: getModels }
 }
 
+/**
+ * The state retained across facet reloads: data and long-lived handles only, never behaviour, so new code takes
+ * effect on reload. A reloaded facet gets the object an earlier load created, possibly by older code with other
+ * fields, so each load adds what its own code needs: a missing field is created, one of another kind replaced. A
+ * field whose meaning changes but whose kind stays the same needs a new name. Facets of every version share
+ * `active`, `closing` and `facets` (process cleanup, captured registrations, registration handoff) on one object,
+ * which is why a new resource key per shape would break them: never rename these three.
+ */
+const fields = {
+  provider: () => createUltimateClaudeCodeProvider(),
+  /** Settlement of every request still streaming, from any facet. */
+  active: () => new Set<Promise<unknown>>(),
+  closing: () => false,
+  facets: () => new Set<symbol>(),
+  // Requests carry Pi's provider session id, not a conversation: `beforeRequest` below maps one to the other.
+  sessions: () => new Map<string, number>(),
+}
+type Shared = { [K in keyof typeof fields]: ReturnType<(typeof fields)[K]> }
+
 export default function claudeCode(host: ExtensionHost) {
-  // Retained across facet reloads, so it holds only data and long-lived handles: a reloaded facet gets the object
-  // the first load created. Behaviour stays in the facet below, so new code takes effect on reload. Adding a field
-  // here needs a host restart (or a new key).
   const shared = host.resource('claude-code.provider', () => {
-    const state = {
-      provider: createUltimateClaudeCodeProvider(),
-      /** Settlement of every request still streaming, from any facet. */
-      active: new Set<Promise<unknown>>(),
-      closing: false,
-      facets: new Set<symbol>(),
-      // Requests carry Pi's provider session id, not a conversation: `beforeRequest` below maps one to the other.
-      sessions: new Map<string, number>(),
-    }
+    const state = {} as Shared
     host.onClose(async () => {
       state.closing = true
       // Extension cleanup precedes harness suspension. Let its signal stop active
@@ -56,23 +64,38 @@ export default function claudeCode(host: ExtensionHost) {
     })
     return state
   })
+  for (const [key, create] of Object.entries(fields)) {
+    const value = create()
+    if ((Reflect.get(shared, key) as unknown)?.constructor !== value.constructor)
+      Reflect.set(shared, key, value)
+  }
   const upstream = shared.provider
+  // What this facet adds to a request (its environment, its tracking) must never fail the request itself.
   const withEnv = <O extends { env?: Record<string, string | undefined>; sessionId?: string }>(
     options: O | undefined,
   ) => {
-    const sessionId = options?.sessionId
-    const env: ClaudeCodeEnvService | undefined = host.want(ClaudeCodeEnv)
-    const extra = env?.env(sessionId === undefined ? undefined : shared.sessions.get(sessionId))
-    return extra ? ({ ...options, env: { ...options?.env, ...extra } } as O) : options
+    try {
+      const sessionId = options?.sessionId
+      const env: ClaudeCodeEnvService | undefined = host.want(ClaudeCodeEnv)
+      const extra = env?.env(sessionId === undefined ? undefined : shared.sessions.get(sessionId))
+      return extra ? ({ ...options, env: { ...options?.env, ...extra } } as O) : options
+    } catch (error) {
+      host.notice(`Claude Code environment lookup failed, using the default: ${String(error)}`)
+      return options
+    }
   }
   const track = (response: ReturnType<typeof upstream.streamSimple>) => {
-    const settled = response.result()
-    shared.active.add(settled)
-    void settled.then(
-      () => shared.active.delete(settled),
-      // The stream consumer receives the failure; tracking must not create another rejection.
-      () => shared.active.delete(settled),
-    )
+    try {
+      const settled = response.result()
+      shared.active.add(settled)
+      void settled.then(
+        () => shared.active.delete(settled),
+        // The stream consumer receives the failure; tracking must not create another rejection.
+        () => shared.active.delete(settled),
+      )
+    } catch (error) {
+      host.notice(`Claude Code request tracking failed, running it untracked: ${String(error)}`)
+    }
     return response
   }
   const stream: typeof upstream.stream = (model, context, options) => {

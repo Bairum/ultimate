@@ -399,6 +399,17 @@ if (process.argv.includes('status')) {
     )
     new ProjectTrustStore(join(home, '.ultimate')).set(projectRoot, true)
     const root = await sourceCopy(home)
+    const facetFile = join(root, 'extensions/claude-code/server.ts')
+    const facetSource = await readFile(facetFile, 'utf8')
+    // Expose the retained resource, so the reload case can give it the shape an older load built.
+    if (lifecycle === 'reload')
+      await writeFile(
+        facetFile,
+        facetSource.replace(
+          '  const upstream = shared.provider\n',
+          '  Object.assign(globalThis, { claudeCodeShared: shared })\n  const upstream = shared.provider\n',
+        ),
+      )
     const options = {
       ultimateRoot: root,
       projectRoot,
@@ -446,12 +457,14 @@ if (process.argv.includes('status')) {
       let cancelStatus: number | undefined
       let cancelOutcome: unknown
       if (lifecycle === 'reload') {
-        // Regression: new code whose request path calls a function the first load never had (#409484 added
-        // `shared.setEnv`, which the retained resource lacked) must load and serve the next request.
+        // Regressions: new code whose request path needs what the first load never had must load, serve the next
+        // request and let the in-flight one finish. #409484 called `shared.setEnv`, then #409868 read
+        // `shared.active` and `shared.facets` from a resource an older load had built without them.
+        const retained = Reflect.get(globalThis, 'claudeCodeShared') as object
+        Reflect.deleteProperty(retained, 'active')
+        Reflect.deleteProperty(retained, 'facets')
         const provider = server.host.modelRuntime.getProvider('claude-code')
-        const file = join(root, 'extensions/claude-code/server.ts')
-        const source = await readFile(file, 'utf8')
-        const reloaded = source
+        const reloaded = facetSource
           .replace(
             'export default function claudeCode(',
             'const markReloaded = () => Object.assign(globalThis, { claudeCodeReloaded: true })\nexport default function claudeCode(',
@@ -460,8 +473,8 @@ if (process.argv.includes('status')) {
             'return track(upstream.streamSimple(',
             'markReloaded()\n      return track(upstream.streamSimple(',
           )
-        await writeFile(file, reloaded)
-        server.vite.watcher.emit('change', file)
+        await writeFile(facetFile, reloaded)
+        server.vite.watcher.emit('change', facetFile)
         await until(() => server.host.modelRuntime.getProvider('claude-code') !== provider)
         await writeFile(release, 'ready')
         await server.harness.waitForIdle(context)
@@ -471,6 +484,7 @@ if (process.argv.includes('status')) {
         await server.harness.waitForIdle(context)
         reloadedServes &&= 'claudeCodeReloaded' in globalThis
         Reflect.deleteProperty(globalThis, 'claudeCodeReloaded')
+        Reflect.deleteProperty(globalThis, 'claudeCodeShared')
       } else if (lifecycle === 'reopen' || lifecycle === 'swap') {
         // Supervised swaps release the harness before extension cleanup; ordinary
         // close does the reverse. Exercise both orders against the same durable home.
@@ -502,6 +516,10 @@ if (process.argv.includes('status')) {
           ? { errorMessage: 'Claude Code request failed: invalid_request' }
           : {}),
       })
+      // The reload case's in-flight request and the one after the reload both answer.
+      expect(
+        lifecycle === 'reload' ? assistants.map((message) => message.stopReason) : undefined,
+      ).toEqual(lifecycle === 'reload' ? ['stop', 'stop'] : undefined)
       if (lifecycle === 'cancel' || lifecycle === 'permanent') {
         await server.close()
         server = await createServer(options)
