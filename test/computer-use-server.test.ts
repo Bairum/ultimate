@@ -29,6 +29,13 @@ import { matchLabel } from '../extensions/computer-use/perception.ts'
 import type { Region } from '../extensions/computer-use/perception.ts'
 import { readFile } from 'node:fs/promises'
 import { waitFor } from '../extensions/computer-use/wait.ts'
+import {
+  frontmostGate,
+  identityForPid,
+  preflightGates,
+  resolveIdentity,
+} from '../extensions/computer-use/gates.ts'
+import type { GateContext } from '../extensions/computer-use/gates.ts'
 
 vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@earendil-works/pi-coding-agent')>()
@@ -538,6 +545,88 @@ it('does not let a non-canonical app grant bypass the Terminal deny list', async
   expect(data(output).status).toBe('app_identity')
   expect(f.fake.calls.some((c) => c.tool === 'get_window_state')).toBe(false)
   expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
+})
+
+const citrix = {
+  app_name: 'Citrix Viewer',
+  pid: 29200,
+  bundle: 'com.citrix.receiver.icaviewer.mac',
+}
+it('resolves a helper app that only list_windows reports, by name, bundle id or pid, without a bundle', async () => {
+  const f = await fixture()
+  f.fake.windows = [
+    { ...citrix, window_id: 1, title: 'Desktop' },
+    { ...citrix, window_id: 2, title: 'Toolbar' },
+  ]
+  for (const app of [
+    'Citrix Viewer',
+    'citrix viewer',
+    'com.citrix.receiver.icaviewer.mac',
+    '29200',
+  ])
+    expect(await resolveIdentity(f.driver, app)).toEqual({ name: 'Citrix Viewer' })
+  // The driver's substring match is not an exact name.
+  expect(await resolveIdentity(f.driver, 'Citrix')).toBeUndefined()
+})
+it('keeps ambiguous identities unresolved, without a window fallback after several list_apps matches', async () => {
+  const f = await fixture()
+  f.fake.windows = [
+    { ...citrix, window_id: 1, title: 'One' },
+    { ...citrix, pid: 29201, window_id: 2, title: 'Two' },
+  ]
+  expect(await resolveIdentity(f.driver, 'Citrix Viewer')).toBeUndefined()
+  // A window-only process named like a listed app never inherits that app's identity.
+  f.fake.windows = [{ app_name: 'Calculator', pid: 555, window_id: 3, title: 'Fake' }]
+  expect(await resolveIdentity(f.driver, '555')).toBeUndefined()
+  expect(await identityForPid(f.driver, 555)).toBeUndefined()
+  f.fake.replyFor('list_apps', {
+    content: [],
+    structuredContent: {
+      apps: [
+        { name: 'Calculator', bundle_id: 'com.apple.calculator', pid: 123 },
+        { name: 'Calculator', bundle_id: 'com.apple.calculator', pid: 124 },
+      ],
+    },
+  })
+  f.fake.calls.length = 0
+  expect(await resolveIdentity(f.driver, 'Calculator')).toBeUndefined()
+  expect(f.fake.calls.map((c) => c.tool)).toEqual(['list_apps'])
+})
+it('resolves a window-only pid at dispatch and keeps the app match, scope and name consent checks', async () => {
+  const f = await fixture()
+  f.fake.windows = [{ ...citrix, window_id: 1, title: 'Desktop' }]
+  const session = await readSession(f.host, f.root.id)
+  session.task!.spec.scope.apps.push('Citrix Viewer')
+  const gate = preflightGates.at(-1)!
+  const check = async (app: string, grants = session.grants) => {
+    const ctx: GateContext = {
+      session,
+      conversation: f.root.id,
+      grants,
+      app,
+      step: { kind: 'click', element: 's1:1' },
+      observation: { pid: 29200 } as Observation,
+      dispatch: true,
+      foreground: false,
+      active: { stopped: false, inFlight: false },
+      count: 0,
+      signal: new AbortController().signal,
+      host: f.host,
+      driver: f.driver,
+    }
+    return { refusal: await gate(ctx), ctx }
+  }
+  expect((await check('Citrix Viewer')).refusal?.refuse).toBe('consent_required')
+  const granted = [{ app: 'Citrix Viewer', scope: 'conversation' as const, at: 0 }]
+  const allowed = await check('citrix viewer', granted)
+  expect(allowed.refusal).toBeUndefined()
+  expect(allowed.ctx.identity).toEqual({ name: 'Citrix Viewer' })
+  expect(allowed.ctx.app).toBe('Citrix Viewer')
+  expect((await check('Calculator', granted)).refusal?.refuse).toBe('app_identity')
+  expect((await check('29200', granted)).refusal?.refuse).toBe('app_identity')
+  // It never reports `active`, so even with another app frontmost it counts as the user's app.
+  expect((await frontmostGate(allowed.ctx))?.refuse).toBe('user_active')
+  expect(allowed.ctx.frontmost).toBe(true)
 })
 
 async function otherConversation(f: Awaited<ReturnType<typeof fixture>>) {

@@ -13,7 +13,7 @@ import { updateSession } from './session.ts'
 import * as task from './task.ts'
 import { untrusted } from './content.ts'
 import { readSession, isStopped } from './session.ts'
-import { allGrants, resolveIdentity, readConsent, listApps } from './gates.ts'
+import { allGrants, resolveIdentity, identityCandidates, readConsent, listApps } from './gates.ts'
 import type { ComputerDetails } from './refs.ts'
 import { pruneEvidence } from './evidence-files.ts'
 
@@ -209,7 +209,8 @@ export function observeTool(host: ExtensionHost) {
       query: Type.Optional(Type.String()),
       evidence: Type.Optional(Type.Boolean()),
       criterion: Type.Optional(Type.String()),
-      zoom: Type.Optional(Type.Tuple([Type.Number(), Type.Number(), Type.Number(), Type.Number()])),
+      // Not Type.Tuple: its draft-07 `items: [...]` fails Anthropic's draft 2020-12 check.
+      zoom: Type.Optional(Type.Array(Type.Number(), { minItems: 4, maxItems: 4 })),
     }),
     async execute(args, api, ctx) {
       if (await isStopped(host, api.conversationId, { signal: ctx.abortSignal }))
@@ -223,7 +224,11 @@ export function observeTool(host: ExtensionHost) {
           await pruneEvidence(host.home)
           if (args.app) {
             const identity = await resolveIdentity(driver, args.app, ctx.abortSignal)
-            if (!identity) return result({ status: 'app_identity' })
+            if (!identity)
+              return result({
+                status: 'app_identity',
+                candidates: await identityCandidates(driver, args.app, ctx.abortSignal),
+              })
             const consent = readConsent(
               identity,
               await allGrants(
