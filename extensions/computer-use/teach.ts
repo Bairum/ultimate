@@ -608,7 +608,8 @@ export async function startTeaching(host: ExtensionHost, args: TeachStart) {
       const title = windowTitle(record)
       if (entry.match !== undefined && !titleMatches(title, entry.match))
         throw new Error(`window_title: window ${entry.window} no longer shows "${entry.match}"`)
-      const key = JSON.stringify([identity.name, identity.bundle])
+      // The pid keeps two same-named window-only helpers apart: each needs and holds its own consent.
+      const key = JSON.stringify([identity.name, identity.bundle, identity.pid])
       apps.set(key, identity)
       const fragment = entry.match ?? title
       // A saved lesson finds the window by this fragment among its app's windows: it must name only this one.

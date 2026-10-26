@@ -242,6 +242,40 @@ it('starts teaching a window-only helper app by pid once its process is granted'
   expect((await readTeach(f.host, f.root.id)).segment?.bundle).toBeUndefined()
   await finishTeaching(f.host, f.root.id, true)
 })
+it('watches two same-named window-only processes, each allowed and held by its own grant', async () => {
+  const f = await fixture()
+  f.fake.windows = [
+    { window_id: 7, title: 'Desktop A', app_name: 'Citrix Viewer', pid: 29200 },
+    { window_id: 8, title: 'Desktop B', app_name: 'Citrix Viewer', pid: 29201 },
+  ]
+  await startTeaching(f.host, {
+    conversation: f.root.id,
+    title: 'Lesson',
+    windows: [
+      { app: 'Citrix Viewer', window: 7 },
+      { app: 'Citrix Viewer', window: 8 },
+    ],
+    allow: [
+      { app: 'Citrix Viewer', pid: 29200 },
+      { app: 'Citrix Viewer', pid: 29201 },
+    ],
+  })
+  expect((await readSession(f.host, f.root.id)).grants).toMatchObject([
+    { app: 'Citrix Viewer', pid: 29200, teach: true, used: true },
+    { app: 'Citrix Viewer', pid: 29201, teach: true, used: true },
+  ])
+  // Both windows are captured; neither ends the recording for lack of consent.
+  const captured = (pid: number) =>
+    f.fake.calls.some((c) => c.tool === 'get_window_state' && c.args.pid === pid)
+  await until(
+    async () =>
+      (captured(29200) && captured(29201)) ||
+      (await readTeach(f.host, f.root.id)).segment?.status !== 'recording',
+  )
+  expect((await readTeach(f.host, f.root.id)).segment).toMatchObject({ status: 'recording' })
+  expect(captured(29200) && captured(29201)).toBe(true)
+  await finishTeaching(f.host, f.root.id, true)
+})
 const citrix = 'OpsMate \u2014 Microsoft\u200B Edge'
 const picker = () => [
   { window_id: 456, title: 'Calculator', app_name: 'Calculator', pid: 123 },

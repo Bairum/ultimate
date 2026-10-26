@@ -175,12 +175,13 @@ export function WindowPicker({
               const denied = w.consent === 'denied'
               const where = away(w)
               const problem = pick && matchProblem(w, pick.match, windows)
-              // One Allow per app: its first row in the shown list.
+              // One Allow per app (per process for a window-only helper): its first row in the shown list.
               const allowedHere = w.consent === 'required' && isAllowed(allow, w)
               const asks =
                 w.consent === 'required' &&
                 !allowedHere &&
-                shown.findIndex((o) => o.app === w.app) === index
+                shown.findIndex((o) => o.app === w.app && allowFor(o).pid === allowFor(w).pid) ===
+                  index
               return (
                 <li data-teach-window={w.window} key={w.window}>
                   <div className="flex items-center gap-2 pr-2">
