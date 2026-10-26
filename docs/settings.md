@@ -43,7 +43,9 @@ background compaction 32k below the blocking threshold), which suit a ~200k wind
 earlier. `compaction.modelOverrides` in those settings files, keyed by exact `"provider/modelId"` (fields
 `reserveTokens`, `keepRecentTokens`, `backgroundTokens`, `enabled`), replaces them field by field. Pi's settings files
 are read when the server starts.
-User config is independent of `ULTIMATE_HOME`. This repository's `.ultimate/settings.json` holds its isolate setup,
+User config is independent of `ULTIMATE_HOME`. A project's `isolates.worktree` sets its checkouts' `setup` commands and, optionally, where they live (`path`) and
+how they are made and removed (`add`, `remove`); see `extensions/workspaces/README.md`.
+This repository's `.ultimate/settings.json` holds its isolate setup,
 lander checks and preview model.
 
 A project's `.ultimate/` applies only once it is chosen: its `extensions/`, the project `extensions` settings layer,

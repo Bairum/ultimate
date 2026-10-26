@@ -53,6 +53,11 @@ replaces the whole extension, both facets:
 | `user`    | `~/.ultimate/extensions/`         | Your additions, in every project                                   |
 | `project` | `<project>/.ultimate/extensions/` | One project's tools and apps, committed with the project; wins all |
 
+A tool name follows the same layering: a project or user extension may override a built-in's tool (a project `bash`
+replaces coding-tools'). Two extensions of the same source may not share one: the one that loaded second fails with
+a load error such as `web_search is already provided by parallel`, and takes the name on its next reload once the
+other is disabled or removed.
+
 Every extension folder is on by default, built-in, user or project: adding the folder is the opt-in. The exception is
 the built-ins listed in `defaultOff` (`shared/extension-api.ts`; see [settings](../docs/settings.md)), which need
 something of their own and ship off until `extensions.enable` names them (including `voice-live`, the live voice relay). Turn one off

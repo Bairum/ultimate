@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { lstat, mkdir, realpath, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import type { Context } from '@earendil-works/chord'
 import {
   configure,
@@ -17,6 +17,14 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { WorkspacesDoc } from './refs.ts'
 import { setup } from './setup.ts'
+import {
+  addCheckout,
+  clearCheckout,
+  hasAddCommand,
+  removeCheckout,
+  treeName,
+  treePath,
+} from './tree.ts'
 import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
 import type {
   LandResult,
@@ -241,7 +249,8 @@ export function workspaces(host: Host) {
     const { source, target } = 'source' in checkout ? checkout : {}
     const { change } = await landerAgent(host, context)
     // The conversation's cwd exists from the start, at the target tip, so it can answer before any submission.
-    const path = source && target && (await landerCheckout(host.home, source))
+    const path =
+      source && target && (await landerCheckout(host.home, source, await host.projectSettings()))
     await host.harness().commit(async (tx) => {
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       const landers: ConversationId[] = []
@@ -322,10 +331,25 @@ export function workspaces(host: Host) {
           // Git reads every `.git/worktrees/<name>` on list and add, and fails on one a concurrent add has only half
           // written ("failed to read .git/worktrees/<name>/locked"), so preparations of one source take turns.
           await serial(workspace.source, async () => {
-            const registered = (await git(workspace.source, 'worktree', 'list', '--porcelain'))
-              .split('\n\n')
-              .find((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+            const list = async () =>
+              (await git(workspace.source, 'worktree', 'list', '--porcelain'))
+                .split('\n\n')
+                .find((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+            let registered = await list()
             const resumed = await runtime.memo<boolean>('started', context)
+            const settings = await host.projectSettings()
+            // A crash during a configured add command can leave its half-made checkout. It is this preparation's own:
+            // `started` is recorded only after the path was found free. Clear it and run the command again.
+            if (
+              resumed &&
+              hasAddCommand(settings) &&
+              (registered
+                ? !registered.split('\n').includes(`branch refs/heads/${workspace.branch}`)
+                : await onDisk(workspace.path))
+            ) {
+              await clearCheckout(workspace.source, workspace.path)
+              registered = await list()
+            }
             if (registered) {
               if (
                 !resumed ||
@@ -351,18 +375,14 @@ export function workspaces(host: Host) {
               }
               await runtime.memo('started', true, context)
               created = true
-              await git(
+              await addCheckout(
+                settings,
                 workspace.source,
-                'worktree',
-                'add',
-                ...(task.input.preserve
-                  ? [workspace.path, workspace.branch]
-                  : [
-                      task.input.reset ? '-B' : '-b',
-                      workspace.branch,
-                      workspace.path,
-                      workspace.base,
-                    ]),
+                workspace.path,
+                treeName(workspace.branch),
+                task.input.preserve
+                  ? [workspace.branch]
+                  : [task.input.reset ? '-B' : '-b', workspace.branch, workspace.base],
               )
             }
           })
@@ -391,7 +411,12 @@ export function workspaces(host: Host) {
               )
             if (created) {
               if (registered)
-                await git(workspace.source, 'worktree', 'remove', workspace.path).catch(
+                await removeCheckout(
+                  await host.projectSettings(),
+                  workspace.source,
+                  workspace.path,
+                  treeName(workspace.branch),
+                ).catch(
                   // Best-effort rollback: the preparation error is recorded below and must not be replaced.
                   () => undefined,
                 )
@@ -527,7 +552,12 @@ export function workspaces(host: Host) {
         )
           throw new Error(`Workspace #${id} no longer checks out its recorded branch tip`)
         // Never force: Git refuses uncommitted changes made since the status check.
-        await git(workspace.source, 'worktree', 'remove', workspace.path)
+        await removeCheckout(
+          await host.projectSettings(),
+          workspace.source,
+          workspace.path,
+          treeName(workspace.branch),
+        )
       } else if (await onDisk(workspace.path))
         // Release clears the leftover folder of its own checkout first; any other folder there is not ours to remove.
         throw new Error(`Workspace path is not a registered checkout: ${workspace.path}`)
@@ -721,7 +751,7 @@ export function workspaces(host: Host) {
     if ((await git(workspace.path, 'symbolic-ref', '--short', 'HEAD')) !== workspace.branch)
       throw new Error('Workspace branch changed')
     const tip = await git(workspace.path, 'rev-parse', 'HEAD')
-    const path = await landerPath(host.home, workspace.source)
+    const path = await landerPath(host.home, workspace.source, await host.projectSettings())
     const { change } = await landerAgent(host, context)
     const subject = await host.need(ConversationsApi).subject(id, context)
     const result = await host.harness().commit(async (tx) => {
@@ -921,17 +951,28 @@ export function workspaces(host: Host) {
       const { source, target } = checkout
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       if (index.items[String(id)]) throw new Error('Conversation already has a workspace')
-      await mkdir(join(host.home, 'worktrees'), { recursive: true })
-      const parent = await realpath(join(host.home, 'worktrees'))
+      const branch = `ultimate/${createHash('sha256').update(host.home).digest('hex').slice(0, 6)}-${id}`
+      let path = await treePath(await host.projectSettings(), treeName(branch))
+      if (!path) {
+        await mkdir(join(host.home, 'worktrees'), { recursive: true })
+        path = join(await realpath(join(host.home, 'worktrees')), String(id))
+      }
       index.items[String(id)] = {
-        path: join(parent, String(id)),
-        branch: `ultimate/${createHash('sha256').update(host.home).digest('hex').slice(0, 6)}-${id}`,
+        path,
+        branch,
         base: await git(source, 'rev-parse', 'HEAD'),
         source,
         target,
         state: 'preparing',
       }
-      await configure(tx, id, { cwd: index.items[String(id)].path })
+      // A project in a subfolder of its repository opens in the same subfolder of its checkout.
+      const below = relative(source, await realpath(cwd))
+      await configure(tx, id, {
+        cwd:
+          below === '..' || below.startsWith(`..${sep}`) || isAbsolute(below)
+            ? path
+            : join(path, below),
+      })
       await tx.createTask(
         Preparation,
         { id },
@@ -966,7 +1007,12 @@ export function workspaces(host: Host) {
       if (workspace.state === 'preparing') throw new Error('Workspace is preparing')
       if (workspace.state !== 'removed') {
         if (await listedBySource(workspace))
-          await git(workspace.source, 'worktree', 'remove', workspace.path)
+          await removeCheckout(
+            await host.projectSettings(),
+            workspace.source,
+            workspace.path,
+            treeName(workspace.branch),
+          )
         await host.harness().commit(async (tx) => {
           ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'removed'
         }, context)
