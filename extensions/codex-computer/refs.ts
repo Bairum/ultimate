@@ -32,6 +32,7 @@ export type CodexState = {
   grants: { app: string; scope: GrantScope | 'deny'; at: number }[]
   pending: {
     kind: 'acknowledge' | 'consent' | 'continue'
+    /** Stable for consent and continuation entries; continuation ids deduplicate wake submissions. */
     id?: string
     app?: string
     session?: string

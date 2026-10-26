@@ -5,6 +5,7 @@ import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import { access, realpath } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { exec } from '../../lib/exec.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
@@ -220,6 +221,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
             )
               doc.pending.push({
                 kind: 'continue',
+                id: randomUUID(),
                 ...(value.details.session ? { session: value.details.session } : {}),
                 at: Date.now(),
               })
@@ -279,17 +281,17 @@ export const actions = {
       (p) => p.kind === 'continue',
     )
     if (!pending) throw new Error('No budget continuation pending')
+    if (!pending.id) throw new Error('Pending continuation has no id')
     const session = pending.session
     await wake(
       host,
       args.conversation,
       `The user approved another Codex computer budget. ${session ? `Resume with codex_operate session ${JSON.stringify(session)}` : 'Codex did not return a session; call codex_operate again'} with the remaining brief.`,
+      `codex-computer:continue:${pending.id}`,
     )
     // submit() durably admits the wake before resolving; failures leave Continue retryable.
     await updateState(host, args.conversation, (doc) => {
-      doc.pending = doc.pending.filter(
-        (p) => p.kind !== 'continue' || p.at !== pending.at || p.session !== pending.session,
-      )
+      doc.pending = doc.pending.filter((p) => p.id !== pending.id)
     })
     return readState(host, args.conversation)
   }),

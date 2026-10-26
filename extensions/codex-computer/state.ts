@@ -49,11 +49,16 @@ export async function consent(host: ExtensionHost, conversation: number, app: st
   }, context)
   return decision
 }
-export async function wake(host: ExtensionHost, conversation: number, text: string) {
+export async function wake(
+  host: ExtensionHost,
+  conversation: number,
+  text: string,
+  requestId: string,
+) {
   const target = await host.harness().conversation(conversation as ConversationId, context)
   if (!target) throw new Error('Conversation not found; Continue remains pending')
   await target.submit(
-    { type: 'input', content: text, entry: { kind: 'codex-computer.wake' } },
+    { type: 'input', content: text, requestId, entry: { kind: 'codex-computer.wake' } },
     context,
   )
 }

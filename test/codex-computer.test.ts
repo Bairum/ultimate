@@ -6,7 +6,7 @@ import { createRegistry, defineTool, Harness, MemoryStorage } from '@earendil-wo
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
-import { mkdir, writeFile, readFile, stat, lstat, rename, symlink, utimes } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, stat, lstat, symlink, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { ActionContext } from '../server/actions.ts'
@@ -21,11 +21,6 @@ import type { CodexDetails } from '../extensions/codex-computer/refs.ts'
 import { readState, updateState } from '../extensions/codex-computer/state.ts'
 import { removeTemp, temp, until } from './helpers.ts'
 import { pruneEvidence, resultsDirectory } from '../extensions/codex-computer/evidence.ts'
-
-vi.mock('node:fs/promises', async (original) => {
-  const fs = await original<typeof import('node:fs/promises')>()
-  return { ...fs, lstat: vi.fn<typeof fs.lstat>(fs.lstat) }
-})
 
 class FakeServer extends EventEmitter {
   stdout = new PassThrough()
@@ -90,10 +85,6 @@ class FakeServer extends EventEmitter {
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
   for (const close of cleanup.splice(0).toReversed()) await close()
-  vi.mocked(lstat).mockReset()
-  vi.mocked(lstat).mockImplementation(
-    (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).lstat,
-  )
   vi.useRealTimers()
 })
 async function fixture(acknowledged = true) {
@@ -327,6 +318,7 @@ it('interrupts at 50 MCP/exec items and requires Continue before resuming', asyn
     turnId: 'turn-1',
   })
   expect((await readState(f.host, f.root.id)).pending[0]?.kind).toBe('continue')
+  expect((await readState(f.host, f.root.id)).pending[0]?.id).toEqual(expect.any(String))
   expect(data(await f.invoke({ brief: 'Continue', session: 'thread-1' })).status).toBe('budget')
   expect(f.spawn).toHaveBeenCalledOnce()
   await actions.continue({ conversation: f.root.id }, f.ctx)
@@ -445,7 +437,7 @@ it('keeps a live run across facet reloads, but process close fences pending and 
 it('leaves Continue pending when its wake throws, so the user can retry', async () => {
   const f = await fixture()
   await updateState(f.host, f.root.id, (doc) => {
-    doc.pending.push({ kind: 'continue', session: 'thread-1', at: Date.now() })
+    doc.pending.push({ kind: 'continue', id: 'retry-1', session: 'thread-1', at: Date.now() })
   })
   vi.spyOn(f.harness, 'conversation').mockResolvedValueOnce(undefined)
   await expect(actions.continue({ conversation: f.root.id }, f.ctx)).rejects.toThrow(
@@ -462,35 +454,65 @@ it('leaves Continue pending when its wake throws, so the user can retry', async 
   await f.harness.waitForIdle(context)
 })
 
-it('skips pruning when an evidence parent is swapped after its last metadata check', async () => {
+it('deduplicates concurrent Continue wakes and retries after clearing fails', async () => {
+  const f = await fixture()
+  await updateState(f.host, f.root.id, (doc) => {
+    doc.pending.push({ kind: 'continue', id: 'continue-1', session: 'thread-1', at: Date.now() })
+  })
+  vi.spyOn(f.harness, 'conversation').mockResolvedValue(f.root)
+  const submit = f.root.submit.bind(f.root)
+  const arrived = Promise.withResolvers<void>()
+  let calls = 0
+  const ids: import('@earendil-works/pi-durable').SubmissionId[] = []
+  vi.spyOn(f.root, 'submit').mockImplementation(async (...args) => {
+    if (++calls === 2) arrived.resolve()
+    await arrived.promise
+    const receipt = await submit(...args)
+    ids.push(receipt.id)
+    return receipt
+  })
+  const commit = vi
+    .spyOn(f.harness, 'commit')
+    .mockRejectedValueOnce(new Error('clear failed'))
+    .mockRejectedValueOnce(new Error('clear failed'))
+  const attempts = await Promise.allSettled([
+    actions.continue({ conversation: f.root.id }, f.ctx),
+    actions.continue({ conversation: f.root.id }, f.ctx),
+  ])
+  expect(attempts.map((attempt) => attempt.status)).toEqual(['rejected', 'rejected'])
+  expect(
+    attempts.map((attempt) => attempt.status === 'rejected' && attempt.reason.message),
+  ).toEqual(['clear failed', 'clear failed'])
+  expect((await readState(f.host, f.root.id)).pending[0]?.id).toBe('continue-1')
+  commit.mockRestore()
+  await actions.continue({ conversation: f.root.id }, f.ctx)
+  expect(ids).toHaveLength(3)
+  expect(new Set(ids).size).toBe(1)
+  expect((await readState(f.host, f.root.id)).pending).toEqual([])
+  await f.harness.waitForIdle(context)
+  const entries = (await f.root.entries({}, 100, undefined, context)).items
+  expect(entries.filter((entry) => entry.kind === 'codex-computer.wake')).toHaveLength(1)
+})
+
+it('never follows links or descends into directories planted inside the conversation folder', async () => {
   const home = await temp()
   cleanup.push(() => removeTemp(home))
   const directory = await resultsDirectory(home, 1)
   const outside = join(home, 'outside')
   await mkdir(outside)
-  const filename = 'expired.png'
-  const path = join(directory, filename)
-  const victim = join(outside, filename)
-  await writeFile(path, 'evidence')
+  const victim = join(outside, 'expired.png')
   await writeFile(victim, 'must survive')
-  const now = Date.now()
-  await utimes(path, 0, 0)
-  const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
-  let scanned = false,
-    swapped = false
-  vi.mocked(lstat).mockImplementation(async (...args) => {
-    const info = await fs.lstat(...args)
-    if (String(args[0]) === path) scanned = true
-    // Return the old directory's metadata after replacing it: only a fresh realpath detects the escape.
-    if (scanned && String(args[0]) === directory && !swapped) {
-      swapped = true
-      await rename(directory, `${directory}-old`)
-      await symlink(outside, directory)
-    }
-    return info
-  })
-  await pruneEvidence(home, now)
-  expect(swapped).toBe(true)
+  await utimes(victim, 0, 0)
+  await symlink(victim, join(directory, 'planted.png'))
+  await symlink(outside, join(directory, 'planted-folder.png'))
+  const nested = join(directory, 'nested.png')
+  await mkdir(nested)
+  await writeFile(join(nested, 'expired.png'), 'nested evidence')
+  const expired = join(directory, 'expired.png')
+  await writeFile(expired, 'remove me')
+  await utimes(expired, 0, 0)
+  await pruneEvidence(home, Date.now(), 0, 0)
   expect(await readFile(victim, 'utf8')).toBe('must survive')
-  expect(await readFile(join(`${directory}-old`, filename), 'utf8')).toBe('evidence')
+  expect(await readFile(join(nested, 'expired.png'), 'utf8')).toBe('nested evidence')
+  await expect(lstat(expired)).rejects.toMatchObject({ code: 'ENOENT' })
 })

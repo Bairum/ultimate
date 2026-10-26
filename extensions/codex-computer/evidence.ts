@@ -1,57 +1,31 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, lstat, readdir, realpath, rm, chmod, writeFile } from 'node:fs/promises'
-import { basename, dirname, join, sep } from 'node:path'
+import { mkdir, lstat, readdir, rm, chmod, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
-const unavailable = (error: NodeJS.ErrnoException) =>
-  ['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code ?? '')
-
-/** Canonical paths only: a replaced root or parent symlink must not redirect evidence operations. */
-async function confinedDirectory(root: string, directory: string) {
-  try {
-    if (!(await lstat(directory)).isDirectory()) return undefined
-    const actual = await realpath(directory)
-    if (actual !== directory || (actual !== root && !actual.startsWith(root + sep)))
-      return undefined
-    return actual
-  } catch (error) {
-    // Missing or swapped directories are skipped, never traversed through their replacement.
-    if (unavailable(error as NodeJS.ErrnoException)) return undefined
-    throw error
-  }
-}
-async function entries(root: string, directory: string) {
-  const path = await confinedDirectory(root, directory)
-  if (!path) return []
+const missing = (error: NodeJS.ErrnoException) => error.code === 'ENOENT'
+async function entries(path: string) {
   return readdir(path, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
-    if (unavailable(error)) return []
+    if (missing(error)) return []
     throw error
   })
 }
-async function privateDirectory(root: string, path: string) {
-  if (path !== root && !(await confinedDirectory(root, dirname(path))))
-    throw new Error('Unsafe evidence parent')
+async function privateDirectory(path: string) {
   await mkdir(path, { recursive: true, mode: 0o700 })
-  if (!(await confinedDirectory(root, path))) throw new Error('Unsafe evidence directory')
+  if (!(await lstat(path)).isDirectory()) throw new Error('Unsafe evidence directory')
   await chmod(path, 0o700)
 }
 export async function resultsDirectory(home: string, conversation: number) {
   if (!Number.isSafeInteger(conversation) || conversation < 1)
     throw new Error('Invalid conversation')
-  const root = join(await realpath(home), 'codex-computer')
-  await privateDirectory(root, root)
+  const root = join(home, 'codex-computer')
+  await privateDirectory(root)
   const directory = join(root, String(conversation))
-  await privateDirectory(root, directory)
+  await privateDirectory(directory)
   return directory
 }
 
-/** Re-resolve the parent immediately before unlinking; skip anything no longer confined to the root. */
-async function removeEvidence(root: string, path: string) {
-  const directory = await confinedDirectory(root, dirname(path))
-  if (!directory) return false
-  await rm(join(directory, basename(path)), { force: true })
-  return true
-}
-
+// Codex can plant entries inside its conversation folder, not replace that folder or its parents.
+// Parent swaps require the user's own privileges. Never descend into planted directories or symlinks.
 /** Only numeric conversation directories and regular PNG files; never traverse symlinks. */
 export async function pruneEvidence(
   home: string,
@@ -59,19 +33,19 @@ export async function pruneEvidence(
   limit = 200 * 1024 * 1024,
   globalLimit = 1024 * 1024 * 1024,
 ) {
-  // Anchor to the canonical home, not a root symlink that may have replaced the evidence directory.
-  const root = join(await realpath(home), 'codex-computer')
+  const root = join(home, 'codex-computer')
+  if (!(await lstat(root)).isDirectory()) throw new Error('Unsafe evidence root')
   const all: { path: string; size: number; at: number }[] = []
-  for (const folder of await entries(root, root)) {
+  for (const folder of await entries(root)) {
     if (!folder.isDirectory() || !/^\d+$/.test(folder.name)) continue
     const directory = join(root, folder.name)
+    if (!(await lstat(directory)).isDirectory()) continue
     const files: typeof all = []
-    for (const file of await entries(root, directory)) {
+    for (const file of await entries(directory)) {
       if (!file.isFile() || !file.name.endsWith('.png')) continue
-      if (!(await confinedDirectory(root, directory))) break
       const path = join(directory, file.name)
       const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
-        if (unavailable(error)) return undefined
+        if (missing(error)) return undefined
         throw error
       })
       if (info?.isFile()) files.push({ path, size: info.size, at: info.mtimeMs })
@@ -79,13 +53,18 @@ export async function pruneEvidence(
     let total = files.reduce((sum, file) => sum + file.size, 0)
     for (const file of files.toSorted((a, b) => a.at - b.at)) {
       if (now - file.at <= 30 * 24 * 60 * 60 * 1000 && total <= limit) all.push(file)
-      else if (await removeEvidence(root, file.path)) total -= file.size
+      else {
+        // Non-recursive rm removes a replacement link itself, never its target.
+        await rm(file.path, { force: true })
+        total -= file.size
+      }
     }
   }
   let total = all.reduce((sum, file) => sum + file.size, 0)
   for (const file of all.toSorted((a, b) => a.at - b.at)) {
     if (total <= globalLimit) break
-    if (await removeEvidence(root, file.path)) total -= file.size
+    await rm(file.path, { force: true })
+    total -= file.size
   }
 }
 export async function saveImage(home: string, conversation: number, data: string) {
@@ -93,10 +72,8 @@ export async function saveImage(home: string, conversation: number, data: string
   if (!png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
     throw new Error('Computer Use returned a non-PNG image')
   const directory = await resultsDirectory(home, conversation)
-  const root = join(await realpath(home), 'codex-computer')
-  const confined = await confinedDirectory(root, directory)
-  if (!confined) throw new Error('Unsafe evidence directory')
-  const path = join(confined, `${Date.now()}-${randomUUID()}.png`)
+  const path = join(directory, `${Date.now()}-${randomUUID()}.png`)
+  // Exclusive creation refuses any planted destination, including symlinks.
   await writeFile(path, png, { flag: 'wx', mode: 0o600 })
   await pruneEvidence(home)
   return path
