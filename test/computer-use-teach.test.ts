@@ -276,6 +276,81 @@ it('watches two same-named window-only processes, each allowed and held by its o
   expect(captured(29200) && captured(29201)).toBe(true)
   await finishTeaching(f.host, f.root.id, true)
 })
+it('saves no grant change when an act starts while teaching starts, or the teaching document fails', async () => {
+  const f = await fixture()
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.grants.push({ app: 'Other', scope: 'once', at: 0 })
+  })
+  const before = (await readSession(f.host, f.root.id)).grants
+  // An act takes the runtime once the start has passed its first busy check.
+  const call = f.driver.call.bind(f.driver)
+  f.driver.call = async (tool, args, signal) => {
+    if (tool === 'list_windows') runtime(f.host).busy = true
+    return call(tool, args, signal)
+  }
+  await expect(
+    startTeaching(f.host, {
+      conversation: f.root.id,
+      title: 'Lesson',
+      windows: [{ app: 'Calculator', window: 456 }],
+      allow: [{ app: 'Calculator' }],
+    }),
+  ).rejects.toThrow('Computer act is running')
+  f.driver.call = call
+  runtime(f.host).busy = false
+  expect((await readSession(f.host, f.root.id)).grants).toEqual(before)
+  expect((await readTeach(f.host, f.root.id)).segment).toBeUndefined()
+
+  // The teaching document fails after the grants were computed, beside unrelated grants of the same millisecond:
+  // an unused once grant the start consumes, a used one, and a used teach grant like the one Allow adds.
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(5)
+  f.fake.windows = picker()
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.grants = [
+      { app: 'Calculator', scope: 'once', at: 5 },
+      { app: 'Other', scope: 'once', at: 5, used: true },
+      { app: 'Citrix Viewer', scope: 'once', teach: true, used: true, pid: 29200, at: 5 },
+    ]
+  })
+  const colliding = (await readSession(f.host, f.root.id)).grants
+  const harness = f.host.harness()
+  const commit = harness.commit.bind(harness)
+  const failing = vi.spyOn(harness, 'commit').mockImplementation(((
+    change: (tx: { doc: (...args: unknown[]) => unknown }) => Promise<unknown>,
+    ctx: unknown,
+  ) =>
+    commit(
+      ((tx: { doc: (definition: unknown, id: unknown) => unknown }) =>
+        change({
+          ...tx,
+          doc: (definition: unknown, id: unknown) => {
+            if (definition === ComputerTeach) throw new Error('teaching document unavailable')
+            return tx.doc(definition, id)
+          },
+        })) as never,
+      ctx as never,
+    )) as never)
+  try {
+    await expect(
+      startTeaching(f.host, {
+        conversation: f.root.id,
+        title: 'Lesson',
+        windows: [
+          { app: 'Calculator', window: 456 },
+          { app: 'Citrix Viewer', window: 7, match: 'Microsoft Edge' },
+        ],
+        allow: [{ app: 'Citrix Viewer', pid: 29200 }],
+      }),
+    ).rejects.toThrow('teaching document unavailable')
+  } finally {
+    failing.mockRestore()
+    vi.useRealTimers()
+  }
+  expect((await readSession(f.host, f.root.id)).grants).toEqual(colliding)
+  expect((await readTeach(f.host, f.root.id)).segment).toBeUndefined()
+  expect(await teachingBlocked(f.host, f.root.id)).toBeUndefined()
+})
 const citrix = 'OpsMate \u2014 Microsoft\u200B Edge'
 const picker = () => [
   { window_id: 456, title: 'Calculator', app_name: 'Calculator', pid: 123 },

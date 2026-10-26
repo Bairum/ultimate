@@ -19,7 +19,7 @@ import type {
   FrameRef,
 } from './refs.ts'
 import { driverFor, runtime, settings } from './runtime.ts'
-import { isStopped, readSession, updateSession } from './session.ts'
+import { ComputerSession, isStopped, readSession } from './session.ts'
 import type { Session } from './session.ts'
 import {
   allGrants,
@@ -659,28 +659,33 @@ export async function startTeaching(host: ExtensionHost, args: TeachStart) {
         throw new Error(`consent_required: ${identity.name}`)
     const now = runtime(host).clock?.now() ?? Date.now()
     const onceGrants = new Map<string, number>()
-    await updateSession(host, args.conversation, (doc) => {
+    let replaced: string | undefined
+    let live: LiveSegment | undefined
+    // The grants this start uses and its segment commit together: a start refused or failing here changes neither.
+    await host.harness().commit(async (tx) => {
+      if (runtime(host).busy || runtime(host).active.size > 0)
+        throw new Error('Computer act is running')
+      const session = await tx.doc(ComputerSession, args.conversation as ConversationId)
       for (const [key, identity] of apps) {
         const [allowed] = allowance(identity)
         if (allowed) {
-          doc.grants.push({ ...allowed, used: true })
+          session.grants.push({ ...allowed, used: true })
           onceGrants.set(key, allowed.at)
           continue
         }
-        const consumed = consumeCanonical(identity, doc.grants, true)
-        const at = consumed.find((g, i) => g.scope === 'once' && g.used && !doc.grants[i].used)?.at
+        const consumed = consumeCanonical(identity, session.grants, true)
+        const at = consumed.find(
+          (g, i) => g.scope === 'once' && g.used && !session.grants[i].used,
+        )?.at
         if (at !== undefined) onceGrants.set(key, at)
-        doc.grants = consumed
+        session.grants = consumed
       }
-    })
-    const watched: TeachWindow[] = windows.map(({ key, ...w }) =>
-      onceGrants.has(key) ? { ...w, onceGrantAt: onceGrants.get(key) } : w,
-    )
-    const [first] = watched
-    await updateTeach(host, args.conversation, (doc) => {
-      if (runtime(host).busy || runtime(host).active.size > 0)
-        throw new Error('Computer act is running')
-      if (doc.segment) protectTeachReview(host.home, args.conversation, doc.segment.id, false)
+      const watched: TeachWindow[] = windows.map(({ key, ...w }) =>
+        onceGrants.has(key) ? { ...w, onceGrantAt: onceGrants.get(key) } : w,
+      )
+      const [first] = watched
+      const doc = await tx.doc(ComputerTeach, args.conversation as ConversationId)
+      replaced = doc.segment?.id
       doc.segment = {
         id: randomUUID(),
         app: first.app,
@@ -699,7 +704,11 @@ export async function startTeaching(host: ExtensionHost, args: TeachStart) {
       }
       delete doc.steps
       delete doc.saved
-    })
+      live = segmentWindows(doc.segment)
+    }, context)
+    // In-memory state follows the commit only.
+    if (replaced) protectTeachReview(host.home, args.conversation, replaced, false)
+    recorders(host).live.set(args.conversation, live!)
     await launchRecorder(host, args.conversation)
     return readTeach(host, args.conversation)
   } finally {
