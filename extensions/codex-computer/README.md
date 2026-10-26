@@ -111,5 +111,7 @@ verification. The permissions refusal shape `{permissions:{},scope:'turn'}` is i
 strings (response fields and turn scope), not exercised against a real app-server. `turn/interrupt` uses
 `{threadId,turnId}` (the binary identifies a two-field TurnInterruptParams); `turn/started` and `turn/start`'s
 `turn.id` supply that ID. `turn/steer {threadId, expectedTurnId, input}` follows Codex 0.163.0's generated schema
-(`codex app-server generate-json-schema`); it is **unverified live**. These shapes and the sandbox config are tested
-with an in-process fake, not a live model. Unexpected shapes fail closed or hit the hard deadline; they never auto-approve.
+(`codex app-server generate-json-schema`). One harmless live check (a tool-less text turn, read-only sandbox) got
+`{turnId}` back and the turn then completed normally; steering during a Computer Use turn is not verified live.
+These shapes and the sandbox config are tested with an in-process fake. Unexpected shapes fail closed or hit the
+hard deadline; they never auto-approve.
