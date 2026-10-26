@@ -36,6 +36,10 @@ class FakeServer extends EventEmitter {
   ignoreTerm = false
   /** Answer `turn/steer` with an error, as a Codex without live steering would. */
   refuseSteer = false
+  /** Hold `turn/steer` replies for the test to send; `reply(id)` finds them in `sent`. */
+  holdSteer = false
+  /** Answer a restarting `turn/start` with an error. */
+  refuseRestart = false
   turns = 0
   ready = Promise.withResolvers<void>()
   stdin = new Writable({
@@ -45,23 +49,27 @@ class FakeServer extends EventEmitter {
       if (message.method === 'initialize') this.emitMessage({ id: message.id, result: {} })
       if (message.method === 'thread/start' || message.method === 'thread/resume')
         this.emitMessage({ id: message.id, result: { thread: { id: 'thread-1' } } })
-      if (message.method === 'turn/start') {
+      if (message.method === 'turn/start' && this.refuseRestart && this.turns > 0)
+        this.emitMessage({ id: message.id, error: { code: -32600, message: 'thread busy' } })
+      else if (message.method === 'turn/start') {
         const id = `turn-${++this.turns}`
         this.emitMessage({ id: message.id, result: { turn: { id } } })
         this.notify('turn/started', { turn: { id } })
         this.ready.resolve()
       }
-      if (message.method === 'turn/steer')
-        this.emitMessage(
-          this.refuseSteer
-            ? { id: message.id, error: { code: -32600, message: 'steer unsupported' } }
-            : { id: message.id, result: { turnId: message.params.expectedTurnId } },
-        )
+      if (message.method === 'turn/steer' && !this.holdSteer) this.answerSteer(message.id)
       if (message.method === 'turn/interrupt' && this.refuseSteer)
         this.notify('turn/completed', { turn: { status: 'interrupted' } })
       callback()
     },
   })
+  answerSteer(id: number | string | undefined) {
+    this.emitMessage(
+      this.refuseSteer
+        ? { id, error: { code: -32600, message: 'steer unsupported' } }
+        : { id, result: { turnId: `turn-${this.turns}` } },
+    )
+  }
   emitMessage(message: object) {
     this.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`)
   }
@@ -295,6 +303,64 @@ it('falls back to interrupt and a new turn on the same thread when Codex refuses
     'Guidance from the user (restarted the turn): Use tenant #4',
   )
 })
+it('refuses a second steer while one is in flight, and both settle', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  f.fake.holdSteer = true
+  f.fake.refuseSteer = true
+  const first = actions.steer({ conversation: f.root.id, text: 'one' }, f.ctx)
+  await expect(actions.steer({ conversation: f.root.id, text: 'two' }, f.ctx)).rejects.toThrow(
+    'still taking the previous guidance',
+  )
+  await until(() => f.fake.sent.some((m) => m.method === 'turn/steer'))
+  f.fake.answerSteer(f.fake.sent.find((m) => m.method === 'turn/steer')!.id)
+  expect(await first).toEqual({ delivery: 'restarted' })
+  f.fake.complete()
+  expect(data(await promise).guidance.map((g) => g.text)).toEqual(['one'])
+})
+it('restarts with the guidance even when the old turn completes before the interrupt lands', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  f.fake.holdSteer = true
+  f.fake.refuseSteer = true
+  const steer = actions.steer({ conversation: f.root.id, text: 'Use tenant #4' }, f.ctx)
+  await until(() => f.fake.sent.some((m) => m.method === 'turn/steer'))
+  // The turn finishes on its own, then Codex rejects the steer.
+  f.fake.complete()
+  f.fake.answerSteer(f.fake.sent.find((m) => m.method === 'turn/steer')!.id)
+  expect(await steer).toEqual({ delivery: 'restarted' })
+  expect(f.fake.sent.filter((m) => m.method === 'turn/start')).toHaveLength(2)
+  f.fake.complete()
+  const details = data(await promise)
+  expect(details.status).toBe('done')
+  expect(details.guidance[0]).toMatchObject({ text: 'Use tenant #4', delivery: 'restarted' })
+})
+it('an accepted steer racing the turn end keeps the guidance and ends the run once', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  f.fake.holdSteer = true
+  const steer = actions.steer({ conversation: f.root.id, text: 'Also note the version' }, f.ctx)
+  await until(() => f.fake.sent.some((m) => m.method === 'turn/steer'))
+  f.fake.complete()
+  f.fake.answerSteer(f.fake.sent.find((m) => m.method === 'turn/steer')!.id)
+  expect(await steer).toEqual({ delivery: 'steered' })
+  const details = data(await promise)
+  expect(details.status).toBe('done')
+  expect(details.guidance).toHaveLength(1)
+})
+it('fails the run, instead of hanging, when Codex refuses the restarted turn', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  f.fake.refuseSteer = true
+  f.fake.refuseRestart = true
+  await expect(actions.steer({ conversation: f.root.id, text: 'x' }, f.ctx)).rejects.toThrow(
+    'thread busy',
+  )
+  const details = data(await promise)
+  expect(details.status).toBe('failed')
+  expect(details.error).toContain('Codex did not restart the turn with the guidance')
+  expect(details.guidance).toEqual([])
+})
 it('codex_steer reaches only a run in a conversation the caller owns', async () => {
   const f = await fixture()
   const { promise } = await running(f)
@@ -520,6 +586,22 @@ it('keeps a live run across facet reloads, but process close fences pending and 
   expect(data(await pending).status).toBe('stopped')
   expect(data(await f.invoke()).status).toBe('stopped')
   expect(f.spawn).toHaveBeenCalledOnce()
+})
+it('a Stop while codex.md is read still keeps Codex from starting', async () => {
+  const f = await fixture()
+  const reading = Promise.withResolvers<void>()
+  const entered = Promise.withResolvers<void>()
+  vi.spyOn(f.host, 'projectSetup').mockImplementationOnce(async () => {
+    entered.resolve()
+    await reading.promise
+    return { config: true, decision: true }
+  })
+  const pending = f.invoke()
+  await entered.promise
+  await actions.stop({ conversation: f.root.id }, f.ctx)
+  reading.resolve()
+  expect(data(await pending).status).toBe('stopped')
+  expect(f.spawn).not.toHaveBeenCalled()
 })
 
 it('never follows links or descends into directories planted inside the conversation folder', async () => {

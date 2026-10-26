@@ -204,6 +204,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
             return refuse('stopped', 'Stopped before Codex started')
           const directory = await resultsDirectory(host.home, conversation)
           await pruneEvidence(host.home)
+          const standing = args.session ? undefined : await instructions(host)
           // Recheck after filesystem work: Stop must not race a fresh process into existence.
           if (
             state.closed ||
@@ -221,7 +222,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
             directory,
             appDirectory: dirname(app),
             brief: args.brief,
-            ...(await instructions(host).then((text) => (text ? { instructions: text } : {}))),
+            ...(standing ? { instructions: standing } : {}),
             ...(args.session ? { session: args.session } : {}),
             ...(args.model ? { model: args.model } : {}),
             ...(apps ? { apps } : {}),

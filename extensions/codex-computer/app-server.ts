@@ -91,8 +91,12 @@ export async function operate(input: {
     closed = false,
     terminating = false,
     active = false
-  /** Set while a steer that Codex refused swaps the turn: the interrupted turn's end must not end the run. */
+  /** One steer at a time, from its request until its guidance is delivered or refused. */
+  let steering = false
+  /** Set while a steer that Codex refused swaps the turn: the old turn's end, however it ended, must not end the run. */
   let swapping: PromiseWithResolvers<void> | undefined
+  /** A turn that ended while a steer was in flight; ends the run unless the steer starts a new turn. */
+  let held: (() => void) | undefined
   let image: { type: 'image'; mimeType: string; data: string } | undefined
   const done = Promise.withResolvers<void>()
   const requests = new Map<
@@ -156,36 +160,57 @@ export async function operate(input: {
       child.kill('SIGKILL')
     },
     steer: async (value, from) => {
-      if (ended || !active || !details.session || !turnId || swapping)
+      if (ended || !active || !details.session || !turnId)
         throw new Error('No active Codex turn to steer in this conversation')
-      const threadId = details.session
-      const message = { type: 'text', text: guidance(value, from), text_elements: [] }
-      let delivery: Guidance['delivery'] = 'steered'
+      if (steering)
+        throw new Error('Codex is still taking the previous guidance; send this after it')
+      steering = true
       try {
-        await request('turn/steer', { threadId, expectedTurnId: turnId, input: [message] })
-      } catch (error) {
-        if (ended) throw error
-        // Codex refused the steer: end this turn and start the next one on the same thread with the guidance.
-        delivery = 'restarted'
-        swapping = Promise.withResolvers<void>()
-        interrupt()
-        await swapping.promise
-        swapping = undefined
-        if (ended)
-          throw new Error('The Codex run ended before the guidance was delivered', { cause: error })
-        const turn = object(
-          await request('turn/start', {
-            threadId,
-            input: [{ ...message, text: turnNote + message.text }],
-          }),
+        const threadId = details.session
+        const message = { type: 'text', text: guidance(value, from), text_elements: [] }
+        let delivery: Guidance['delivery'] = 'steered'
+        try {
+          await request('turn/steer', { threadId, expectedTurnId: turnId, input: [message] })
+        } catch (error) {
+          if (ended) throw error
+          // Codex refused the steer: end this turn and start the next one on the same thread with the guidance.
+          delivery = 'restarted'
+          held = undefined
+          swapping = Promise.withResolvers<void>()
+          if (active) interrupt()
+          else swapping.resolve()
+          await swapping.promise
+          swapping = undefined
+          if (ended)
+            throw new Error('The Codex run ended before the guidance was delivered', {
+              cause: error,
+            })
+          try {
+            const turn = object(
+              await request('turn/start', {
+                threadId,
+                input: [{ ...message, text: turnNote + message.text }],
+              }),
+            )
+            turnId = string(object(turn.turn).id) || turnId
+          } catch (start) {
+            // No turn runs now: nothing else would end the run before the 8 h ceiling.
+            finish('failed', `Codex did not restart the turn with the guidance: ${String(start)}`)
+            throw start
+          }
+        }
+        details.guidance.push({ from, text: value, at: Date.now(), delivery })
+        output(
+          `Guidance from the ${from}${delivery === 'restarted' ? ' (restarted the turn)' : ''}: ${value.replace(/\s+/g, ' ')}\n`,
         )
-        turnId = string(object(turn.turn).id) || turnId
+        return delivery
+      } finally {
+        // A turn that ended during an accepted steer ends the run now, with the guidance recorded.
+        const end = held
+        held = undefined
+        steering = false
+        end?.()
       }
-      details.guidance.push({ from, text: value, at: Date.now(), delivery })
-      output(
-        `Guidance from the ${from}${delivery === 'restarted' ? ' (restarted the turn)' : ''}: ${value.replace(/\s+/g, ' ')}\n`,
-      )
-      return delivery
     },
   }
   input.live.add(run)
@@ -323,21 +348,22 @@ export async function operate(input: {
     } else if (message.method === 'turn/completed') {
       active = false
       const turn = object(object(message.params).turn)
-      // The turn a refused steer interrupted: the next one carries the guidance on the same run.
-      if (swapping && turn.status !== 'completed') {
-        swapping.resolve()
-        return
-      }
-      finish(
-        turn.status === 'completed'
-          ? details.status === 'declined'
-            ? 'declined'
-            : 'done'
-          : 'failed',
-        turn.status === 'completed'
-          ? undefined
-          : string(object(turn.error).message) || `Turn ${string(turn.status)}`,
-      )
+      const end = () =>
+        finish(
+          turn.status === 'completed'
+            ? details.status === 'declined'
+              ? 'declined'
+              : 'done'
+            : 'failed',
+          turn.status === 'completed'
+            ? undefined
+            : string(object(turn.error).message) || `Turn ${string(turn.status)}`,
+        )
+      // The turn a refused steer replaces, however it ended: the next one carries the guidance on the same run.
+      if (swapping) swapping.resolve()
+      // A steer is in flight: it decides whether this end is the run's or a new turn follows.
+      else if (steering) held = end
+      else end()
     } else if (message.method === 'error')
       finish('failed', string(object(object(message.params).error).message) || 'Codex error')
   })
