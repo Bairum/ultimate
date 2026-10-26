@@ -6,12 +6,12 @@ import { spawn } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { parseCLI } from 'vitest/node'
 import { acquireLock, readOwner } from '../server/lock.ts'
 
 const args = process.argv.slice(2)
-// A file filter is a positional argument. One right after a `--flag` without `=` may be that flag's value
-// (`--maxWorkers 2`), so it does not count: an ambiguous run takes the lock, which is the safe side.
-const full = !args.some((arg, i) => !arg.startsWith('-') && !/^-[^=]*$/.test(args[i - 1] ?? ''))
+// Vitest's own parser tells file filters from option values (`--maxWorkers 2`, `--run test/x.test.ts`).
+const full = parseCLI(['vitest', ...args]).filter.length === 0
 const directory = join(homedir(), '.ultimate')
 const path = join(directory, 'test.lock')
 
