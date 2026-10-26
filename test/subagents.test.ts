@@ -93,7 +93,11 @@ async function fixture(
     implement: () => {},
     need: idleNeed,
     resource: (_key, create) => create(),
-    extensions: () => [],
+    // `withheld` is loaded by an enabled extension but not given to the conversations here.
+    extensions: () =>
+      [{ server: { tools: [{ name: 'withheld', description: '' }] } }] as ReturnType<
+        ExtensionHost['extensions']
+      >,
     notice: () => {},
     onOpen: (callback) => {
       onOpen.push(callback)
@@ -320,10 +324,10 @@ it('runs root -> forked review lead -> parallel leaves -> lead -> root with scop
       return undefined
     },
   )
-  for (const name of ['lead', 'astra', 'sol', 'omitted', 'invalid'])
+  for (const name of ['lead', 'astra', 'sol', 'omitted', 'invalid', 'offline'])
     await writeFile(
       join(f.ultimateRoot, `agents/${name}.md`),
-      `---\nname: ${name}\ndescription: ${name}\n${name === 'omitted' ? '' : `tools: [read, bash${name === 'lead' ? ', subagent' : name === 'invalid' ? ', missing' : ''}]\n`}---\nAssigned ${name} role\n`,
+      `---\nname: ${name}\ndescription: ${name}\n${name === 'omitted' ? '' : `tools: [read, bash${{ lead: ', subagent', invalid: ', withheld', offline: ', find' }[name] ?? ''}]\n`}---\nAssigned ${name} role\n`,
     )
   await call(f.opened, { action: 'start', agent: 'scout', task: 'prior child' })
   const result = await call(f.opened, { action: 'start', agent: 'lead', task: 'TEAM', fork: true })
@@ -368,7 +372,19 @@ it('runs root -> forked review lead -> parallel leaves -> lead -> root with scop
   )!
   expect(JSON.stringify(leadTranscript.messages)).toContain('Available definitions')
   const invalid = await call(f.opened, { action: 'start', agent: 'invalid', task: 'reject' })
-  expect(invalid.text).toContain('subset of parent tools')
+  expect(invalid.text).toContain(
+    "invalid needs withheld, which this session doesn't have: start it from a conversation with it or drop it from the definition",
+  )
+  // Regression: find's extension is off by default, which rejected scout and reviewer.
+  const offline = await call(f.opened, { action: 'start', agent: 'offline', task: 'no find' })
+  expect(offline.text).toContain(
+    'Notice: find not loaded (extension off); offline runs without it.',
+  )
+  const offlineId = (await children(f.opened)).at(-1)!.conversationId
+  const offlineAgent = await (await f.opened.harness.conversation(offlineId, context))!.agent(
+    context,
+  )
+  expect(offlineAgent.tools.map((tool) => tool.name)).toEqual(['read', 'bash'])
   await call(f.opened, { action: 'start', agent: 'omitted', task: 'no delegation' })
   const omittedId = (await children(f.opened)).at(-1)!.conversationId
   const omitted = (await f.opened.harness.conversation(omittedId, context))!

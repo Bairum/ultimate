@@ -925,8 +925,25 @@ export default function subagents(
               throw new Error(
                 `Unknown agent: ${args.agent}. Pass agent: one of ${definitions.map((agent) => agent.name).join(', ')}`,
               )
-            if (definition?.tools?.some((name) => !parent.tools.some((tool) => tool.name === name)))
-              throw new Error('Definition tools must be a subset of parent tools')
+            const absent = (definition?.tools ?? []).filter(
+              (name) => !parent.tools.some((tool) => tool.name === name),
+            )
+            // A tool no enabled extension registers (find while its extension is off) is dropped;
+            // one that is loaded but withheld from this conversation still rejects the definition.
+            const loaded = new Set(
+              host
+                .extensions()
+                .flatMap((extension) => extension.server?.tools.map((tool) => tool.name) ?? []),
+            )
+            const lacking = absent.filter((name) => loaded.has(name))
+            const them = lacking.length === 1 ? 'it' : 'them'
+            if (lacking.length)
+              throw new Error(
+                `${definition!.name} needs ${lacking.join(', ')}, which this session doesn't have: start it from a conversation with ${them} or drop ${them} from the definition`,
+              )
+            const dropped = absent.length
+              ? `\nNotice: ${absent.join(', ')} not loaded (extension off); ${definition!.name} runs without ${absent.length === 1 ? 'it' : 'them'}.`
+              : ''
             const isolated =
               definition && (args.isolate ?? definition.isolate ?? 'none') === 'worktree'
             const warning =
@@ -1014,9 +1031,9 @@ export default function subagents(
               return createdAction
             }, context)
             const isolate = await workspaces.get(action.conversationId, context)
-            const isolateInfo = isolate
-              ? `\nIsolate: ${isolate.path}\nBranch: ${isolate.branch}${warning}`
-              : ''
+            const isolateInfo =
+              (isolate ? `\nIsolate: ${isolate.path}\nBranch: ${isolate.branch}${warning}` : '') +
+              dropped
             const background =
               index.agents[String(action.conversationId)]?.background ?? args.background === true
             const info = details(action.conversationId, background)
