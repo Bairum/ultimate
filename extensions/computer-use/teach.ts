@@ -324,10 +324,23 @@ async function watchWindow(
     throw new Error(`consent_required: ${identity.name}`)
   return { driver, target }
 }
+/** macOS's own window-only processes (overlays, the Dock, menu extras): never something a lesson shows. */
+const systemOwners = new Set([
+  'windowmanager',
+  'window server',
+  'dock',
+  'systemuiserver',
+  'control center',
+  'controlcenter',
+  'notification center',
+  'notificationcenter',
+  'spotlight',
+])
 /**
  * The windows the start dialog offers: one unfiltered `list_windows` (every app and helper process) joined with
- * `list_apps` for bundle ids, frontmost first. Untitled and tiny windows (badges, icons) and deny-listed apps are left
- * out; so is a window-only owner sharing a listed app's name, which `identityForPid` would refuse.
+ * `list_apps` for bundle ids, frontmost first. Untitled and tiny windows (badges, icons), macOS's own overlays and
+ * deny-listed apps are left out; so is a window-only owner sharing a listed app's name, which `identityForPid` would
+ * refuse.
  */
 export async function pickableWindows(
   host: ExtensionHost,
@@ -357,6 +370,7 @@ export async function pickableWindows(
       continue
     const owner = apps.find((a) => a.pid === w.pid)
     if (!owner && names.has(w.app_name.toLowerCase())) continue
+    if (!owner && systemOwners.has(w.app_name.toLowerCase())) continue
     const identity = owner
       ? {
           name: typeof owner.name === 'string' ? owner.name : w.app_name,
