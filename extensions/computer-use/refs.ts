@@ -175,6 +175,11 @@ export const HardStopAction = actionRef<Record<string, never>, { stopped: true }
 export const ResumeAction = actionRef<{ conversation: number }, Session>('computer-use', 'resume')
 /** `{conversation}` → session; read-only. */
 export const StateAction = actionRef<{ conversation: number }, Session>('computer-use', 'state')
+/** `{}` → `{guards}`; read-only: false when `computerUse.guards` turns every consent, confirmation and task gate off. */
+export const GuardsAction = actionRef<Record<string, never>, { guards: boolean }>(
+  'computer-use',
+  'guards',
+)
 /** `{conversation, app}` → session; user-only foreground takeover until stop/release (later: task end). */
 export const TakeoverAction = actionRef<{ conversation: number; app: string }, Session>(
   'computer-use',

@@ -28,6 +28,7 @@ import {
   ConfirmChangeAction,
   DenyAction,
   GrantAction,
+  GuardsAction,
   HardStopAction,
   ReleaseAction,
   ResumeAction,
@@ -36,7 +37,7 @@ import {
   TakeoverAction,
 } from './refs.ts'
 import { plainTask, activatePending } from './tool-helpers.ts'
-import { runtime } from './runtime.ts'
+import { runtime, guardsOff } from './runtime.ts'
 import { stopDriver } from './driver.ts'
 import * as task from './task.ts'
 
@@ -239,6 +240,9 @@ export const actions = {
     validate(args)
     return readSession(host, args.conversation)
   }),
+  guards: implementAction(GuardsAction, async (_args, { host }) => ({
+    guards: !(await guardsOff(host)),
+  })),
   grant: implementAction(GrantAction, async (args, { host }) => {
     validate(args, true)
     if (
