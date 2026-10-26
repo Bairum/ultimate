@@ -1686,6 +1686,46 @@ it('requires confirmation for OCR Delete and binds it to the verified screen lab
   expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
 })
 
+it('asks before clicking a target OCR reads only approximately as its label, then clicks it once', async () => {
+  const f = await pixelFixture()
+  f.fake.surface.regions = [textRegion('Sent')]
+  const send = async () => {
+    const view = await f.observe()
+    return f.run([{ ...f.pixel, capture: view.capture!.id, expect_label: 'Send' } as Step], true)
+  }
+  const clicks = () => f.fake.calls.filter((c) => c.tool === 'click')
+  const asked = await send()
+  expect(data(asked).status).toBe('confirm_required')
+  expect(data(asked).outcomes[0]).toMatchObject({
+    message: expect.stringContaining('<untrusted_screen_content>\nSent\n'),
+  })
+  expect(clicks()).toHaveLength(0)
+  const [request] = (await readSession(f.host, f.root.id)).pending
+  expect(request).toMatchObject({ kind: 'confirm', label: 'Sent', x: 120, y: 90 })
+  await actions.confirm({ conversation: f.root.id, key: request.key! }, f.ctx)
+  expect(data(await send()).status).toBe('delivered')
+  expect(clicks()).toHaveLength(1)
+  // The confirmation was one dispatch; a label-only click with only that reading asks too.
+  expect(data(await send()).status).toBe('confirm_required')
+  const view = await f.observe()
+  const labelOnly = { kind: 'click', capture: view.capture!.id, expect_label: 'Send' } as Step
+  expect(data(await f.run([labelOnly], true)).status).toBe('confirm_required')
+  expect(clicks()).toHaveLength(1)
+  // Exact labels behave as before: "Send" itself is consequential and asks with the plain reason; a harmless exact
+  // label is clicked without asking.
+  f.fake.surface.regions = [textRegion('Send')]
+  expect(data(await send()).outcomes[0]).toMatchObject({
+    code: 'confirm_required',
+    message: 'The user must confirm this exact action.',
+  })
+  f.fake.surface.regions = [textRegion('Continue')]
+  const view2 = await f.observe()
+  expect(data(await f.run([{ ...f.pixel, capture: view2.capture!.id } as Step], true)).status).toBe(
+    'delivered',
+  )
+  expect(clicks()).toHaveLength(2)
+})
+
 it('requires an existing takeover for degraded input by default', async () => {
   const f = await pixelFixture(false)
   expect(data(await f.run([f.pixel])).status).toBe('takeover_required')
@@ -1979,7 +2019,7 @@ async function scaledComposer() {
   f.fake.surface.regions = [
     { ...textRegion('Read  elph ?', 'r1'), bounds: { x: 693, y: 345, width: 412, height: 39 } },
     {
-      ...textRegion('Decibe .', 'r2'),
+      ...textRegion('Describe your problem or question', 'r2'),
       confidence: 0.52,
       bounds: { x: 592, y: 413, width: 215, height: 28 },
     },
@@ -1987,7 +2027,7 @@ async function scaledComposer() {
   const view = await f.observe()
   return { ...f, capture: view.capture!.id }
 }
-it('checks a pixel click on a scaled capture in screenshot pixels, tolerating OCR spelling', async () => {
+it('checks a pixel click on a scaled capture in screenshot pixels', async () => {
   const f = await scaledComposer()
   const click = {
     kind: 'click',

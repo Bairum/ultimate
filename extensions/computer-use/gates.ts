@@ -111,6 +111,8 @@ export type GateContext = {
   params?: string[]
   ocrMatch?: string
   unlabelledPixel?: boolean
+  /** The OCR text of a pixel click whose expected label matched only fuzzily; it needs confirmation. */
+  approximateLabel?: string
 }
 export type Refusal = {
   refuse: string
@@ -321,6 +323,8 @@ export const dispatchGates: Gate[] = [
     // OCR boxes hug the glyphs: a click a few pixels off its matched text (a field beside its placeholder) is still on
     // it. Further off, or on an icon, it is an unlabelled pixel that needs confirmation.
     ctx.unlabelledPixel = !containsPoint(checked.match, 4) || atPoint.some((r) => r.kind === 'icon')
+    // Only an OCR misreading matched ("Sent" for "Send"): what is under the point may be another control.
+    if (checked.fuzzy) ctx.approximateLabel = checked.match.label
     ctx.target = {
       ...target,
       label: [
@@ -339,7 +343,7 @@ export const dispatchGates: Gate[] = [
       return undefined
     }
     const consequence = consequential(ctx.step, ctx.target)
-    let risky = ctx.unlabelledPixel || consequence.hit
+    let risky = ctx.unlabelledPixel || !!ctx.approximateLabel || consequence.hit
     // Approving a label never approves another risk or bypasses the independent Jev check.
     if (
       // Menus never qualify: their risk comes from the whole path, which a single approved label cannot cover.
@@ -347,6 +351,7 @@ export const dispatchGates: Gate[] = [
       consequence.reason?.startsWith('Consequential label: ') &&
       !sensitiveField(ctx.target) &&
       !ctx.unlabelledPixel &&
+      !ctx.approximateLabel &&
       ctx.target?.label &&
       inApproval(ctx) &&
       ctx.session.task!.spec.scope.consequential.some(
@@ -386,6 +391,13 @@ export const dispatchGates: Gate[] = [
         risky = answer.answers.risk?.type === 'noul' && answer.answers.risk.noul >= 0.3
       } catch (error) {
         return { refuse: 'risk_unavailable', message: `Risk check failed: ${message(error)}` }
+      }
+    }
+    if (risky && ctx.approximateLabel && refusal.refuse === 'confirm_required') {
+      const seen = redactor(ctx.params ?? [])(ctx.approximateLabel).slice(0, 60)
+      return {
+        ...refusal,
+        message: `OCR reads the target only approximately as the expected label: ${untrusted(seen)} The user must confirm this exact action.`,
       }
     }
     if (risky) return refusal

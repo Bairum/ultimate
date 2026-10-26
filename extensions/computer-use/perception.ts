@@ -157,7 +157,8 @@ const closeWord = (seen: string, wanted: string) =>
  * `containsLabel`, or OCR's garbled or cut-off reading of it: the region's words (two letters or more) stand, in
  * order, for words of the label starting with its first, at most a quarter of each word's letters off, with four
  * letters at least ("Decibe ." for "Describe your problem or question"). A region that negates the label never
- * matches. Only for checking a pixel click's target, never for verifying a criterion.
+ * matches. Only for checking a pixel click's target, never for verifying a criterion; it also passes "Sent" for
+ * "Send", so a click whose only match is fuzzy needs the user's confirmation (`matchLabel`'s `fuzzy`).
  */
 export function fuzzyLabel(text: string, label: string) {
   if (containsLabel(text, label)) return true
@@ -181,6 +182,10 @@ const distance = (r: Region, p: { x: number; y: number }) =>
     Math.max(r.bounds.x - p.x, 0, p.x - r.bounds.x - r.bounds.width),
     Math.max(r.bounds.y - p.y, 0, p.y - r.bounds.y - r.bounds.height),
   )
+/**
+ * The one text region near `point` (or anywhere) matching `label`. With `fuzzy`, OCR misreadings count towards
+ * uniqueness too, and `fuzzy` in the result says the match is only such a misreading, not the label itself.
+ */
 export function matchLabel(
   regions: Region[],
   label: string,
@@ -201,10 +206,12 @@ export function matchLabel(
       (fuzzy ? fuzzyLabel(r.label, label) : containsLabel(r.label, label)) &&
       (!point || distance(r, point) <= radius),
   )
+  const match = matches.length === 1 ? matches[0] : undefined
   return {
-    match: matches.length === 1 ? matches[0] : undefined,
+    match,
     candidates: candidates.slice(0, 8),
     ambiguous: matches.length > 1,
+    fuzzy: !!match && !containsLabel(match.label, label),
   }
 }
 export function visibleWindow(observation: Observation) {
