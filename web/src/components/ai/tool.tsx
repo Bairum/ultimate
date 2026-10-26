@@ -9,6 +9,7 @@ import {
   MinusCircleIcon,
   XIcon,
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import type { ComponentProps, ReactNode } from 'react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -45,14 +46,25 @@ const icons = {
   interrupted: [MinusCircleIcon, 'text-warning'],
 } as const
 
-export const ToolStatusIcon = ({ state, className }: { state: ToolState; className?: string }) => {
-  const [Icon, tone] = icons[state]
+/** The call's state; `icon`, the tool's own, stands in for the check mark once it is done. */
+export const ToolStatusIcon = ({
+  state,
+  className,
+  icon,
+}: {
+  state: ToolState
+  className?: string
+  icon?: LucideIcon
+}) => {
+  const [Icon, tone] = icon && state === 'done' ? [icon, 'text-brand'] : icons[state]
   return <Icon aria-label={labels[state]} className={cn('size-3.5 shrink-0', tone, className)} />
 }
 
 export type ToolHeaderProps = Omit<ComponentProps<typeof CollapsibleTrigger>, 'title'> & {
   name: string
   state: ToolState
+  /** The tool's icon, shown in place of the check mark once the call is done. */
+  icon?: LucideIcon
   /** What the call works on: a path, a command. */
   title?: ReactNode
   /** Right-aligned facts: duration, size, exit code. */
@@ -75,6 +87,7 @@ const ToolTrigger = ({
   className,
   name,
   state,
+  icon,
   title,
   meta,
   ...props
@@ -86,7 +99,7 @@ const ToolTrigger = ({
     )}
     {...props}
   >
-    <ToolStatusIcon state={state} />
+    <ToolStatusIcon icon={icon} state={state} />
     {name && <span className="shrink-0 font-medium text-foreground">{name}</span>}
     <span className="min-w-0 flex-1 truncate text-muted-foreground">{title}</span>
     {meta && (
