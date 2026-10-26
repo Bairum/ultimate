@@ -8,7 +8,7 @@ import type { Approval, Verdict } from './types.ts'
 import { readSession, updateSession, isStopped } from './session.ts'
 import { result, anchored, plainTask, activatePending, object } from './tool-helpers.ts'
 import { runtime, setup, cacheKey, settings } from './runtime.ts'
-import { predicates } from './schemas.ts'
+import { actionObject, checkAction, predicates } from './schemas.ts'
 
 import * as task from './task.ts'
 import { pixelDefaults } from './perception.ts'
@@ -382,60 +382,65 @@ export async function taskTool(
   )
 }
 
+/** The arguments of each `computer_task` action: checked exactly in `execute`, flattened for the model. */
+const taskBranches = () => [
+  Type.Object({
+    action: Type.Literal('start'),
+    spec: Type.Object({
+      id: Type.String(),
+      intent: Type.String(),
+      goal: Type.String(),
+      criteria: criteriaSchema,
+      scope: scopeSchema,
+      approval: Type.Optional(approvalSchema),
+      stop: Type.Optional(
+        Type.Object({
+          steps: Type.Optional(Type.Number()),
+          minutes: Type.Optional(Type.Number()),
+          escalations: Type.Optional(Type.Number()),
+        }),
+      ),
+      link: Type.Optional(
+        Type.Object({ conversation: Type.Number(), task: Type.Optional(Type.String()) }),
+      ),
+    }),
+  }),
+  Type.Object({ action: Type.Literal('subgoals'), list: subgoalsSchema }),
+  Type.Object({ action: Type.Literal('activate'), id: Type.String() }),
+  Type.Object({ action: Type.Literal('complete'), subgoal: Type.String() }),
+  Type.Object({
+    action: Type.Literal('checkpoint'),
+    assessment: Type.String(),
+    recentSteps: Type.Array(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal('replan'),
+    reason: Type.String(),
+    subgoals: Type.Optional(subgoalsSchema),
+    criteria: Type.Optional(criteriaSchema),
+    scope: Type.Optional(scopeSchema),
+    approval: Type.Optional(approvalSchema),
+  }),
+  Type.Object({
+    action: Type.Literal('finish'),
+    outcome: Type.Union(['done', 'partial', 'blocked'].map((s) => Type.Literal(s))),
+    summary: Type.String(),
+  }),
+  Type.Object({ action: Type.Literal('status') }),
+]
 export function taskToolDefinition(host: ExtensionHost) {
+  const branches = taskBranches()
+  const union = Type.Union(branches)
   return defineTool({
     name: 'computer_task',
     description:
       "Anchor desktop work to the user's verbatim intent, plan one subgoal, checkpoint, explicitly replan, and verify completion. Confirmations are user-only.",
     structuredOutputSchema: Type.Any(),
-    parameters: Type.Unsafe<TaskArgs>(
-      Type.Union([
-        Type.Object({
-          action: Type.Literal('start'),
-          spec: Type.Object({
-            id: Type.String(),
-            intent: Type.String(),
-            goal: Type.String(),
-            criteria: criteriaSchema,
-            scope: scopeSchema,
-            approval: Type.Optional(approvalSchema),
-            stop: Type.Optional(
-              Type.Object({
-                steps: Type.Optional(Type.Number()),
-                minutes: Type.Optional(Type.Number()),
-                escalations: Type.Optional(Type.Number()),
-              }),
-            ),
-            link: Type.Optional(
-              Type.Object({ conversation: Type.Number(), task: Type.Optional(Type.String()) }),
-            ),
-          }),
-        }),
-        Type.Object({ action: Type.Literal('subgoals'), list: subgoalsSchema }),
-        Type.Object({ action: Type.Literal('activate'), id: Type.String() }),
-        Type.Object({ action: Type.Literal('complete'), subgoal: Type.String() }),
-        Type.Object({
-          action: Type.Literal('checkpoint'),
-          assessment: Type.String(),
-          recentSteps: Type.Array(Type.String()),
-        }),
-        Type.Object({
-          action: Type.Literal('replan'),
-          reason: Type.String(),
-          subgoals: Type.Optional(subgoalsSchema),
-          criteria: Type.Optional(criteriaSchema),
-          scope: Type.Optional(scopeSchema),
-          approval: Type.Optional(approvalSchema),
-        }),
-        Type.Object({
-          action: Type.Literal('finish'),
-          outcome: Type.Union(['done', 'partial', 'blocked'].map((s) => Type.Literal(s))),
-          summary: Type.String(),
-        }),
-        Type.Object({ action: Type.Literal('status') }),
-      ]),
-    ),
-    async execute(args, api, ctx) {
+    parameters: Type.Unsafe<TaskArgs>(actionObject(branches)),
+    async execute(raw, api, ctx) {
+      const checked = checkAction('computer_task', union, raw)
+      if (!checked.ok) return result({ status: 'invalid_arguments', message: checked.message })
+      const args = checked.args as TaskArgs
       const state = runtime(host)
       if (state.busy) return anchored(host, api.conversationId, result({ status: 'busy' }))
       state.busy = true

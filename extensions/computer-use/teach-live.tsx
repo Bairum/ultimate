@@ -64,11 +64,14 @@ const dropWords: Record<string, string> = {
 }
 /**
  * `{total, text}` of frames left out while recording: `2 password on screen · 1 window not visible`, most frequent
- * first. `frame_missing` is recorded by save, not the recorder; the saved card reports it on its own.
+ * first. `frame_missing` is recorded by save, not the recorder; the saved card reports it on its own. A recorder
+ * failure is no dropped frame: with its `failure` message the strip shows it instead.
  */
 export function dropped(segment: Segment) {
   const counts = new Map<string, number>()
-  const recorded = segment.dropped.filter((d) => d.reason !== 'frame_missing')
+  const recorded = segment.dropped.filter(
+    (d) => d.reason !== 'frame_missing' && !(d.reason === 'recorder_failed' && segment.failure),
+  )
   for (const d of recorded) counts.set(d.reason, (counts.get(d.reason) ?? 0) + 1)
   const text = [...counts]
     .toSorted((a, b) => b[1] - a[1])
@@ -297,7 +300,14 @@ export function TeachStrip({
             {segment.endedBy === 'unavailable' && (
               <span className="text-warning">ended early: the window could not be read</span>
             )}
-            {segment.status === 'drafting' && <span>the agent drafts the steps next</span>}
+            {segment.failure && <span className="text-error">the recorder failed</span>}
+            {segment.status === 'drafting' && (
+              <span>
+                {segment.frames.length
+                  ? 'the agent drafts the steps next'
+                  : 'nothing to draft: discard it and start again'}
+              </span>
+            )}
             {segment.status === 'review' && steps && (
               <span className={unreviewed ? 'text-warning' : 'text-success'}>
                 {unreviewed
@@ -308,6 +318,14 @@ export function TeachStrip({
           </span>
         )}
       </div>
+      {segment.failure && (
+        <p
+          className="border-t border-border/60 px-2.5 py-1 text-[11px] leading-[1.5] break-words text-muted-foreground"
+          data-teach-failure
+        >
+          {segment.failure}
+        </p>
+      )}
       {error && <p className="px-2.5 pb-1.5 break-words text-error">{error}</p>}
     </div>
   )

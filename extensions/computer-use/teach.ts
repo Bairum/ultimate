@@ -2,6 +2,8 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineDoc, defineTool } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { Type } from '@earendil-works/pi-ai'
+import type { Static } from '@earendil-works/pi-ai'
+import { actionObject, checkAction } from './schemas.ts'
 import { resizeImage } from '@earendil-works/pi-coding-agent'
 import { createHash, randomUUID } from 'node:crypto'
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
@@ -489,6 +491,9 @@ export async function launchRecorder(host: ExtensionHost, conversation: number) 
             runtime(host).clock?.now() ?? Date.now(),
           )
           doc.segment.dropped.push({ reason: 'recorder_failed', at: Date.now() })
+          // The card shows why; a message that could carry a credential cue is not kept.
+          const message = (error instanceof Error ? error.message : String(error)).slice(0, 300)
+          doc.segment.failure = credentialCue(message) ? 'the recorder stopped' : message
         }
       })
     })
@@ -1025,7 +1030,11 @@ export async function teachingFrames(host: ExtensionHost, conversation: number) 
   }
   return {
     output,
-    structuredOutput: { status: doc.segment.status, frames: doc.segment.frames.length },
+    structuredOutput: {
+      status: doc.segment.status,
+      frames: doc.segment.frames.length,
+      ...(doc.segment.failure ? { failure: doc.segment.failure } : {}),
+    },
     details: json({ teach: teachDetails(doc) }),
   }
 }
@@ -1133,32 +1142,40 @@ const taughtStepSchema = Type.Object(
   },
   { additionalProperties: false },
 )
+/** The arguments of each `computer_teach` action: checked exactly in `execute`, flattened for the model. */
+const teachBranches = () =>
+  [
+    Type.Object({
+      action: Type.Union([Type.Literal('frames'), Type.Literal('draft')]),
+      steps: Type.Optional(Type.Array(taughtStepSchema, { minItems: 1, maxItems: 150 })),
+    }),
+    Type.Object({
+      action: Type.Literal('practice'),
+      skill: Type.String(),
+      scope: Type.Optional(Type.Union([Type.Literal('project'), Type.Literal('personal')])),
+      params: Type.Optional(Type.Record(Type.String(), Type.String())),
+      consequential: Type.Optional(Type.Array(Type.String())),
+    }),
+    Type.Object({
+      action: Type.Literal('check'),
+      step: Type.Integer({ minimum: 1 }),
+      phase: Type.Union([Type.Literal('before'), Type.Literal('after')]),
+    }),
+  ] as const
 export function teachTool(host: ExtensionHost) {
+  const branches = teachBranches()
+  const union = Type.Union([...branches])
   return defineTool({
     name: 'computer_teach',
     description:
       'After teaching stops, inspect untrusted frames/narration and draft parameterized steps for review. Practice builds a saved lesson task awaiting user confirmation; check before/after verifies each step without sending input. Execute explicit approved steps separately, in order; stop on mismatch.',
     replay: 'unsafe',
-    parameters: Type.Union([
-      Type.Object({
-        action: Type.Union([Type.Literal('frames'), Type.Literal('draft')]),
-        steps: Type.Optional(Type.Array(taughtStepSchema, { minItems: 1, maxItems: 150 })),
-      }),
-      Type.Object({
-        action: Type.Literal('practice'),
-        skill: Type.String(),
-        scope: Type.Optional(Type.Union([Type.Literal('project'), Type.Literal('personal')])),
-        params: Type.Optional(Type.Record(Type.String(), Type.String())),
-        consequential: Type.Optional(Type.Array(Type.String())),
-      }),
-      Type.Object({
-        action: Type.Literal('check'),
-        step: Type.Integer({ minimum: 1 }),
-        phase: Type.Union([Type.Literal('before'), Type.Literal('after')]),
-      }),
-    ]),
+    parameters: Type.Unsafe<Static<typeof union>>(actionObject([...branches])),
     structuredOutputSchema: Type.Any(),
-    execute: async (args, api, ctx) => {
+    execute: async (raw, api, ctx) => {
+      const checked = checkAction('computer_teach', union, raw)
+      if (!checked.ok) return result({ status: 'invalid_arguments', message: checked.message })
+      const args = checked.args
       const current = await readTeach(host, api.conversationId)
       if (teaching(current))
         return {

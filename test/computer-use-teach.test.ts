@@ -1061,6 +1061,23 @@ it('handles a recorder checkpoint double failure without an unhandled rejection'
   commit.mockRestore()
   error.mockRestore()
 })
+it('keeps why the recorder failed, so the card can say it', async () => {
+  const f = await fixture()
+  await updateTeach(f.host, f.root.id, (doc) => {
+    doc.segment = segment()
+  })
+  const settings = vi
+    .spyOn(f.host, 'projectSettings')
+    .mockRejectedValue(new Error('Invalid Driver observation: missing or invalid truncated'))
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+  await launchRecorder(f.host, f.root.id)
+  await until(async () => (await readTeach(f.host, f.root.id)).segment?.status === 'drafting')
+  const { segment: ended } = await readTeach(f.host, f.root.id)
+  expect(ended?.failure).toBe('Invalid Driver observation: missing or invalid truncated')
+  expect(ended?.dropped.map((d) => d.reason)).toEqual(['recorder_failed'])
+  settings.mockRestore()
+  error.mockRestore()
+})
 it.each([
   { action: 'type', label: 'Password' },
   { action: 'type_secret', label: 'Credential' },
