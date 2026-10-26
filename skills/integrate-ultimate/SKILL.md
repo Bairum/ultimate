@@ -113,8 +113,11 @@ this, even unasked (setup health warns while it is missing), and propose it.
 - **Ask** before Postgres, MySQL or anything needing credentials: whether worktrees share the developer's database
   or get their own (`createdb -T <db> <db>_wt_<id>`, or a dump), and where credentials come from. Never copy
   production data into a worktree without the owner saying so.
-- **Prove it:** `git worktree add --detach <tmp>/1 HEAD` (a numeric folder, like a real worktree), run the commands there with `ULTIMATE_SOURCE` set, run the
-  project's checks or start the dev server, then remove the scratch worktree. Commit the settings and script.
+- **Prove it:** create a scratch worktree the way Ultimate will: `git worktree add --detach <tmp>/1 HEAD` (a numeric
+  folder, like a real worktree), or the project's `isolates.worktree.add` command at its configured `path` when it
+  sets one, since its tooling may refuse worktrees made any other way (`extensions/workspaces/README.md`). Run the
+  commands there with `ULTIMATE_SOURCE` set, run the project's checks or start the dev server, then remove the scratch
+  worktree (with `isolates.worktree.remove` when it is set). Commit the settings and script.
 
 ```sh
 #!/bin/sh
