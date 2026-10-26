@@ -41,6 +41,8 @@ const commit = async (repo: string, branch: string, message: string) => {
   await git(repo, 'update-ref', `refs/heads/${branch}`, oid)
   return oid
 }
+// Long enough that random ciphertext never contains it by chance, as it did the earlier four-letter 'desk'.
+const machine = 'snapshot-machine-name-that-must-stay-encrypted'
 const tip = (repo: string, ref: string) => git(repo, 'rev-parse', ref)
 const count = (path: string, table: string) => {
   const db = new DatabaseSync(path, { readOnly: true })
@@ -102,7 +104,7 @@ beforeAll(async () => {
   progress = []
   manifest = await uploadSnapshot({
     ...remote,
-    machine: 'desk',
+    machine,
     database,
     repo: source,
     progress: (done, total, uploaded) => progress.push([done, total, uploaded]),
@@ -114,7 +116,7 @@ afterAll(() => {
 })
 
 it('round-trips the database and fetches branches without force, keeping conflicting ones aside', async () => {
-  expect(manifest).toMatchObject({ key, machine: 'desk', database: { chunks: 2 } })
+  expect(manifest).toMatchObject({ key, machine, database: { chunks: 2 } })
   expect(manifest.bundle?.chunks).toBe(1)
   expect(await contentHash(database)).toBe(manifest.database.sha256)
   expect(progress.at(-1)).toEqual([
@@ -172,7 +174,7 @@ it('stores only ciphertext in R2', () => {
   )
   for (const bytes of stored.values()) {
     const text = Buffer.from(bytes)
-    for (const plain of ['SQLite format 3', 'git bundle', key, manifest.id, 'desk'])
+    for (const plain of ['SQLite format 3', 'git bundle', key, manifest.id, machine])
       expect(text.includes(plain)).toBe(false)
     expect(() => JSON.parse(text.toString())).toThrow(SyntaxError)
   }
@@ -286,7 +288,7 @@ it('never carries provider logins or secrets that sit next to the database', asy
   await git(repo, 'init', '-b', 'main')
   const uploaded = await uploadSnapshot({
     ...remote,
-    machine: 'desk',
+    machine,
     database: path,
     repo,
   })
@@ -322,7 +324,7 @@ it('carries a branch checked out in a source worktree, with commits of its own, 
   new DatabaseSync(path).close()
   const uploaded = await uploadSnapshot({
     ...remote,
-    machine: 'desk',
+    machine,
     database: path,
     repo,
   })
