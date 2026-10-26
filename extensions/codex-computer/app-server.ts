@@ -226,8 +226,13 @@ export async function operate(input: {
         const data = part.data
         imageWork = imageWork
           .then(async () => {
-            details.screenshots.push(await saveImage(host.home, conversation, data))
-            image = { type: 'image', mimeType: 'image/png', data }
+            const saved = await saveImage(host.home, conversation, data)
+            if (!saved) {
+              output(`Skipped an image of unknown format (${untrusted(string(part.mimeType))})\n`)
+              return
+            }
+            details.screenshots.push(saved.path)
+            image = { type: 'image', mimeType: saved.mimeType, data }
           })
           .catch((error) => {
             if (ended) {

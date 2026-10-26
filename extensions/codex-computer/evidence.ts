@@ -26,7 +26,7 @@ export async function resultsDirectory(home: string, conversation: number) {
 
 // Codex can plant entries inside its conversation folder, not replace that folder or its parents.
 // Parent swaps require the user's own privileges. Never descend into planted directories or symlinks.
-/** Only numeric conversation directories and regular PNG files; never traverse symlinks. */
+/** Only numeric conversation directories and regular image files; never traverse symlinks. */
 export async function pruneEvidence(
   home: string,
   now = Date.now(),
@@ -42,7 +42,7 @@ export async function pruneEvidence(
     if (!(await lstat(directory)).isDirectory()) continue
     const files: typeof all = []
     for (const file of await entries(directory)) {
-      if (!file.isFile() || !file.name.endsWith('.png')) continue
+      if (!file.isFile() || !/\.(png|jpe?g|webp)$/.test(file.name)) continue
       const path = join(directory, file.name)
       const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
         if (missing(error)) return undefined
@@ -67,14 +67,28 @@ export async function pruneEvidence(
     total -= file.size
   }
 }
+/** The image type its bytes prove, whatever the payload declares. */
+export function imageType(bytes: Buffer) {
+  if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
+    return { mimeType: 'image/png', extension: 'png' }
+  if (bytes.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])))
+    return { mimeType: 'image/jpeg', extension: 'jpeg' }
+  if (
+    bytes.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    bytes.subarray(8, 12).toString('latin1') === 'WEBP'
+  )
+    return { mimeType: 'image/webp', extension: 'webp' }
+  return undefined
+}
+/** Saves PNG, JPEG or WebP evidence; returns undefined for any other bytes, so the run carries on. */
 export async function saveImage(home: string, conversation: number, data: string) {
-  const png = Buffer.from(data, 'base64')
-  if (!png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
-    throw new Error('Computer Use returned a non-PNG image')
+  const bytes = Buffer.from(data, 'base64')
+  const type = imageType(bytes)
+  if (!type) return undefined
   const directory = await resultsDirectory(home, conversation)
-  const path = join(directory, `${Date.now()}-${randomUUID()}.png`)
+  const path = join(directory, `${Date.now()}-${randomUUID()}.${type.extension}`)
   // Exclusive creation refuses any planted destination, including symlinks.
-  await writeFile(path, png, { flag: 'wx', mode: 0o600 })
+  await writeFile(path, bytes, { flag: 'wx', mode: 0o600 })
   await pruneEvidence(home)
-  return path
+  return { path, mimeType: type.mimeType }
 }

@@ -50,9 +50,11 @@ and fences pending starts at host close; facet reloads do not kill live runs. No
 
 ## Evidence and untrusted content
 
-Evidence is stored under `<host.home>/codex-computer/<conversation>/` (0700), with exclusive-create PNG files
-(0600). Only PNG image payloads are accepted; non-PNG payloads fail rather than being mislabeled. Pruning keeps
-30 days, at most 200 MB per conversation and 1 GB overall, oldest first. Pruning only visits regular PNG files,
+Evidence is stored under `<host.home>/codex-computer/<conversation>/` (0700), with exclusive-create image files
+(0600). PNG, JPEG and WebP payloads are accepted (Computer Use returns JPEG); the type comes from the magic bytes,
+which also pick the file extension and the mimeType passed to the model. Any other payload is skipped with a note,
+never failing the run. Pruning keeps 30 days, at most 200 MB per conversation and 1 GB overall, oldest first.
+Pruning only visits regular `.png`, `.jpeg`, `.jpg` and `.webp` files,
 never planted symlinks or nested directories; exclusive-create saves refuse planted destinations. The sandbox lets
 Codex write only inside its conversation folder. Swapping that folder or its parents requires the user's own
 privileges and is outside this threat model; parent-swap races remain an accepted risk. The last image and saved

@@ -328,6 +328,34 @@ it('saves private PNG evidence in the conversation folder and returns the last i
   expect(f.spawn.mock.calls[0]).toBeDefined()
 })
 
+it('saves JPEG evidence with its real type and skips an unknown image without failing the run', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46]).toString(
+    'base64',
+  )
+  const content = [
+    { type: 'image', mimeType: 'image/jpeg', data: jpeg },
+    { type: 'image', mimeType: 'image/gif', data: Buffer.from('GIF89a').toString('base64') },
+  ]
+  f.fake.item({
+    type: 'mcpToolCall',
+    server: 'computer-use',
+    tool: 'get_app_state',
+    status: 'completed',
+    result: { content },
+  })
+  f.fake.complete()
+  const value = await promise
+  const details = data(value)
+  expect(details.status).toBe('done')
+  expect(details.screenshots).toHaveLength(1)
+  expect(details.screenshots[0]).toMatch(/\.jpeg$/)
+  expect(await readFile(details.screenshots[0])).toEqual(Buffer.from(jpeg, 'base64'))
+  expect(value.output?.[1]).toEqual({ type: 'image', mimeType: 'image/jpeg', data: jpeg })
+  expect(details.error).toBeUndefined()
+})
+
 it('refuses a resolved agent with any extra tool, even if named as an operator', async () => {
   const f = await fixture()
   const agent = await f.root.agent(context)
