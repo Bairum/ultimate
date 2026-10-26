@@ -75,19 +75,29 @@ function Untrusted() {
 function liveOf(output: string) {
   const steps: { tool?: string; guidance?: string }[] = []
   let message = ''
+  // Reconnecting until the next step or message shows Codex is through.
+  let reconnecting = false
   const blocks = output.split(new RegExp(`(${OPEN}[\\s\\S]*?${CLOSE})`))
   for (let index = 0; index < blocks.length; index++) {
     const block = blocks[index]
     if (block.startsWith(OPEN)) {
       const inner = unwrap(block).text
+      if ((blocks[index - 1] ?? '').endsWith('Codex is reconnecting to OpenAI (')) {
+        reconnecting = true
+        continue
+      }
+      reconnecting = false
       if (/Step \d+: $/.test(blocks[index - 1] ?? '')) steps.push({ tool: inner })
       else message = inner
       continue
     }
-    for (const line of block.split('\n'))
-      if (line.startsWith('Guidance from the ')) steps.push({ guidance: line })
+    for (const line of block.split('\n')) {
+      if (line.startsWith('Guidance from the ') || line.startsWith('Connection to OpenAI dropped'))
+        steps.push({ guidance: line })
+      if (line.startsWith('Connection to OpenAI dropped')) reconnecting = false
+    }
   }
-  return { steps, message, tools: steps.filter((step) => step.tool).length }
+  return { steps, message, reconnecting, tools: steps.filter((step) => step.tool).length }
 }
 
 /** A step's outcome as one mark, the same glyphs as the computer-use step lists. */
@@ -455,7 +465,11 @@ export function OperateCard({
               </p>
             )}
             <Shimmer className="text-[12px]">
-              {live.tools ? 'Codex is working…' : 'starting Codex…'}
+              {live.reconnecting
+                ? 'Codex is reconnecting to OpenAI…'
+                : live.tools
+                  ? 'Codex is working…'
+                  : 'starting Codex…'}
             </Shimmer>
           </ToolSection>
         )}
@@ -475,6 +489,16 @@ export function OperateCard({
       {details && (details.session || details.counts.items > 0) && (
         <Footer>
           <span>steps {details.counts.items}</span>
+          {!!details.retries && (
+            <span className="text-warning">
+              reconnected to OpenAI {details.retries === 1 ? 'once' : `${details.retries}×`}
+            </span>
+          )}
+          {!!details.resumes && (
+            <span className="text-warning">
+              continued after {plural(details.resumes, 'dropped turn')}
+            </span>
+          )}
           <span>{details.counts.minutes < 1 ? '<1' : Math.round(details.counts.minutes)} min</span>
           {details.session && (
             <span className="min-w-0 truncate" title={details.session}>

@@ -22,6 +22,10 @@ export type CodexDetails = {
   screenshots: string[]
   answer: UntrustedText
   counts: { items: number; minutes: number }
+  /** Times Codex said it was reconnecting to OpenAI and would retry; the run carried on. */
+  retries?: number
+  /** Times the run continued its thread in a new turn after Codex gave up reconnecting. */
+  resumes?: number
   /** Guidance sent into the run while it worked; `restarted` when Codex refused a steer and the turn was restarted with it. */
   guidance: {
     from: 'user' | 'operator'

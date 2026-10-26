@@ -62,6 +62,26 @@ not a sandbox on the native apps: an approved app may itself have broader access
 A run has no item cap. It ends at **8 hours** wall time (status `budget`) or when the user presses Stop; the agent
 may resume it with `codex_operate {session}`.
 
+### Connection drops
+
+Codex itself retries a lost stream to OpenAI ("Reconnecting... n/5") and announces each retry as an `error`
+notification with `willRetry: true`. These are not failures: the run counts them in `retries` and carries on. (Until
+this was fixed the wrapper ended the run on the first one, which is why USG saw runs die at "Reconnecting... 2/5".)
+When Codex gives up and fails the turn with a connection error (`responseStreamDisconnected`,
+`responseStreamConnectionFailed`, `httpConnectionFailed`, `serverOverloaded` or `internalServerError`), the run starts
+a new turn on the same thread asking Codex to check the screen and carry on, at most three times (`resumes`). Any
+other error ends the run. The card shows both counts. stdout is read line by line and stderr is drained, so a full
+pipe cannot stall Codex.
+
+### Typing into remote sessions
+
+Every new thread gets fixed rules for evidence (describe only the latest screenshot, quote text exactly, no claimed
+result without a fresh capture after the action) and typing (click into the remote session canvas and check focus
+first, never the browser chrome or address bar; prefer `setValue`, then `paste`, type only short text). Computer
+Use offers `setValue`, `paste` and `typeText`; a Citrix session may refuse the clipboard and non-ASCII keystrokes,
+so Codex replaces those characters with ASCII (× becomes x) and says which. Long text into such a session is typed
+character by character and is slow; there is no other input path.
+
 ## Apps and Stop
 
 Every app elicitation Codex sends is accepted automatically. Optional project `codexComputer.apps` (e.g.

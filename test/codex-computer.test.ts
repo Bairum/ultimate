@@ -361,6 +361,51 @@ it('fails the run, instead of hanging, when Codex refuses the restarted turn', a
   expect(details.error).toContain('Codex did not restart the turn with the guidance')
   expect(details.guidance).toEqual([])
 })
+it('rides out Codex reconnecting, and continues the thread when a turn drops, up to three times', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  // USG #69519: "Reconnecting... 2/5" (willRetry) ended the run although Codex was still retrying.
+  const reconnect = {
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    willRetry: true,
+    error: { message: 'Reconnecting... 2/5', codexErrorInfo: { responseStreamDisconnected: {} } },
+  }
+  f.fake.notify('error', reconnect)
+  const failed = {
+    status: 'failed',
+    error: { message: 'stream disconnected', codexErrorInfo: { responseStreamDisconnected: {} } },
+  }
+  for (let drop = 1; drop <= 3; drop++) {
+    f.fake.notify('error', { ...reconnect, willRetry: false, error: failed.error })
+    f.fake.notify('turn/completed', { turn: failed })
+    await until(() => f.fake.turns === drop + 1)
+  }
+  const continuing = f.fake.sent.filter((m) => m.method === 'turn/start').slice(1)
+  expect(continuing).toHaveLength(3)
+  expect(continuing[0].params).toMatchObject({ threadId: 'thread-1' })
+  expect(JSON.stringify(continuing[0].params)).toContain('The connection to OpenAI dropped')
+  // A fourth drop ends the run.
+  f.fake.notify('turn/completed', { turn: failed })
+  const details = data(await promise)
+  expect(details).toMatchObject({ status: 'failed', retries: 1, resumes: 3 })
+  expect(f.progress.join('')).toContain('Codex is reconnecting to OpenAI')
+})
+it('still fails at once on an error Codex will not retry and a new turn cannot fix', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  f.fake.notify('error', {
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    willRetry: false,
+    error: { message: 'usage limit', codexErrorInfo: 'usageLimitExceeded' },
+  })
+  expect(data(await promise)).toMatchObject({
+    status: 'failed',
+    error: expect.stringContaining('usage limit'),
+  })
+  expect(f.fake.sent.filter((m) => m.method === 'turn/start')).toHaveLength(1)
+})
 it('codex_steer reaches only a run in a conversation the caller owns', async () => {
   const f = await fixture()
   const { promise } = await running(f)
@@ -404,7 +449,7 @@ it("puts the trusted project's codex.md after the fixed rules and before the bri
   expect(project).toBeGreaterThan(0)
   expect(prompt.indexOf('Brief:\nRead Calculator')).toBeGreaterThan(project)
   expect(prompt).toContain('[cut at 8 KB]')
-  expect(prompt.length).toBeLessThan(9000)
+  expect(prompt.slice(project, prompt.indexOf('[cut at 8 KB]')).length).toBeLessThan(8 * 1024 + 100)
 })
 it('refuses Codex when strict signature verification fails, without spawning', async () => {
   const f = await fixture()
