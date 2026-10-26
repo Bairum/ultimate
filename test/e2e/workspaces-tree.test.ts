@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, realpathSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
 import {
-  addWorktree,
-  removeWorktree,
+  addCheckout,
+  removeCheckout,
   treeName,
   treePath,
 } from '../../extensions/workspaces/tree.ts'
@@ -54,9 +54,9 @@ test('a path alone keeps git worktree add and remove', async () => {
   const { root, source, base } = repository()
   const settings = { isolates: { worktree: { path: join(root, 'trees/{name}') } } }
   const path = (await treePath(settings, 'ult-1'))!
-  await addWorktree(settings, source, path, 'ult-1', ['-b', 'ultimate/x-1', base])
+  await addCheckout(settings, source, path, 'ult-1', ['-b', 'ultimate/x-1', base])
   expect(run(path, 'symbolic-ref', '--short', 'HEAD')).toBe('ultimate/x-1')
-  await removeWorktree(settings, source, path, 'ult-1')
+  await removeCheckout(settings, source, path, 'ult-1')
   expect(run(source, 'worktree', 'list', '--porcelain')).not.toContain(path)
 })
 
@@ -72,23 +72,61 @@ test('configured add and remove commands get {name} and {path} as shell words, a
     },
   }
   const path = (await treePath(settings, 'ult-2'))!
-  await addWorktree(settings, source, path, 'ult-2', ['-b', 'ultimate/x-2', base])
+  await addCheckout(settings, source, path, 'ult-2', ['-b', 'ultimate/x-2', base])
   expect(run(path, 'symbolic-ref', '--short', 'HEAD')).toBe('ultimate/x-2')
   await expect(
-    removeWorktree({ isolates: { worktree: { remove: 'true' } } }, source, path, 'ult-2'),
+    removeCheckout({ isolates: { worktree: { remove: 'true' } } }, source, path, 'ult-2'),
   ).rejects.toThrow('isolates.worktree.remove left')
-  await removeWorktree(settings, source, path, 'ult-2')
+  await removeCheckout(settings, source, path, 'ult-2')
   expect(run(source, 'worktree', 'list', '--porcelain')).not.toContain(path)
   await expect(
-    addWorktree({ isolates: { worktree: { add: 'exit 3' } } }, source, join(root, 'n'), 'n', [
+    addCheckout({ isolates: { worktree: { add: 'exit 3' } } }, source, join(root, 'n'), 'n', [
       '--detach',
       base,
     ]),
   ).rejects.toThrow('isolates.worktree.add failed')
   await expect(
-    addWorktree({ isolates: { worktree: { add: 'true' } } }, source, join(root, 'm'), 'm', [
+    addCheckout({ isolates: { worktree: { add: 'true' } } }, source, join(root, 'm'), 'm', [
       '--detach',
       base,
     ]),
   ).rejects.toThrow('isolates.worktree.add left no worktree')
+})
+
+test('a failed add clears its half-made checkout, so the command can run again', async () => {
+  const { root, source, base } = repository()
+  const path = join(root, 'half')
+  // The command registers the worktree and then fails, as an interrupted copy would.
+  const settings = {
+    isolates: { worktree: { add: 'git worktree add --detach {path} HEAD && exit 4' } },
+  }
+  await expect(
+    addCheckout(settings, source, path, 'half', ['-b', 'ultimate/x-3', base]),
+  ).rejects.toThrow('isolates.worktree.add failed')
+  expect(existsSync(path)).toBe(false)
+  expect(run(source, 'worktree', 'list', '--porcelain')).not.toContain(path)
+  const fixed = { isolates: { worktree: { add: 'git worktree add --detach {path} HEAD' } } }
+  await addCheckout(fixed, source, path, 'half', ['-b', 'ultimate/x-3', base])
+  expect(run(path, 'symbolic-ref', '--short', 'HEAD')).toBe('ultimate/x-3')
+})
+
+test('the remove command never runs on a checkout with modified or untracked files', async () => {
+  const { root, source, base } = repository()
+  const log = join(root, 'removed')
+  const settings = {
+    isolates: {
+      worktree: {
+        path: join(root, '{name}'),
+        remove: `echo ran > '${log}' && git worktree remove --force {path}`,
+      },
+    },
+  }
+  const path = (await treePath(settings, 'ult-4'))!
+  await addCheckout(settings, source, path, 'ult-4', ['-b', 'ultimate/x-4', base])
+  writeFileSync(join(path, 'work.txt'), 'unsaved')
+  await expect(removeCheckout(settings, source, path, 'ult-4')).rejects.toThrow(
+    'contains modified or untracked files',
+  )
+  expect(existsSync(log)).toBe(false)
+  expect(existsSync(join(path, 'work.txt'))).toBe(true)
 })

@@ -2,7 +2,7 @@
  * Where isolated checkouts live and how they are created and removed: the project's `isolates.worktree.path`, `.add`
  * and `.remove`, each optional. Without them, checkouts are `git worktree add`/`remove` under Ultimate's home.
  */
-import { realpath } from 'node:fs/promises'
+import { realpath, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import type { JsonObject } from '@earendil-works/pi-durable'
@@ -74,6 +74,9 @@ async function command(
   })
 }
 
+/** Whether the project creates checkouts with its own `isolates.worktree.add` command. */
+export const hasAddCommand = (settings: JsonObject) => layout(settings).add !== undefined
+
 async function listed(source: string, path: string) {
   return (await git(source, 'worktree', 'list', '--porcelain'))
     .split('\n\n')
@@ -84,9 +87,10 @@ async function listed(source: string, path: string) {
  * Create the checkout `path` of `source` and put `checkout` (the arguments of `git checkout`, such as
  * `-b branch base`) on it. Without `isolates.worktree.add` this is one `git worktree add`. With it, the command
  * creates the worktree (for tooling that owns worktree creation), it must leave a worktree of `source` registered at
- * `path`, and git then checks `checkout` out there.
+ * `path`, and git then checks `checkout` out there. When either step fails, the half-made checkout is cleared so the
+ * command can run again: callers create only at a path they found free.
  */
-export async function addWorktree(
+export async function addCheckout(
   settings: JsonObject,
   source: string,
   path: string,
@@ -99,17 +103,36 @@ export async function addWorktree(
     await git(source, 'worktree', 'add', ...checkout.slice(0, -1), path, checkout.at(-1)!)
     return
   }
-  await command('add', add, source, name, path)
-  if (!(await listed(source, path)))
-    throw new Error(`isolates.worktree.add left no worktree of ${source} at ${path}`)
-  await git({ cwd: path, timeout: commandTimeout }, 'checkout', '-q', ...checkout)
+  try {
+    await command('add', add, source, name, path)
+    if (!(await listed(source, path)))
+      throw new Error(`isolates.worktree.add left no worktree of ${source} at ${path}`)
+    await git({ cwd: path, timeout: commandTimeout }, 'checkout', '-q', ...checkout)
+  } catch (error) {
+    await clearCheckout(source, path).catch(
+      // The failure being reported matters more; a leftover is cleared again before the next attempt.
+      () => undefined,
+    )
+    throw error
+  }
 }
 
 /**
- * Remove the checkout `path`: `git worktree remove`, which refuses uncommitted changes, or the configured
- * `isolates.worktree.remove`, which must refuse them too and must leave `path` unregistered.
+ * Clear a checkout Ultimate was creating at `path` and did not finish: unregister it, delete the folder and prune.
+ * Only for a path its creation found free, never for a checkout that was handed out.
  */
-export async function removeWorktree(
+export async function clearCheckout(source: string, path: string) {
+  if (await listed(source, path))
+    await git(source, 'worktree', 'remove', '--force', '--force', path)
+  await rm(path, { recursive: true, force: true })
+  await git(source, 'worktree', 'prune')
+}
+
+/**
+ * Remove the checkout `path`: `git worktree remove`, which refuses modified or untracked files, or the configured
+ * `isolates.worktree.remove`, run only after the same check and required to leave `path` unregistered.
+ */
+export async function removeCheckout(
   settings: JsonObject,
   source: string,
   path: string,
@@ -120,6 +143,10 @@ export async function removeWorktree(
     await git(source, 'worktree', 'remove', path)
     return
   }
+  if (await git(path, 'status', '--porcelain', '--untracked-files=all'))
+    throw new Error(
+      `'${path}' contains modified or untracked files; isolates.worktree.remove was not run`,
+    )
   await command('remove', remove, source, name, path)
   if (await listed(source, path))
     throw new Error(`isolates.worktree.remove left ${path} registered as a worktree of ${source}`)

@@ -26,7 +26,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent, discoverAgents, hostDefaultModel } from '../../lib/agents.ts'
 import { CheckRan, Handoff, SubmissionLanded } from './api.ts'
 import { setup } from './setup.ts'
-import { addWorktree, treePath } from './tree.ts'
+import { addCheckout, treePath } from './tree.ts'
 import type {
   Landed,
   LanderAsk,
@@ -78,7 +78,7 @@ export async function landerCheckout(
         // The directory is the lander's own; a crash may have left it half created.
         await rm(path, { recursive: true, force: true })
         await git(source, 'worktree', 'prune')
-        await addWorktree(settings, source, path, landerName(source), ['--detach', tip])
+        await addCheckout(settings, source, path, landerName(source), ['--detach', tip])
       }
       return path
     })

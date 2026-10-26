@@ -17,7 +17,14 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { WorkspacesDoc } from './refs.ts'
 import { setup } from './setup.ts'
-import { addWorktree, removeWorktree, treeName, treePath } from './tree.ts'
+import {
+  addCheckout,
+  clearCheckout,
+  hasAddCommand,
+  removeCheckout,
+  treeName,
+  treePath,
+} from './tree.ts'
 import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
 import type {
   LandResult,
@@ -324,10 +331,25 @@ export function workspaces(host: Host) {
           // Git reads every `.git/worktrees/<name>` on list and add, and fails on one a concurrent add has only half
           // written ("failed to read .git/worktrees/<name>/locked"), so preparations of one source take turns.
           await serial(workspace.source, async () => {
-            const registered = (await git(workspace.source, 'worktree', 'list', '--porcelain'))
-              .split('\n\n')
-              .find((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+            const list = async () =>
+              (await git(workspace.source, 'worktree', 'list', '--porcelain'))
+                .split('\n\n')
+                .find((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+            let registered = await list()
             const resumed = await runtime.memo<boolean>('started', context)
+            const settings = await host.projectSettings()
+            // A crash during a configured add command can leave its half-made checkout. It is this preparation's own:
+            // `started` is recorded only after the path was found free. Clear it and run the command again.
+            if (
+              resumed &&
+              hasAddCommand(settings) &&
+              (registered
+                ? !registered.split('\n').includes(`branch refs/heads/${workspace.branch}`)
+                : await onDisk(workspace.path))
+            ) {
+              await clearCheckout(workspace.source, workspace.path)
+              registered = await list()
+            }
             if (registered) {
               if (
                 !resumed ||
@@ -353,8 +375,8 @@ export function workspaces(host: Host) {
               }
               await runtime.memo('started', true, context)
               created = true
-              await addWorktree(
-                await host.projectSettings(),
+              await addCheckout(
+                settings,
                 workspace.source,
                 workspace.path,
                 treeName(workspace.branch),
@@ -389,7 +411,7 @@ export function workspaces(host: Host) {
               )
             if (created) {
               if (registered)
-                await removeWorktree(
+                await removeCheckout(
                   await host.projectSettings(),
                   workspace.source,
                   workspace.path,
@@ -530,7 +552,7 @@ export function workspaces(host: Host) {
         )
           throw new Error(`Workspace #${id} no longer checks out its recorded branch tip`)
         // Never force: Git refuses uncommitted changes made since the status check.
-        await removeWorktree(
+        await removeCheckout(
           await host.projectSettings(),
           workspace.source,
           workspace.path,
@@ -985,7 +1007,7 @@ export function workspaces(host: Host) {
       if (workspace.state === 'preparing') throw new Error('Workspace is preparing')
       if (workspace.state !== 'removed') {
         if (await listedBySource(workspace))
-          await removeWorktree(
+          await removeCheckout(
             await host.projectSettings(),
             workspace.source,
             workspace.path,

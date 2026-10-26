@@ -33,9 +33,11 @@ refuses worktrees outside one folder, or a team that keeps every tree in one pla
   `<home>/lander`. Checkouts outside `<home>/worktrees` are not counted in the workspace disk stats.
 - `add` creates the checkout instead of `git worktree add`. It runs with `sh` in the source checkout, with `{name}`
   and `{path}` filled in as single shell words, and must leave a worktree of the source registered at `{path}`;
-  Ultimate then runs `git checkout` there (the conversation's branch, or a detached tip for the lander).
-- `remove` removes it instead of `git worktree remove`. Like Git, it must refuse a checkout with uncommitted changes,
-  and it must leave `{path}` unregistered.
+  Ultimate then runs `git checkout` there (the conversation's branch, or a detached tip for the lander). When it
+  fails, or a crash interrupts it, Ultimate clears its half-made checkout and runs it again on the next attempt, so
+  it must be safe to repeat.
+- `remove` removes it instead of `git worktree remove`. Ultimate runs it only on a checkout without modified or
+  untracked files, as Git would, and it must leave `{path}` unregistered.
 
 The commands get five minutes each. A conversation started in a subfolder of its repository opens in the same
 subfolder of its checkout.
