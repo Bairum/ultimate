@@ -22,6 +22,7 @@ export type {
   IntroContribution,
   CompactDocs,
   CommandContribution,
+  CodeBlockRenderer,
   ComposerRenderer,
   Contribution,
   DocumentContribution,

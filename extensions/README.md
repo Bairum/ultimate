@@ -403,6 +403,19 @@ link: ({ href, children, core }) =>
   href.startsWith('https://docs.example.com/') ? <a href={href}>{children}</a> : core
 ```
 
+### Code block renderers
+
+`codeBlocks` renders the fenced code blocks of one language in Markdown that `MessageResponse` shows, keyed by the
+fence's language. Each receives `{ code, language, incomplete, core }`; `core` starts as the highlighted block with its
+copy button, and `incomplete` is true while the fence still streams. They compose in discovery order behind error
+boundaries that fall back to `core`. Return `core` while `incomplete`, so a half-written block never renders.
+
+```tsx
+codeBlocks: {
+  dot: ({ code, incomplete, core }) => (incomplete ? core : <Graph source={code} />),
+}
+```
+
 ### Message actions
 
 `messageActions` contributes components to the hover action row on stored user and assistant messages, between the
