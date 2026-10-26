@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { readdir, readFile, realpath } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import type { Plugin } from 'vite-plus'
 import { discoverExtensions } from './discovery.ts'
 import { discoveryRoots } from './project.ts'
@@ -70,20 +70,17 @@ export function extensionModules(
       if (id.split('?')[0] === join(ultimateRoot, 'web/src/index.css')) {
         // Tailwind skips a git-ignored symlinked extension inside a root, so its target is a source of its own.
         // Tailwind reads sources once per process: links added later count after a restart.
-        const linked = await Promise.all(
-          (await discoverExtensions(ultimateRoot, projectRoot, userHome))
-            .filter((entry) => entry.source !== 'builtin' && !entry.error)
-            .map(async (entry) => {
-              const target = await realpath(entry.path)
-              return target === entry.path ? [] : [target]
-            }),
-        )
+        const linked = (await discoverExtensions(ultimateRoot, projectRoot, userHome))
+          .filter(
+            (entry) => entry.source !== 'builtin' && !entry.error && entry.target !== entry.path,
+          )
+          .map((entry) => entry.target)
         return (
           (await readFile(join(ultimateRoot, 'web/src/index.css'), 'utf8')) +
           '\n' +
           [
             ...roots.filter((_, index) => index !== 2 || useProjectSetup(projectRoot, userHome)),
-            ...linked.flat(),
+            ...linked,
           ]
             .map((root) => `@source ${JSON.stringify(root)};`)
             .join('\n')
@@ -95,7 +92,8 @@ export function extensionModules(
       )
       const entries = facets.map(
         (entry) =>
-          `${JSON.stringify(join(entry.path, 'web.tsx'))}: () => import(${JSON.stringify('/@fs/' + join(entry.path, 'web.tsx'))})`,
+          // By target, as the server facet loads: Vite keeps a URL bound to the file it first resolved to.
+          `${JSON.stringify(join(entry.path, 'web.tsx'))}: () => import(${JSON.stringify('/@fs/' + join(entry.target, 'web.tsx'))})`,
       )
       return `export const loaders = {${entries.join(',')}};`
     },
