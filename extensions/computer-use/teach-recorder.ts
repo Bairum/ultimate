@@ -91,12 +91,13 @@ export async function recordTeaching(options: {
   time?: Clock
 }) {
   const time = options.time ?? clock
-  let priorLogin: string[] = []
   const initial = (await options.read()).segment!
+  // Change detection and sign-in context are per window; `skip` stays global.
   const windows = Array.from({ length: initial.windows?.length ?? 1 }, () => ({
     previousHash: undefined as string | undefined,
     storedHash: undefined as string | undefined,
     held: 0,
+    priorLogin: [] as string[],
   }))
   // A restart loses transient credential context. Skip two settled changes conservatively.
   let skip = initial.dropped.some((d) => d.reason === 'password_cue') ? 2 : 0
@@ -172,9 +173,9 @@ export async function recordTeaching(options: {
       const logins = regions
         .filter((r) => signin.test(normalizeLabel(r.label)))
         .map((r) => normalizeLabel(r.label))
-      const signedIn = priorLogin.some((label) => !logins.includes(label))
+      const signedIn = state.priorLogin.some((label) => !logins.includes(label))
       const loginCues = regions.filter((r) => credentialCue(r.label) || loginCue.test(r.label))
-      priorLogin = loginCues.length
+      state.priorLogin = loginCues.length
         ? regions
             .filter(
               (r) => signin.test(normalizeLabel(r.label)) && loginCues.some((c) => near(c, r)),

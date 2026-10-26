@@ -533,7 +533,7 @@ export function TeachStartForm({
   const picked = payload.map((p) => windows.find((w) => w.window === p.window)!)
   const needs = [...new Set(picked.filter((w) => w.consent !== 'granted').map((w) => w.app))]
   const invalid = picked.some((w) =>
-    matchProblem(w, picks.find((p) => p.window === w.window)!.match),
+    matchProblem(w, picks.find((p) => p.window === w.window)!.match, windows),
   )
   const ready = !!title.trim() && payload.length > 0 && !needs.length && !invalid && !busy
   const start = () => {
@@ -581,7 +581,11 @@ export function TeachStartForm({
         <WindowPicker
           conversation={conversation}
           listed={listed}
-          onPicks={setPicks}
+          onPicks={(next) => {
+            // A failure names the old selection; the consent hint below must show for the new one.
+            setFailure(undefined)
+            setPicks(next)
+          }}
           picks={picks}
         />
         <label className="block space-y-1.5">

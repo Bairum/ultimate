@@ -35,7 +35,7 @@ import { parseWindow, windowFor } from './observe.ts'
 import { consequential, denyList } from './policy.ts'
 import { redactor, untrusted } from './content.ts'
 import { ObservationUnavailable, json, object, result } from './tool-helpers.ts'
-import { normalizeTitle, titleMatches, windowTitle } from './windows.ts'
+import { normalizeTitle, selectWindows, titleMatches, windowTitle } from './windows.ts'
 import type { PickableWindow } from './refs.ts'
 import {
   saveEvidence,
@@ -577,6 +577,17 @@ export async function startTeaching(host: ExtensionHost, args: TeachStart) {
       const key = JSON.stringify([identity.name, identity.bundle])
       apps.set(key, identity)
       const fragment = entry.match ?? title
+      // A saved lesson finds the window by this fragment among its app's windows: it must name only this one.
+      const siblings = records.filter(
+        (w) =>
+          w.pid === record.pid ||
+          (typeof w.app_name === 'string' && matchesApp(identity, w.app_name)),
+      )
+      const found = normalizeTitle(fragment) ? selectWindows(siblings, fragment) : [record]
+      if (found.length !== 1 || found[0] !== record)
+        throw new Error(
+          `window_title: "${fragment}" also matches another ${identity.name} window; make it more specific`,
+        )
       windows.push({
         key,
         app: identity.name,

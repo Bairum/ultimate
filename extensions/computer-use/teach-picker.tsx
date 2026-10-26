@@ -5,7 +5,7 @@
  * characters in titles. Each picked window can narrow `match`, the part of its title a saved lesson finds it by.
  */
 import { LoaderCircleIcon, RotateCwIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -27,9 +27,20 @@ export function filterWindows(windows: readonly PickableWindow[], query: string)
   return windows.filter((w) => titleMatches(`${w.app} ${w.title} ${w.pid}`, query))
 }
 
-/** A match narrowed to text the title does not contain would never find the window again. */
-export const matchProblem = (w: PickableWindow, match: string) =>
-  match.trim() && !titleMatches(w.title, match) ? 'not part of the title' : undefined
+/**
+ * Why `match` would not find this window again: text the title does not contain, or a fragment (the whole title when
+ * blank) that another window of the same app also contains. Mirrors the refusal of `teachStart`.
+ */
+export function matchProblem(w: PickableWindow, match: string, windows: readonly PickableWindow[]) {
+  if (match.trim() && !titleMatches(w.title, match)) return 'not part of the title'
+  const fragment = match.trim() || w.title
+  if (
+    normalizeTitle(fragment) &&
+    windows.some((o) => o.window !== w.window && o.app === w.app && titleMatches(o.title, fragment))
+  )
+    return `also matches another ${w.app} window; make it more specific`
+  return undefined
+}
 
 /**
  * `TeachStart.windows` from the ticks, in tick order: picks whose window left the list are dropped, and `match` is
@@ -82,6 +93,9 @@ export function WindowPicker({
   const [query, setQuery] = useState('')
   const [grantError, setGrantError] = useState<string>()
   const [granting, setGranting] = useState<string>()
+  // The grant settles after later renders: tick against the picks and list of the latest one, not this one's.
+  const latest = useRef({ picks, windows: listed.data?.windows ?? [] })
+  latest.current = { picks, windows: listed.data?.windows ?? [] }
   /** Grant the app for this conversation, list again so its flag flips, and tick the window it was asked from. */
   const grant = (w: PickableWindow) => {
     setGranting(w.app)
@@ -90,8 +104,10 @@ export function WindowPicker({
       .action(GrantAction, { conversation, app: w.app, scope: 'conversation' })
       .then(() => listed.refetch())
       .then(() => {
-        if (!picks.some((p) => p.window === w.window) && ticked.length < maxWindows)
-          onPicks([...picks, { window: w.window, match: w.title }])
+        const { picks: current, windows: now } = latest.current
+        const count = current.filter((p) => now.some((o) => o.window === p.window)).length
+        if (!current.some((p) => p.window === w.window) && count < maxWindows)
+          onPicks([...current, { window: w.window, match: w.title }])
       })
       .catch((error: unknown) => setGrantError(errorMessage(error)))
       .finally(() => setGranting(undefined))
@@ -164,7 +180,7 @@ export function WindowPicker({
               const pick = picks.find((p) => p.window === w.window)
               const denied = w.consent === 'denied'
               const where = away(w)
-              const problem = pick && matchProblem(w, pick.match)
+              const problem = pick && matchProblem(w, pick.match, windows)
               return (
                 <li data-teach-window={w.window} key={w.window}>
                   <div className="flex items-center gap-2 pr-2">

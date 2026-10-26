@@ -245,18 +245,25 @@ it('starts teaching a window-only helper app by pid once its name is granted', a
 const citrix = 'OpsMate \u2014 Microsoft\u200B Edge'
 const picker = () => [
   { window_id: 456, title: 'Calculator', app_name: 'Calculator', pid: 123 },
-  { window_id: 457, title: 'Calculator Tape', app_name: 'Calculator', pid: 123 },
+  { window_id: 457, title: 'Paper Tape', app_name: 'Calculator', pid: 123 },
   { window_id: 7, title: citrix, app_name: 'Citrix Viewer', pid: 29200 },
 ]
 it('matches window titles normalised and ids as numbers, still refusing ambiguity', async () => {
   const f = await fixture()
   f.fake.windows = [
     { window_id: 123, title: citrix, app_name: 'Citrix Viewer', pid: 29200 },
-    { window_id: 124, title: 'OpsMate Network Drive (E:)', app_name: 'Citrix Viewer', pid: 29200 },
+    {
+      window_id: 124,
+      title: 'OpsMate Network Drive (E:) 2025',
+      app_name: 'Citrix Viewer',
+      pid: 29200,
+    },
   ]
   for (const window of ['microsoft edge', '123', 123])
     expect((await windowFor(f.driver, 'Citrix Viewer', window)).window_id).toBe(123)
-  for (const window of ['opsmate', 'Safari'])
+  // Digits as text fall back to the title when no id has them; a number matches ids only.
+  expect((await windowFor(f.driver, 'Citrix Viewer', '2025')).window_id).toBe(124)
+  for (const window of ['opsmate', 'Safari', 2025])
     await expect(windowFor(f.driver, 'Citrix Viewer', window)).rejects.toThrow('exactly one window')
   const state = (window: string | number) =>
     ({
@@ -397,6 +404,79 @@ it('requires consent for every picked app before starting anything', async () =>
   await expect(
     startTeaching(f.host, { ...args, windows: [{ app: 'Citrix Viewer', window: 456 }] }),
   ).rejects.toThrow('app_identity')
+})
+it('refuses a title fragment that would also find another window of its app', async () => {
+  const f = await fixture()
+  f.fake.windows = [
+    { window_id: 456, title: 'Calculator', app_name: 'Calculator', pid: 123 },
+    { window_id: 457, title: 'Calculator Tape', app_name: 'Calculator', pid: 123 },
+    { window_id: 7, title: citrix, app_name: 'Citrix Viewer', pid: 29200 },
+    { window_id: 8, title: citrix, app_name: 'Citrix Viewer', pid: 29300 },
+  ]
+  await f.grant()
+  const start = (window: number, app = 'Calculator', match?: string) =>
+    startTeaching(f.host, {
+      conversation: f.root.id,
+      title: 'Lesson',
+      windows: [{ app, window, ...(match ? { match } : {}) }],
+    })
+  // The whole title by default, a sibling's identical title in another process, and a too-short match.
+  await expect(start(456)).rejects.toThrow(
+    'window_title: "Calculator" also matches another Calculator window',
+  )
+  await expect(start(7, 'Citrix Viewer')).rejects.toThrow('also matches another Citrix Viewer')
+  await expect(start(457, 'Calculator', 'calc')).rejects.toThrow('also matches another Calculator')
+  expect((await readTeach(f.host, f.root.id)).segment).toBeUndefined()
+  await start(457, 'Calculator', 'Tape')
+  expect((await readTeach(f.host, f.root.id)).segment?.windowTitle).toBe('Tape')
+  await finishTeaching(f.host, f.root.id)
+})
+it('keeps sign-in context per window, so another window’s frames do not hide a sign-in', async () => {
+  const f = await fixture()
+  const login = [region('User name'), region('Sign in', 0, 30)]
+  // Per poll: window 0 shows a login form, then signs in, then shows private content; window 1 changes meanwhile.
+  const screens = [
+    Array.from({ length: 12 }, () => login).concat(
+      Array.from({ length: 3 }, () => [region('Welcome')]),
+      Array.from({ length: 3 }, () => [region('Private account')]),
+    ),
+    ['b1', 'b2', 'b3'].flatMap((label) => Array.from({ length: 3 }, () => [region(label)])),
+  ]
+  const doc: Teach = {
+    segment: {
+      ...segment(),
+      windows: [
+        { app: 'Calculator', window: 456, windowTitle: 'Calculator' },
+        { app: 'Calculator', window: 457, windowTitle: 'Tape' },
+      ],
+    },
+  }
+  let poll = 0
+  await recordTeaching({
+    driver: f.driver,
+    signal: new AbortController().signal,
+    read: async () => doc,
+    update: async (change) => change(doc),
+    save: async () => 'private.png',
+    bytes: async () => 0,
+    stopped: async () => false,
+    redact: (s) => s,
+    capture: async (window, dimension) => {
+      const labels = screens[window][Math.min(poll, screens[window].length - 1)]
+      f.fake.surface.hashes = [`${window}:${labels.map((r) => r.label).join()}`]
+      f.fake.surface.regions = labels
+      return captureTeach(f.driver, 'Calculator', 456, dimension, new AbortController().signal)
+    },
+    time: {
+      now: () => (poll >= 18 ? 60000 : poll),
+      sleep: async () => {
+        poll++
+      },
+    },
+  })
+  const texts = doc.segment!.frames.map((fr) => fr.ocr.map((r) => r.text).join())
+  expect(texts).toEqual(['User name,Sign in', 'b1', 'b2', 'b3', 'Welcome'])
+  expect(doc.segment!.dropped.map((d) => d.reason)).toEqual(['post_signin'])
 })
 it('lists pickable windows frontmost first with consent, leaving out tiny, untitled and deny-listed ones', async () => {
   const f = await fixture()

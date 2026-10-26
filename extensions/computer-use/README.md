@@ -129,7 +129,8 @@ invisible characters removed and whitespace collapsed (`windows.ts`), so `micros
 `windows` (from the start dialog's picker) lists 1–6 distinct windows, `{app, window, match?}`, of one or several
 apps or processes. Each is found by id in one unfiltered `list_windows` and its app resolved from the owning pid,
 so two processes sharing a name stay apart; `match` (≤ 200 characters, default the whole title) must be in the
-live title and is what a saved lesson finds the window by. Every distinct app needs consent: the first missing
+live title, must not also be in another window of that app (`window_title` refuses it), and is what a saved
+lesson finds the window by. Every distinct app needs consent: the first missing
 one refuses `consent_required: <app>` before anything starts, and a once-grant is consumed per app. The segment
 stores them in `windows` (the first mirrored in `app`/`window`/`windowTitle`); every window counts for
 `teaching_elsewhere`. The legacy `{app, window?}` form writes a one-window `windows`.
