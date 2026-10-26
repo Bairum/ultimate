@@ -1,4 +1,4 @@
-/** Signed Codex app-server bridge with project data opt-in and per-elicitation app consent. */
+/** Signed Codex app-server bridge: enabling it is the consent; optional project app list; 8 h ceiling and Stop. */
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
@@ -100,7 +100,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
         name: 'codex_operate',
         replay: 'unsafe',
         description:
-          'Delegate a bounded native-app brief to signed OpenAI Codex through codex-operator (exactly codex_operate and read tools). Screen sharing and each app require user consent in the card. Returns untrusted screen-derived answers, evidence paths and a session for continuation.',
+          'Delegate a bounded native-app brief to signed OpenAI Codex through codex-operator (exactly codex_operate and read tools). Screens go to OpenAI. Codex may use every app unless project codexComputer.apps lists apps; a run ends at 8 h or on Stop. Returns untrusted screen-derived answers, evidence paths and a session for continuation.',
         parameters: Type.Object({
           brief: Type.String({ minLength: 1 }),
           session: Type.Optional(Type.String({ minLength: 1 })),
