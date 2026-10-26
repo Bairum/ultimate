@@ -139,7 +139,7 @@ it.concurrent('notes a landing in its tree root once, across a failed attempt an
   // A restart on the same home catches up from the cursor and writes nothing again.
   spy.mockRestore()
   await server.close()
-  servers.splice(servers.indexOf(server), 1)
+  servers.delete(server)
   const reopened = (await fixture(home)).server
   const third = await land(reopened, landing('s3', first))
   await until(async () => (await cursor(reopened)) >= third)

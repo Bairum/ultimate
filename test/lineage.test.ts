@@ -533,7 +533,7 @@ it.concurrent('delivers a branch’s prompt once when the process stops before i
     ),
   ).toEqual([])
   await server.close()
-  servers.splice(servers.indexOf(server), 1)
+  servers.delete(server)
 
   const { server: reopened } = await fixture(home)
   await until(async () => (await prompts(reopened))[0].state.status === 'terminal')

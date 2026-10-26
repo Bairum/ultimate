@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Message } from '@earendil-works/pi-ai'
@@ -6,7 +7,7 @@ import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate'
 import { defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
-import { afterAll, beforeAll, expect } from 'vitest'
+import { aroundEach, beforeAll, expect } from 'vitest'
 import { context } from '../server/harness.ts'
 import { branchProbe, fauxServer, post, seedTally, sourceCopy, temp } from './helpers.ts'
 
@@ -25,10 +26,19 @@ beforeAll(async () => {
 })
 
 export type Server = Awaited<ReturnType<typeof fauxServer>>
-export const servers: Server[] = []
-// Each test owns its durable home; share only the read-only source fixture.
-afterAll(async () => {
-  await Promise.all(servers.splice(0).map((server) => server.close()))
+// Share only the read-only source. Concurrent tests own and close their own servers.
+const scope = new AsyncLocalStorage<Set<Server>>()
+export const servers = {
+  add: (server: Server) => scope.getStore()!.add(server),
+  delete: (server: Server) => scope.getStore()!.delete(server),
+}
+aroundEach(async (runTest) => {
+  const owned = new Set<Server>()
+  try {
+    await scope.run(owned, runTest)
+  } finally {
+    await Promise.all([...owned].map((server) => server.close()))
+  }
 })
 
 export const textOf = (content: unknown) =>
@@ -51,7 +61,7 @@ export function section(server: Server, id: ConversationId) {
 export async function fixture(reopen?: string) {
   const home = reopen ?? (await temp('ultimate-lineage-'))
   const server = await fauxServer({ ultimateRoot, home, userHome: home })
-  servers.push(server)
+  servers.add(server)
   const requests: Message[][] = []
   const condensed: string[] = []
   /** While `condense` is set, compaction summaries wait for it. */
@@ -114,7 +124,7 @@ export const image = { type: 'image', data: 'aW1n', mimeType: 'image/png' } as c
 export async function notifyFixture(reopen?: string) {
   const home = reopen ?? (await temp('ultimate-lineage-'))
   const server = await fauxServer({ ultimateRoot, home, userHome: home })
-  servers.push(server)
+  servers.add(server)
   const hold = Promise.withResolvers<void>()
   const route: FauxResponseFactory = async (transcript, options) => {
     server.host.faux!.appendResponses([route])

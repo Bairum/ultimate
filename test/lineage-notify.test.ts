@@ -138,7 +138,7 @@ it.concurrent('a deliver resumed after a restart finds the note it left under it
     requestId: `lineage:notify:${other.id}:${task.id}`,
   })
   await server.close()
-  servers.splice(servers.indexOf(server), 1)
+  servers.delete(server)
   const database = new DatabaseSync(join(home, 'state.sqlite'))
   const record = JSON.parse(
     (database.prepare('SELECT record FROM tasks WHERE id = ?').get(task.id) as { record: string })
@@ -176,7 +176,7 @@ it.concurrent('keeps one pending notify per target and delivers it once across a
   expect(pending.map((task) => task.input)).toEqual([{ target: other.id, wake: false }])
 
   await server.close()
-  servers.splice(servers.indexOf(server), 1)
+  servers.delete(server)
   const { server: reopened, release } = await notifyFixture(home)
   expect(await pendingNotifies(reopened)).toHaveLength(1)
   release()
