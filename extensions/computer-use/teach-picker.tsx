@@ -176,11 +176,14 @@ export function WindowPicker({
           </p>
         ) : (
           <ul className="divide-y divide-border/50">
-            {shown.map((w) => {
+            {shown.map((w, index) => {
               const pick = picks.find((p) => p.window === w.window)
               const denied = w.consent === 'denied'
               const where = away(w)
               const problem = pick && matchProblem(w, pick.match, windows)
+              // One Allow per app: its first row in the shown list.
+              const asks =
+                w.consent === 'required' && shown.findIndex((o) => o.app === w.app) === index
               return (
                 <li data-teach-window={w.window} key={w.window}>
                   <div className="flex items-center gap-2 pr-2">
@@ -196,12 +199,15 @@ export function WindowPicker({
                         disabled={denied || (!pick && full)}
                         onCheckedChange={(value) => toggle(w, value === true)}
                       />
-                      <span className="min-w-0 flex-1 truncate">
-                        <span className="text-foreground">{w.app}</span>
-                        <span className="text-muted-foreground/50"> — </span>
-                        <span className="text-muted-foreground">{w.title}</span>
-                        <span className="font-mono text-[10.5px] text-muted-foreground/60">
-                          {' '}
+                      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+                        <span className="max-w-[45%] shrink-0 truncate text-foreground">
+                          {w.app}
+                        </span>
+                        <span className="shrink-0 text-muted-foreground/50">—</span>
+                        <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                          {w.title}
+                        </span>
+                        <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground/60 tabular-nums">
                           ({w.pid})
                         </span>
                       </span>
@@ -221,7 +227,7 @@ export function WindowPicker({
                         <span className="shrink-0 font-mono text-[10.5px] text-error">denied</span>
                       )}
                     </label>
-                    {w.consent === 'required' && (
+                    {asks && (
                       <Button
                         className="h-6 shrink-0 gap-1 border-brand/50 px-1.5 font-sans text-[11px] text-foreground hover:border-brand max-md:h-8"
                         data-teach-allow={w.app}
