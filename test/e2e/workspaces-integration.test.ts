@@ -324,13 +324,13 @@ ${fail ? 'exit 1' : ''}
 }
 it.concurrent('serializes concurrent lander checkout creation', async () => {
   const { home, projectRoot } = await repository()
-  const path = await landerPath(home, projectRoot)
+  const path = await landerPath(home, projectRoot, {})
   // Recover an unregistered directory left by an interrupted creation, too.
   await mkdir(path)
   await writeFile(join(path, 'incomplete'), 'interrupted')
   const results = await Promise.allSettled([
-    landerCheckout(home, projectRoot),
-    landerCheckout(home, projectRoot),
+    landerCheckout(home, projectRoot, {}),
+    landerCheckout(home, projectRoot, {}),
   ])
   expect(results).toEqual([
     { status: 'fulfilled', value: path },
@@ -342,13 +342,13 @@ it.concurrent('serializes concurrent lander checkout creation', async () => {
   expect(await readdir(path)).not.toContain('incomplete')
   // An existing checkout must be left alone, even when another tip is requested.
   await writeFile(join(path, 'keep.txt'), 'keep')
-  expect(await landerCheckout(home, projectRoot, 'missing-tip')).toBe(path)
+  expect(await landerCheckout(home, projectRoot, {}, 'missing-tip')).toBe(path)
   expect(await readFile(join(path, 'keep.txt'), 'utf8')).toBe('keep')
 })
 it.concurrent('retries lander checkout creation after a failure', async () => {
   const { home, projectRoot } = await repository()
-  await expect(landerCheckout(home, projectRoot, 'missing-tip')).rejects.toThrow('missing-tip')
-  expect(await landerCheckout(home, projectRoot)).toBe(await landerPath(home, projectRoot))
+  await expect(landerCheckout(home, projectRoot, {}, 'missing-tip')).rejects.toThrow('missing-tip')
+  expect(await landerCheckout(home, projectRoot, {})).toBe(await landerPath(home, projectRoot, {}))
 })
 it.concurrent('creates through the action; setup receives ULTIMATE_SOURCE and the first model request waits for ready', async () => {
   const f = await fixture()
@@ -390,6 +390,58 @@ it.concurrent('creates through the action; setup receives ULTIMATE_SOURCE and th
   expect((await readFile(sourceFile, 'utf8')).trim()).toBe(f.projectRoot)
   expect(await git(pending.path, 'branch', '--show-current')).toBe(pending.branch)
   expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
+})
+it.concurrent('creates and removes checkouts where isolates.worktree.path says, through its add and remove commands', async () => {
+  const f = await fixture()
+  const log = join(f.directory, 'tree commands')
+  f.host.projectSettings = async () => ({
+    isolates: {
+      worktree: {
+        // A folder with a space: the commands get {name} and {path} as single shell words.
+        path: join(f.directory, 'my trees', '{name}', 'src'),
+        add: `echo add {name} >> '${log}' && git worktree add --detach {path} HEAD`,
+        remove: `echo remove {name} >> '${log}' && git worktree remove {path}`,
+      },
+    },
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  const name = `ult-${workspace.branch.slice('ultimate/'.length)}`
+  expect(workspace.path).toBe(join(await realpath(f.directory), 'my trees', name, 'src'))
+  expect(await git(workspace.path, 'branch', '--show-current')).toBe(workspace.branch)
+  await f.service.discard(id, context)
+  expect(await git(f.projectRoot, 'worktree', 'list', '--porcelain')).not.toContain(workspace.path)
+  expect((await readFile(log, 'utf8')).trim().split('\n')).toEqual([
+    `add ${name}`,
+    `remove ${name}`,
+  ])
+})
+it.concurrent('fails preparation when the configured add command leaves no worktree at the path', async () => {
+  const f = await fixture()
+  f.host.projectSettings = async () => ({
+    isolates: { worktree: { path: join(f.directory, 'trees', '{name}'), add: 'true' } },
+  })
+  const id = await f.create()
+  await f.service.ready(id, context)
+  expect((await f.service.get(id, context))!).toMatchObject({
+    state: 'failed',
+    error: expect.stringContaining('isolates.worktree.add left no worktree'),
+  })
+})
+it.concurrent('opens a conversation started in a subfolder of the repository in that subfolder of its checkout', async () => {
+  const f = await fixture()
+  await mkdir(join(f.projectRoot, 'app'))
+  await writeFile(join(f.projectRoot, 'app/package.json'), '{}')
+  await git(f.projectRoot, 'add', '.')
+  await git(f.projectRoot, 'commit', '-m', 'app')
+  const { id } = await actions.create({ cwd: join(f.projectRoot, 'app') }, {
+    host: f.host,
+  } as ActionContext)
+  await f.service.ready(id, context)
+  const workspace = (await f.service.get(id, context))!
+  const conversation = (await f.opened.harness.conversation(id, context))!
+  expect((await conversation.agent(context)).cwd).toBe(join(workspace.path, 'app'))
 })
 it.concurrent('renders workspace preparation before project context in the first composed provider request', async () => {
   const paths = await repository()

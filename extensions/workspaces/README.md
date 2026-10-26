@@ -12,6 +12,35 @@ refuses a folder with files, whose first commit is a judgement for an agent; onb
 
 Each conversation has one record in the root `ultimate.workspaces` document.
 Its path is `<home>/worktrees/<conversationId>`; its branch includes the home hash and conversation ID.
+Where checkouts live and how they are made can be configured in the project's settings, for repositories whose
+tooling owns worktrees: company-internal monorepo tooling that must create and register each tree, a Git setup that
+refuses worktrees outside one folder, or a team that keeps every tree in one place. All three keys are optional:
+
+```json
+{
+  "isolates": {
+    "worktree": {
+      "path": "~/trees/{name}",
+      "add": "./scripts/tree-add {path}",
+      "remove": "./scripts/tree-remove {path}"
+    }
+  }
+}
+```
+
+- `path` is where each checkout goes. `{name}` is `ult-<hash>-<conversationId>` (the lander's is `ult-lander-<hash>`),
+  and a leading `~/` is expanded; the template must contain `{name}` and the result must be absolute. Without it, checkouts go under `<home>/worktrees` and
+  `<home>/lander`. Checkouts outside `<home>/worktrees` are not counted in the workspace disk stats.
+- `add` creates the checkout instead of `git worktree add`. It runs with `sh` in the source checkout, with `{name}`
+  and `{path}` filled in as single shell words, and must leave a worktree of the source registered at `{path}`;
+  Ultimate then runs `git checkout` there (the conversation's branch, or a detached tip for the lander). When it
+  fails, or a crash interrupts it, Ultimate clears its half-made checkout and runs it again on the next attempt, so
+  it must be safe to repeat.
+- `remove` removes it instead of `git worktree remove`. Ultimate runs it only on a checkout without modified or
+  untracked files, as Git would, and it must leave `{path}` unregistered.
+
+The commands get five minutes each. A conversation started in a subfolder of its repository opens in the same
+subfolder of its checkout.
 Preparation runs `isolates.worktree.setup` with `ULTIMATE_SOURCE` set to the source checkout.
 Setup commands must be safe to repeat after interruption.
 What a project's setup should do (dependencies, `.env`, a copy-on-write SQLite clone, a dev port per worktree, skipping
