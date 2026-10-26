@@ -1,4 +1,4 @@
-import { mkdir, writeFile, rm, mkdtemp } from 'node:fs/promises'
+import { mkdir, writeFile, rm, mkdtemp, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
@@ -27,7 +27,18 @@ it('lists and scans only git-visible, eligible text files', async () => {
       'src/big.ts': `fastForward\n${'x'.repeat(4 * 1024 * 1024)}\nfastForward\n`,
     }
     for (const [rel, content] of Object.entries(files)) await writeFile(join(root, rel), content)
-    await exec('git', ['add', 'src/lander.ts'], { cwd: root })
+    // Credential folders, links to secrets inside and outside the project, and a tracked file ignored later.
+    for (const dir of ['secrets', 'credentials', 'linked']) await mkdir(join(root, dir))
+    await writeFile(join(root, 'secrets/prod.json'), 'fastForward key\n')
+    await writeFile(join(root, 'credentials/aws'), 'fastForward key\n')
+    await writeFile(join(root, 'local.json'), 'fastForward local\n')
+    await symlink(join(root, '.env'), join(root, 'src/config.ts'))
+    await symlink(join(root, 'secrets'), join(root, 'linked/dir'))
+    const outside = await mkdtemp(join(tmpdir(), 'find-outside-'))
+    await writeFile(join(outside, 'token.ts'), 'fastForward outside\n')
+    await symlink(join(outside, 'token.ts'), join(root, 'src/token.ts'))
+    await exec('git', ['add', 'src/lander.ts', 'local.json', 'src/config.ts'], { cwd: root })
+    await writeFile(join(root, '.gitignore'), '*.ignored\nlocal.json\n')
     const source = gitSource(root, '.')
     // Tracked and untracked files alike; gitignore, credentials, binaries (by name or NUL byte), empty and vendored
     // files dropped.
@@ -43,6 +54,10 @@ it('lists and scans only git-visible, eligible text files', async () => {
       'src/notes.md:1',
     ])
     expect(await source.read('blob', 1024)).toBeUndefined()
+    // Nothing outside the listing is read, whatever the cascade asks for.
+    for (const rel of ['src/config.ts', 'src/token.ts', 'local.json', 'secrets/prod.json'])
+      expect(await source.read(rel, 1024)).toBeUndefined()
+    await rm(outside, { recursive: true, force: true })
     expect(await source.read('src/lander.ts', 1024)).toEqual({
       text: 'export function fastForward() {}\n',
       truncated: false,
