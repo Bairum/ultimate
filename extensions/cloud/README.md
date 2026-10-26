@@ -4,7 +4,7 @@ Encrypted project backups in the user's cloud, inert until configured. A project
 starts it on; the cloud holds its backups and a register of which machine backed up what, and `pnpm restore` installs
 a backup on another machine.
 
-Configure once in **user** settings (`~/.ultimate/settings.json`), or with ⌘K → **Join cloud fleet**:
+Configure once in **user** settings (`~/.ultimate/settings.json`), or with ⌘K → **Join cloud backups**:
 
 ```json
 { "cloud": { "url": "wss://example.com", "machine": "my-machine" } }
@@ -108,7 +108,7 @@ Only that chapter's old state moves aside, into `~/.ultimate/backups/restore-<ti
 locks still guard the restore. Restoring a later chapter registers it in `chapters.json` if needed and makes it active.
 The first chapter keeps the original key, paths and restore behaviour.
 
-**Join** (⌘K → **Join cloud fleet**, or **Join** on the setup row) asks for the cloud URL, machine name and both
+**Join** (⌘K → **Join cloud backups**, or **Join** on the setup row) asks for the cloud URL, machine name and both
 secrets, checks `GET /sync/register` with the token (401: "The cloud refused the token"; anything else but 200:
 "Cannot reach <host>"), and only then stores the secrets and `cloud.url`/`cloud.machine`. It lists the projects the
 register knows. Backups read the configuration from the next start on.

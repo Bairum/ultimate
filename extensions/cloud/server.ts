@@ -76,7 +76,7 @@ export async function backup(host: ExtensionHost, force: boolean) {
   try {
     const ready = await setup(host)
     if (ready.status === 'off')
-      throw new Error('Cloud backups are off: join the fleet with ⌘K → Join cloud fleet')
+      throw new Error('Cloud backups are off: join them with ⌘K → Join cloud backups')
     if (ready.status === 'satellite')
       throw new Error(
         'This machine is a satellite (cloud.satellite in user settings): it never backs up, so it cannot replace the backups of the machine that owns this project',
@@ -176,7 +176,7 @@ export const actions = {
   backup: implementAction(BackupAction, (args, { host }) =>
     backup(host, (args as { force?: unknown } | null)?.force === true),
   ),
-  /** Whether this machine joined the fleet: `cloud.url` and both secrets, without their values. */
+  /** Whether this machine joined cloud backups: `cloud.url` and both secrets, without their values. */
   joinState: implementAction(JoinStateAction, (_args, { host }) => joinState(host.userHome)),
   /** User-only: the Join card's submit; checks the cloud, then stores the secrets and settings. */
   join: implementAction(JoinAction, async (args, { host }) => {

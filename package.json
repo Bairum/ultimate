@@ -16,7 +16,6 @@
     "setup:machine": "node scripts/setup-machine.ts",
     "reset": "node scripts/reset.ts",
     "restore": "node scripts/restore.ts",
-    "fleet:e2e": "node scripts/fleet-e2e.ts",
     "fmt": "vp fmt",
     "lint": "vp lint"
   },

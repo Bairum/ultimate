@@ -1,4 +1,4 @@
-/** Joining this machine to the user's cloud fleet: the Join card's `cloud.join` and `cloud.joinState` actions. */
+/** Joining this machine to the user's cloud backups: the Join card's `cloud.join` and `cloud.joinState` actions. */
 import { hostname } from 'node:os'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { httpBase } from '../../lib/cloud.ts'

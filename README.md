@@ -72,9 +72,6 @@ pnpm cli            # emergency terminal agent when the UI, server or database i
 - **When everything is broken:** `pnpm cli` in the clone (or `ultimate --cli` in a project) opens Pi's terminal agent
   with Ultimate's instructions, skills, your default model and the Claude Code provider. It starts no server and opens
   no database; further arguments go to Pi, e.g. `pnpm cli --model claude-code/claude-opus-5-5 "why won't it boot"`.
-- **Several machines, one project:** join the cloud on each (⌘K → **Join cloud fleet**), back the project up from the
-  status line, and `pnpm restore <name>` on the other machine; see
-  [Cloud backups](extensions/cloud/README.md#cloud-backups).
 
 ### Recommended models
 
