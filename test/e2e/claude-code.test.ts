@@ -153,6 +153,10 @@ if (process.argv.includes('status')) {
       subscription: false,
       plan: null,
     })
+    // An unreadable probe is unknown, not a logout: retain the last confirmed login.
+    expect((await runtime.getAvailable()).some((m) => m.provider === 'claude-code')).toBe(true)
+    await writeFile(payload, JSON.stringify({ loggedIn: false }))
+    expect(await status()).toMatchObject({ available: true, loggedIn: false })
     expect((await runtime.getAvailable()).some((m) => m.provider === 'claude-code')).toBe(false)
     vi.stubEnv('PI_CLAUDE_CODE_COMMAND', join(home, 'missing'))
     expect(await status()).toEqual({
