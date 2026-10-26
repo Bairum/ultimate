@@ -565,6 +565,19 @@ export async function loadExtensions(
           )
             throw new Error('pollActions must contain registered action names')
           const secrets = validateSecrets(module.secrets ?? [])
+          // Pi lets the last extension win a tool name silently. A later source layer overriding a tool on purpose is
+          // fine (a project's bash over coding-tools); within one layer, the extension holding the name keeps it.
+          const taken = host.registry
+            .snapshot()
+            .tools()
+            .filter(
+              (entry) =>
+                entry.extension.name !== name &&
+                host.extensionSources.get(entry.extension.name) === source &&
+                extension.tools?.some((tool) => tool.name === entry.tool.name),
+            )
+            .map((entry) => `${entry.tool.name} is already provided by ${entry.extension.name}`)
+          if (taken.length) throw new Error(taken.join('; '))
           host.registry.install(trace.tools(extension))
           const previousHost = facetHosts.get(name)
           facetHosts.set(name, facetHost)
