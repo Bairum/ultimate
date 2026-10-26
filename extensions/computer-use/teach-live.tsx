@@ -21,6 +21,7 @@ import {
   api,
   cn,
   errorMessage,
+  useAction,
   useConversations,
   useDialog,
   useDocOf,
@@ -37,8 +38,11 @@ import {
   TeachResumeAction,
   TeachStartAction,
   TeachStopAction,
+  TeachWindowsAction,
 } from './refs.ts'
 import type { Teach } from './refs.ts'
+import { matchProblem, startWindows, suggestedPick, WindowPicker } from './teach-picker.tsx'
+import type { Pick } from './teach-picker.tsx'
 
 export type Segment = NonNullable<Teach['segment']>
 
@@ -484,14 +488,14 @@ export function TeachStatus({ conversation }: { conversation: number }) {
   return <TeachStatusView conversation={conversation} now={now} segment={segment} />
 }
 
-/** Start a segment: a title, the app and window to watch, and how long. */
+/** Start a segment: a title, the windows to watch, and how long. */
 export function TeachDialog() {
   const [open, setOpen] = useDialog(teachDialog)
   const { conversationId } = useUltimate()
   return (
     <Dialog onOpenChange={setOpen} open={open}>
       <DialogContent
-        className="max-h-[calc(100dvh-2rem)] grid-cols-[minmax(0,1fr)] gap-0 overflow-y-auto p-0 sm:max-w-[30rem]"
+        className="max-h-[calc(100dvh-2rem)] grid-cols-[minmax(0,1fr)] gap-0 overflow-y-auto p-0 sm:max-w-[34rem]"
         data-teach-dialog
       >
         {open && conversationId !== undefined && (
@@ -515,28 +519,29 @@ export function TeachStartForm({
 }) {
   const session = useDocOf(conversation, SessionDoc)
   const suggested = session?.journal.at(-1)?.app ?? session?.task?.spec.scope.apps[0] ?? ''
+  const listed = useAction(TeachWindowsAction, { conversation }, { onError: () => {} })
   const [title, setTitle] = useState('')
-  const [app, setApp] = useState(suggested)
-  const [window, setWindow] = useState('')
+  const [chosen, setPicks] = useState<Pick[]>()
   const [minutes, setMinutes] = useState(5)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string>()
-  const apps = [
-    ...new Set((session?.grants ?? []).filter((g) => g.scope !== 'deny').map((grant) => grant.app)),
-  ]
-  const ready = !!title.trim() && !!app.trim() && !busy
+  const windows = listed.data?.windows ?? []
+  // Until the user ticks or unticks, the frontmost window of the app the session used last is ticked for them.
+  const suggestion = listed.data && suggestedPick(windows, suggested)
+  const picks = chosen ?? (suggestion ? [suggestion] : [])
+  const payload = startWindows(windows, picks)
+  const picked = payload.map((p) => windows.find((w) => w.window === p.window)!)
+  const needs = [...new Set(picked.filter((w) => w.consent !== 'granted').map((w) => w.app))]
+  const invalid = picked.some((w) =>
+    matchProblem(w, picks.find((p) => p.window === w.window)!.match, windows),
+  )
+  const ready = !!title.trim() && payload.length > 0 && !needs.length && !invalid && !busy
   const start = () => {
     if (!ready) return
     setBusy(true)
     setFailure(undefined)
     api
-      .action(TeachStartAction, {
-        conversation,
-        app: app.trim(),
-        title: title.trim(),
-        minutes,
-        ...(window.trim() ? { window: window.trim() } : {}),
-      })
+      .action(TeachStartAction, { conversation, title: title.trim(), minutes, windows: payload })
       .then(onClose)
       .catch((error: unknown) => setFailure(errorMessage(error)))
       .finally(() => setBusy(false))
@@ -573,35 +578,16 @@ export function TeachStartForm({
             value={title}
           />
         </label>
-        <div className="grid grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-3 max-sm:grid-cols-1">
-          <label className="block space-y-1.5">
-            <span className="text-[12px] text-muted-foreground">App</span>
-            <input
-              className={field}
-              data-teach-app
-              list="teach-apps"
-              onChange={(event) => setApp(event.target.value)}
-              placeholder="Citrix Viewer"
-              value={app}
-            />
-            <datalist id="teach-apps">
-              {apps.map((name) => (
-                <option key={name} value={name} />
-              ))}
-            </datalist>
-          </label>
-          <label className="block space-y-1.5">
-            <span className="text-[12px] text-muted-foreground">
-              Window <span className="text-muted-foreground/60">optional</span>
-            </span>
-            <input
-              className={field}
-              onChange={(event) => setWindow(event.target.value)}
-              placeholder="Part of its title"
-              value={window}
-            />
-          </label>
-        </div>
+        <WindowPicker
+          conversation={conversation}
+          listed={listed}
+          onPicks={(next) => {
+            // A failure names the old selection; the consent hint below must show for the new one.
+            setFailure(undefined)
+            setPicks(next)
+          }}
+          picks={picks}
+        />
         <label className="block space-y-1.5">
           <span className="flex items-baseline justify-between text-[12px] text-muted-foreground">
             Up to
@@ -625,7 +611,19 @@ export function TeachStartForm({
         </p>
       </div>
       <footer className="space-y-3 border-t border-border/60 bg-muted/30 px-6 py-4">
-        {failure && <StartFailure app={app} conversation={conversation} failure={failure} />}
+        {failure && (
+          <StartFailure
+            app={picked[0]?.app ?? ''}
+            conversation={conversation}
+            failure={failure}
+            onGranted={() => void listed.refetch()}
+          />
+        )}
+        {!failure && needs.length > 0 && (
+          <p className="text-[12px] leading-relaxed text-warning">
+            Allow {needs.join(' and ')} first: watching needs your consent for each app.
+          </p>
+        )}
         <div className="flex items-center justify-end gap-2">
           <Button onClick={onClose} size="sm" type="button" variant="ghost">
             Not now
@@ -645,19 +643,20 @@ function StartFailure({
   failure,
   app,
   conversation,
+  onGranted,
 }: {
   failure: string
   app: string
   conversation: number
+  onGranted: () => void
 }) {
   const [error, setError] = useState<string>()
-  // app_identity echoes the typed app, so only a failure without it carries a server-resolved name.
   const consent = failure.includes('app_identity')
     ? undefined
     : /consent_required(?:: (.+))?$/.exec(failure)
   if (consent) {
-    // The canonical name the server resolved, so typing a pid still grants the real app.
-    const name = consent[1]?.trim() || app.trim()
+    // The canonical name the server resolved, which the picked window's app may only approximate.
+    const name = consent[1]?.trim() || app
     return (
       <div className="space-y-2 text-[12px] leading-relaxed">
         <p className="text-warning">
@@ -668,6 +667,7 @@ function StartFailure({
           action={GrantAction}
           args={{ conversation, app: name, scope: 'conversation' }}
           onError={setError}
+          onSuccess={onGranted}
           tone="primary"
         >
           Allow {name} in this conversation
@@ -676,29 +676,16 @@ function StartFailure({
       </div>
     )
   }
-  if (failure.includes('app_identity')) {
-    const closest = /Closest: (.+)$/.exec(failure)?.[1]
-    return (
-      <div className="space-y-1 text-[12px] leading-relaxed break-words">
-        <p className="text-error">
-          No single running app is called “{app}”. Open it first, or use its exact name.
-        </p>
-        {closest && closest !== 'none' && (
-          <p className="text-muted-foreground">
-            Closest: <span className="text-foreground">{closest}</span>
-          </p>
-        )}
-      </div>
-    )
-  }
-  const words = failure.includes('window is ambiguous')
-    ? 'That matches no window, or more than one. Name part of the window title.'
-    : failure.includes('already active')
-      ? 'A recording is already running in this conversation.'
-      : failure.includes('act is running')
-        ? 'The agent is operating the computer right now. Stop it first.'
-        : failure.includes('stopped')
-          ? 'Computer use is stopped for this project. Resume it from the status line first.'
-          : failure
+  // Windows come from the live list, so a window or app that no longer resolves closed or quit since it was listed.
+  const words =
+    failure.includes('window is ambiguous') || failure.includes('app_identity')
+      ? 'A picked window closed or its app quit since the list was made. Refresh the list and pick again.'
+      : failure.includes('already active')
+        ? 'A recording is already running in this conversation.'
+        : failure.includes('act is running')
+          ? 'The agent is operating the computer right now. Stop it first.'
+          : failure.includes('stopped')
+            ? 'Computer use is stopped for this project. Resume it from the status line first.'
+            : failure
   return <p className="text-[12px] leading-relaxed break-words text-error">{words}</p>
 }

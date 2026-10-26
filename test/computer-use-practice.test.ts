@@ -16,7 +16,7 @@ import type {
   Observation,
 } from '../extensions/computer-use/types.ts'
 import type { Region } from '../extensions/computer-use/perception.ts'
-import type { TaughtStep } from '../extensions/computer-use/refs.ts'
+import type { Teach, TaughtStep } from '../extensions/computer-use/refs.ts'
 import computerUse, { actions } from '../extensions/computer-use/server.ts'
 import { createDriver } from '../extensions/computer-use/driver.ts'
 import { runtime } from '../extensions/computer-use/runtime.ts'
@@ -181,7 +181,11 @@ async function fixture() {
       actions: [{ kind, x: 10, y: 10, capture, expect_label: label }],
     })
   }
-  const save = async (steps: TaughtStep[] = [lessonStep()], title = 'Upload lesson') => {
+  const save = async (
+    steps: TaughtStep[] = [lessonStep()],
+    title = 'Upload lesson',
+    change?: (segment: NonNullable<Teach['segment']>) => void,
+  ) => {
     const file = await saveEvidence(
       home,
       root.id,
@@ -217,6 +221,7 @@ async function fixture() {
         narration: [],
         dropped: [],
       }
+      change?.(doc.segment)
     })
     await editTeaching(host, root.id, steps)
     return saveTeaching(host, { conversation: root.id, scope: 'project', name: 'lesson' })
@@ -565,6 +570,45 @@ it('checks fresh before/after captures without input and finishes a sequential l
       ['list_apps', 'list_windows', 'get_window_state', 'parse_visual_regions'].includes(c.tool),
     ),
   ).toBe(true)
+})
+it('practices a lesson over windows of two apps, capturing each step’s window by its title fragment', async () => {
+  const f = await fixture()
+  f.fake.windows = [
+    { window_id: 456, title: 'Calculator', app_name: 'Calculator', pid: 123 },
+    { window_id: 457, title: 'Paper Tape', app_name: 'Calculator', pid: 123 },
+    {
+      window_id: 7,
+      title: 'OpsMate \u2014 Microsoft\u200B Edge',
+      app_name: 'Citrix Viewer',
+      pid: 29200,
+    },
+  ]
+  await f.save([lessonStep(), { ...lessonStep(2), frame: 'f2' }], 'Upload lesson', (segment) => {
+    segment.windows = [
+      { app: 'Calculator', bundle: 'com.apple.calculator', window: 456, windowTitle: 'Calculator' },
+      { app: 'Calculator', bundle: 'com.apple.calculator', window: 457, windowTitle: 'Tape' },
+      { app: 'Citrix Viewer', window: 7, windowTitle: 'Microsoft Edge' },
+    ]
+    segment.frames.push({ ...segment.frames[0], id: 'f2', window: 2 })
+  })
+  await f.say('Upload lesson')
+  const { spec } = data(await f.practice())
+  expect(spec.scope.apps).toEqual(['Calculator', 'Citrix Viewer'])
+  // Two windows of the approved app: the run approval binds no single window.
+  expect(spec.approval).not.toHaveProperty('window')
+  await f.confirm()
+  expect((await readTeach(f.host, f.root.id)).practice?.windows).toHaveLength(3)
+  await sequential(f)
+  const captured = f.fake.calls
+    .filter((c) => c.tool === 'get_window_state')
+    .map((c) => [c.args.pid, c.args.window_id])
+  expect(captured).toEqual([
+    [123, 456],
+    [123, 456],
+    [29200, 7],
+    [29200, 7],
+  ])
+  expect(data(await f.finish()).status).toBe('done')
 })
 it('records redacted mismatch frames and blocks done but allows partial', async () => {
   const f = await ready()

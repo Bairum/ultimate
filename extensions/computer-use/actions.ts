@@ -8,7 +8,9 @@ import {
   TeachSaveAction,
   TeachRejectAction,
   TeachReopenAction,
+  TeachWindowsAction,
 } from './refs.ts'
+import type { TeachStart } from './refs.ts'
 import {
   startTeaching,
   finishTeaching,
@@ -16,6 +18,7 @@ import {
   editTeaching,
   saveTeaching,
   rejectTeaching,
+  pickableWindows,
 } from './teach.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { readSession, updateSession, wake } from './session.ts'
@@ -132,22 +135,30 @@ async function interrupt(host: ExtensionHost, conversation: number, markStopped:
 }
 export const actions = {
   teachStart: implementAction(TeachStartAction, (args, { host }) => {
-    validate(args, true)
+    validate(args)
+    if (!('windows' in args) && !('app' in args)) throw new Error('app must be nonempty')
     if (
       typeof args.title !== 'string' ||
       (args.window !== undefined &&
         typeof args.window !== 'string' &&
         typeof args.window !== 'number') ||
+      (args.windows !== undefined && !Array.isArray(args.windows)) ||
       (args.minutes !== undefined && typeof args.minutes !== 'number')
     )
       throw new Error('Invalid teaching arguments')
+    // startTeaching validates each picked window.
     return startTeaching(host, {
       conversation: args.conversation,
       app: args.app,
       title: args.title,
       window: args.window,
+      windows: args.windows as TeachStart['windows'],
       minutes: args.minutes,
     })
+  }),
+  teachWindows: implementAction(TeachWindowsAction, async (args, { host }) => {
+    validate(args)
+    return { windows: await pickableWindows(host, args.conversation) }
   }),
   teachStop: implementAction(TeachStopAction, (args, { host }) => {
     validate(args)
@@ -347,6 +358,7 @@ export const actions = {
 }
 export const userActions = [
   'teachStart',
+  'teachWindows',
   'teachReopen',
   'teachStop',
   'teachPause',

@@ -60,6 +60,7 @@
     "extensions/review/drafts.ts",
     "extensions/review/lines.ts",
     "extensions/review/sha256.ts",
+    "extensions/computer-use/windows.ts",
     "lib/ago.ts",
     "lib/compare.ts",
     "lib/context-usage.ts",
