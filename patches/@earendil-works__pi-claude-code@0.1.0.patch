@@ -1,5 +1,5 @@
 diff --git a/src/claude-cli.ts b/src/claude-cli.ts
-index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..3bc9e94a1a027e6f1a3fb2bf0e7ac92f3a0c7367 100644
+index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..269d75b22f2711a4d0d2bf76f58b11e6e77e5252 100644
 --- a/src/claude-cli.ts
 +++ b/src/claude-cli.ts
 @@ -19,7 +19,7 @@ import type {
@@ -11,7 +11,16 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..3bc9e94a1a027e6f1a3fb2bf0e7ac92f
  
  export const INSTALL_HINT =
    "Claude Code is not installed. Install it with `npm install -g @anthropic-ai/claude-code` " +
-@@ -45,7 +45,6 @@ export interface RunClaudeInput {
+@@ -31,6 +31,8 @@ export interface ClaudeStatus {
+   loggedIn: boolean;
+   /** True when Claude Code reports a Claude Pro/Max-style subscription login. */
+   subscription: boolean;
++  /** True when Claude Code gave no answer (a timeout, a crash, unreadable output): `loggedIn` says nothing then. */
++  unknown?: boolean;
+   authMethod?: string;
+   plan?: string;
+   detail?: string;
+@@ -45,7 +47,6 @@ export interface RunClaudeInput {
    systemPrompt: string;
    manifest: ToolManifestEntry[];
    extraBody: Record<string, unknown>;
@@ -19,7 +28,68 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..3bc9e94a1a027e6f1a3fb2bf0e7ac92f
    signal?: AbortSignal;
    timeoutMs?: number;
    env?: Record<string, string | undefined>;
-@@ -544,15 +543,23 @@ function setReplayCacheBreakpoints(messages: NativeRequestMessage[]): void {
+@@ -158,26 +159,36 @@ export async function getClaudeStatus(
+   const env = withConfigDirectory(envInput);
+   const command = await resolveClaudeExecutable(env);
+   if (!command) return { available: false, loggedIn: false, subscription: false, detail: INSTALL_HINT };
++  // Only a parsed answer says whether Claude Code is logged in. A timeout, a crash or unreadable output says nothing:
++  // it is `unknown`, never "logged out".
++  let result: { code: number; stdout: string; stderr: string };
+   try {
+-    const result = await captureProcess(command, ["auth", "status"], env, signal);
+-    const payload = result.stdout.trim().startsWith("{")
+-      ? (JSON.parse(result.stdout) as { loggedIn?: unknown; authMethod?: unknown; subscriptionType?: unknown })
+-      : {};
+-    const loggedIn = payload.loggedIn === true;
+-    const plan = typeof payload.subscriptionType === "string" ? payload.subscriptionType : undefined;
+-    return {
+-      available: true,
+-      loggedIn,
+-      subscription: loggedIn && !!plan,
+-      command,
+-      authMethod: typeof payload.authMethod === "string" ? payload.authMethod : undefined,
+-      plan,
+-      detail: loggedIn ? undefined : LOGIN_HINT,
+-    };
++    result = await captureProcess(command, ["auth", "status"], env, signal);
+   } catch (error) {
+     if (signal?.aborted) throw error;
+-    return { available: true, loggedIn: false, subscription: false, command, detail: LOGIN_HINT };
++    return { available: true, loggedIn: false, subscription: false, unknown: true, command, detail: String(error) };
++  }
++  let payload: { loggedIn?: unknown; authMethod?: unknown; subscriptionType?: unknown } | undefined;
++  try {
++    payload = JSON.parse(result.stdout) as typeof payload;
++  } catch {
++    payload = undefined;
++  }
++  if (typeof payload?.loggedIn !== "boolean") {
++    const detail = `claude auth status gave no status (exit ${result.code}): ${result.stderr.trim().slice(0, 300)}`;
++    return { available: true, loggedIn: false, subscription: false, unknown: true, command, detail };
+   }
++  const loggedIn = payload.loggedIn;
++  const plan = typeof payload.subscriptionType === "string" ? payload.subscriptionType : undefined;
++  return {
++    available: true,
++    loggedIn,
++    subscription: loggedIn && !!plan,
++    command,
++    authMethod: typeof payload.authMethod === "string" ? payload.authMethod : undefined,
++    plan,
++    detail: loggedIn ? undefined : LOGIN_HINT,
++  };
+ }
+ 
+ const READY_STATUS_TTL_MS = 60_000;
+@@ -199,6 +210,7 @@ async function readyClaudeCommand(
+ 
+   const status = await getClaudeStatus(env, signal);
+   if (!status.available || !status.command) throw new Error(INSTALL_HINT);
++  if (status.unknown) throw new Error(status.detail ?? "Claude Code status unknown");
+   if (!status.loggedIn) {
+     readyStatusCache.delete(key);
+     throw new Error(LOGIN_HINT);
+@@ -544,15 +556,23 @@ function setReplayCacheBreakpoints(messages: NativeRequestMessage[]): void {
    const userIndexes = messages
      .map((message, index) => (message.role === "user" ? index : -1))
      .filter((index) => index >= 0);
@@ -50,7 +120,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..3bc9e94a1a027e6f1a3fb2bf0e7ac92f
    }
    const final = messages.at(-1);
    if (final) setCacheBreakpoint(final);
-@@ -642,6 +649,11 @@ export function rewriteInitialRequest(
+@@ -642,6 +662,11 @@ export function rewriteInitialRequest(
    };
    let messages = payload.messages;
    const first = messages?.[0];
@@ -62,7 +132,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..3bc9e94a1a027e6f1a3fb2bf0e7ac92f
    if (first?.role !== "user" || !Array.isArray(first.content)) {
      throw new Error("Claude Code request is missing its initial user message");
    }
-@@ -666,9 +678,11 @@ export function rewriteInitialRequest(
+@@ -666,9 +691,11 @@ export function rewriteInitialRequest(
    if (nativeSystemInjections) {
      messages = injectNativeSystemMessages(messages!, nativeSystemInjections);
      payload.messages = messages;
@@ -75,7 +145,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..3bc9e94a1a027e6f1a3fb2bf0e7ac92f
  
    return Buffer.from(JSON.stringify(payload));
  }
-@@ -726,6 +740,20 @@ function launchPlan(input: RunClaudeInput): ClaudeLaunchPlan {
+@@ -726,6 +753,20 @@ function launchPlan(input: RunClaudeInput): ClaudeLaunchPlan {
    };
  }
  
@@ -96,7 +166,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..3bc9e94a1a027e6f1a3fb2bf0e7ac92f
  class ClaudeProcess {
    busy = false;
    readonly createdAt = Date.now();
-@@ -976,11 +1004,7 @@ class ClaudeProcess {
+@@ -976,11 +1017,7 @@ class ClaudeProcess {
          message = assistants.at(-1);
        }
  
@@ -109,7 +179,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..3bc9e94a1a027e6f1a3fb2bf0e7ac92f
  
        const nativeFailureHandled = this.relay.denied > 0 || message.stop_reason === "refusal";
        if (nativeError && !nativeFailureHandled) throw new Error(`Claude Code API error: ${nativeError}`);
-@@ -990,13 +1014,6 @@ class ClaudeProcess {
+@@ -990,13 +1027,6 @@ class ClaudeProcess {
          throw new Error(`Claude Code request failed: ${result.subtype ?? "unknown result"}`);
        }
  
@@ -123,6 +193,56 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..3bc9e94a1a027e6f1a3fb2bf0e7ac92f
        const usage = message.usage ?? result.usage;
        if (!usage || typeof usage.input_tokens !== "number" || typeof usage.output_tokens !== "number") {
          throw new Error("Claude Code response did not include complete token usage");
+diff --git a/src/provider.ts b/src/provider.ts
+index e579496219793f8668e0c8b26dc38efc453fe3bb..d888187d1263d8f48cfc72089da6a3700893e1fb 100644
+--- a/src/provider.ts
++++ b/src/provider.ts
+@@ -1,4 +1,4 @@
+-import { createProvider, type AuthContext, type ProviderEnv } from "@earendil-works/pi-ai";
++import { createProvider, type AuthCheck, type AuthContext, type ProviderEnv } from "@earendil-works/pi-ai";
+ import { discoverClaudeModels, getClaudeStatus, LOGIN_HINT } from "./claude-cli.ts";
+ import { API_ID, CLAUDE_CODE_MODELS, modelFromDiscovery, PROVIDER_ID } from "./model-catalog.ts";
+ import { streamClaudeCode } from "./stream.ts";
+@@ -20,6 +20,8 @@ async function providerEnvironment(ctx: AuthContext): Promise<ProviderEnv | unde
+ // through auth hooks. Remember the latest values so model discovery and the
+ // status command look at the same Claude Code installation as requests do.
+ let lastProviderEnv: ProviderEnv | undefined;
++/** The last definite login check per provider environment, kept while a status probe gives no answer. */
++const knownChecks = new Map<string, AuthCheck | undefined>();
+ 
+ /** The environment used to locate and configure Claude Code. */
+ export function claudeCodeEnv(): Record<string, string | undefined> {
+@@ -47,14 +49,25 @@ export function createClaudeCodeProvider() {
+         async check({ ctx, signal }) {
+           const providerEnv = await providerEnvironment(ctx);
+           lastProviderEnv = providerEnv;
++          const key = JSON.stringify(providerEnv ?? {});
+           const status = await getClaudeStatus(claudeCodeEnv(), signal);
++          // A status Claude Code did not give (a timeout or a crash under load) changes nothing: the last answer for
++          // this installation stands, so its models never vanish for one failed probe.
++          if (status.unknown) {
++            if (knownChecks.has(key)) return knownChecks.get(key);
++            throw new Error(status.detail ?? "Claude Code status unknown");
++          }
+           // Only report the provider as configured when Claude Code is
+           // installed and logged in, so Pi hides its models otherwise.
+-          if (!status.available || !status.loggedIn) return undefined;
+-          return {
+-            type: status.subscription ? "oauth" : "api_key",
+-            source: status.subscription ? `Claude Code ${status.plan ?? "subscription"}` : "Claude Code CLI",
+-          };
++          const check: AuthCheck | undefined =
++            !status.available || !status.loggedIn
++              ? undefined
++              : {
++                  type: status.subscription ? "oauth" : "api_key",
++                  source: status.subscription ? `Claude Code ${status.plan ?? "subscription"}` : "Claude Code CLI",
++                };
++          knownChecks.set(key, check);
++          return check;
+         },
+         async resolve({ ctx, signal }) {
+           signal.throwIfAborted();
 diff --git a/src/stream.ts b/src/stream.ts
 index b516241c794b5dd7054822921d445a2169c6b70e..00ccb6aa5ddec60e64ccc4d339942be8124567fb 100644
 --- a/src/stream.ts
