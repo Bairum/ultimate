@@ -71,6 +71,7 @@ export const defaultOff: readonly string[] = [
   'context-hygiene',
   'hashline',
   'computer-use',
+  'codex-computer',
   'voice-live',
 ]
 
