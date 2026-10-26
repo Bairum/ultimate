@@ -1794,6 +1794,13 @@ afterEach(() => {
 /** A fixture whose @ultimate is conversation 1 and whose machine also runs `poe2-rust` at `url`. */
 async function remoteFixture(url?: string) {
   const f = await fixture()
+  if (url) {
+    await mkdir(join(f.host.userHome, '.ultimate'), { recursive: true })
+    await writeFile(
+      join(f.host.userHome, '.ultimate/settings.json'),
+      JSON.stringify({ remotes: { rog: { 'poe2-rust': url } } }),
+    )
+  }
   f.provided.set('subagents', {
     residents: async () => [{ name: 'ultimate', description: 'Ultimate' }],
     standing: async () => ROOT_CONVERSATION_ID,

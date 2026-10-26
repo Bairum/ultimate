@@ -53,8 +53,11 @@ it.concurrent('leaves a note without waking the caller when wake is false', asyn
   await until(async () => (await kinds(server, ROOT_CONVERSATION_ID)).includes('lineage.note'))
   await until(async () => (await pendingNotifies(server)).length === 0)
   const view = await server.root.context(context)
-  const note = view.entries.at(-1)!
-  expect(note.kind).toBe('lineage.note')
+  // Delivery can happen before the notify tool's own final answer; it must not start another run.
+  const notes = view.entries.filter((entry) => entry.kind === 'lineage.note')
+  expect(notes).toHaveLength(1)
+  const [note] = notes
+  expect(view.entries.filter((entry) => entry.kind === 'pi.assistant')).toHaveLength(2)
   expect(note.data).toEqual({
     text: 'echo Done already',
     from: other.id,

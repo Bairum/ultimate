@@ -19,7 +19,7 @@ it('reconfigures the lander when the project setup is chosen, edited, and given 
   await git(projectRoot, 'config', 'user.email', 'test@example.com')
   await git(projectRoot, 'config', 'user.name', 'Test')
   await writeFile(join(projectRoot, '.ultimate/agents/lander.md'), definition('read'))
-  await git(projectRoot, 'add', '.')
+  await git(projectRoot, 'add', '-f', '.ultimate')
   await git(projectRoot, 'commit', '-m', 'base')
   const server = await fauxServer({
     ultimateRoot: resolve('.'),

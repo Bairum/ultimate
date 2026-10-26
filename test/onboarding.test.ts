@@ -423,7 +423,7 @@ it.concurrent('shares one choice between a checkout and its linked worktrees', a
     await mkdir(join(main, '.ultimate/agents'), { recursive: true })
     await writeFile(join(main, '.ultimate/agents/y.md'), '---\nname: y\ndescription: Y\n---\nY.')
     await git(main, 'init', '-b', 'main')
-    await git(main, 'add', '.')
+    await git(main, 'add', '-f', '.ultimate')
     await git(main, '-c', 'user.name=T', '-c', 'user.email=t@example.com', 'commit', '-m', 'base')
     await git(main, 'worktree', 'add', worktree, '-b', 'branch')
     expect(projectDecision(worktree, home)).toBe(null)

@@ -89,9 +89,10 @@ async function start() {
   const root = await temp('ultimate-trace-')
   await linkDependencies(root)
   await mkdir(join(root, 'web'))
+  // Tracing does not exercise reloads; delayed macOS file events must not restart this fixture during boot.
   await writeFile(
     join(root, 'vite.config.ts'),
-    "export default { root: 'web', optimizeDeps: { noDiscovery: true } }",
+    "export default { root: 'web', server: { watch: null }, optimizeDeps: { noDiscovery: true } }",
   )
   await mkdir(join(root, 'extensions'))
   await symlink(resolve('extensions/secrets'), join(root, 'extensions/secrets'))
