@@ -34,7 +34,13 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
   let frontmostPid: number | undefined = 999
   /** When set, `list_windows` filters these like cua-driver: `app` is a name substring or exact bundle id, `pid` exact. */
   let windows:
-    | { window_id: number; title: string; app_name: string; pid: number; bundle?: string }[]
+    | ({
+        window_id: number
+        title: string
+        app_name: string
+        pid: number
+        bundle?: string
+      } & Record<string, JsonValue>)[]
     | undefined
   const labels = [
     ...Array.from({ length: 10 }, (_, i) => String(i)),
@@ -211,12 +217,7 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
               (args.pid === undefined || w.pid === args.pid),
           )
           // The driver reports no bundle id on window records.
-          .map((w) => ({
-            window_id: w.window_id,
-            title: w.title,
-            app_name: w.app_name,
-            pid: w.pid,
-          })),
+          .map(({ bundle: _bundle, ...w }) => w),
       }
     } else if (tool === 'launch_app' || tool === 'list_windows') {
       structured = { windows: [{ window_id: 456, window_title: 'Calculator', pid: 123 }] }

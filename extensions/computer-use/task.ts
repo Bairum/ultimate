@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util'
 import { redactor } from './content.ts'
+import { selectWindows } from './windows.ts'
 import type { ClassifyService } from '../classify/api.ts'
 import type {
   Approval,
@@ -84,9 +85,10 @@ export function approvalScope(
     ) &&
     approval.actions.includes(kind) &&
     (approval.window === undefined ||
-      (typeof approval.window === 'number'
-        ? observation.windowId === approval.window
-        : observation.title.includes(approval.window)))
+      selectWindows(
+        [{ window_id: observation.windowId, title: observation.title }],
+        approval.window,
+      ).length === 1)
   )
 }
 function validate(spec: TaskSpec) {

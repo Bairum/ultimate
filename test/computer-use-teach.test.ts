@@ -32,7 +32,9 @@ import { createFakeDriver } from './computer-use-fake-driver.ts'
 import { temp, removeTemp, until, fauxServer } from './helpers.ts'
 import { appsTool } from '../extensions/computer-use/act.ts'
 import { Profile } from '../extensions/subagents/api.ts'
-import { startTask } from '../extensions/computer-use/task.ts'
+import { approvalScope, startTask } from '../extensions/computer-use/task.ts'
+import type { TaskState } from '../extensions/computer-use/types.ts'
+import { windowFor } from '../extensions/computer-use/observe.ts'
 import {
   captureTeach,
   editTeaching,
@@ -200,7 +202,7 @@ async function recorded(
     bytes: async () => options.bytes ?? 0,
     stopped: async () => false,
     redact: (s) => s,
-    capture: async (dimension) => {
+    capture: async (_window, dimension) => {
       if (index < (options.unavailable ?? 0))
         throw new ObservationUnavailable(
           'observation_unavailable',
@@ -239,6 +241,214 @@ it('starts teaching a window-only helper app by pid once its name is granted', a
   })
   expect((await readTeach(f.host, f.root.id)).segment?.bundle).toBeUndefined()
   await finishTeaching(f.host, f.root.id, true)
+})
+const citrix = 'OpsMate \u2014 Microsoft\u200B Edge'
+const picker = () => [
+  { window_id: 456, title: 'Calculator', app_name: 'Calculator', pid: 123 },
+  { window_id: 457, title: 'Calculator Tape', app_name: 'Calculator', pid: 123 },
+  { window_id: 7, title: citrix, app_name: 'Citrix Viewer', pid: 29200 },
+]
+it('matches window titles normalised and ids as numbers, still refusing ambiguity', async () => {
+  const f = await fixture()
+  f.fake.windows = [
+    { window_id: 123, title: citrix, app_name: 'Citrix Viewer', pid: 29200 },
+    { window_id: 124, title: 'OpsMate Network Drive (E:)', app_name: 'Citrix Viewer', pid: 29200 },
+  ]
+  for (const window of ['microsoft edge', '123', 123])
+    expect((await windowFor(f.driver, 'Citrix Viewer', window)).window_id).toBe(123)
+  for (const window of ['opsmate', 'Safari'])
+    await expect(windowFor(f.driver, 'Citrix Viewer', window)).rejects.toThrow('exactly one window')
+  const state = (window: string | number) =>
+    ({
+      status: 'active',
+      spec: { approval: { app: 'Citrix Viewer', window, actions: ['click'] } },
+    }) as unknown as TaskState
+  for (const window of ['MICROSOFT EDGE', '123', 123])
+    expect(
+      approvalScope(
+        state(window),
+        { name: 'Citrix Viewer' },
+        { windowId: 123, title: citrix },
+        'click',
+      ),
+    ).toBe(true)
+  expect(
+    approvalScope(
+      state('Network'),
+      { name: 'Citrix Viewer' },
+      { windowId: 123, title: citrix },
+      'click',
+    ),
+  ).toBe(false)
+})
+it('teaches windows of two apps, tags frames by window and saves their title fragments', async () => {
+  const f = await fixture()
+  f.fake.windows = picker()
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.grants.push(
+      { app: 'Calculator', scope: 'conversation', at: 0 },
+      { app: 'Citrix Viewer', scope: 'conversation', at: 0 },
+    )
+  })
+  await startTeaching(f.host, {
+    conversation: f.root.id,
+    title: 'Lesson',
+    windows: [
+      { app: 'Calculator', window: 456 },
+      { app: 'Calculator', window: 457, match: 'Tape' },
+      { app: 'Citrix Viewer', window: 7, match: 'Microsoft Edge' },
+    ],
+  })
+  const started = (await readTeach(f.host, f.root.id)).segment!
+  expect(started).toMatchObject({
+    app: 'Calculator',
+    bundle: 'com.apple.calculator',
+    window: 456,
+    windowTitle: 'Calculator',
+    windows: [
+      { app: 'Calculator', bundle: 'com.apple.calculator', window: 456, windowTitle: 'Calculator' },
+      { app: 'Calculator', bundle: 'com.apple.calculator', window: 457, windowTitle: 'Tape' },
+      { app: 'Citrix Viewer', window: 7, windowTitle: 'Microsoft Edge' },
+    ],
+  })
+  expect(started.windows![2].bundle).toBeUndefined()
+  await finishTeaching(f.host, f.root.id)
+
+  // One loop over the windows: the hidden second window is skipped silently.
+  const doc: Teach = {
+    segment: { ...started, status: 'recording', endsAt: 60000, frames: [], dropped: [] },
+  }
+  let now = 0
+  await recordTeaching({
+    driver: f.driver,
+    signal: new AbortController().signal,
+    read: async () => doc,
+    update: async (change) => change(doc),
+    save: async () => 'private.png',
+    bytes: async () => 0,
+    stopped: async () => false,
+    redact: (s) => s,
+    capture: async (window, dimension) => {
+      if (window === 1) throw new ObservationUnavailable('window_not_visible', 'Minimised')
+      f.fake.surface.hashes = [String(window)]
+      f.fake.surface.regions = [region(window ? 'Browse' : 'Upload skill')]
+      return captureTeach(f.driver, 'Calculator', 456, dimension, new AbortController().signal)
+    },
+    time: {
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms
+        if (now >= 2000) now = 60000
+      },
+    },
+  })
+  expect(doc.segment!.frames.map((fr) => [fr.window, fr.ocr[0]?.text])).toEqual([
+    [undefined, 'Upload skill'],
+    [2, 'Browse'],
+  ])
+  expect(doc.segment!.dropped).toEqual([])
+
+  await updateTeach(f.host, f.root.id, (d) => {
+    d.segment = { ...doc.segment!, status: 'drafting' }
+  })
+  const [first, third] = doc.segment!.frames
+  await editTeaching(f.host, f.root.id, [
+    { ...step(), frame: first.id, approved: true },
+    { ...step(), n: 2, frame: third.id, approved: true },
+  ])
+  const saved = await saveTeaching(f.host, {
+    conversation: f.root.id,
+    scope: 'project',
+    name: 'two-apps',
+  })
+  const manifest = JSON.parse(await readFile(join(saved.path, 'teach.json'), 'utf8'))
+  expect(manifest).toMatchObject({
+    app: { name: 'Calculator', bundle: 'com.apple.calculator' },
+    window: { id: 456, titleSubstring: 'Calculator' },
+    windows: [
+      { app: 'Calculator', bundle: 'com.apple.calculator', titleSubstring: 'Calculator' },
+      { app: 'Calculator', bundle: 'com.apple.calculator', titleSubstring: 'Tape' },
+      { app: 'Citrix Viewer', bundle: '', titleSubstring: 'Microsoft Edge' },
+    ],
+  })
+  expect(manifest.frames[first.id].window).toBeUndefined()
+  expect(manifest.frames[third.id].window).toBe(2)
+})
+it('requires consent for every picked app before starting anything', async () => {
+  const f = await fixture()
+  f.fake.windows = picker()
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.grants.push({ app: 'Calculator', scope: 'once', at: 0 })
+  })
+  const args = {
+    conversation: f.root.id,
+    title: 'Lesson',
+    windows: [
+      { app: 'Calculator', window: 456 },
+      { app: 'Citrix Viewer', window: 7 },
+    ],
+  }
+  await expect(startTeaching(f.host, args)).rejects.toThrow('consent_required: Citrix Viewer')
+  expect((await readTeach(f.host, f.root.id)).segment).toBeUndefined()
+  expect((await readSession(f.host, f.root.id)).grants[0].used).toBeFalsy()
+  await expect(
+    startTeaching(f.host, { ...args, windows: [args.windows[0], args.windows[0]] }),
+  ).rejects.toThrow('Invalid teaching segment')
+  await expect(
+    startTeaching(f.host, { ...args, windows: [{ app: 'Citrix Viewer', window: 456 }] }),
+  ).rejects.toThrow('app_identity')
+})
+it('lists pickable windows frontmost first with consent, leaving out tiny, untitled and deny-listed ones', async () => {
+  const f = await fixture()
+  const bounds = { x: 0, y: 0, width: 800, height: 600 }
+  f.fake.windows = [
+    { window_id: 456, title: 'Calculator', app_name: 'Calculator', pid: 123, bounds, z_index: 1 },
+    { window_id: 458, title: '\u200B', app_name: 'Calculator', pid: 123, bounds, z_index: 2 },
+    {
+      window_id: 459,
+      title: 'Badge',
+      app_name: 'Calculator',
+      pid: 123,
+      bounds: { x: 0, y: 0, width: 40, height: 40 },
+      z_index: 3,
+    },
+    { window_id: 9, title: 'zsh', app_name: 'Terminal', pid: 555, bounds, z_index: 4 },
+    {
+      window_id: 7,
+      title: citrix,
+      app_name: 'Citrix Viewer',
+      pid: 29200,
+      bounds,
+      z_index: 5,
+      is_on_screen: false,
+      on_current_space: false,
+    },
+  ]
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.grants.push({ app: 'Citrix Viewer', scope: 'conversation', at: 0 })
+  })
+  const { windows } = await actions.teachWindows({ conversation: f.root.id }, f.ctx)
+  expect(windows).toEqual([
+    {
+      app: 'Citrix Viewer',
+      pid: 29200,
+      window: 7,
+      title: citrix,
+      onScreen: false,
+      currentSpace: false,
+      consent: 'granted',
+    },
+    {
+      app: 'Calculator',
+      bundle: 'com.apple.calculator',
+      pid: 123,
+      window: 456,
+      title: 'Calculator',
+      onScreen: true,
+      currentSpace: true,
+      consent: 'required',
+    },
+  ])
 })
 it('requires consent before starting and refuses a live computer act', async () => {
   const f = await fixture()
@@ -808,6 +1018,8 @@ it('requires always for deny-listed teaching and consumes once for only that seg
   await updateSession(f.host, f.root.id, (doc) => {
     doc.grants[0].always = true
   })
+  // Start resolves the app by name, then the picked window's owner by pid.
+  f.fake.replyFor('list_apps', terminal)
   f.fake.replyFor('list_apps', terminal)
   await startTeaching(f.host, { conversation: f.root.id, app: 'Terminal', title: 'Lesson' })
   expect((await readSession(f.host, f.root.id)).grants[0].used).toBe(true)

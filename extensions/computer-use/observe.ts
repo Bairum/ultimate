@@ -16,6 +16,7 @@ import { readSession, isStopped } from './session.ts'
 import { allGrants, resolveIdentity, identityCandidates, readConsent, listApps } from './gates.ts'
 import type { ComputerDetails } from './refs.ts'
 import { pruneEvidence } from './evidence-files.ts'
+import { selectWindows, windowTitle } from './windows.ts'
 
 export async function windowFor(
   driver: Driver,
@@ -25,19 +26,7 @@ export async function windowFor(
 ) {
   const listed = await driver.call('list_windows', { app }, signal)
   const windows = listed.structured?.windows
-  const matches = (Array.isArray(windows) ? windows : [])
-    .map(object)
-    .filter(
-      (w) =>
-        window === undefined ||
-        w.window_id === window ||
-        (typeof w.title === 'string'
-          ? w.title
-          : typeof w.window_title === 'string'
-            ? w.window_title
-            : ''
-        ).includes(String(window)),
-    )
+  const matches = selectWindows((Array.isArray(windows) ? windows : []).map(object), window)
   if (matches.length !== 1)
     throw new Error(
       'Select exactly one window with computer_observe; window is ambiguous or missing',
@@ -45,12 +34,7 @@ export async function windowFor(
   return {
     pid: Number(matches[0].pid),
     window_id: Number(matches[0].window_id),
-    title:
-      typeof matches[0].title === 'string'
-        ? matches[0].title
-        : typeof matches[0].window_title === 'string'
-          ? matches[0].window_title
-          : '',
+    title: windowTitle(matches[0]),
     isOnScreen: typeof matches[0].is_on_screen === 'boolean' ? matches[0].is_on_screen : undefined,
   }
 }
