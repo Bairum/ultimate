@@ -85,8 +85,6 @@ export type GateContext = {
   params?: string[]
   ocrMatch?: string
   unlabelledPixel?: boolean
-  /** `computerUse.guards: false`: only the stopped gate, app identity, window visibility and the per-call limit apply. */
-  guardsOff?: boolean
 }
 export type Refusal = {
   refuse: string
@@ -101,13 +99,8 @@ export type Refusal = {
   nearest?: string[]
 }
 export type Gate = (ctx: GateContext) => undefined | Refusal | Promise<undefined | Refusal>
-/** A gate that guards off skips. */
-const guarded =
-  (gate: Gate): Gate =>
-  (ctx) =>
-    ctx.guardsOff ? undefined : gate(ctx)
 // Task grounding precedes authority/safety gates; canonical scope is checked again at identity resolution.
-const taskGates: Gate[] = [
+export const preflightGates: Gate[] = [
   (ctx) => task.requireActiveTask(ctx.session.task),
   (ctx) => task.observeGate(ctx.session.task!),
   (ctx) => {
@@ -128,9 +121,6 @@ const taskGates: Gate[] = [
   (ctx) => task.oscillationGate(ctx.session.task!),
   (ctx) => task.checkpointGate(ctx.session.task!),
   (ctx) => task.budgetGate(ctx.session.task!, Date.now()),
-]
-export const preflightGates: Gate[] = [
-  ...taskGates.map(guarded),
   async (ctx) =>
     (await isStopped(ctx.host, ctx.conversation, {
       session: ctx.session,
@@ -143,7 +133,6 @@ export const preflightGates: Gate[] = [
     // The preflight is only a negative grant check: it may refuse without contacting the Driver.
     // Authority at dispatch always uses the PID-resolved canonical name and bundle id below.
     if (!ctx.dispatch) {
-      if (ctx.guardsOff) return undefined
       const consent = consentFor(ctx.app, ctx.grants, Date.now())
       return consent === 'granted'
         ? undefined
@@ -164,10 +153,6 @@ export const preflightGates: Gate[] = [
         message: `Use the exact app name ${identity.name} or bundle id ${identity.bundle ?? '(unavailable)'}, not ${ctx.app}.`,
       }
     ctx.identity = identity
-    if (ctx.guardsOff) {
-      ctx.app = identity.name
-      return undefined
-    }
     const scopedApp = ctx.session.task!.spec.scope.apps.find((name) => matchesApp(identity, name))
     const scope = task.scopeGate(ctx.session.task!, {
       app: scopedApp ?? identity.name,
@@ -216,14 +201,12 @@ export async function frontmostGate(ctx: GateContext): Promise<Refusal | undefin
     }
   return undefined
 }
-// Guards off keep only the per-call limit.
 export const conversationBudgetGate: Gate = (ctx) =>
   ctx.count >= 20 ||
-  (!ctx.guardsOff &&
-    (ctx.session.budget.steps >= (inApproval(ctx) ? ctx.session.task!.spec.approval!.steps : 60) ||
-      (ctx.session.budget.startedAt > 0 &&
-        Date.now() - ctx.session.budget.startedAt >=
-          (inApproval(ctx) ? ctx.session.task!.spec.approval!.minutes : 15) * 60_000)))
+  ctx.session.budget.steps >= (inApproval(ctx) ? ctx.session.task!.spec.approval!.steps : 60) ||
+  (ctx.session.budget.startedAt > 0 &&
+    Date.now() - ctx.session.budget.startedAt >=
+      (inApproval(ctx) ? ctx.session.task!.spec.approval!.minutes : 15) * 60_000)
     ? {
         refuse: 'budget',
         message:
@@ -231,14 +214,12 @@ export const conversationBudgetGate: Gate = (ctx) =>
       }
     : undefined
 export const dispatchGates: Gate[] = [
-  guarded(frontmostGate),
+  frontmostGate,
   async (ctx): Promise<Refusal | undefined> => {
     const pixel = 'x' in ctx.step && ctx.step.x !== undefined
     if (!ctx.observation || (!pixel && !ctx.observation.degraded)) return undefined
     const visibility = visibleWindow(ctx.observation)
     if (visibility) return visibility
-    // Guards off: a pixel click needs only x/y on the latest capture; no takeover, label or confirmation.
-    if (ctx.guardsOff) return undefined
     const config = { ...pixelDefaults, ...(await settings(ctx.host)).pixel }
     if (
       ctx.observation.degraded &&
@@ -314,7 +295,7 @@ export const dispatchGates: Gate[] = [
     ctx.ocrMatch = [...new Set([checked.match.label, ...riskyLabels])].join(' / ')
     return undefined
   },
-  guarded(async (ctx) => {
+  async (ctx) => {
     const refusal = confirmRefusal(ctx.app, ctx.step, ctx.target, ctx.observation)
     const key = refusal.refuse === 'confirm_required' ? refusal.key : undefined
     ctx.confirmation = key
@@ -374,7 +355,7 @@ export const dispatchGates: Gate[] = [
     }
     if (risky) return refusal
     return undefined
-  }),
+  },
   conversationBudgetGate,
 ]
 export const gates = [...preflightGates, ...dispatchGates]

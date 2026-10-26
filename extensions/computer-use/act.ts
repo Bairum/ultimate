@@ -7,8 +7,7 @@ import {
   setup,
   cacheKey,
   acquireBusy,
-  basicSettings,
-  guardsOff,
+  imageSize,
   permissionMissing,
   PERMISSION_FIX,
 } from './runtime.ts'
@@ -194,31 +193,24 @@ export async function act(
       })
     await pruneEvidence(host.home)
     let session = await readSession(host, conversation)
-    const basics = await basicSettings(host)
-    const off = basics.guardsOff
-    const taskRefusal = off ? undefined : task.requireActiveTask(session.task)
+    const taskRefusal = task.requireActiveTask(session.task)
     if (taskRefusal) return result({ status: taskRefusal.refuse, message: taskRefusal.message })
-    const subgoal = args.subgoal ?? session.task?.subgoals.find((s) => s.status === 'active')?.id
-    // With guards on the task is active here. With guards off a task is optional: steps and evidence are
-    // recorded only while an active task has this active subgoal.
-    const tracked =
-      session.task?.status === 'active' &&
-      session.task.subgoals.some((s) => s.id === subgoal && s.status === 'active')
-    if (!off && !tracked)
+    const subgoal = args.subgoal ?? session.task!.subgoals.find((s) => s.status === 'active')?.id
+    if (!session.task!.subgoals.some((s) => s.id === subgoal && s.status === 'active'))
       return result({ status: 'subgoal_required', message: 'Activate one subgoal before acting.' })
-    const track = (change: (state: task.TaskState) => task.TaskState) =>
-      tracked ? changeTask(host, conversation, change) : Promise.resolve()
     if (
       session.journal.some(
         (j) => j.status === 'sending' || (j.status === 'unknown' && j.at > session.lastObservedAt),
       )
     ) {
-      await track((state) => task.markInterrupted(state, 'crash', [], Date.now()))
+      await changeTask(host, conversation, (state) =>
+        task.markInterrupted(state, 'crash', [], Date.now()),
+      )
       return result({ status: 'observe_first', journal: session.journal.slice(-20) })
     }
     const values = [
       ...Object.values(args.goal?.params ?? {}),
-      ...Object.values(session.task?.spec.scope.params ?? {}),
+      ...Object.values(session.task!.spec.scope.params),
       ...(args.actions ?? []).flatMap((s) =>
         s.kind === 'type' ? [s.text] : s.kind === 'set_value' ? [s.value] : [],
       ),
@@ -233,7 +225,7 @@ export async function act(
           s.kind === 'wait',
       ) ||
       (Array.isArray(args.expect) ? args.expect.some((p) => p.ocr) : args.expect?.ocr)
-    const maxDimension = basics.imageMaxDimension
+    const maxDimension = await imageSize(host)
     const config = { ...pixelDefaults, ...(needsPixels ? (await settings(host)).pixel : {}) }
     const expectations: Predicate[] = Array.isArray(args.expect)
       ? args.expect
@@ -291,7 +283,6 @@ export async function act(
       session,
       conversation,
       grants: await allGrants(host, conversation, session),
-      guardsOff: off,
       params: values,
       app: args.app,
       step: args.actions?.[0] ?? { kind: 'click' },
@@ -323,7 +314,9 @@ export async function act(
             args.window,
           ).length))
     ) {
-      await track((current) => task.markInterrupted(current, 'crash', [], Date.now()))
+      await changeTask(host, conversation, (current) =>
+        task.markInterrupted(current, 'crash', [], Date.now()),
+      )
       return result({
         status: 'observe_first',
         message: 'Observe and select a window before acting.',
@@ -348,7 +341,7 @@ export async function act(
       const consent = canonicalConsent(identity, await allGrants(host, conversation, latest))
       if (await isStopped(host, conversation, { session: latest, active, signal }))
         throw new ObservationUnavailable('stopped', 'Computer use is stopped.')
-      if (args.goal && !off && consent !== 'granted')
+      if (args.goal && consent !== 'granted')
         throw new ObservationUnavailable(
           consent === 'denied' ? 'denied' : 'consent_required',
           'Canonical app consent is required before reading for Jev.',
@@ -365,7 +358,7 @@ export async function act(
       )
       runtimeState.observations.set(cacheKey(conversation, args.app), observation)
       runtimeState.zoomed.delete(cacheKey(conversation, args.app))
-      await track((current) => {
+      await changeTask(host, conversation, (current) => {
         const observed = task.recordObserve(current)
         if (current.status !== 'active') observed.needsObserve = current.needsObserve
         return observed
@@ -390,7 +383,7 @@ export async function act(
           checked.excerpt,
           args.criterion,
         )
-        await track((state) => {
+        await changeTask(host, conversation, (state) => {
           linkedProgress = task.predicateEvidence(state, evidence)
           return task.addEvidence(state, subgoal!, evidence)
         })
@@ -421,7 +414,7 @@ export async function act(
               : 'satisfied'
       }
       if (verified === 'satisfied')
-        await track((state) => {
+        await changeTask(host, conversation, (state) => {
           const evidence: task.Evidence = {
             kind: 'verify',
             predicates: preds,
@@ -440,7 +433,7 @@ export async function act(
       if (!pendingStep) return
       const recorded = pendingStep
       pendingStep = undefined
-      await track((state) =>
+      await changeTask(host, conversation, (state) =>
         task.recordStep(state, {
           ...recorded,
           verifiedProgress,
@@ -617,7 +610,7 @@ export async function act(
               at: Date.now(),
             })
           })
-          await track((state) =>
+          await changeTask(host, conversation, (state) =>
             task.recordStep(state, {
               actionHash: actionHash(original),
               delivered: true,
@@ -684,18 +677,15 @@ export async function act(
         progress(`Step ${index + 1}: ${next.kind} sending\n`)
         let outcome: StepOutcome
         ctx.session = await readSession(host, conversation)
-        // Guards off: nothing is revalidated at dispatch but stop.
-        const focusRefusal = off ? undefined : await frontmostGate(ctx)
+        const focusRefusal = await frontmostGate(ctx)
         const latest = await readSession(host, conversation)
         const stillConsented =
-          off ||
           canonicalConsent(ctx.identity!, await allGrants(host, conversation, latest)) === 'granted'
         const takeover =
           args.foreground &&
           (runTakeover({ ...ctx, session: latest }) ||
             latest.takeovers.some((t) => matchesApp(ctx.identity!, t.app)))
-        const stillTakenOver =
-          off || (!focusRefusal && ((!ctx.frontmost && !args.foreground) || takeover))
+        const stillTakenOver = !focusRefusal && ((!ctx.frontmost && !args.foreground) || takeover)
         const stopped = await isStopped(host, conversation, { session: latest, active, signal })
         if (stopped || !stillConsented || !stillTakenOver) {
           await updateSession(host, conversation, (doc) => {
@@ -767,7 +757,9 @@ export async function act(
           subgoal: subgoal!,
         }
         if (outcome.status === 'unknown')
-          await track((state) => task.markInterrupted(state, 'crash', [], Date.now()))
+          await changeTask(host, conversation, (state) =>
+            task.markInterrupted(state, 'crash', [], Date.now()),
+          )
         if (!args.goal || outcome.status !== 'delivered') {
           let verified = false
           let post: Observation | undefined
@@ -797,12 +789,14 @@ export async function act(
               linkedProgress
             if (outcome.status === 'delivered' && !post) post = await observe()
           } catch (error) {
-            await track((current) => task.markInterrupted(current, 'crash', [], Date.now()))
+            await changeTask(host, conversation, (current) =>
+              task.markInterrupted(current, 'crash', [], Date.now()),
+            )
             throw error
           } finally {
             const recorded = pendingStep
             pendingStep = undefined
-            await track((current) =>
+            await changeTask(host, conversation, (current) =>
               task.recordStep(current, {
                 ...recorded,
                 verifiedProgress: verified,
@@ -852,11 +846,8 @@ export async function act(
           ? (request, requestSignal) => host.want(ClassifyApi)!.ask(request, requestSignal)
           : undefined,
         allowed: (c) =>
-          off || session.task!.spec.scope.actions.includes(candidateStep(c).kind)
-            ? 'ok'
-            : 'consequential',
+          session.task!.spec.scope.actions.includes(candidateStep(c).kind) ? 'ok' : 'consequential',
         confirm: async (c) => {
-          if (off) return true
           const next = candidateStep(c)
           const target = stepTarget(next, observation!)
           const app = observation!.app
@@ -900,7 +891,7 @@ export async function act(
                   ...(chose === undefined ? {} : { chose: redact(chose) }),
                 },
               })
-              if (decision.outcome === 'verified' && pendingStep && tracked) {
+              if (decision.outcome === 'verified' && pendingStep) {
                 doc.task = task.recordStep(plainTask(doc.task!), {
                   ...pendingStep,
                   verifiedProgress: linkedProgress,
@@ -914,15 +905,19 @@ export async function act(
       }).catch(async (error: unknown) => {
         await Promise.all(decisions)
         await recordPending(false)
-        await track((current) => task.markInterrupted(current, 'crash', [], Date.now()))
+        await changeTask(host, conversation, (current) =>
+          task.markInterrupted(current, 'crash', [], Date.now()),
+        )
         throw error
       })
       await Promise.all(decisions)
       await recordPending(false)
       if (outcome.status === 'escalated')
-        await track((state) => task.recordEscalation(state, outcome.reason, Date.now()))
+        await changeTask(host, conversation, (state) =>
+          task.recordEscalation(state, outcome.reason, Date.now()),
+        )
       else
-        await track((state) => {
+        await changeTask(host, conversation, (state) => {
           const completed = task.completeSubgoal(state, subgoal!, Date.now())
           return 'refuse' in completed ? state : completed
         })
@@ -1094,9 +1089,7 @@ export function actTool(host: ExtensionHost) {
       foreground: Type.Optional(Type.Boolean()),
     }),
     async execute(args, api, ctx) {
-      const refusal = (await guardsOff(host))
-        ? undefined
-        : task.requireActiveTask((await readSession(host, api.conversationId)).task)
+      const refusal = task.requireActiveTask((await readSession(host, api.conversationId)).task)
       if (refusal)
         return anchored(
           host,
@@ -1146,7 +1139,7 @@ export function appsTool(host: ExtensionHost) {
             }),
           )
         const current = (await readSession(host, api.conversationId)).task
-        const refusal = (await guardsOff(host)) ? undefined : task.requireActiveTask(current)
+        const refusal = task.requireActiveTask(current)
         if (refusal)
           return anchored(
             host,
@@ -1157,7 +1150,6 @@ export function appsTool(host: ExtensionHost) {
       return setup(host, api.conversationId, async (driver) => {
         if (!args.launch) return result((await listApps(driver, ctx.abortSignal)).reply)
         const session = await readSession(host, api.conversationId)
-        const off = await guardsOff(host)
         if (await isStopped(host, api.conversationId, { session, signal: ctx.abortSignal }))
           return result({ status: 'stopped' })
         const identity = await resolveIdentity(driver, args.launch, ctx.abortSignal)
@@ -1166,11 +1158,12 @@ export function appsTool(host: ExtensionHost) {
             status: 'app_identity',
             candidates: await identityCandidates(driver, args.launch, ctx.abortSignal),
           })
-        if (!off && !session.task!.spec.scope.apps.some((app) => matchesApp(identity, app)))
+        if (!session.task!.spec.scope.apps.some((app) => matchesApp(identity, app)))
           return result({ status: 'out_of_scope' })
-        const consent = off
-          ? 'granted'
-          : canonicalConsent(identity, await allGrants(host, api.conversationId, session))
+        const consent = canonicalConsent(
+          identity,
+          await allGrants(host, api.conversationId, session),
+        )
         if (consent !== 'granted') {
           const refusal = {
             refuse: consent === 'denied' ? 'denied' : 'consent_required',
@@ -1208,9 +1201,8 @@ export function appsTool(host: ExtensionHost) {
           })
           if (
             stopped ||
-            (!off &&
-              canonicalConsent(identity, await allGrants(host, api.conversationId, latest)) !==
-                'granted')
+            canonicalConsent(identity, await allGrants(host, api.conversationId, latest)) !==
+              'granted'
           ) {
             await updateSession(host, api.conversationId, (doc) => {
               doc.journal.findLast((j) => j.call === api.callId)!.status = 'refused'

@@ -18,7 +18,7 @@ import type {
   ComputerDetails,
   FrameRef,
 } from './refs.ts'
-import { driverFor, guardsOff, runtime, settings } from './runtime.ts'
+import { driverFor, runtime, settings } from './runtime.ts'
 import { isStopped, readSession, updateSession } from './session.ts'
 import type { Session } from './session.ts'
 import {
@@ -265,7 +265,6 @@ async function consent(host: ExtensionHost, conversation: number, app: string) {
       `app_identity: no single running app matches "${app}". Closest: ${describeCandidates(await identityCandidates(driver, app))}`,
     )
   if (
-    !(await guardsOff(host)) &&
     !granted(identity, await allGrants(host, conversation, await readSession(host, conversation)))
   )
     throw new Error(`consent_required: ${identity.name}`)
@@ -323,7 +322,7 @@ async function watchWindow(
   )
     throw new Error(`app_identity: window ${window.window} no longer belongs to ${window.app}`)
   const grants = await allGrants(host, conversation, await readSession(host, conversation))
-  if (!(await guardsOff(host)) && !granted(identity, grants, window.onceGrantAt))
+  if (!granted(identity, grants, window.onceGrantAt))
     throw new Error(`consent_required: ${identity.name}`)
   return { driver, target }
 }
@@ -353,7 +352,6 @@ export async function pickableWindows(
   const [{ apps }, listed] = await Promise.all([listApps(driver), driver.call('list_windows', {})])
   if (!listed.ok) throw new Error(listed.text || 'Could not list windows')
   const grants = await allGrants(host, conversation, await readSession(host, conversation))
-  const off = await guardsOff(host)
   const records = Array.isArray(listed.structured?.windows)
     ? listed.structured.windows.map(object)
     : []
@@ -390,7 +388,7 @@ export async function pickableWindows(
       title,
       onScreen: w.is_on_screen !== false,
       currentSpace: w.on_current_space !== false,
-      consent: off ? 'granted' : canonicalConsent(identity, grants),
+      consent: canonicalConsent(identity, grants),
       z: typeof w.z_index === 'number' ? w.z_index : -1,
     })
   }
@@ -622,9 +620,8 @@ export async function startTeaching(host: ExtensionHost, args: TeachStart) {
       args.conversation,
       await readSession(host, args.conversation),
     )
-    const off = await guardsOff(host)
     for (const identity of apps.values())
-      if (!off && !granted(identity, grants)) throw new Error(`consent_required: ${identity.name}`)
+      if (!granted(identity, grants)) throw new Error(`consent_required: ${identity.name}`)
     const now = runtime(host).clock?.now() ?? Date.now()
     const onceGrants = new Map<string, number>()
     await updateSession(host, args.conversation, (doc) => {

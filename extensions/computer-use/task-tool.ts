@@ -7,7 +7,7 @@ import { ClassifyApi } from '../classify/api.ts'
 import type { Approval, Verdict } from './types.ts'
 import { readSession, updateSession, isStopped } from './session.ts'
 import { result, anchored, plainTask, activatePending, object } from './tool-helpers.ts'
-import { runtime, setup, cacheKey, settings, guardsOff } from './runtime.ts'
+import { runtime, setup, cacheKey, settings } from './runtime.ts'
 import { actionObject, checkAction, predicates } from './schemas.ts'
 
 import * as task from './task.ts'
@@ -102,13 +102,8 @@ export async function taskTool(
       'S1',
       Date.now(),
     )
-    // Guards off: no task confirmation, and an earlier task (in any state) never blocks a new one.
-    const off = await guardsOff(host)
-    if (off && started.state.status === 'awaiting_confirmation')
-      started.state = task.confirmTask(started.state, Date.now())
     await updateSession(host, conversation, (doc) => {
       if (
-        !off &&
         doc.task &&
         ['active', 'awaiting_confirmation', 'stopped', 'paused_by_user'].includes(doc.task.status)
       )
@@ -117,7 +112,7 @@ export async function taskTool(
       doc.confirmed = []
       doc.budget = { steps: 0, startedAt: 0 }
       doc.pending = doc.pending.filter((p) => p.kind === 'consent')
-      if (started.state.status === 'awaiting_confirmation')
+      if (started.needsConfirmation.length)
         doc.pending.push({
           kind: 'task',
           app: started.state.spec.scope.apps.join(', '),
@@ -127,10 +122,7 @@ export async function taskTool(
     return anchored(
       host,
       conversation,
-      result({
-        status: started.state.status,
-        needsConfirmation: off ? [] : started.needsConfirmation,
-      }),
+      result({ status: started.state.status, needsConfirmation: started.needsConfirmation }),
     )
   }
   if (args.action === 'complete') {
@@ -188,11 +180,10 @@ export async function taskTool(
                 const identity = await resolveIdentity(driver, app, signal)
                 if (
                   !identity ||
-                  (!(await guardsOff(host)) &&
-                    readConsent(
-                      identity,
-                      await allGrants(host, conversation, await readSession(host, conversation)),
-                    ) !== 'granted')
+                  readConsent(
+                    identity,
+                    await allGrants(host, conversation, await readSession(host, conversation)),
+                  ) !== 'granted'
                 ) {
                   verdict = 'unknown'
                   continue
@@ -345,7 +336,6 @@ export async function taskTool(
       ? (await import('./practice.ts')).taughtConsequential
       : undefined
   let rejectedLabels = false
-  const off = await guardsOff(host)
   await updateSession(host, conversation, (doc) => {
     if (!doc.task) throw new Error('No computer task')
     if (doc.task.status !== 'active') {
@@ -376,8 +366,6 @@ export async function taskTool(
         change = { ...args, approval: { ...approval, ...(appName ? { appName } : {}) } }
       }
       next = task.replan(current, change, Date.now())
-      // Guards off: a widening or weakening change applies at once, with no confirmation.
-      if (off && next.pendingChange) next = task.confirmChange(next, Date.now())
     }
     next = activatePending(next)
     if (!doc.task.runTakeover) next.runTakeover = false

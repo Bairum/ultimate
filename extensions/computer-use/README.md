@@ -234,7 +234,7 @@ checks and final frame; `details.teach.mismatches` wraps expected/seen as `Untru
 
 ## Actions and document
 
-All actions return the conversation's session unless noted. Only `state` and `guards` are available to agents; authority-changing actions are `userActions` reserved for the UI.
+All actions return the conversation's session unless noted. Only `state` is available to agents; authority-changing actions are `userActions` reserved for the UI.
 
 | Action          | Arguments                                                                | Effect                                                                                                                                                                         |
 | --------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -249,7 +249,6 @@ All actions return the conversation's session unless noted. Only `state` and `gu
 | `stop`          | `{conversation}`                                                         | Block dispatch between steps, clear takeovers; kill the daemon after 1 s still in flight, or on a second stop.                                                                 |
 | `hardStop`      | `{}`                                                                     | Kill the daemon immediately; returns `{stopped: true}`.                                                                                                                        |
 | `resume`        | `{conversation}`                                                         | Clear stopped and wake the conversation; observe before continuing.                                                                                                            |
-| `guards`        | `{}`                                                                     | Read-only: returns `{guards}`, false while `computerUse.guards` is `false` (see [Guards off](#guards-off)).                                                                    |
 
 `computer.session` is per conversation: `task` (spec, sub-goals, ledger, counters, evidence and recovery flags), `grants`, `confirmed` keys, `pending` consent/action/task/change requests, the latest 200 `journal` entries, `stopped`, `lastObservedAt`, `takeovers`, and conversation `budget`. Project grants live on conversation 1. Forks start with fresh task state, local authority, journal, takeover and budget; project grants still apply.
 
@@ -284,17 +283,6 @@ Each dispatched step records delivery, verified progress and a post-step outline
 - Stop is not proof that the in-flight action did not happen. MCP cancellation does not stop the daemon's current action; the second-level daemon kill is deliberately explicit. Observe and verify before deciding what to do next.
 - Stop is project-wide (conversation 1), survives forks, blocks reads as well as input, and aborts active calls. Only user resume clears it. A second Stop kills the daemon directly, without starting one. Stop clears unused confirmations across conversations; task start and finish also clear them.
 - `computer_task {action:'complete', subgoal}` completes an explicit-mode subgoal with linked Driver evidence. Predicate criteria require exactly matching Driver predicates, regardless of any `criterion` tag. Tags link only `check:'evidence'` criteria and never reset the loop detector. A model-chosen `expect` plus an arbitrary tag cannot prove a predicate criterion or reset loops.
-
-### Guards off
-
-`"computerUse": { "guards": false }` in user or project settings (project wins) turns the gates off for testing; only the literal `false` does, and removing it restores the default `true`. The status line then shows a warning-toned **guards off** label. With guards off:
-
-- No task is needed: `computer_act`, `computer_observe` and `computer_apps` launch work with no task, a finished one, or one awaiting a task or change confirmation. The task gates (active task, observe-first, scope, loop, oscillation, checkpoint, task budget) are skipped. Steps and evidence are still recorded while an active task has an active sub-goal.
-- `computer_task start` makes the new task active at once, whatever task came before; a widening or weakening `replan` applies at once. No task or change confirmation is requested.
-- Every app counts as granted, in act, observe, launch, teach (including the picker's consent flags) and practice. App identity is still resolved to find the pid and window.
-- No one-shot confirmation (consequential labels, unlabelled pixels, committing keys, multiline typing, the Jev/classify risk check), no `requireLabel` or label match for pixel clicks (x/y on the latest capture suffice), no frontmost check and no takeover requirement. The label-only click (capture and `expect_label`, no x/y) still clicks the OCR centre.
-- The conversation budget (60 steps / 15 minutes) is skipped; the 20 dispatches per call remain.
-- Unchanged: Stop and Force stop, the operator-only tool rule, untrusted screen-content wrapping, the `observe_first` check after an unknown outcome, window visibility for pixels, and secure-field masking (typed text is journalled by length only).
 
 No remote targets, sandboxes, clipboard access or secrets typing are exposed in phase 1. The UI facet is separate work.
 

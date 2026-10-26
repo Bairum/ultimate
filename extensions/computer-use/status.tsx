@@ -4,15 +4,8 @@
  * level inside the popover. It watches the newest computer-operator conversations: only that agent has the computer
  * tools, and it usually runs as a subagent the user is not looking at.
  */
-import {
-  CircleStopIcon,
-  LoaderCircleIcon,
-  MonitorIcon,
-  PlayIcon,
-  ShieldOffIcon,
-  ZapOffIcon,
-} from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { CircleStopIcon, LoaderCircleIcon, MonitorIcon, PlayIcon, ZapOffIcon } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -20,7 +13,6 @@ import {
   cn,
   errorMessage,
   formatAgo,
-  useAction,
   useConversation,
   useConversations,
   useDocOf,
@@ -28,7 +20,7 @@ import {
   useUltimate,
 } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
-import { GuardsAction, HardStopAction, ResumeAction, SessionDoc, StopAction } from './refs.ts'
+import { HardStopAction, ResumeAction, SessionDoc, StopAction } from './refs.ts'
 import type { Session } from './shared.tsx'
 import { TeachStatus } from './teach-live.tsx'
 
@@ -261,29 +253,6 @@ function Quick({ run }: { run: () => Promise<unknown> }) {
 }
 
 /**
- * `computerUse.guards: false` in settings: no task, consent, confirmation or takeover gate applies, so say so for as
- * long as it lasts. Settings change without a reload, so it reads them again every 30 s.
- */
-function GuardsOff() {
-  const { data, refetch } = useAction(GuardsAction, {}, { onError: () => {} })
-  useEffect(() => {
-    const timer = setInterval(() => void refetch(), 30_000)
-    return () => clearInterval(timer)
-  }, [refetch])
-  if (data?.guards !== false) return null
-  return (
-    <span
-      className="flex items-center gap-1.5 text-warning"
-      data-computer-guards-off
-      title="Computer-use guards are off (computerUse.guards: false): agents act without a task, app consent, confirmations or a foreground takeover. Stop still works. Remove the setting to turn them back on."
-    >
-      <ShieldOffIcon className="size-3" />
-      guards off
-    </span>
-  )
-}
-
-/**
  * The three newest computer operators; watching a session creates it, so ordinary conversations are left alone. While
  * the project is stopped, only the newest operator shows: one Stopped item with Resume, not one per conversation.
  */
@@ -299,7 +268,6 @@ export function ComputerStatus() {
   const watched = useMemo(() => (key ? key.split(',').map(Number) : []), [key])
   return (
     <>
-      <GuardsOff />
       {watched.map((id) => (
         <span className="flex items-center gap-2.5" key={id}>
           <TeachStatus conversation={id} />

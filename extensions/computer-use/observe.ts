@@ -1,13 +1,5 @@
 import { ObservationUnavailable, json, result, plainTask, object } from './tool-helpers.ts'
-import {
-  runtime,
-  setup,
-  cacheKey,
-  imageSize,
-  acquireBusy,
-  permissionMissing,
-  guardsOff,
-} from './runtime.ts'
+import { runtime, setup, cacheKey, imageSize, acquireBusy, permissionMissing } from './runtime.ts'
 import { clock as realClock } from './perception.ts'
 import type { Clock } from './perception.ts'
 import { windowSchema, prepare } from './schemas.ts'
@@ -221,16 +213,14 @@ export function observeTool(host: ExtensionHost) {
                 status: 'app_identity',
                 candidates: await identityCandidates(driver, args.app, ctx.abortSignal),
               })
-            const consent = (await guardsOff(host))
-              ? 'granted'
-              : readConsent(
-                  identity,
-                  await allGrants(
-                    host,
-                    api.conversationId,
-                    await readSession(host, api.conversationId),
-                  ),
-                )
+            const consent = readConsent(
+              identity,
+              await allGrants(
+                host,
+                api.conversationId,
+                await readSession(host, api.conversationId),
+              ),
+            )
             if (consent !== 'granted')
               return result({ status: consent === 'denied' ? 'denied' : 'consent_required' })
           }

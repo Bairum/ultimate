@@ -14,8 +14,6 @@ export type Settings = {
   jev?: Parameters<typeof runGoal>[1]['thresholds']
   pixel?: Partial<PixelSettings>
   imageMaxDimension?: number
-  /** `false` turns off every task, scope, consent, confirmation and takeover gate; stop and secure-field masking stay. */
-  guards?: boolean
 }
 /** Invalid types cannot relax safety; finite numeric settings are bounded at the configuration boundary. */
 export function pixelSettings(value: unknown): PixelSettings {
@@ -55,23 +53,14 @@ export function imageMaxDimension(value: unknown) {
     ? Math.max(512, Math.min(2576, Math.round(value)))
     : 1568
 }
-/**
- * Read apart from `settings` so an invalid `pixel` block cannot fail captures that need no pixel settings, nor decide
- * the guards. Guards are off only for a literal `computerUse.guards: false` (project over user).
- */
-export async function basicSettings(host: ExtensionHost) {
+/** Read apart from `settings` so an invalid `pixel` block cannot fail captures that need no pixel settings. */
+export async function imageSize(host: ExtensionHost) {
   const user = (await readSettings(userSettingsPath(host.userHome))).computerUse as
     | Settings
     | undefined
   const project = (await host.projectSettings()).computerUse as Settings | undefined
-  return {
-    imageMaxDimension: imageMaxDimension(project?.imageMaxDimension ?? user?.imageMaxDimension),
-    guardsOff: (project?.guards ?? user?.guards) === false,
-  }
+  return imageMaxDimension(project?.imageMaxDimension ?? user?.imageMaxDimension)
 }
-export const imageSize = async (host: ExtensionHost) =>
-  (await basicSettings(host)).imageMaxDimension
-export const guardsOff = async (host: ExtensionHost) => (await basicSettings(host)).guardsOff
 export async function settings(host: ExtensionHost): Promise<Settings> {
   const user = await readSettings(userSettingsPath(host.userHome))
   const project = await host.projectSettings()

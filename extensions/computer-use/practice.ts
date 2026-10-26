@@ -16,7 +16,7 @@ import {
 } from './teach.ts'
 import { taskTool, intentInConversation } from './task-tool.ts'
 import { readSession, updateSession, isStopped } from './session.ts'
-import { guardsOff, runtime, settings, setup } from './runtime.ts'
+import { runtime, settings, setup } from './runtime.ts'
 import { allGrants, readConsent, matchesApp, identityForPid } from './gates.ts'
 import { windowFor } from './observe.ts'
 import {
@@ -479,8 +479,7 @@ async function checkedCapture(
     !identity ||
     !matchesApp(identity, window.app) ||
     (window.bundle && identity.bundle !== window.bundle) ||
-    (!(await guardsOff(host)) &&
-      readConsent(identity, await allGrants(host, conversation, session)) !== 'granted')
+    readConsent(identity, await allGrants(host, conversation, session)) !== 'granted'
   )
     throw new Error('Practice app consent or identity changed')
   const observation = await captureWindow(driver, target, window.app, 1568, signal)
