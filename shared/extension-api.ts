@@ -65,6 +65,7 @@ export const defaultOff: readonly string[] = [
   'health',
   'classify',
   'phase',
+  'find',
   'sounds',
   'context-offload',
   'context-hygiene',

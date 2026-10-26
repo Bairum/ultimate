@@ -26,6 +26,12 @@ export const recommended: readonly { name: string; line: string; needs?: string;
     { name: 'health', line: 'Provider health for backups', hint: 'reports with cloud' },
     { name: 'classify', line: 'Typed judgments from Jev', hint: 'needs a Jev key' },
     { name: 'phase', line: 'Working-phase labels', needs: 'classify', hint: 'needs a Jev key' },
+    {
+      name: 'find',
+      line: 'Find code by describing it',
+      needs: 'classify',
+      hint: 'needs a Jev key',
+    },
     { name: 'sounds', line: 'Notification sounds', hint: 'plays when @ultimate needs you' },
   ]
 
