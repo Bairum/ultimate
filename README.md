@@ -72,9 +72,6 @@ pnpm cli            # emergency terminal agent when the UI, server or database i
 - **When everything is broken:** `pnpm cli` in the clone (or `ultimate --cli` in a project) opens Pi's terminal agent
   with Ultimate's instructions, skills, your default model and the Claude Code provider. It starts no server and opens
   no database; further arguments go to Pi, e.g. `pnpm cli --model claude-code/claude-opus-5-5 "why won't it boot"`.
-- **Several machines, one project:** join the cloud on each (⌘K → **Join cloud fleet**), back the project up from the
-  status line, and `pnpm restore <name>` on the other machine; see
-  [Cloud backups](extensions/cloud/README.md#cloud-backups).
 
 ### Recommended models
 
@@ -115,6 +112,28 @@ the tools and the conversation work in your project.
   conversations with `ultimate.projects()` in codemode, including their URL when running.
 - **Actions** let an extension's UI call its server code: `export const actions = { … }` in `server.ts`, then
   `useAction(ref, args)` in `web.tsx`, with a typed `actionRef` from `@/sdk`. See [extensions/README.md](extensions/README.md).
+
+### One Ultimate or many
+
+Ultimate works both ways. Start it in one project and use it as an individual agent. Or run several: each project
+is its own dedicated Ultimate process, on one machine or across several, and one Ultimate manages the others. It
+reads their conversations, messages their @ultimate and watches their status; for example, a hub project whose
+@ultimate checks the other projects and starts work in them. That is why every project gets its own process and
+state home instead of one server for all of them.
+
+The building blocks that make it possible:
+
+- **Finding each other:** on one machine, every running instance shows up with its URL in `ultimate.projects()`
+  and answers over loopback; no Tailscale needed. Across machines, list each instance in the `remotes` user setting,
+  `{ "<machine>": { "<project>": "<url>" } }` ([Discovery and settings](docs/settings.md)).
+- **Reading:** codemode's `ultimate.conversations`, `entries`, `search`, `trace` and `doc` take `{ project }` and
+  read another running instance read-only ([Codemode](extensions/codemode/README.md#other-projects)).
+- **Messaging:** `ultimate.tell({ project, text })` messages another project's @ultimate, and its answer comes back
+  as a reply ([Messages](extensions/messages/README.md#other-projects-ultimates)).
+- **Watching:** the `status` action reports an instance's health, failures and extensions in one cheap call
+  ([Status](extensions/status/README.md)).
+- **Reaching other machines:** the [Tailscale](extensions/tailscale/README.md) extension serves each instance on
+  your tailnet, to your own login only.
 
 ## Building blocks
 

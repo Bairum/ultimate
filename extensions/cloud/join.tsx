@@ -15,7 +15,7 @@ import { api, cn, errorMessage, useAction, useCopy, useDialog, useRestart } from
 import { JoinAction, JoinStateAction } from './refs.ts'
 import type { JoinResult, JoinState, JoinStep } from './refs.ts'
 
-/** The dialog id the "Join cloud fleet" command opens. */
+/** The dialog id the "Join cloud backups" command opens. */
 export const joinDialog = 'cloud.join'
 
 const steps: { id: JoinStep | 'done'; label: string }[] = [
@@ -321,7 +321,7 @@ function JoinForm({ state, onJoined }: { state: JoinState; onJoined: () => void 
 }
 
 /**
- * Join your fleet: on a machine without cloud backups, the form; once joined, "Joined as <machine> · <host>" with a
+ * Join cloud backups: on a machine without cloud backups, the form; once joined, "Joined as <machine> · <host>" with a
  * Change link that opens the form again.
  */
 export function JoinCard() {
@@ -345,7 +345,7 @@ export function JoinCard() {
               <span className="text-muted-foreground/60"> · {joined.host}</span>
             </>
           ) : (
-            'Join your fleet'
+            'Join cloud backups'
           )}
         </span>
         {joined && !form && (
@@ -380,13 +380,13 @@ export function JoinCard() {
   )
 }
 
-/** The "Join cloud fleet" command's dialog. */
+/** The "Join cloud backups" command's dialog. */
 export function JoinDialog() {
   const [open, setOpen] = useDialog(joinDialog)
   return (
     <Dialog onOpenChange={setOpen} open={open}>
       <DialogContent className="gap-0 p-0 sm:max-w-md" showCloseButton={false}>
-        <DialogTitle className="sr-only">Join cloud fleet</DialogTitle>
+        <DialogTitle className="sr-only">Join cloud backups</DialogTitle>
         <DialogDescription className="sr-only">
           Store the cloud URL, this machine's name and the two cloud secrets.
         </DialogDescription>

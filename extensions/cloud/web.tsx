@@ -285,6 +285,6 @@ function CloudStatus() {
 export default defineWebExtension({
   slots: { 'statusline.right': [CloudStatus], overlay: [JoinDialog] },
   commands: [
-    { id: 'cloud.join', title: 'Join cloud fleet', run: (context) => context.open(joinDialog) },
+    { id: 'cloud.join', title: 'Join cloud backups', run: (context) => context.open(joinDialog) },
   ],
 })

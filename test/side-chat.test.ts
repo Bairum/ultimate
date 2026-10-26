@@ -52,11 +52,11 @@ async function fixture() {
   })
   expect(standing.status).toBe(200)
   const main = standing.data.result as ConversationId
-  // Dream makes its built-in automation once @ultimate exists; it joins @ultimate's prompt, so wait before the first turn.
-  await until(
-    async () =>
-      (await post(server, '/api/extensions/automations/actions/list', { args: null })).data.result
-        .length > 0,
+  // Dream makes both built-ins once @ultimate exists; they join its prompt, so wait before the first turn.
+  await until(async () =>
+    (
+      await post(server, '/api/extensions/automations/actions/list', { args: null })
+    ).data.result.some(({ name }: { name: string }) => name === 'Dream after a pause'),
   )
   const hold = Promise.withResolvers<void>()
   const gate = { afterTool: false, entered: false, summaryFailure: undefined as string | undefined }

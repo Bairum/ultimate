@@ -48,6 +48,8 @@ interface Draft {
   of: string
   above: number
   cooldownMinutes: number
+  /** Hours without the user's input before it may fire; 0 for none. */
+  idleHours: number
   name: string
   prompt: string
   /** What a script watches for, in plain words; its watcher writes the script from it. */
@@ -105,6 +107,7 @@ function draftOf(automation?: Automation): Draft {
     of: '@ultimate',
     above: 80,
     cooldownMinutes: 60,
+    idleHours: 0,
     name: '',
     prompt: '',
     ask: '',
@@ -138,6 +141,7 @@ function draftOf(automation?: Automation): Draft {
       of: automation.condition?.of ?? '@ultimate',
       above: automation.condition?.above ?? 80,
       cooldownMinutes: (automation.condition?.cooldownMs ?? 3600000) / 60000,
+      idleHours: (automation.condition?.idleFor ?? 0) / 3600000,
     }
   if (automation?.script)
     return {
@@ -451,7 +455,9 @@ export function AutomationForm({
           draft.above >= 1 &&
           draft.above <= 99 &&
           Number.isFinite(draft.cooldownMinutes) &&
-          draft.cooldownMinutes >= 0
+          draft.cooldownMinutes >= 0 &&
+          Number.isFinite(draft.idleHours) &&
+          draft.idleHours >= 0
       : schedule !== undefined
   const ready = draft.name.trim() && validTrigger && acts && !saving
   const save = async () => {
@@ -482,6 +488,7 @@ export function AutomationForm({
                   of: draft.of,
                   above: draft.above,
                   cooldownMs: draft.cooldownMinutes * 60000,
+                  idleFor: draft.idleHours * 3600000,
                 },
               }
           : { schedule }
@@ -715,7 +722,21 @@ export function AutomationForm({
                         />
                       </Field>
                     </div>
+                    <Field htmlFor={`${ids}-idle`} label="After a pause (hours without your input)">
+                      <input
+                        className={input}
+                        id={`${ids}-idle`}
+                        min={0}
+                        step="any"
+                        onChange={(event) => set({ idleHours: Number(event.target.value) })}
+                        placeholder="0: no pause needed"
+                        type="number"
+                        value={draft.idleHours}
+                      />
+                    </Field>
                     <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+                      {draft.idleHours > 0 &&
+                        `Waits until you gave it no input for ${draft.idleHours === 1 ? 'an hour' : `${draft.idleHours} hours`}. `}
                       Fires once, again after it drops below {draft.above - 10}% and{' '}
                       {draft.cooldownMinutes === 60
                         ? 'an hour has'

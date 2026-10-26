@@ -44,12 +44,12 @@ available chapters. `chapter` and `project` cannot be combined. Cross-chapter li
 
 ### Other projects
 
-`conversations`, `entries`, `search`, `trace`, `traceTree` and `doc` take `{ project }` in their options object (`ultimate.conversations({ project })`, `ultimate.traceTree(id, { project })`, `ultimate.doc('todos', 1, { project })`) and then read that project instead, read-only; `doc` there reads conversation 1 unless one is named. `project` is a name (`my-app`) or a key (`github.com/acme/my-app`), case-insensitive. Only a running instance answers:
+`conversations`, `entries`, `search`, `trace`, `traceTree` and `doc` take `{ project, machine? }` in their options object (`ultimate.conversations({ project })`, `ultimate.traceTree(id, { project })`, `ultimate.doc('todos', 1, { project })`) and then read that project instead, read-only; `doc` there reads conversation 1 unless one is named, and `machine` picks one machine's instance when the project runs on several. `project` is a name (`my-app`) or a key (`github.com/acme/my-app`), case-insensitive. Only a running instance answers:
 
 - this project reads its own storage;
 - another running project on this machine answers over loopback (`ultimate.projects()`'s URL);
-- with a `machine` the user named in `cloud.satellites` for that project, the URL set there (a satellite never backs up, so the register has no address for it; see [Cloud](../cloud/README.md#satellites));
-- otherwise the cloud's register (`GET /sync/register`, with the cloud token) names the machine that last backed the project up, and the tailnet address it registered (on that backup, else on its machine record) answers.
+- a project the user listed in `remotes` (`{ <machine>: { <project>: url } }` in user settings; see [Discovery and settings](../../docs/settings.md)) answers at the URL set there; a project listed on several machines needs a `machine`;
+- otherwise, when cloud backups are on, the cloud's register (`GET /sync/register`, with the cloud token) names the machine that last backed the project up, and the tailnet address it registered (on that backup, else on its machine record) answers.
 
 The call is the target's `codemode.read {op, args}` action, sent with the target's own `Origin`; on the tailnet, Tailscale Serve's identity header and `tailscale.allow` admit it, the same rule as the UI. Nothing falls back to a copy: a machine that registered no tailnet address ("<name> was last backed up from <machine>, which registered no tailnet address") and an unknown name each fail with a sentence that names the machine or lists the known projects. Answers are capped at 1 MiB of JSON (ask for a smaller `limit`). Locating and calling the other instance lives in `lib/remote.ts`, shared with Messages’ Ultimate-to-Ultimate messages.
 

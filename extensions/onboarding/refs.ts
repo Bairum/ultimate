@@ -11,6 +11,8 @@ export type ProjectSetup = { config: boolean; decision: boolean | null; readme?:
 export type OnboardingStatus = {
   /** True until the user finished or skipped the first run. */
   firstRun: boolean
+  /** `"onboarding": false` in `~/.ultimate/settings.json`: no first run, no Start here, no setup reminders but the project decision. */
+  off: boolean
   project: ProjectSetup
   /** What `~/.ultimate/settings.json` enables and disables. */
   user: { enable: string[]; disable: string[] }

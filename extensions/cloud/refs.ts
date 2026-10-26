@@ -38,7 +38,7 @@ export interface JoinState {
   /** The secret names this machine lacks. */
   missing: string[]
 }
-/** No arguments → whether this machine has joined the fleet, for the Join card. */
+/** No arguments → whether this machine has joined cloud backups, for the Join card. */
 export const JoinStateAction = actionRef<null, JoinState>('cloud', 'joinState')
 /**
  * User-only: `{ url, machine, token, snapshotKey }` → checks `GET /sync/register` with the token, then stores both

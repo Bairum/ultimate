@@ -396,6 +396,8 @@ function backend(host: ExtensionHost) {
         throw new Error('above must be an integer from 1 to 99')
       if (c.cooldownMs !== undefined && (!Number.isFinite(c.cooldownMs) || c.cooldownMs < 0))
         throw new Error('cooldownMs must be non-negative')
+      if (c.idleFor !== undefined && (!Number.isFinite(c.idleFor) || c.idleFor < 0))
+        throw new Error('idleFor must be non-negative')
       const target = typeof c.of === 'string' ? await trigger.resolve(c.of) : undefined
       if (!target || !(await host.harness().conversation(target, BACKGROUND_CONTEXT)))
         throw new Error(`Unknown of: ${c.of}`)
@@ -524,12 +526,19 @@ function backend(host: ExtensionHost) {
       if (args.condition !== undefined) {
         delete a.schedule
         delete a.event
+        const previousOf = a.condition?.of
         a.condition = {
           ...a.condition,
           ...args.condition,
           cooldownMs: args.condition.cooldownMs ?? a.condition?.cooldownMs ?? 3600000,
           armed: a.condition?.armed ?? true,
         }
+        // Another target's input says nothing about this one: its pause counts afresh, from this update.
+        if (!a.condition.idleFor) {
+          delete a.condition.idleFor
+          delete a.condition.inputAt
+        } else if (previousOf !== undefined && previousOf !== a.condition.of)
+          a.condition.inputAt = Date.now()
       }
       if (a.script) {
         if (args.ask !== undefined) a.script.ask = required(args.ask, 'ask')
@@ -732,7 +741,7 @@ export default function automations(host: ExtensionHost) {
         // Receipts deduplicate ledger changes; process effects reuse their committed pid on replay.
         replay: 'safe',
         description:
-          'Automate background work with one trigger (schedule, ask, event or condition) and one or both actions (prompt, subscribers). create {name,schedule?|ask?|event?|condition?,once?,secrets?,prompt?,agent?,model?,thinking?,subscribers?,scope?,slug?}. ask starts a watcher that writes a supervised script: stdout FIRE wakes subscribers and/or starts a prompt run; DONE then exit 0 stops recurring scripts. event {name,where?} watches domain events; events lists names and fields. condition {metric:"context",of:"@name"|"#id",above:1-99,cooldownMs?} watches context fill. Scripts spend tokens only on setup and repair; prompt runs spend tokens every fire. Schedules: cron "0 9 * * 1-5" Europe/Vienna, at 2026-12-01T09:00:00Z, in 30m, every 15m. IDs A<n>, or lowercase slugs for project scripts in <project>/.ultimate/automations/<slug>/. Project scripts never start themselves. list; update; pause/resume; run (fire trigger now or relaunch script); runs; log {id,lines?}; abort {id,runId}; escalate {id,reason}; subscribe/unsubscribe {id,to?: "#id"|"@name"} (default caller); delete (keeps files and conversations). Without prompt or subscribers, caller subscribes. Optional agent selects an existing definition (isolates ignored), model {provider,modelId} and thinking override it; otherwise runs copy the root agent. Failures wake only the watcher; escalation notifies subscribers and @ultimate.',
+          'Automate background work with one trigger (schedule, ask, event or condition) and one or both actions (prompt, subscribers). create {name,schedule?|ask?|event?|condition?,once?,secrets?,prompt?,agent?,model?,thinking?,subscribers?,scope?,slug?}. ask starts a watcher that writes a supervised script: stdout FIRE wakes subscribers and/or starts a prompt run; DONE then exit 0 stops recurring scripts. event {name,where?} watches domain events; events lists names and fields. condition {metric:"context",of:"@name"|"#id",above:1-99,cooldownMs?,idleFor?} watches context fill; idleFor (ms) waits until the user gave it no input for that long. Scripts spend tokens only on setup and repair; prompt runs spend tokens every fire. Schedules: cron "0 9 * * 1-5" Europe/Vienna, at 2026-12-01T09:00:00Z, in 30m, every 15m. IDs A<n>, or lowercase slugs for project scripts in <project>/.ultimate/automations/<slug>/. Project scripts never start themselves. list; update; pause/resume; run (fire trigger now or relaunch script); runs; log {id,lines?}; abort {id,runId}; escalate {id,reason}; subscribe/unsubscribe {id,to?: "#id"|"@name"} (default caller); delete (keeps files and conversations). Without prompt or subscribers, caller subscribes. Optional agent selects an existing definition (isolates ignored), model {provider,modelId} and thinking override it; otherwise runs copy the root agent. Failures wake only the watcher; escalation notifies subscribers and @ultimate.',
         parameters: Type.Object({
           action: Type.Union(operations.map((v) => Type.Literal(v))),
           id: Type.Optional(Type.String()),
@@ -756,6 +765,7 @@ export default function automations(host: ExtensionHost) {
               of: Type.String(),
               above: Type.Integer({ minimum: 1, maximum: 99 }),
               cooldownMs: Type.Optional(Type.Number({ minimum: 0 })),
+              idleFor: Type.Optional(Type.Number({ minimum: 0 })),
             }),
           ),
           once: Type.Optional(Type.Boolean()),

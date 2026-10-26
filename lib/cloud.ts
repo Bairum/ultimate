@@ -40,25 +40,6 @@ export async function cloudConfig(
   return { url, token, machine, satellite: config.satellite === true }
 }
 
-/**
- * The address the user set for `project` on `machine` in `cloud.satellites` (`{ <machine>: { <project>: url } }`):
- * a satellite never backs up, so the register holds no tailnet address for it.
- */
-export async function satelliteAddress(
-  host: Pick<ExtensionHost, 'userHome'>,
-  machine: string,
-  project: string,
-) {
-  const satellites = (await userCloudSettings(host)).satellites
-  if (!satellites || typeof satellites !== 'object' || Array.isArray(satellites)) return undefined
-  const projects = (satellites as Record<string, unknown>)[machine]
-  if (!projects || typeof projects !== 'object' || Array.isArray(projects)) return undefined
-  const found = Object.entries(projects).find(
-    ([name, url]) => name.toLowerCase() === project.toLowerCase() && typeof url === 'string',
-  )
-  return found && { name: found[0], url: found[1] as string }
-}
-
 /** The Worker's `GET /sync/register`: every project's latest backup and every machine that backed up. */
 export interface Register {
   projects: {

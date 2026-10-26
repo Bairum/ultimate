@@ -23,7 +23,7 @@ export const recommended: readonly { name: string; line: string; needs?: string;
     },
     { name: 'cloud', line: 'Encrypted project backups', hint: 'needs your own backup Worker' },
     { name: 'tailscale', line: 'Reach Ultimate from your devices', hint: 'needs Tailscale here' },
-    { name: 'health', line: 'Provider health for backups', hint: 'reports with cloud' },
+    { name: 'health', line: 'Provider health', hint: 'shows failing providers' },
     { name: 'classify', line: 'Typed judgments from Jev', hint: 'needs a Jev key' },
     { name: 'phase', line: 'Working-phase labels', needs: 'classify', hint: 'needs a Jev key' },
     { name: 'sounds', line: 'Notification sounds', hint: 'plays when @ultimate needs you' },

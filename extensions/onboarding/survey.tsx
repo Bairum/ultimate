@@ -2,11 +2,11 @@ import { CompassIcon, LoaderCircleIcon, XIcon } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { api, errorMessage, useConversation, useDocOf, useSystem } from '@/sdk'
+import { api, errorMessage, useAction, useConversation, useDocOf, useSystem } from '@/sdk'
 import { column, MemoryDoc, useRoots } from '../lineage/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { onboarded } from './onboarded.ts'
-import { DismissAction, StartAction, StartsDoc } from './refs.ts'
+import { DismissAction, StartAction, StartsDoc, StatusAction } from './refs.ts'
 
 /** Above @ultimate's composer until onboarding has run for the project: one click starts it. */
 export function StartComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
@@ -26,10 +26,12 @@ function StartHere({ dock }: { dock?: boolean }) {
   const starts = useDocOf(1, StartsDoc)
   const memories = useDocOf(root ?? 1, MemoryDoc)
   const project = useSystem()?.project.name
+  const status = useAction(StatusAction).data
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string>()
-  if (root === undefined || starts === undefined || memories === undefined) return null
-  if (starts?.dismissed || onboarded(starts?.roots[String(root)], memories)) return null
+  if (root === undefined || starts === undefined || memories === undefined || !status) return null
+  if (status.off || starts?.dismissed || onboarded(starts?.roots[String(root)], memories))
+    return null
   const run = async (action: () => Promise<unknown>) => {
     setSending(true)
     setError(undefined)

@@ -27,7 +27,7 @@ Each failure is classified by its summary (`failureKind` in `store.ts`):
 - **capacity** (429, 529, `overloaded_error`, rate-limit and quota codes) never does: the provider is busy, not the login. It is kept as the last error only.
 - **transient** (timeouts, network errors, any other failure) turns it `failing` at the third in a row with no success between, or at one 5 minutes or more after the first of the streak. Capacity failures neither count toward a streak nor stretch its window.
 
-A success newer than the failures ends both. Otherwise a provider is `ok` once it has a `lastOk`, else `unknown`. Writes read, merge each timestamp by its maximum (the `error` stays with the newest `lastFail`), count the new failure and rename a temporary file into place; two homes writing at once lose at most one event. An error is stored only as a structured summary: the HTTP status (when the message starts with it or names it, `status 401`) and the words of a fixed list of provider error codes and network errors it contains (`invalid_grant`, `rate_limit_error`, `overloaded`, `ECONNREFUSED`, …, `KNOWN` in `store.ts`), or "request failed". Its free text never is, so no request or auth contents reach the file or the cloud; add a code to `KNOWN` to keep it. Health reaches the cloud only with each backup (see [In backups](#in-backups)).
+A success newer than the failures ends both. Otherwise a provider is `ok` once it has a `lastOk`, else `unknown`. Writes read, merge each timestamp by its maximum (the `error` stays with the newest `lastFail`), count the new failure and rename a temporary file into place; two homes writing at once lose at most one event. An error is stored only as a structured summary: the HTTP status (when the message starts with it or names it, `status 401`) and the words of a fixed list of provider error codes and network errors it contains (`invalid_grant`, `rate_limit_error`, `overloaded`, `ECONNREFUSED`, …, `KNOWN` in `store.ts`), or "request failed". Its free text never is, so no request or auth contents reach the file; add a code to `KNOWN` to keep it. Health stays on this machine.
 
 ## Login changes
 
@@ -42,10 +42,6 @@ Every machine keeps its own logins: never copy `auth.json` between machines. OAu
 ## Real usage
 
 A `GenerationTask` `afterResponse` hook records every terminal provider message at no cost: `stopReason: 'error'` records a failure with `errorMessage`, `aborted` nothing, anything else a success. The write never blocks or fails the generation.
-
-## In backups
-
-Every cloud backup carries `providers()` as its `health`, so the cloud's register shows each machine's provider health as of its last backup (`extensions/cloud/README.md`).
 
 ## Status line
 

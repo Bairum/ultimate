@@ -26,7 +26,7 @@ const call = (name: string, args: JsonObject) =>
 function onboarding(project: string): FauxResponseFactory {
   return (transcript) => {
     const messages = transcript.messages
-    const last = messages.at(-1)!
+    const last = messages.findLast((message) => message.role !== 'system')!
     const at = messages.findIndex(
       (message) =>
         message.role === 'user' && text(message.content).startsWith('Onboarding started.'),
