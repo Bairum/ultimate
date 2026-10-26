@@ -3,7 +3,8 @@ import { CompactionTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable
 import type { TaskId } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { context } from '../server/harness.ts'
-import { fauxServer, post, seedTally, sourceCopy, temp } from './helpers.ts'
+import { eventHost, fauxServer, post, seedTally, sourceCopy, temp, until } from './helpers.ts'
+import { Compacted } from '../extensions/conversations/refs.ts'
 
 it('compacts a tally once at a time with the root focus and the given instructions', async () => {
   const home = await temp()
@@ -59,6 +60,19 @@ it('compacts a tally once at a time with the root focus and the given instructio
     expect(prompt).toContain('standing decisions')
     expect(prompt).toContain('Drop the obsolete deployment plan.')
     expect(JSON.stringify((await server.root.context(context)).messages)).toContain('Root summary')
+    // Check the recent-event projection and announcement against the same completed compaction.
+    const recent = await post(server, '/api/extensions/lineage/actions/recent', {
+      args: { id, limit: 1 },
+    })
+    expect(recent.data.result).toMatchObject([{ type: 'compacted' }])
+    const log = eventHost(() => server.harness, 'test').eventLog
+    await until(async () => (await log.recent({ events: [Compacted] })).length === 1)
+    const [compacted] = await log.recent({ events: [Compacted] })
+    expect(compacted.data).toEqual({
+      conversation: id,
+      entry: expect.any(Number),
+      reason: 'manual',
+    })
   } finally {
     finishCompact.resolve()
     await server.close()

@@ -5,7 +5,6 @@ import { compareLinks, leaveNote, rootOf, Tally } from '../extensions/lineage/se
 import { Branch, Branched, Roots } from '../extensions/lineage/api.ts'
 import { Plan, Started } from '../extensions/plan/server.ts'
 import { Summaries } from '../extensions/conversations/summary.ts'
-import { Compacted } from '../extensions/conversations/refs.ts'
 import { Started as AgentStarted } from '../extensions/subagents/api.ts'
 import { defineExtension } from '@earendil-works/pi-durable'
 import { context } from '../server/harness.ts'
@@ -60,7 +59,7 @@ it.concurrent('unlists a root that never became a tally, never a tally or the la
   expect((await unlist(last)).error).toBe(`#${last} is the last root`)
 })
 
-it.concurrent("lists a root's newest landings, notes, branches and compactions, and compacts only a tally", async () => {
+it.concurrent("lists a root's newest landings, notes and branches, and refuses compaction of a non-tally", async () => {
   const { server } = await fixture()
   const call = async (name: string, args: unknown) =>
     (await post(server, `/api/extensions/lineage/actions/${name}`, { args })).data
@@ -71,14 +70,6 @@ it.concurrent("lists a root's newest landings, notes, branches and compactions, 
   expect((await call('compact', { id: 1 })).error).toBe('#1 is not a tally')
 
   await seedTally(server.harness)
-  // Enough older context that a compaction has something to summarize besides the recent entries it keeps.
-  await server.harness.commit(async (tx) => {
-    for (let n = 0; n < 12; n++)
-      await tx.appendEntry(1 as ConversationId, {
-        kind: 'test.history',
-        model: [{ role: 'user', content: 'Older work. '.repeat(1500), timestamp: n }],
-      })
-  }, context)
   const branch = await branchFrom(server, { from: 1, prompt: 'Polish the sidebar' })
   await settled(server, branch)
   await leaveNote({ harness: () => server.harness }, 1, 'Keep it quiet.', { from: branch })
@@ -120,13 +111,7 @@ it.concurrent("lists a root's newest landings, notes, branches and compactions, 
     'types must be a list of event types',
   )
 
-  const { taskId } = (await call('compact', { id: 1 })).result
-  expect(typeof taskId).toBe('number')
-  await until(
-    async () => (await call('recent', { id: 1, limit: 1 })).result[0]?.type === 'compacted',
-  )
-
-  // The branch started as an agent, and the compaction was announced once, after Pi's commit.
+  // A branch is announced as an agent once.
   const log = eventHost(() => server.harness, 'test').eventLog
   expect((await log.recent({ events: [AgentStarted] })).map((event) => event.data)).toEqual([
     {
@@ -137,11 +122,6 @@ it.concurrent("lists a root's newest landings, notes, branches and compactions, 
       model: 'faux/faux-1',
     },
   ])
-  await until(async () => (await log.recent({ events: [Compacted] })).length === 1)
-  const [compacted] = await log.recent({ events: [Compacted] })
-  expect(compacted.data).toEqual({ conversation: 1, entry: expect.any(Number), reason: 'manual' })
-  await server.harness.waitForIdle(context)
-  expect(await log.recent({ events: [Compacted] })).toHaveLength(1)
 })
 
 const landed = (entry: number, sha: string, base?: string) =>
