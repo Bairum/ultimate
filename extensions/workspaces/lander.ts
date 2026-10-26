@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 import { copyJson } from '@earendil-works/chord'
 import type { Context } from '@earendil-works/chord'
+import type { JsonObject } from '@earendil-works/pi-durable'
 import { withAbortSignal } from '@earendil-works/chord/context'
 import {
   AssistantEntry,
@@ -25,6 +26,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent, discoverAgents, hostDefaultModel } from '../../lib/agents.ts'
 import { CheckRan, Handoff, SubmissionLanded } from './api.ts'
 import { setup } from './setup.ts'
+import { addCheckout, treePath } from './tree.ts'
 import type {
   Landed,
   LanderAsk,
@@ -41,20 +43,28 @@ export const LanderAskEntry = 'ultimate.lander-ask'
 /** Outcomes kept in the index for submit cards; older ones live on in the lander conversation. */
 const kept = 50
 /** The lander's own detached checkout of `source`, also its conversation's cwd. */
-export async function landerPath(home: string, source: string) {
+export async function landerPath(home: string, source: string, settings: JsonObject) {
+  const configured = await treePath(settings, landerName(source))
+  if (configured) return configured
   await mkdir(join(home, 'lander'), { recursive: true })
-  return join(
-    await realpath(join(home, 'lander')),
-    createHash('sha256').update(source).digest('hex').slice(0, 12),
-  )
+  return join(await realpath(join(home, 'lander')), landerHash(source))
 }
+const landerHash = (source: string) =>
+  createHash('sha256').update(source).digest('hex').slice(0, 12)
+/** The name a configured `isolates.worktree` layout gives the lander's checkout of `source`. */
+const landerName = (source: string) => `ult-lander-${landerHash(source)}`
 const checkouts = new Map<string, Promise<string>>()
 /**
  * The lander's checkout of `source`, created detached at `tip` when it is not a registered worktree yet; an existing one
  * stays as it is. Serialize creation per path so another caller cannot remove a checkout being created.
  */
-export async function landerCheckout(home: string, source: string, tip = 'HEAD') {
-  const path = await landerPath(home, source)
+export async function landerCheckout(
+  home: string,
+  source: string,
+  settings: JsonObject,
+  tip = 'HEAD',
+) {
+  const path = await landerPath(home, source, settings)
   const queued = (checkouts.get(path) ?? Promise.resolve())
     .catch(
       // The previous caller receives its failure; a later call must still be able to recover.
@@ -68,7 +78,7 @@ export async function landerCheckout(home: string, source: string, tip = 'HEAD')
         // The directory is the lander's own; a crash may have left it half created.
         await rm(path, { recursive: true, force: true })
         await git(source, 'worktree', 'prune')
-        await git(source, 'worktree', 'add', '--detach', path, tip)
+        await addCheckout(settings, source, path, landerName(source), ['--detach', tip])
       }
       return path
     })
@@ -413,7 +423,7 @@ export function createLander(
   limits: CheckLimits = checkLimits,
 ) {
   async function checkout(source: string, tip: string) {
-    const path = await landerCheckout(host.home, source, tip)
+    const path = await landerCheckout(host.home, source, await host.projectSettings(), tip)
     // Every attempt starts from a clean checkout at the target tip; ignored files such as installs stay.
     await git(path, 'reset', '--hard', '-q')
     await git(path, 'checkout', '-q', '--detach', '--force', tip)
@@ -585,7 +595,7 @@ export function createLander(
             }),
             context,
           )
-        const integration = await landerPath(host.home, entry.source)
+        const integration = await landerPath(host.home, entry.source, await host.projectSettings())
         /** Reset the lander's checkout after a failure the model looked at. */
         const reset = async () => {
           await git(integration, 'merge', '--abort').catch(
