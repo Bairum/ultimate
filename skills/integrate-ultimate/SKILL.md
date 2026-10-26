@@ -63,8 +63,8 @@ Ask the user to choose, offering defaults. Ask only questions whose answers chan
 
 Both work without setup: the shipped `reviewer` reviews alone on the parent's model, or leads any `reviewer-*`
 definitions, and `workspace submit` merges and
-fast-forwards with no checks and no push. Ultimate's own clone is the working example: copy from its `.ultimate/agents/`
-and `.ultimate/settings.json`, then adjust models and commands.
+fast-forwards with no checks and no push. Ultimate's own clone is the working example: the `adopt-ultimate-setup` skill
+tours its `.ultimate/` and adapts the chosen pieces (models, checks, review focus) to the project.
 Worker reports and submissions state divergence from the task as given (agreements, approach, scope), or "None";
 `workspace submit` requires that `divergence` string, and lander reports distinguish any additional changes.
 
