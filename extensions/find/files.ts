@@ -100,7 +100,14 @@ async function probe(root: string, rel: string) {
   try {
     const info = await lstat(path)
     if (!info.isFile() || !direct(root, rel, await realpath(path))) return undefined
-    return (await readText(path, 8192)) && info.size
+    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try {
+      const head = Buffer.alloc(Math.min(8192, info.size))
+      const { bytesRead } = await file.read(head, 0, head.length, 0)
+      return head.subarray(0, bytesRead).includes(0) ? undefined : info.size
+    } finally {
+      await file.close()
+    }
   } catch (error) {
     // A path the index still lists may be deleted, unreadable or swapped for a symlink: it is not a searchable file.
     if (['ENOENT', 'EACCES', 'ELOOP', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code!))
