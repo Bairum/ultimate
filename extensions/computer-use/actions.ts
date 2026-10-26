@@ -8,6 +8,7 @@ import {
   TeachSaveAction,
   TeachRejectAction,
   TeachReopenAction,
+  TeachWindowsAction,
 } from './refs.ts'
 import {
   startTeaching,
@@ -16,6 +17,7 @@ import {
   editTeaching,
   saveTeaching,
   rejectTeaching,
+  pickableWindows,
 } from './teach.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { readSession, updateSession, wake } from './session.ts'
@@ -148,6 +150,10 @@ export const actions = {
       window: args.window,
       minutes: args.minutes,
     })
+  }),
+  teachWindows: implementAction(TeachWindowsAction, async (args, { host }) => {
+    validate(args)
+    return { windows: await pickableWindows(host, args.conversation) }
   }),
   teachStop: implementAction(TeachStopAction, (args, { host }) => {
     validate(args)
@@ -347,6 +353,7 @@ export const actions = {
 }
 export const userActions = [
   'teachStart',
+  'teachWindows',
   'teachReopen',
   'teachStop',
   'teachPause',

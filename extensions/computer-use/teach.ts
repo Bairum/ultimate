@@ -17,13 +17,16 @@ import {
   consumeCanonical,
   describeCandidates,
   identityCandidates,
+  listApps,
   matchesApp,
   resolveIdentity,
 } from './gates.ts'
 import { parseWindow, windowFor } from './observe.ts'
-import { consequential } from './policy.ts'
+import { consequential, denyList } from './policy.ts'
 import { redactor, untrusted } from './content.ts'
-import { json, result } from './tool-helpers.ts'
+import { json, object, result } from './tool-helpers.ts'
+import { normalizeTitle, windowTitle } from './windows.ts'
+import type { PickableWindow } from './refs.ts'
 import {
   saveEvidence,
   teachDirectory,
@@ -236,6 +239,60 @@ async function consent(
   if (canonicalConsent(identity, authorized) !== 'granted')
     throw new Error(`consent_required: ${identity.name}`)
   return { driver, app: identity.name, identity }
+}
+/**
+ * The windows the start dialog offers: one unfiltered `list_windows` (every app and helper process) joined with
+ * `list_apps` for bundle ids, frontmost first. Untitled and tiny windows (badges, icons) and deny-listed apps are left
+ * out; so is a window-only owner sharing a listed app's name, which `identityForPid` would refuse.
+ */
+export async function pickableWindows(
+  host: ExtensionHost,
+  conversation: number,
+): Promise<PickableWindow[]> {
+  const driver = await driverFor(host)
+  const [{ apps }, listed] = await Promise.all([listApps(driver), driver.call('list_windows', {})])
+  if (!listed.ok) throw new Error(listed.text || 'Could not list windows')
+  const grants = await allGrants(host, conversation, await readSession(host, conversation))
+  const records = Array.isArray(listed.structured?.windows)
+    ? listed.structured.windows.map(object)
+    : []
+  const names = new Set(apps.map((a) => (typeof a.name === 'string' ? a.name.toLowerCase() : '')))
+  const windows: (PickableWindow & { z: number })[] = []
+  for (const w of records) {
+    const bounds = object(w.bounds)
+    const title = windowTitle(w)
+    if (
+      typeof w.pid !== 'number' ||
+      w.pid <= 0 ||
+      typeof w.app_name !== 'string' ||
+      !Number.isSafeInteger(Number(w.window_id)) ||
+      !normalizeTitle(title) ||
+      Number(bounds.width) < 100 ||
+      Number(bounds.height) < 60
+    )
+      continue
+    const owner = apps.find((a) => a.pid === w.pid)
+    if (!owner && names.has(w.app_name.toLowerCase())) continue
+    const identity = owner
+      ? {
+          name: typeof owner.name === 'string' ? owner.name : w.app_name,
+          ...(typeof owner.bundle_id === 'string' ? { bundle: owner.bundle_id } : {}),
+        }
+      : { name: w.app_name }
+    if (denyList.some((name) => matchesApp(identity, name))) continue
+    windows.push({
+      app: identity.name,
+      ...(identity.bundle ? { bundle: identity.bundle } : {}),
+      pid: w.pid,
+      window: Number(w.window_id),
+      title,
+      onScreen: w.is_on_screen !== false,
+      currentSpace: w.on_current_space !== false,
+      consent: canonicalConsent(identity, grants),
+      z: typeof w.z_index === 'number' ? w.z_index : -1,
+    })
+  }
+  return windows.toSorted((a, b) => b.z - a.z).map(({ z: _z, ...w }) => w)
 }
 export async function teachingBlocked(
   host: ExtensionHost,

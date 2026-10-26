@@ -215,6 +215,8 @@ export type FrameMeta = {
   file?: string
   width: number
   height: number
+  /** Index into the segment's `windows` this frame shows; absent for the first. */
+  window?: number
   ocr: {
     text: string
     bounds: { x: number; y: number; width: number; height: number }
@@ -223,7 +225,18 @@ export type FrameMeta = {
   diff: { appeared: string[]; disappeared: string[]; region?: [number, number, number, number] }
   inferred: string
 }
-export type FrameRef = { id: string; width: number; height: number; file?: string }
+export type FrameRef = { id: string; width: number; height: number; file?: string; window?: number }
+/**
+ * One window a lesson watches. `window` is the live id while recording; a saved lesson keeps only the app identity
+ * and `windowTitle`, a title fragment matched normalised (see `windows.ts`), so it survives restarts.
+ */
+export type TeachWindow = {
+  app: string
+  bundle?: string
+  window: number
+  windowTitle: string
+  onceGrantAt?: number
+}
 export type TeachPractice = {
   task: string
   skill: string
@@ -233,6 +246,8 @@ export type TeachPractice = {
   app: string
   bundle: string
   window: { id: number; titleSubstring: string }
+  /** Every lesson window in order (frames index it); absent on single-window lessons saved before multi-window. */
+  windows?: { app: string; bundle: string; titleSubstring: string }[]
   steps: TaughtStep[]
   frames: Record<string, FrameRef>
   checks: PracticeCheck[]
@@ -250,11 +265,14 @@ export type TeachMismatch = {
 export type Teach = {
   segment?: {
     id: string
+    /** The first window's app, bundle, id and title, kept for single-window readers; `windows` lists them all. */
     app: string
     bundle?: string
     onceGrantAt?: number
     window: number
     windowTitle?: string
+    /** Every watched window, the first matching the fields above; absent on segments started before multi-window. */
+    windows?: TeachWindow[]
     source?: { scope: 'project' | 'personal'; name: string; hash: string }
     title: string
     startedAt: number
@@ -272,15 +290,41 @@ export type Teach = {
 }
 /** Forks start fresh: recording consent and private frame files must not spread to children. */
 export const TeachDoc = docRef<Teach>('computer.teach')
+/**
+ * Either `app` with an optional `window` (a numeric id or title fragment), or `windows`: 1–6 windows picked from
+ * `teachWindows`, possibly of different apps. Each is `{app, window}` with the picked window id, and optionally
+ * `match`: the part of its title a saved lesson finds it by later (default the whole title). Every app needs consent.
+ */
 export type TeachStart = {
   conversation: number
-  app: string
+  app?: string
   window?: string | number
+  windows?: { app: string; window: number; match?: string }[]
   minutes?: number
   title: string
 }
 /** TeachStart → teaching document; user-only observation authority. */
 export const TeachStartAction = actionRef<TeachStart, Teach>('computer-use', 'teachStart')
+/** One window the start dialog can offer. `consent` is this conversation's grant for its app. */
+export type PickableWindow = {
+  app: string
+  bundle?: string
+  pid: number
+  window: number
+  title: string
+  /** False when minimised, hidden or covered; `currentSpace` false when on another Space. */
+  onScreen: boolean
+  currentSpace: boolean
+  consent: 'granted' | 'required' | 'denied'
+}
+/**
+ * {conversation} → {windows}; read-only. Every titled top-level window of every running app and helper process,
+ * frontmost first, deny-listed apps (password managers, terminals) left out.
+ */
+export const TeachWindowsAction = actionRef<
+  { conversation: number },
+  { windows: PickableWindow[] }
+>('computer-use', 'teachWindows')
 /** {conversation} → teaching document in drafting; stops observation. */
 export const TeachStopAction = actionRef<{ conversation: number }, Teach>(
   'computer-use',
