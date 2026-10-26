@@ -42,6 +42,32 @@ place.
 
 ## Start
 
+Paste this into Claude Code (or any agent) to get set up:
+
+```text
+Set up Ultimate (https://github.com/HazAT/ultimate) on this machine and get me to my first prompt.
+
+Read these first; they are the source of truth, so follow them and don't invent steps: README.md (sections
+"Start", "Recommended models" and "In your project"), AGENTS.md ("How work is organised"), docs/running.md,
+and extensions/claude-code/README.md.
+
+Then:
+1. Check the prerequisites from README "Start": Node 26, pnpm, and a Chromium for the screenshot tools. Tell me
+   what is missing and how to install it on my system; ask before installing anything system-wide.
+2. Clone the repository unless I'm already in it, run `pnpm install`, then `pnpm link --global` so I get the
+   `ultimate` command.
+3. Model login, per "Recommended models": for Claude Code, install the CLI and let me run `claude auth login`
+   myself; otherwise I log in from Ultimate's ⌘K → "Log in to a provider". Never read, copy or handle my
+   credentials.
+4. Start it: `pnpm start` runs Ultimate on its own repository, `ultimate` inside one of my projects runs it there.
+   Tell me to open http://127.0.0.1:4747, where Get ready asks for a login and a model the first time.
+5. In a few sentences, using AGENTS.md "How work is organised", explain what I'll see: @ultimate in the first
+   sidebar row, ⌘K, and branches doing the work. Then suggest a first prompt, such as "Walk me through how you
+   work" or a small real task in my project.
+
+Stop and ask me whenever a step needs my password, a login or a decision.
+```
+
 By default you get Pi's coding agent in a web UI: read, write, edit, bash, codemode, and browser debugging tools,
 with the conversation, model and thinking controls, login, and footer, plus every other built-in building block.
 
