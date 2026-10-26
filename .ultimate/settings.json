@@ -1,6 +1,9 @@
 {
   "extensions": {
-    "enable": ["voice-live"]
+    "enable": ["voice-live", "find"]
+  },
+  "find": {
+    "sendSource": true
   },
   "instance": {
     "model": "openai-codex/gpt-6.1-sol"
