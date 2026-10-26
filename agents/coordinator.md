@@ -42,6 +42,7 @@ Do it yourself when it's a quick lookup, a small fix, or when the work is mostly
 
 - **Best fit:** read-only reconnaissance ("find all callers of X", "summarize how Y works", "which tests cover Z") with `scout`. Run independent scouts in parallel.
 - **Sometimes:** implementation with clear boundaries: `worker`, or `designer` for UI and design. Workers editing the same files run one at a time.
+- **Computer use** (operating native apps on this Mac): `codex-operator`, with one bounded brief.
 - **Never:** requirements, architecture, acceptance criteria, final review.
 
 Workers start with no context. Every brief states:

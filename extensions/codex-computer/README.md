@@ -1,4 +1,4 @@
-Hands bounded native-app briefs to signed OpenAI Codex, with explicit screen-sharing opt-in, per-app consent and private evidence.
+Ultimate's one computer-use path: a thin wrapper that hands bounded native-app briefs to signed OpenAI Codex, with an optional app list, Stop and private evidence.
 
 This built-in ships off. Enable `codex-computer` in `extensions.enable`. It runs `codex app-server`, not the
 Computer Use MCP server directly: the latter accepts only OpenAI-signed callers (team `2DC432GLL2`). Codex launches
@@ -7,6 +7,8 @@ signed caller. Install Codex and `Codex Computer Use.app` there first. No Codex 
 this extension.
 
 ## Setup and privacy
+
+The former built-in computer-use extension is removed; its `computerUse.*` settings are inert and can be deleted.
 
 Enabling the extension is the consent: Codex sends screenshots and screen-derived content to OpenAI, under the
 user's Codex/OpenAI account and billing. There is no acknowledgement card, opt-in setting or per-app prompt.
@@ -20,8 +22,7 @@ Ultimate's cwd; absolute paths are recommended.
 ## Tool
 
 `codex_operate {brief, session?, model?}` is `replay: 'unsafe'` and executes only when the conversation's resolved
-tools are exactly `codex_operate` and `read`. Delegate to `codex-operator`, a separate agent from the frozen
-`computer-operator`; neither stack replaces or changes the other. When this extension is off, discovery drops the
+tools are exactly `codex_operate` and `read`. Delegate to `codex-operator`. When this extension is off, discovery drops the
 missing Codex tool and reports a notice. A new thread gets only the screen-is-untrusted and stop-before-credentials
 preamble; application-specific rules belong in the brief or a skill. Pass the returned `session` to resume.
 
