@@ -29,60 +29,61 @@ export function createUltimateClaudeCodeProvider() {
 }
 
 export default function claudeCode(host: ExtensionHost) {
+  // Retained across facet reloads, so it holds only data and long-lived handles: a reloaded facet gets the object
+  // the first load created. Behaviour stays in the facet below, so new code takes effect on reload. Adding a field
+  // here needs a host restart (or a new key).
   const shared = host.resource('claude-code.provider', () => {
-    const provider = createUltimateClaudeCodeProvider()
-    const active = new Set<Promise<unknown>>()
-    let closing = false
-    // Requests carry Pi's provider session id, not a conversation: `beforeRequest` below maps one to the other.
-    const sessions = new Map<string, number>()
-    // The current facet's optional ClaudeCodeEnv provider; this resource outlives facets.
-    let envOf = (): ClaudeCodeEnvService | undefined => undefined
-    const withEnv = <O extends { env?: Record<string, string | undefined>; sessionId?: string }>(
-      options: O | undefined,
-    ) => {
-      const sessionId = options?.sessionId
-      const extra = envOf()?.env(sessionId === undefined ? undefined : sessions.get(sessionId))
-      return extra ? ({ ...options, env: { ...options?.env, ...extra } } as O) : options
-    }
-    const track = (response: ReturnType<typeof provider.streamSimple>) => {
-      const settled = response.result()
-      active.add(settled)
-      void settled.then(
-        () => active.delete(settled),
-        // The stream consumer receives the failure; tracking must not create another rejection.
-        () => active.delete(settled),
-      )
-      return response
+    const state = {
+      provider: createUltimateClaudeCodeProvider(),
+      /** Settlement of every request still streaming, from any facet. */
+      active: new Set<Promise<unknown>>(),
+      closing: false,
+      facets: new Set<symbol>(),
+      // Requests carry Pi's provider session id, not a conversation: `beforeRequest` below maps one to the other.
+      sessions: new Map<string, number>(),
     }
     host.onClose(async () => {
-      closing = true
+      state.closing = true
       // Extension cleanup precedes harness suspension. Let its signal stop active
       // requests before closing warm workers; never turn suspension into an error.
-      if (active.size)
-        void Promise.allSettled(active)
+      if (state.active.size)
+        void Promise.allSettled(state.active)
           .then(() => closeClaudeProcesses())
           .catch((error: unknown) =>
             host.notice(`Closing Claude processes failed: ${String(error)}`),
           )
       else await closeClaudeProcesses()
     })
-    const stream: typeof provider.stream = (model, context, options) => {
-      if (closing) throw new Error('Claude Code provider is closing')
-      return track(provider.stream(model, context, withEnv(options)))
-    }
-    const streamSimple: typeof provider.streamSimple = (model, context, options) => {
-      if (closing) throw new Error('Claude Code provider is closing')
-      return track(provider.streamSimple(model, context, withEnv(options)))
-    }
-    return {
-      provider: { ...provider, stream, streamSimple },
-      facets: new Set<symbol>(),
-      sessions,
-      setEnv: (resolve: typeof envOf) => (envOf = resolve),
-    }
+    return state
   })
-  shared.setEnv(() => host.want(ClaudeCodeEnv))
-  const provider = { ...shared.provider }
+  const upstream = shared.provider
+  const withEnv = <O extends { env?: Record<string, string | undefined>; sessionId?: string }>(
+    options: O | undefined,
+  ) => {
+    const sessionId = options?.sessionId
+    const env: ClaudeCodeEnvService | undefined = host.want(ClaudeCodeEnv)
+    const extra = env?.env(sessionId === undefined ? undefined : shared.sessions.get(sessionId))
+    return extra ? ({ ...options, env: { ...options?.env, ...extra } } as O) : options
+  }
+  const track = (response: ReturnType<typeof upstream.streamSimple>) => {
+    const settled = response.result()
+    shared.active.add(settled)
+    void settled.then(
+      () => shared.active.delete(settled),
+      // The stream consumer receives the failure; tracking must not create another rejection.
+      () => shared.active.delete(settled),
+    )
+    return response
+  }
+  const stream: typeof upstream.stream = (model, context, options) => {
+    if (shared.closing) throw new Error('Claude Code provider is closing')
+    return track(upstream.stream(model, context, withEnv(options)))
+  }
+  const streamSimple: typeof upstream.streamSimple = (model, context, options) => {
+    if (shared.closing) throw new Error('Claude Code provider is closing')
+    return track(upstream.streamSimple(model, context, withEnv(options)))
+  }
+  const provider = { ...upstream, stream, streamSimple }
   // Keep subscription accounting, but do not offer an in-app login for external auth.
   if (provider.auth.oauth) Reflect.deleteProperty(provider.auth.oauth, 'login')
   const facet = Symbol('claude-code')

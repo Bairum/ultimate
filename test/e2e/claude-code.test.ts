@@ -442,19 +442,35 @@ if (process.argv.includes('status')) {
         (await post(server, '/api/extensions/claude-code/actions/status', { args: null })).status,
       ).toBe(200)
       expect((await messages()).filter((message) => message.role === 'assistant')).toHaveLength(0)
-      let streamsShared = true
+      let reloadedServes = true
       let cancelStatus: number | undefined
       let cancelOutcome: unknown
       if (lifecycle === 'reload') {
+        // Regression: new code whose request path calls a function the first load never had (#409484 added
+        // `shared.setEnv`, which the retained resource lacked) must load and serve the next request.
         const provider = server.host.modelRuntime.getProvider('claude-code')
         const file = join(root, 'extensions/claude-code/server.ts')
-        await writeFile(file, (await readFile(file, 'utf8')) + '\n')
+        const source = await readFile(file, 'utf8')
+        const reloaded = source
+          .replace(
+            'export default function claudeCode(',
+            'const markReloaded = () => Object.assign(globalThis, { claudeCodeReloaded: true })\nexport default function claudeCode(',
+          )
+          .replace(
+            'return track(upstream.streamSimple(',
+            'markReloaded()\n      return track(upstream.streamSimple(',
+          )
+        await writeFile(file, reloaded)
         server.vite.watcher.emit('change', file)
         await until(() => server.host.modelRuntime.getProvider('claude-code') !== provider)
-        const replacement = server.host.modelRuntime.getProvider('claude-code')!
-        streamsShared =
-          replacement.stream === provider?.stream &&
-          replacement.streamSimple === provider?.streamSimple
+        await writeFile(release, 'ready')
+        await server.harness.waitForIdle(context)
+        // The in-flight request finished on the old code; only the new request runs the reloaded facet.
+        reloadedServes = !('claudeCodeReloaded' in globalThis)
+        await server.root.submit({ type: 'input', content: 'After reload.' }, context)
+        await server.harness.waitForIdle(context)
+        reloadedServes &&= 'claudeCodeReloaded' in globalThis
+        Reflect.deleteProperty(globalThis, 'claudeCodeReloaded')
       } else if (lifecycle === 'reopen' || lifecycle === 'swap') {
         // Supervised swaps release the harness before extension cleanup; ordinary
         // close does the reverse. Exercise both orders against the same durable home.
@@ -473,7 +489,7 @@ if (process.argv.includes('status')) {
       await writeFile(release, 'ready')
       await server.harness.waitForIdle(context)
       const assistants = (await messages()).filter((message) => message.role === 'assistant')
-      expect(streamsShared).toBe(true)
+      expect(reloadedServes).toBe(true)
       expect(cancelStatus).toBe(lifecycle === 'cancel' ? 200 : undefined)
       expect(cancelOutcome).toEqual(
         lifecycle === 'cancel' ? { status: 'unanswered', reason: 'aborted' } : undefined,
@@ -492,7 +508,7 @@ if (process.argv.includes('status')) {
         await server.harness.waitForIdle(context)
       }
       expect((await readFile(started, 'utf8')).trim().split('\n')).toHaveLength(
-        lifecycle === 'reopen' || lifecycle === 'swap' ? 2 : 1,
+        lifecycle === 'cancel' || lifecycle === 'permanent' ? 1 : 2,
       )
     } finally {
       const captured = server.host.modelRuntime.getProvider('claude-code')!
