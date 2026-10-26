@@ -467,12 +467,14 @@ async function checkedCapture(
           titleSubstring: practice.window.titleSubstring,
         })
   if (!window) throw new Error('Practice window is missing from the lesson')
-  // Only the first window falls back to its saved id; an untitled other window must be its app's only one.
+  // Only the first window falls back to its saved id; an untitled other window must be its app's only one. The
+  // fragment matches titles only: a title "2025" never selects window id 2025.
   const target = await windowFor(
     driver,
     window.app,
     window.titleSubstring || (index ? undefined : practice.window.id),
     signal,
+    { titleOnly: true },
   )
   const identity = await identityForPid(driver, target.pid, signal)
   if (

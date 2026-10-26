@@ -23,10 +23,15 @@ export async function windowFor(
   app: string,
   window?: string | number,
   signal?: AbortSignal,
+  options?: { titleOnly?: boolean },
 ) {
   const listed = await driver.call('list_windows', { app }, signal)
   const windows = listed.structured?.windows
-  const matches = selectWindows((Array.isArray(windows) ? windows : []).map(object), window)
+  const matches = selectWindows(
+    (Array.isArray(windows) ? windows : []).map(object),
+    window,
+    options,
+  )
   if (matches.length !== 1)
     throw new Error(
       'Select exactly one window with computer_observe; window is ambiguous or missing',

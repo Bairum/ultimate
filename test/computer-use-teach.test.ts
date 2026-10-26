@@ -270,7 +270,7 @@ it('matches window titles normalised and ids as numbers, still refusing ambiguit
       status: 'active',
       spec: { approval: { app: 'Citrix Viewer', window, actions: ['click'] } },
     }) as unknown as TaskState
-  for (const window of ['MICROSOFT EDGE', '123', 123])
+  for (const window of ['MICROSOFT EDGE', 123])
     expect(
       approvalScope(
         state(window),
@@ -279,14 +279,49 @@ it('matches window titles normalised and ids as numbers, still refusing ambiguit
         'click',
       ),
     ).toBe(true)
-  expect(
-    approvalScope(
-      state('Network'),
-      { name: 'Citrix Viewer' },
-      { windowId: 123, title: citrix },
-      'click',
-    ),
-  ).toBe(false)
+  // An approval's text is a title fragment only: digits never name a window id.
+  for (const window of ['Network', '123'])
+    expect(
+      approvalScope(
+        state(window),
+        { name: 'Citrix Viewer' },
+        { windowId: 123, title: citrix },
+        'click',
+      ),
+    ).toBe(false)
+})
+it('matches a lesson, approval or teach title fragment of digits against titles only, never as a window id', async () => {
+  const f = await fixture()
+  f.fake.windows = [
+    { window_id: 2025, title: 'Mail', app_name: 'Citrix Viewer', pid: 29200 },
+    { window_id: 7, title: 'Report 2025', app_name: 'Citrix Viewer', pid: 29200 },
+  ]
+  // A saved lesson's fragment (practice captures) finds the titled window; the model's `window` keeps id-or-title.
+  const lesson = await windowFor(f.driver, 'Citrix Viewer', '2025', undefined, { titleOnly: true })
+  expect(lesson.window_id).toBe(7)
+  expect((await windowFor(f.driver, 'Citrix Viewer', '2025')).window_id).toBe(2025)
+  const state = {
+    status: 'active',
+    spec: { approval: { app: 'Citrix Viewer', window: '2025', actions: ['click'] } },
+  } as unknown as TaskState
+  const approved = (windowId: number, title: string) =>
+    approvalScope(state, { name: 'Citrix Viewer' }, { windowId, title }, 'click')
+  expect(approved(2025, 'Mail')).toBe(false)
+  expect(approved(7, 'Report 2025')).toBe(true)
+  // Teach start checks that the fragment names only its own window among the app's windows.
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.grants.push({ app: 'Citrix Viewer', scope: 'conversation', at: 0, pid: 29200 })
+  })
+  await startTeaching(f.host, {
+    conversation: f.root.id,
+    title: 'Lesson',
+    windows: [{ app: 'Citrix Viewer', window: 7, match: '2025' }],
+  })
+  expect((await readTeach(f.host, f.root.id)).segment).toMatchObject({
+    window: 7,
+    windowTitle: '2025',
+  })
+  await finishTeaching(f.host, f.root.id, true)
 })
 it('teaches windows of two apps, tags frames by window and saves their title fragments', async () => {
   const f = await fixture()

@@ -26,16 +26,17 @@ export function titleMatches(title: string, fragment: string) {
 
 /**
  * The windows `window` names: a number selects that id only; digits as text select that id when one has it, else
- * every window whose title contains the text, as any other text does; no `window` selects all. Callers refuse
- * anything but one match.
+ * every window whose title contains the text, as any other text does; no `window` selects all. With `titleOnly`
+ * (a saved lesson's or an approval's title fragment, never the model's `window` argument) text matches titles only,
+ * so a fragment "2025" never selects window id 2025. Callers refuse anything but one match.
  */
 export function selectWindows<
   W extends { window_id?: unknown; title?: unknown; window_title?: unknown },
->(windows: W[], window?: string | number) {
+>(windows: W[], window?: string | number, { titleOnly = false } = {}) {
   if (window === undefined) return windows
   if (typeof window === 'number') return windows.filter((w) => Number(w.window_id) === window)
   const text = window.trim()
-  if (/^\d+$/.test(text)) {
+  if (!titleOnly && /^\d+$/.test(text)) {
     const byId = windows.filter((w) => Number(w.window_id) === Number(text))
     if (byId.length) return byId
   }

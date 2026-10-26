@@ -85,9 +85,11 @@ export function approvalScope(
     ) &&
     approval.actions.includes(kind) &&
     (approval.window === undefined ||
+      // A string is a title fragment (a number is an id): approval "2025" never covers window id 2025.
       selectWindows(
         [{ window_id: observation.windowId, title: observation.title }],
         approval.window,
+        { titleOnly: true },
       ).length === 1)
   )
 }

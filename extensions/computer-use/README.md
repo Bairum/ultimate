@@ -53,7 +53,8 @@ Each request replaces old screenshots and AX trees of `computer_observe` and `co
 
   `approval: {app, appName?, window?, pixel: true, actions, steps, minutes, foreground}` always waits for the user's
   `confirmTask`; widening it requires `confirmChange`. App is a canonical name/bundle; `appName` is display-only
-  (practice supplies the saved display name). Matching never uses `appName`. Window is an id or title substring.
+  (practice supplies the saved display name). Matching never uses `appName`. Window is a numeric id or a title
+  substring; text, even digits, matches titles only.
   Budgets replace the defaults (1–200 steps, >0–60 minutes). Normal gates still apply outside that app/window/action scope.
   A whole normalized, verified effective label in `scope.consequential` waives only its label risk, and only for
   click/double_click/right_click (never menus, whose risk spans the whole path). Keys, typing, sensitive/secure fields, unlabelled pixels and independent Jev
@@ -122,9 +123,11 @@ while recording **or paused**. Other conversations targeting the lesson's app or
 segment only; later segments require a new grant. Resume rechecks revocations and cannot undo Stop/Reject.
 Start and resume refuse any in-flight computer act across the project, checked again at commit. Live teaching
 guards use an in-memory index rebuilt on open, not a scan of conversation documents on each act. Window ids
-match numerically, including string arguments such as `"456"`; title fragments match case-insensitively with
-invisible characters removed and whitespace collapsed (`windows.ts`), so `microsoft edge` finds Citrix's
-`Microsoft\u200B Edge`. Exactly one window must match.
+match numerically, including string arguments such as `"456"` to observe, act and `teachStart`'s `window`; title
+fragments match case-insensitively with invisible characters removed and whitespace collapsed (`windows.ts`), so
+`microsoft edge` finds Citrix's `Microsoft\u200B Edge`. A saved lesson's fragment, a picked window's `match` and a
+task approval's `window` text match titles only, so `"2025"` never selects window id 2025. Exactly one window must
+match.
 
 `windows` (from the start dialog's picker) lists 1–6 distinct windows, `{app, window, match?}`, of one or several
 apps or processes. Each is found by id in one unfiltered `list_windows` and its app resolved from the owning pid,

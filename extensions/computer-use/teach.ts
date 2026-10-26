@@ -602,7 +602,9 @@ export async function startTeaching(host: ExtensionHost, args: TeachStart) {
           w.pid === record.pid ||
           (typeof w.app_name === 'string' && matchesApp(identity, w.app_name)),
       )
-      const found = normalizeTitle(fragment) ? selectWindows(siblings, fragment) : [record]
+      const found = normalizeTitle(fragment)
+        ? selectWindows(siblings, fragment, { titleOnly: true })
+        : [record]
       if (found.length !== 1 || found[0] !== record)
         throw new Error(
           `window_title: "${fragment}" also matches another ${identity.name} window; make it more specific`,
