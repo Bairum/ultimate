@@ -190,7 +190,10 @@ export async function frontmostGate(ctx: GateContext): Promise<Refusal | undefin
   const active = apps.filter((a) => a.active === true)
   if (active.length !== 1)
     return { refuse: 'user_active', message: 'Frontmost app is unknown; refusing input.' }
-  ctx.frontmost = active[0].pid === ctx.observation?.pid
+  // A window-only helper app (absent from list_apps, such as Citrix Viewer) never reports `active`,
+  // so whether the user is in it is unknown: treat it as frontmost, which requires a takeover.
+  ctx.frontmost =
+    active[0].pid === ctx.observation?.pid || !apps.some((a) => a.pid === ctx.observation?.pid)
   if (ctx.frontmost && !takeover)
     return {
       refuse: 'user_active',
@@ -432,7 +435,7 @@ export async function identityCandidates(
 ): Promise<IdentityCandidate[]> {
   const { apps } = await listApps(driver, signal)
   const listed: IdentityCandidate[] = apps
-    .filter((a) => typeof a.name === 'string' && typeof a.pid === 'number')
+    .filter((a) => typeof a.name === 'string' && typeof a.pid === 'number' && a.pid > 0)
     .map((a) => ({ ...appIdentity(a), pid: a.pid as number }))
   const lower = app.trim().toLowerCase()
   const unique = new Map<number, IdentityCandidate>()

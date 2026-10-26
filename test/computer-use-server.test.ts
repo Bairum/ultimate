@@ -29,7 +29,7 @@ import { matchLabel } from '../extensions/computer-use/perception.ts'
 import type { Region } from '../extensions/computer-use/perception.ts'
 import { readFile } from 'node:fs/promises'
 import { waitFor } from '../extensions/computer-use/wait.ts'
-import { preflightGates, resolveIdentity } from '../extensions/computer-use/gates.ts'
+import { frontmostGate, preflightGates, resolveIdentity } from '../extensions/computer-use/gates.ts'
 import type { GateContext } from '../extensions/computer-use/gates.ts'
 
 vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
@@ -615,6 +615,9 @@ it('resolves a window-only pid at dispatch and keeps the app match, scope and na
   expect(allowed.ctx.app).toBe('Citrix Viewer')
   expect((await check('Calculator', granted)).refusal?.refuse).toBe('app_identity')
   expect((await check('29200', granted)).refusal?.refuse).toBe('app_identity')
+  // It never reports `active`, so even with another app frontmost it counts as the user's app.
+  expect((await frontmostGate(allowed.ctx))?.refuse).toBe('user_active')
+  expect(allowed.ctx.frontmost).toBe(true)
 })
 
 async function otherConversation(f: Awaited<ReturnType<typeof fixture>>) {
