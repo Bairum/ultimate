@@ -855,9 +855,7 @@ const taughtStepSchema = Type.Object(
     target: Type.Object({
       label: Type.String(),
       anchors: labelsSchema,
-      region: Type.Optional(
-        Type.Tuple([Type.Number(), Type.Number(), Type.Number(), Type.Number()]),
-      ),
+      region: Type.Optional(Type.Array(Type.Number(), { minItems: 4, maxItems: 4 })),
     }),
     value: Type.Optional(
       Type.Object(

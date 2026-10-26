@@ -209,7 +209,8 @@ export function observeTool(host: ExtensionHost) {
       query: Type.Optional(Type.String()),
       evidence: Type.Optional(Type.Boolean()),
       criterion: Type.Optional(Type.String()),
-      zoom: Type.Optional(Type.Tuple([Type.Number(), Type.Number(), Type.Number(), Type.Number()])),
+      // Not Type.Tuple: its draft-07 `items: [...]` fails Anthropic's draft 2020-12 check.
+      zoom: Type.Optional(Type.Array(Type.Number(), { minItems: 4, maxItems: 4 })),
     }),
     async execute(args, api, ctx) {
       if (await isStopped(host, api.conversationId, { signal: ctx.abortSignal }))
