@@ -651,34 +651,50 @@ function StartFailure({
   conversation: number
 }) {
   const [error, setError] = useState<string>()
-  if (failure.includes('consent_required'))
+  if (failure.includes('consent_required')) {
+    // The canonical name the server resolved, so typing a pid still grants the real app.
+    const name = /consent_required: (.+)$/.exec(failure)?.[1]?.trim() || app.trim()
     return (
       <div className="space-y-2 text-[12px] leading-relaxed">
         <p className="text-warning">
-          Watching needs your consent for <span className="text-foreground">{app}</span> in this
+          Watching needs your consent for <span className="text-foreground">{name}</span> in this
           conversation. An “allow once” grant covers one lesson only.
         </p>
         <TeachButton
           action={GrantAction}
-          args={{ conversation, app: app.trim(), scope: 'conversation' }}
+          args={{ conversation, app: name, scope: 'conversation' }}
           onError={setError}
           tone="primary"
         >
-          Allow {app.trim()} in this conversation
+          Allow {name} in this conversation
         </TeachButton>
         {error && <p className="text-error">{error}</p>}
       </div>
     )
-  const words = failure.includes('app_identity')
-    ? `No single running app is called “${app}”. Open it first, or use its exact name.`
-    : failure.includes('window is ambiguous')
-      ? 'That matches no window, or more than one. Name part of the window title.'
-      : failure.includes('already active')
-        ? 'A recording is already running in this conversation.'
-        : failure.includes('act is running')
-          ? 'The agent is operating the computer right now. Stop it first.'
-          : failure.includes('stopped')
-            ? 'Computer use is stopped for this project. Resume it from the status line first.'
-            : failure
+  }
+  if (failure.includes('app_identity')) {
+    const closest = /Closest: (.+)$/.exec(failure)?.[1]
+    return (
+      <div className="space-y-1 text-[12px] leading-relaxed break-words">
+        <p className="text-error">
+          No single running app is called “{app}”. Open it first, or use its exact name.
+        </p>
+        {closest && closest !== 'none' && (
+          <p className="text-muted-foreground">
+            Closest: <span className="text-foreground">{closest}</span>
+          </p>
+        )}
+      </div>
+    )
+  }
+  const words = failure.includes('window is ambiguous')
+    ? 'That matches no window, or more than one. Name part of the window title.'
+    : failure.includes('already active')
+      ? 'A recording is already running in this conversation.'
+      : failure.includes('act is running')
+        ? 'The agent is operating the computer right now. Stop it first.'
+        : failure.includes('stopped')
+          ? 'Computer use is stopped for this project. Resume it from the status line first.'
+          : failure
   return <p className="text-[12px] leading-relaxed break-words text-error">{words}</p>
 }

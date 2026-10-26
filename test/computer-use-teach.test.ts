@@ -224,6 +224,22 @@ async function recorded(
 }
 const settled = (hash: string, labels: Region[]) =>
   Array.from({ length: 3 }, () => ({ hash, labels }))
+it('starts teaching a window-only helper app by pid once its name is granted', async () => {
+  const f = await fixture()
+  f.fake.windows = [{ window_id: 7, title: 'Desktop', app_name: 'Citrix Viewer', pid: 29200 }]
+  const args = { conversation: f.root.id, app: '29200', title: 'Lesson' }
+  await expect(startTeaching(f.host, args)).rejects.toThrow('consent_required: Citrix Viewer')
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.grants.push({ app: 'Citrix Viewer', scope: 'conversation', at: 0 })
+  })
+  await startTeaching(f.host, { ...args, app: 'Citrix Viewer' })
+  expect((await readTeach(f.host, f.root.id)).segment).toMatchObject({
+    app: 'Citrix Viewer',
+    window: 7,
+  })
+  expect((await readTeach(f.host, f.root.id)).segment?.bundle).toBeUndefined()
+  await finishTeaching(f.host, f.root.id, true)
+})
 it('requires consent before starting and refuses a live computer act', async () => {
   const f = await fixture()
   const args = { conversation: f.root.id, app: 'Calculator', title: 'Lesson' }

@@ -50,6 +50,7 @@ import {
   frontmostGate,
   runTakeover,
   resolveIdentity,
+  identityCandidates,
   listApps,
   confirmRefusal,
 } from './gates.ts'
@@ -1092,7 +1093,11 @@ export function appsTool(host: ExtensionHost) {
         if (await isStopped(host, api.conversationId, { session, signal: ctx.abortSignal }))
           return result({ status: 'stopped' })
         const identity = await resolveIdentity(driver, args.launch, ctx.abortSignal)
-        if (!identity) return result({ status: 'app_identity' })
+        if (!identity)
+          return result({
+            status: 'app_identity',
+            candidates: await identityCandidates(driver, args.launch, ctx.abortSignal),
+          })
         if (!session.task!.spec.scope.apps.some((app) => matchesApp(identity, app)))
           return result({ status: 'out_of_scope' })
         const consent = canonicalConsent(

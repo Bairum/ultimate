@@ -13,7 +13,7 @@ import { updateSession } from './session.ts'
 import * as task from './task.ts'
 import { untrusted } from './content.ts'
 import { readSession, isStopped } from './session.ts'
-import { allGrants, resolveIdentity, readConsent, listApps } from './gates.ts'
+import { allGrants, resolveIdentity, identityCandidates, readConsent, listApps } from './gates.ts'
 import type { ComputerDetails } from './refs.ts'
 import { pruneEvidence } from './evidence-files.ts'
 
@@ -224,7 +224,11 @@ export function observeTool(host: ExtensionHost) {
           await pruneEvidence(host.home)
           if (args.app) {
             const identity = await resolveIdentity(driver, args.app, ctx.abortSignal)
-            if (!identity) return result({ status: 'app_identity' })
+            if (!identity)
+              return result({
+                status: 'app_identity',
+                candidates: await identityCandidates(driver, args.app, ctx.abortSignal),
+              })
             const consent = readConsent(
               identity,
               await allGrants(

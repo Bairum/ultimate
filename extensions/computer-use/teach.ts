@@ -15,6 +15,8 @@ import {
   allGrants,
   canonicalConsent,
   consumeCanonical,
+  describeCandidates,
+  identityCandidates,
   matchesApp,
   resolveIdentity,
 } from './gates.ts'
@@ -221,13 +223,18 @@ async function consent(
   if (await isStopped(host, conversation)) throw new Error('Computer use is stopped')
   const driver = await driverFor(host)
   const identity = await resolveIdentity(driver, app)
-  if (!identity) throw new Error('app_identity')
+  if (!identity)
+    throw new Error(
+      `app_identity: no single running app matches "${app}". Closest: ${describeCandidates(await identityCandidates(driver, app))}`,
+    )
   const grants = await allGrants(host, conversation, await readSession(host, conversation))
   // Start consumes once; only this segment may keep observing under that consumed grant.
   const authorized = grants.map((g) =>
     g.scope === 'once' && g.at === segment?.onceGrantAt ? { ...g, used: false } : g,
   )
-  if (canonicalConsent(identity, authorized) !== 'granted') throw new Error('consent_required')
+  // The canonical name lets the start dialog grant the real app, even when a pid was typed.
+  if (canonicalConsent(identity, authorized) !== 'granted')
+    throw new Error(`consent_required: ${identity.name}`)
   return { driver, app: identity.name, identity }
 }
 export async function teachingBlocked(

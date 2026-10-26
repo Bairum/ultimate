@@ -141,17 +141,12 @@ export const preflightGates: Gate[] = [
             message: `User consent required for ${ctx.app}.`,
           }
     }
-    const { apps } = await listApps(ctx.driver, ctx.signal)
-    const app = apps.find((a) => a.pid === ctx.observation?.pid)
-    if (!app || typeof app.name !== 'string')
+    const identity = await identityForPid(ctx.driver, ctx.observation?.pid, ctx.signal)
+    if (!identity)
       return {
         refuse: 'app_identity',
         message: 'The target PID has no resolved app identity; observe again.',
       }
-    const identity: Identity = {
-      name: app.name,
-      ...(typeof app.bundle_id === 'string' ? { bundle: app.bundle_id } : {}),
-    }
     if (!matchesApp(identity, ctx.app))
       return {
         refuse: 'app_identity',
@@ -368,26 +363,93 @@ export async function allGrants(host: ExtensionHost, conversation: number, sessi
   ]
 }
 
+const appIdentity = (app: Record<string, unknown>): Identity => ({
+  name: app.name as string,
+  ...(typeof app.bundle_id === 'string' ? { bundle: app.bundle_id } : {}),
+})
+
+/** Window owners from one `list_windows` call (no filter lists every app's layer-0 windows); records without a numeric pid or string `app_name` are skipped. */
+async function windowOwners(
+  driver: Driver,
+  args: { app?: string; pid?: number },
+  signal?: AbortSignal,
+): Promise<IdentityCandidate[]> {
+  const reply = await driver.call('list_windows', args, signal)
+  const windows = reply.ok ? reply.structured?.windows : undefined
+  return (Array.isArray(windows) ? windows : [])
+    .map(object)
+    .filter((w) => typeof w.pid === 'number' && typeof w.app_name === 'string')
+    .map((w) => ({ pid: w.pid as number, name: w.app_name as string }))
+}
+
+/**
+ * The canonical identity of a PID: its `list_apps` entry, else the owner name of its windows.
+ * Helper apps such as Citrix Viewer own windows but are omitted from `list_apps`; their identity
+ * has no bundle id, so consent for them binds to the app name only and covers any process of that name.
+ */
+export async function identityForPid(
+  driver: Driver,
+  pid: number | undefined,
+  signal?: AbortSignal,
+): Promise<Identity | undefined> {
+  if (pid === undefined) return undefined
+  const { apps } = await listApps(driver, signal)
+  const app = apps.find((a) => a.pid === pid)
+  if (app) return typeof app.name === 'string' ? appIdentity(app) : undefined
+  const owner = (await windowOwners(driver, { pid }, signal)).find((w) => w.pid === pid)
+  return owner && { name: owner.name }
+}
+
 export async function resolveIdentity(
   driver: Driver,
   app: string,
   signal?: AbortSignal,
 ): Promise<Identity | undefined> {
   const { apps } = await listApps(driver, signal)
-  const matches = apps.filter(
-    (a) =>
-      typeof a.name === 'string' &&
-      matchesApp(
-        { name: a.name, bundle: typeof a.bundle_id === 'string' ? a.bundle_id : undefined },
-        app,
-      ),
+  const matches = apps.filter((a) => typeof a.name === 'string' && matchesApp(appIdentity(a), app))
+  if (matches.length === 1) return appIdentity(matches[0])
+  if (matches.length > 1) return undefined
+  // The driver's `app` filter matches a name substring or an exact bundle id: keep exact names,
+  // and owners whose name does not contain the input at all (matched by bundle id).
+  const lower = app.toLowerCase()
+  const owners = (await windowOwners(driver, { app }, signal)).filter(
+    (w) => w.name.toLowerCase() === lower || !w.name.toLowerCase().includes(lower),
   )
-  if (matches.length !== 1) return undefined
-  return {
-    name: matches[0].name as string,
-    ...(typeof matches[0].bundle_id === 'string' ? { bundle: matches[0].bundle_id } : {}),
+  if (/^\d+$/.test(app)) {
+    const pid = Number(app)
+    owners.push(...(await windowOwners(driver, { pid }, signal)).filter((w) => w.pid === pid))
   }
+  const pids = [...new Set(owners.map((w) => w.pid))]
+  return pids.length === 1 ? identityForPid(driver, pids[0], signal) : undefined
 }
+
+export type IdentityCandidate = { name: string; pid: number; bundle?: string }
+/** Up to six running apps or window owners whose name or bundle contains `app`, or whose pid is `app`. */
+export async function identityCandidates(
+  driver: Driver,
+  app: string,
+  signal?: AbortSignal,
+): Promise<IdentityCandidate[]> {
+  const { apps } = await listApps(driver, signal)
+  const listed: IdentityCandidate[] = apps
+    .filter((a) => typeof a.name === 'string' && typeof a.pid === 'number')
+    .map((a) => ({ ...appIdentity(a), pid: a.pid as number }))
+  const lower = app.trim().toLowerCase()
+  const unique = new Map<number, IdentityCandidate>()
+  for (const c of [...listed, ...(await windowOwners(driver, {}, signal))])
+    if (
+      !unique.has(c.pid) &&
+      (String(c.pid) === lower || [c.name, c.bundle].some((n) => n?.toLowerCase().includes(lower)))
+    )
+      unique.set(c.pid, c)
+  return [...unique.values()].slice(0, 6)
+}
+
+/** Candidates as `Name (pid N, bundle id)` text for an `app_identity` message. */
+export const describeCandidates = (candidates: IdentityCandidate[]) =>
+  candidates.length
+    ? candidates.map((c) => `${c.name} (pid ${c.pid}, ${c.bundle ?? 'no bundle id'})`).join('; ')
+    : 'none'
 
 export function readConsent(identity: Identity, grants: Session['grants']) {
   return denyList.some((name) => matchesApp(identity, name))

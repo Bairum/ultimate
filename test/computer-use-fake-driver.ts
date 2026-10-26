@@ -32,6 +32,10 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
   const captures = new Map<string, Region[]>()
   const consumed = new Set<string>()
   let frontmostPid: number | undefined = 999
+  /** When set, `list_windows` filters these like cua-driver: `app` is a name substring or exact bundle id, `pid` exact. */
+  let windows:
+    | { window_id: number; title: string; app_name: string; pid: number; bundle?: string }[]
+    | undefined
   const labels = [
     ...Array.from({ length: 10 }, (_, i) => String(i)),
     'Multiply',
@@ -195,7 +199,26 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
           { name: 'Other', pid: 999, active: frontmostPid === 999 },
         ],
       }
-    if (tool === 'launch_app' || tool === 'list_windows') {
+    if (tool === 'list_windows' && windows) {
+      const app = typeof args.app === 'string' ? args.app.toLowerCase() : undefined
+      structured = {
+        windows: windows
+          .filter(
+            (w) =>
+              (app === undefined ||
+                w.app_name.toLowerCase().includes(app) ||
+                w.bundle?.toLowerCase() === app) &&
+              (args.pid === undefined || w.pid === args.pid),
+          )
+          // The driver reports no bundle id on window records.
+          .map((w) => ({
+            window_id: w.window_id,
+            title: w.title,
+            app_name: w.app_name,
+            pid: w.pid,
+          })),
+      }
+    } else if (tool === 'launch_app' || tool === 'list_windows') {
       structured = { windows: [{ window_id: 456, window_title: 'Calculator', pid: 123 }] }
     }
     return {
@@ -209,6 +232,9 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
     surface,
     set frontmostPid(pid: number | undefined) {
       frontmostPid = pid
+    },
+    set windows(list: typeof windows) {
+      windows = list
     },
     replyFor(tool: string, reply: Reply) {
       scripts.push({ tool, reply })
