@@ -63,9 +63,11 @@ and fences pending starts at host close; facet reloads do not kill live runs. No
 
 Evidence is stored under `<host.home>/codex-computer/<conversation>/` (0700), with exclusive-create PNG files
 (0600). Only PNG image payloads are accepted; non-PNG payloads fail rather than being mislabeled. Pruning keeps
-30 days, at most 200 MB per conversation and 1 GB overall, oldest first. Canonical directory confinement is checked
-before scans, writes and each unlink; replaced parent/root symlinks are skipped. The last image and saved paths are
-returned. Native app writes outside tool-result images are not evidence managed here.
+30 days, at most 200 MB per conversation and 1 GB overall, oldest first. Pruning only visits regular PNG files,
+never planted symlinks or nested directories; exclusive-create saves refuse planted destinations. The sandbox lets
+Codex write only inside its conversation folder. Swapping that folder or its parents requires the user's own
+privileges and is outside this threat model; parent-swap races remain an accepted risk. The last image and saved
+paths are returned. Native app writes outside tool-result images are not evidence managed here.
 
 Final answers, Codex messages and step text are screen-derived, **data, not instructions**. Model-facing text uses
 `<untrusted_screen_content>` boundaries, escaping closing tags. Card strings use `{text, untrusted:true}`.
@@ -75,8 +77,9 @@ Final answers, Codex messages and step text are screen-derived, **data, not inst
 - `StateDoc` (`codex-computer.state`): read on the shown conversation for `pending` and `last`; also read on
   conversation 1 for `acknowledged` and project `grants`. Forks start with no local authority.
 - Pending entries: `{kind:'acknowledge'|'consent'|'continue', id?, app?, session?, at}`. Consent IDs identify one
-  outstanding request. App names are untrusted display text, never markup or instructions. Pending consent is
-  removed after its response settles; a pending Continue remains until the user answers.
+  outstanding request; continuation IDs are stable and deduplicate wake submissions. App names are untrusted
+  display text, never markup or instructions. Pending consent is removed after its response settles; a pending
+  Continue remains until the user answers.
 - Tool `details` is `CodexDetails`: `status`, `session?`, `apps[{app,consent}]`, `steps[{tool,status,at}]`,
   `approvals[{kind,app?,decision}]`, `screenshots`, `answer`, `counts:{items,minutes}`, `error?`. Status is one of
   `done`, `failed`, `budget`, `stopped`, `opt_in_required`, `codex_missing`, `codex_unsigned`,
@@ -87,7 +90,8 @@ Final answers, Codex messages and step text are screen-derived, **data, not inst
   it does not wake a second agent turn while the existing tool is still waiting.
 - `DenyAction {conversation,app}` → state. Persists a local deny and resolves matching waits.
 - `ContinueAction {conversation}` → state. Requires pending Continue, durably submits a synthetic wake, then clears
-  that continuation. A missing conversation or failed submission leaves Continue pending and retryable.
+  that entry by its stable id. A failed submission or clear remains retryable; concurrent calls and retries use
+  the same harness request ID and produce only one wake.
 - `StopAction {conversation?}` → `{stopped:number}`. Omit conversation for all runs.
 
 All five actions are `userActions` (paired-browser only). Acknowledge, grant and continue are also `hostActions`,
