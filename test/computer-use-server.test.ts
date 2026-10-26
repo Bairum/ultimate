@@ -670,6 +670,71 @@ it('binds a window-only helper grant to its pid: a later same-named process need
   expect(await identityForPid(f.driver, 0)).toBeUndefined()
   expect((await check(0))?.refuse).toBe('app_identity')
 })
+it('gets a window-only helper from a cold consent request to a delivered act through the card’s grants', async () => {
+  const f = await fixture({
+    ask: async () => ({
+      model: 'fake',
+      usage: { inputTokens: 1 },
+      answers: { risk: { type: 'noul', noul: 0 } },
+    }),
+  })
+  f.fake.windows = [{ ...citrix, window_id: 7, title: 'Desktop' }]
+  await updateSession(f.host, f.root.id, (doc) => {
+    doc.task!.spec.scope.apps.push('Citrix Viewer')
+  })
+  // The fake's window state is Calculator's: report the helper's process instead.
+  const call = f.driver.call.bind(f.driver)
+  f.driver.call = async (tool, args, signal) => {
+    const reply = await call(tool, args, signal)
+    if (tool === 'get_window_state') Object.assign(reply.structured!, { pid: 29200, window_id: 7 })
+    return reply
+  }
+  const click = (element: string) =>
+    act(
+      f.host,
+      f.driver,
+      f.root.id,
+      `click-${element}`,
+      { app: 'Citrix Viewer', window: 7, actions: [{ kind: 'click', element }], foreground: true },
+      new AbortController().signal,
+    )
+  /** Press the consent card's “This conversation” button: exactly the args it sends for the newest request. */
+  const grantFromCard = async () => {
+    const request = (await readSession(f.host, f.root.id)).pending.at(-1)!
+    expect(request.kind).toBe('consent')
+    await actions.grant(
+      {
+        conversation: f.root.id,
+        app: request.app,
+        scope: 'conversation',
+        ...(request.pid === undefined ? {} : { pid: request.pid }),
+      },
+      f.ctx,
+    )
+    return request
+  }
+  // Cold: no observation is cached and the preflight contacts no Driver, so this request has no pid yet.
+  expect(data(await click('s1:1')).status).toBe('consent_required')
+  expect((await grantFromCard()).pid).toBeUndefined()
+  // The name-only grant passes the preflight; goal mode's observe finds the process and asks for it by pid.
+  expect(
+    data(
+      await f.invoke('computer_act', {
+        app: 'Citrix Viewer',
+        window: 7,
+        goal: { text: 'Press 1' },
+      }),
+    ).status,
+  ).toBe('consent_required')
+  expect(await grantFromCard()).toMatchObject({ app: 'Citrix Viewer', pid: 29200 })
+  // A helper never reports `active`, so acting in it always needs a takeover.
+  await actions.takeover({ conversation: f.root.id, app: 'Citrix Viewer' }, f.ctx)
+  const observed = data(
+    await f.invoke('computer_observe', { app: 'Citrix Viewer', window: 7, screenshot: 'never' }),
+  ) as unknown as Observation
+  expect(data(await click(`${observed.snapshot}:1`)).status).toBe('delivered')
+  expect(f.fake.calls.filter((c) => c.tool === 'click')).toHaveLength(1)
+})
 
 async function otherConversation(f: Awaited<ReturnType<typeof fixture>>) {
   const other = await f.harness.createConversation(

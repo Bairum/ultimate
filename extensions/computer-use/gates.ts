@@ -160,7 +160,9 @@ export const preflightGates: Gate[] = [
       ? { refuse: 'stopped', message: 'Computer use is stopped; ask the user to resume.' }
       : undefined,
   async (ctx) => {
-    // The preflight is only a negative grant check: it may refuse without contacting the Driver.
+    // The preflight is only a negative grant check: it may refuse without contacting the Driver, so a consent request
+    // names a pid only from a cached observation. Without one, a window-only helper's name-only grant passes here and
+    // the pid-bound refusal at dispatch (or goal mode's observe) records a request carrying the pid.
     // Authority at dispatch always uses the PID-resolved canonical name and bundle id below.
     if (!ctx.dispatch) {
       // A teach grant only lets a teach segment watch: it never authorises acting.

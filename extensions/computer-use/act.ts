@@ -344,11 +344,16 @@ export async function act(
       const consent = canonicalConsent(identity, await allGrants(host, conversation, latest))
       if (await isStopped(host, conversation, { session: latest, active, signal }))
         throw new ObservationUnavailable('stopped', 'Computer use is stopped.')
-      if (args.goal && consent !== 'granted')
-        throw new ObservationUnavailable(
-          consent === 'denied' ? 'denied' : 'consent_required',
-          'Canonical app consent is required before reading for Jev.',
-        )
+      if (args.goal && consent !== 'granted') {
+        const refusal = {
+          refuse: consent === 'denied' ? 'denied' : 'consent_required',
+          message: 'Canonical app consent is required before reading for Jev.',
+          ...(identity.pid === undefined ? {} : { pid: identity.pid }),
+        }
+        // A name-only grant passed the preflight; this request names the process a helper's grant must cover.
+        await pending(host, conversation, identity.name, refusal)
+        throw new ObservationUnavailable(refusal.refuse, refusal.message)
+      }
       observation = await observeWindow(
         driver,
         args.app,
