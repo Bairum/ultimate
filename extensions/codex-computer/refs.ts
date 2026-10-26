@@ -1,4 +1,4 @@
-/** Codex computer: card data and the paired-browser Stop. */
+/** Codex computer: card data, the paired-browser Stop and the user's guidance to a running turn. */
 import { actionRef, docRef } from '../../shared/extension-api.ts'
 
 export type UntrustedText = { text: string; untrusted: true }
@@ -22,6 +22,13 @@ export type CodexDetails = {
   screenshots: string[]
   answer: UntrustedText
   counts: { items: number; minutes: number }
+  /** Guidance sent into the run while it worked; `restarted` when Codex refused a steer and the turn was restarted with it. */
+  guidance: {
+    from: 'user' | 'operator'
+    text: string
+    at: number
+    delivery: 'steered' | 'restarted'
+  }[]
   error?: string
 }
 export type CodexState = { last?: CodexDetails }
@@ -32,3 +39,8 @@ export const StopAction = actionRef<{ conversation?: number }, { stopped: number
   'codex-computer',
   'stop',
 )
+/** `{conversation, text}` → `{delivery}`: send the user's guidance into that conversation's active Codex turn. User-only. */
+export const SteerAction = actionRef<
+  { conversation: number; text: string },
+  { delivery: 'steered' | 'restarted' }
+>('codex-computer', 'steer')

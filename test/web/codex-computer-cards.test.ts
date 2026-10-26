@@ -23,6 +23,7 @@ const details = (more: Partial<CodexDetails>): CodexDetails => ({
   screenshots: [],
   answer: u(''),
   counts: { items: 0, minutes: 0 },
+  guidance: [],
   ...more,
 })
 const render = (value: CodexDetails) =>
@@ -69,4 +70,25 @@ it('names a refusal in words with its code', () => {
   expect(html).toContain('Codex not signed by OpenAI')
   expect(html).toContain('codex_unsigned')
   expect(html).not.toContain('data-codex-request')
+})
+
+it('a running card offers Tell Codex… and shows a steer in its step stream', () => {
+  const html = renderToStaticMarkup(
+    createElement(OperateCard, {
+      call: {
+        id: 'c1',
+        name: 'codex_operate',
+        args: { brief: 'Read the ward list' },
+        status: 'running',
+        output:
+          'Codex session started.\nStep 1: <untrusted_screen_content>\ncua_repl/js\n</untrusted_screen_content>\nGuidance from the user: Maximise Citrix first\n',
+        images: [],
+        diagnostics: [],
+      } as unknown as ToolCallView,
+      conversation: 7,
+    }),
+  )
+  expect(html).toContain('placeholder="Tell Codex…"')
+  expect(html).toContain('↳ Guidance from the user: Maximise Citrix first')
+  expect(html).toContain('1 step<')
 })

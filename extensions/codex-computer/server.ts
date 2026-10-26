@@ -1,15 +1,16 @@
-/** Signed Codex app-server bridge: enabling it is the consent; optional project app list; 8 h ceiling and Stop. */
+/** Signed Codex app-server bridge: enabling it is the consent; optional project app list and codex.md; 8 h ceiling, Stop and steering. */
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
-import { access, realpath } from 'node:fs/promises'
+import type { ConversationId } from '@earendil-works/pi-durable'
+import { access, readFile, realpath } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { exec } from '../../lib/exec.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { StopAction } from './refs.ts'
+import { SteerAction, StopAction } from './refs.ts'
 import type { CodexDetails } from './refs.ts'
 import { State, updateState, validate, untrusted } from './state.ts'
 import { operate, spawnServer } from './app-server.ts'
@@ -17,7 +18,33 @@ import type { Run, Spawn } from './app-server.ts'
 import { resultsDirectory, pruneEvidence } from './evidence.ts'
 
 export const docs = [State]
-export const userActions = ['stop']
+export const userActions = ['stop', 'steer']
+/** Standing instructions longer than this are cut: they ride along with every new thread. */
+export const INSTRUCTIONS_LIMIT = 8 * 1024
+/** The trusted project's `.ultimate/codex.md`, capped; `undefined` when absent, empty or the project is untrusted. */
+async function instructions(host: ExtensionHost) {
+  if ((await host.projectSetup()).decision !== true) return undefined
+  const value = await readFile(join(host.projectRoot, '.ultimate', 'codex.md'), 'utf8').catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error
+      return ''
+    },
+  )
+  const bytes = Buffer.from(value.trim())
+  if (!bytes.length) return undefined
+  return bytes.length > INSTRUCTIONS_LIMIT
+    ? `${bytes
+        .subarray(0, INSTRUCTIONS_LIMIT)
+        .toString('utf8')
+        .replace(/\uFFFD$/, '')}\n[cut at 8 KB]`
+    : bytes.toString('utf8')
+}
+/** The live run in a conversation, or a clear refusal. */
+function liveRun(host: ExtensionHost, conversation: number) {
+  const run = [...runtime(host).live].find((candidate) => candidate.conversation === conversation)
+  if (!run) throw new Error(`No Codex run is active in conversation ${conversation}`)
+  return run
+}
 export type Dependencies = { spawn: Spawn; codesign: (path: string) => Promise<void> }
 function runtime(host: ExtensionHost) {
   return host.resource('codex-computer.runs', () => {
@@ -118,6 +145,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
             screenshots: [],
             answer: { text: '', untrusted: true },
             counts: { items: 0, minutes: 0 },
+            guidance: [],
           }
           const refuse = async (status: CodexDetails['status'], error: string) => {
             details.status = status
@@ -131,7 +159,13 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
           const tools = new Set(
             [...agent.tools, ...agent.callable, ...agent.deferred].map((tool) => tool.name),
           )
-          if (tools.size !== 2 || !tools.has('codex_operate') || !tools.has('read'))
+          // codex_steer may ride along: it reaches only this conversation's own subagents' runs.
+          const permitted = new Set(['codex_operate', 'read', 'codex_steer'])
+          if (
+            !tools.has('codex_operate') ||
+            !tools.has('read') ||
+            [...tools].some((name) => !permitted.has(name))
+          )
             return refuse(
               'declined',
               'Delegate to codex-operator with exactly codex_operate and read tools',
@@ -187,6 +221,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
             directory,
             appDirectory: dirname(app),
             brief: args.brief,
+            ...(await instructions(host).then((text) => (text ? { instructions: text } : {}))),
             ...(args.session ? { session: args.session } : {}),
             ...(args.model ? { model: args.model } : {}),
             ...(apps ? { apps } : {}),
@@ -199,6 +234,37 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
             doc.last = value.details
           })
           return result(value.details, value.image)
+        },
+      }),
+      defineTool({
+        name: 'codex_steer',
+        replay: 'unsafe',
+        description:
+          "Send guidance into the active Codex turn of a codex-operator subagent you started (its conversation id), while codex_operate runs there. Codex reads it as the operator's guidance, not screen content. Refused for a conversation you do not own or one with no active turn.",
+        parameters: Type.Object({
+          conversation: Type.Integer({ minimum: 1 }),
+          text: Type.String({ minLength: 1, maxLength: 4000 }),
+        }),
+        async execute(args, api) {
+          const target = await host
+            .harness()
+            .commit((tx) => tx.conversation(args.conversation as ConversationId), context)
+          if (target?.owner?.conversationId !== api.conversationId)
+            throw new Error(
+              `Conversation ${args.conversation} is not a subagent of this conversation; only its owner can steer it`,
+            )
+          const delivery = await liveRun(host, args.conversation).steer(args.text, 'operator')
+          return {
+            output: [
+              {
+                type: 'text' as const,
+                text:
+                  delivery === 'steered'
+                    ? 'Codex received the guidance in its current turn.'
+                    : 'Codex refused a live steer, so its turn was interrupted and restarted on the same thread with the guidance.',
+              },
+            ],
+          }
         },
       }),
     ],
@@ -224,5 +290,11 @@ export const actions = {
         stopped++
       }
     return { stopped }
+  }),
+  steer: implementAction(SteerAction, async (args, { host }) => {
+    validate(args)
+    if (typeof args.text !== 'string' || !args.text.trim() || args.text.length > 4000)
+      throw new Error('text must be 1 to 4000 characters')
+    return { delivery: await liveRun(host, args.conversation).steer(args.text.trim(), 'user') }
   }),
 }

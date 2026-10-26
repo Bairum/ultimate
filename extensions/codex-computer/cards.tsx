@@ -3,7 +3,7 @@
  * screenshots, and what it says it saw. Everything Codex writes is screen-derived: shown as plain text with the
  * untrusted marker, never as Markdown or our own words.
  */
-import { CircleStopIcon, LoaderCircleIcon } from 'lucide-react'
+import { CircleStopIcon, LoaderCircleIcon, SendIcon } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Shimmer } from '@/components/ai/shimmer'
@@ -19,7 +19,7 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { api, cn, errorMessage, useConversation, useToolDuration } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
-import { StopAction } from './refs.ts'
+import { SteerAction, StopAction } from './refs.ts'
 import type { CodexDetails } from './refs.ts'
 
 type Status = CodexDetails['status']
@@ -70,22 +70,24 @@ function Untrusted() {
 
 /**
  * Progress while a call runs, read from its streamed output: `Step n: <tool>` lines and Codex's own messages (both
- * inside the untrusted boundary).
+ * inside the untrusted boundary), and our own `Guidance from the …:` lines, in the order they happened.
  */
 function liveOf(output: string) {
-  const steps: string[] = []
+  const steps: { tool?: string; guidance?: string }[] = []
   let message = ''
   const blocks = output.split(new RegExp(`(${OPEN}[\\s\\S]*?${CLOSE})`))
   for (let index = 0; index < blocks.length; index++) {
     const block = blocks[index]
     if (block.startsWith(OPEN)) {
       const inner = unwrap(block).text
-      if (/Step \d+: $/.test(blocks[index - 1] ?? '')) steps.push(inner)
+      if (/Step \d+: $/.test(blocks[index - 1] ?? '')) steps.push({ tool: inner })
       else message = inner
       continue
     }
+    for (const line of block.split('\n'))
+      if (line.startsWith('Guidance from the ')) steps.push({ guidance: line })
   }
-  return { steps, message }
+  return { steps, message, tools: steps.filter((step) => step.tool).length }
 }
 
 /** A step's outcome as one mark, the same glyphs as the computer-use step lists. */
@@ -130,6 +132,79 @@ function StopButton({ conversation }: { conversation: number }) {
       )}
       Stop
     </button>
+  )
+}
+
+/** "Tell Codex…" under a running call: sends the user's guidance into the active turn. */
+function SteerBox({ conversation }: { conversation: number }) {
+  const [value, setValue] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const send = () => {
+    const guidance = value.trim()
+    if (!guidance || busy) return
+    setBusy(true)
+    setError('')
+    api
+      .action(SteerAction, { conversation, text: guidance })
+      .then(() => setValue(''))
+      .catch((reason: unknown) => setError(errorMessage(reason)))
+      .finally(() => setBusy(false))
+  }
+  return (
+    <div className="border-t border-border/60 px-2.5 py-1.5">
+      <form
+        className="flex items-center gap-1.5"
+        onSubmit={(event) => {
+          event.preventDefault()
+          send()
+        }}
+      >
+        <input
+          aria-label="Tell Codex"
+          className="min-w-0 flex-1 bg-transparent text-[12px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
+          data-codex-steer
+          disabled={busy}
+          maxLength={4000}
+          onChange={(event) => setValue(event.target.value)}
+          placeholder="Tell Codex…"
+          value={value}
+        />
+        <button
+          aria-label="Send to Codex"
+          className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-default disabled:opacity-40"
+          disabled={busy || !value.trim()}
+          type="submit"
+        >
+          {busy ? (
+            <LoaderCircleIcon className="size-3 motion-safe:animate-spin" />
+          ) : (
+            <SendIcon className="size-3" />
+          )}
+        </button>
+      </form>
+      {error && <p className="mt-1 text-[11px] text-error">{error}</p>}
+    </div>
+  )
+}
+
+/** Guidance sent while the run worked, in our words: shown as such, never as Codex's. */
+function Guidance({ guidance }: { guidance: CodexDetails['guidance'] }) {
+  if (!guidance?.length) return null
+  return (
+    <ToolSection label="Guidance">
+      {guidance.map((item, index) => (
+        <p className="break-words whitespace-pre-wrap text-muted-foreground" key={index}>
+          <span className="text-foreground/80">{item.from === 'user' ? 'You' : 'Operator'}:</span>{' '}
+          {item.text}
+          {item.delivery === 'restarted' && (
+            <span className="ml-1.5 text-[10.5px] text-warning">
+              steer refused, turn restarted with it
+            </span>
+          )}
+        </p>
+      ))}
+    </ToolSection>
   )
 }
 
@@ -320,9 +395,7 @@ export function OperateCard({
         meta={
           <>
             {status && <span className={toneClass[tone]}>{words}</span>}
-            {running && live && live.steps.length > 0 && (
-              <span>{plural(live.steps.length, 'step')}</span>
-            )}
+            {running && live && live.tools > 0 && <span>{plural(live.tools, 'step')}</span>}
             {details && details.steps.length > 0 && (
               <span>{plural(details.steps.length, 'step')}</span>
             )}
@@ -351,15 +424,30 @@ export function OperateCard({
         )}
         {live && (
           <ToolSection>
-            {live.steps.slice(-5).map((tool, index, shown) => (
-              <div className="flex min-w-0 items-baseline gap-2 leading-[1.7]" key={index}>
-                <span className="w-5 shrink-0 text-right text-muted-foreground/60 tabular-nums">
-                  {live.steps.length - shown.length + index + 1}
-                </span>
-                <Mark status={index === shown.length - 1 ? 'running' : 'completed'} />
-                <span className="min-w-0 flex-1 truncate text-foreground/90">{tool}</span>
-              </div>
-            ))}
+            {live.steps.slice(-5).map((step, index, shown) =>
+              step.guidance ? (
+                <p
+                  className="truncate text-foreground/80"
+                  data-codex-guidance
+                  key={index}
+                  title={step.guidance}
+                >
+                  ↳ {step.guidance}
+                </p>
+              ) : (
+                <div className="flex min-w-0 items-baseline gap-2 leading-[1.7]" key={index}>
+                  <span className="w-5 shrink-0 text-right text-muted-foreground/60 tabular-nums">
+                    {
+                      live.steps
+                        .slice(0, live.steps.length - shown.length + index + 1)
+                        .filter((s) => s.tool).length
+                    }
+                  </span>
+                  <Mark status={index === shown.length - 1 ? 'running' : 'completed'} />
+                  <span className="min-w-0 flex-1 truncate text-foreground/90">{step.tool}</span>
+                </div>
+              ),
+            )}
             {live.message && (
               <p className="truncate text-muted-foreground" title={live.message}>
                 “{live.message}”
@@ -367,11 +455,12 @@ export function OperateCard({
               </p>
             )}
             <Shimmer className="text-[12px]">
-              {live.steps.length ? 'Codex is working…' : 'starting Codex…'}
+              {live.tools ? 'Codex is working…' : 'starting Codex…'}
             </Shimmer>
           </ToolSection>
         )}
         {status && status !== 'done' && <Problem error={details?.error} status={status} />}
+        {details && <Guidance guidance={details.guidance} />}
         {details && <Answer answer={details.answer.text} />}
         {details && <Apps apps={details.apps} />}
         {details && <Shots call={call} saved={details.screenshots} />}
@@ -382,6 +471,7 @@ export function OperateCard({
         {call.status === 'error' && <ToolOutput isError output={call.output} />}
         <ToolDiagnostics diagnostics={call.diagnostics} />
       </ToolContent>
+      {running && conversation !== undefined && <SteerBox conversation={conversation} />}
       {details && (details.session || details.counts.items > 0) && (
         <Footer>
           <span>steps {details.counts.items}</span>

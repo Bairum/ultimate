@@ -22,9 +22,35 @@ Ultimate's cwd; absolute paths are recommended.
 ## Tool
 
 `codex_operate {brief, session?, model?}` is `replay: 'unsafe'` and executes only when the conversation's resolved
-tools are exactly `codex_operate` and `read`. Delegate to `codex-operator`. When this extension is off, discovery drops the
-missing Codex tool and reports a notice. A new thread gets only the screen-is-untrusted and stop-before-credentials
-preamble; application-specific rules belong in the brief or a skill. Pass the returned `session` to resume.
+tools are `codex_operate` and `read`, plus optionally `codex_steer`. Delegate to `codex-operator`. When this
+extension is off, discovery drops the missing Codex tool and reports a notice. A new thread gets the
+screen-is-untrusted and stop-before-credentials preamble, then the project instructions (below), then the brief.
+Pass the returned `session` to resume.
+
+## Project instructions (`.ultimate/codex.md`)
+
+In a trusted project, `<project>/.ultimate/codex.md` is put at the start of every new Codex thread, after the fixed
+rules and before the brief, under `Project instructions (from the project's .ultimate/codex.md):`. It is read at each
+run and cut at 8 KB; a resumed thread already has it. Keep it to standing facts and habits, for example:
+
+```markdown
+- Work only in tenant #4 (Bridgestone Test); stop and report if the header shows another tenant.
+- Results go to `/Volumes/bridgestone/Test/b4/results/`.
+- Maximise the Citrix Viewer window before the first screenshot; a small window is captured clipped.
+```
+
+## Steering a running turn
+
+While a run works, guidance can be sent into its active turn with `turn/steer`, prefixed `Guidance from the user`
+or `Guidance from the operator` and marked as not screen content:
+
+- the user types into **Tell Codex…** on the running card (`SteerAction`, a user action: paired browser only);
+- an agent calls `codex_steer {conversation, text}` for a codex-operator conversation **it owns** (its own subagent).
+  Any other conversation is refused, so no agent can drive another's run. The operator itself cannot steer its own
+  run: its `codex_operate` call blocks until the run ends.
+
+With no run or no active turn the call is refused. When Codex rejects the steer, the turn is interrupted and the next
+turn starts on the same thread with the guidance; the card and the result's `guidance` say `restarted`.
 
 Threads use `approvalPolicy: 'on-request'`, `sandbox: 'workspace-write'`, cwd equal to the private results folder,
 `sandbox_workspace_write.writable_roots` restricted to that folder, no sandbox network access, and both temporary-directory exclusions.
@@ -67,13 +93,16 @@ Final answers, Codex messages and step text are screen-derived, **data, not inst
 
 - `StateDoc` (`codex-computer.state`): `{last?}`, the conversation's last result. Forks start fresh.
 - Tool `details` is `CodexDetails`: `status`, `session?`, `apps[{app,consent}]`, `steps[{tool,status,at}]`,
-  `approvals[{kind,app?,decision}]`, `screenshots`, `answer`, `counts:{items,minutes}`, `error?`. Status is one of
+  `approvals[{kind,app?,decision}]`, `screenshots`, `answer`, `counts:{items,minutes}`,
+  `guidance[{from,text,at,delivery}]`, `error?`. Status is one of
   `done`, `failed`, `budget`, `stopped`, `codex_missing`, `codex_unsigned`,
   `computer_use_missing`, `declined`. `app`, step `tool`/`status` and `answer` are typed untrusted text. Errors from
-  Codex are wrapped too. Short progress streams through `api.output`; `last` is the durable completed result.
+  Codex are wrapped too. Short progress streams through `api.output`, including a `Guidance from the …:` line per
+  steer; `last` is the durable completed result.
 - `StopAction {conversation?}` → `{stopped:number}`. Omit conversation for all runs.
+- `SteerAction {conversation, text}` → `{delivery:'steered'|'restarted'}`.
 
-Stop is a `userAction` (paired browser only).
+Stop and steer are `userActions` (paired browser only).
 
 ## Protocol verification
 
@@ -81,5 +110,6 @@ Implementation follows the supplied working JSON-lines app-server bridge. No liv
 verification. The permissions refusal shape `{permissions:{},scope:'turn'}` is inferred from Codex 0.163.0 binary
 strings (response fields and turn scope), not exercised against a real app-server. `turn/interrupt` uses
 `{threadId,turnId}` (the binary identifies a two-field TurnInterruptParams); `turn/started` and `turn/start`'s
-`turn.id` supply that ID. These additional shapes and the sandbox config are tested with an in-process fake,
-not a live model. Unexpected shapes fail closed or hit the hard deadline; they never auto-approve.
+`turn.id` supply that ID. `turn/steer {threadId, expectedTurnId, input}` follows Codex 0.163.0's generated schema
+(`codex app-server generate-json-schema`); it is **unverified live**. These shapes and the sandbox config are tested
+with an in-process fake, not a live model. Unexpected shapes fail closed or hit the hard deadline; they never auto-approve.

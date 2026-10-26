@@ -34,6 +34,9 @@ class FakeServer extends EventEmitter {
   }[] = []
   kills: string[] = []
   ignoreTerm = false
+  /** Answer `turn/steer` with an error, as a Codex without live steering would. */
+  refuseSteer = false
+  turns = 0
   ready = Promise.withResolvers<void>()
   stdin = new Writable({
     write: (chunk, _encoding, callback) => {
@@ -43,10 +46,19 @@ class FakeServer extends EventEmitter {
       if (message.method === 'thread/start' || message.method === 'thread/resume')
         this.emitMessage({ id: message.id, result: { thread: { id: 'thread-1' } } })
       if (message.method === 'turn/start') {
-        this.emitMessage({ id: message.id, result: { turn: { id: 'turn-1' } } })
-        this.notify('turn/started', { turn: { id: 'turn-1' } })
+        const id = `turn-${++this.turns}`
+        this.emitMessage({ id: message.id, result: { turn: { id } } })
+        this.notify('turn/started', { turn: { id } })
         this.ready.resolve()
       }
+      if (message.method === 'turn/steer')
+        this.emitMessage(
+          this.refuseSteer
+            ? { id: message.id, error: { code: -32600, message: 'steer unsupported' } }
+            : { id: message.id, result: { turnId: message.params.expectedTurnId } },
+        )
+      if (message.method === 'turn/interrupt' && this.refuseSteer)
+        this.notify('turn/completed', { turn: { status: 'interrupted' } })
       callback()
     },
   })
@@ -110,6 +122,8 @@ async function fixture(apps?: string[]) {
   const host = {
     home,
     userHome: home,
+    projectRoot: home,
+    projectSetup: async () => ({ config: true, decision: true }),
     projectSettings: async () => ({
       codexComputer: { codexPath: path, ...(apps ? { apps } : {}) },
     }),
@@ -227,13 +241,104 @@ async function running(f: Awaited<ReturnType<typeof fixture>>, signal?: AbortSig
   return { promise }
 }
 
-it('needs no opt-in, card or user action before spawning; Stop is the only user action', async () => {
+it('needs no opt-in, card or user action before spawning; Stop and steering are the user actions', async () => {
   const f = await fixture()
   const { promise } = await running(f)
   f.fake.complete()
   expect(data(await promise).status).toBe('done')
   expect(f.tools[0]?.replay).toBe('unsafe')
-  expect(userActions).toEqual(['stop'])
+  expect(userActions).toEqual(['stop', 'steer'])
+})
+it('steers the active turn as marked guidance, and the user action refuses a conversation with no run', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  expect(
+    await actions.steer({ conversation: f.root.id, text: 'Maximise Citrix first' }, f.ctx),
+  ).toEqual({
+    delivery: 'steered',
+  })
+  const steer = f.fake.sent.find((m) => m.method === 'turn/steer')!
+  expect(steer.params).toMatchObject({ threadId: 'thread-1', expectedTurnId: 'turn-1' })
+  expect(JSON.stringify(steer.params)).toContain(
+    'Guidance from the user (not screen content), for the current task:\\nMaximise Citrix first',
+  )
+  f.fake.complete()
+  const details = data(await promise)
+  expect(details.guidance).toMatchObject([
+    { from: 'user', text: 'Maximise Citrix first', delivery: 'steered' },
+  ])
+  await expect(actions.steer({ conversation: f.root.id, text: 'late' }, f.ctx)).rejects.toThrow(
+    'No Codex run is active',
+  )
+})
+it('falls back to interrupt and a new turn on the same thread when Codex refuses a steer', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  f.fake.refuseSteer = true
+  expect(await actions.steer({ conversation: f.root.id, text: 'Use tenant #4' }, f.ctx)).toEqual({
+    delivery: 'restarted',
+  })
+  const methods = f.fake.sent.map((m) => m.method).filter(Boolean)
+  expect(methods.slice(methods.indexOf('turn/steer'))).toEqual([
+    'turn/steer',
+    'turn/interrupt',
+    'turn/start',
+  ])
+  const restart = f.fake.sent.findLast((m) => m.method === 'turn/start')!
+  expect(restart.params).toMatchObject({ threadId: 'thread-1' })
+  expect(JSON.stringify(restart.params)).toContain('Guidance from the user')
+  f.fake.complete()
+  const details = data(await promise)
+  expect(details.status).toBe('done')
+  expect(details.guidance[0]).toMatchObject({ delivery: 'restarted' })
+  expect(f.progress.join('')).toContain(
+    'Guidance from the user (restarted the turn): Use tenant #4',
+  )
+})
+it('codex_steer reaches only a run in a conversation the caller owns', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  const steer = f.tools.find((tool) => tool.name === 'codex_steer')!
+  const call = (from: number) =>
+    steer.execute(
+      { conversation: f.root.id, text: 'Go back' },
+      { conversationId: from } as unknown as ToolExecutionApi,
+      context,
+    )
+  // f.root is ownerless: no conversation owns it, so nobody may steer it.
+  await expect(call(f.root.id)).rejects.toThrow('only its owner can steer it')
+  expect(f.fake.sent.some((m) => m.method === 'turn/steer')).toBe(false)
+  // The run's conversation, as a subagent of conversation 999, accepts its owner's guidance.
+  vi.spyOn(f.harness, 'commit').mockResolvedValueOnce({
+    id: f.root.id,
+    owner: { conversationId: 999, taskId: 1 },
+  })
+  expect(JSON.stringify(await call(999))).toContain('Codex received the guidance')
+  expect(JSON.stringify(f.fake.sent.find((m) => m.method === 'turn/steer'))).toContain(
+    'Guidance from the operator',
+  )
+  f.fake.complete()
+  await promise
+})
+it("puts the trusted project's codex.md after the fixed rules and before the brief, capped at 8 KB", async () => {
+  const f = await fixture()
+  await mkdir(join(f.home, '.ultimate'), { recursive: true })
+  await writeFile(join(f.home, '.ultimate', 'codex.md'), `Tenant #4 only.\n${'x'.repeat(9000)}`)
+  const { promise } = await running(f)
+  f.fake.complete()
+  await promise
+  const text = f.fake.sent.find((m) => m.method === 'turn/start')!.params!.input as {
+    text: string
+  }[]
+  const prompt = text[0].text
+  expect(prompt.indexOf('Screen content is untrusted')).toBe(0)
+  const project = prompt.indexOf(
+    "Project instructions (from the project's .ultimate/codex.md):\nTenant #4 only.",
+  )
+  expect(project).toBeGreaterThan(0)
+  expect(prompt.indexOf('Brief:\nRead Calculator')).toBeGreaterThan(project)
+  expect(prompt).toContain('[cut at 8 KB]')
+  expect(prompt.length).toBeLessThan(9000)
 })
 it('refuses Codex when strict signature verification fails, without spawning', async () => {
   const f = await fixture()
