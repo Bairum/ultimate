@@ -4,24 +4,9 @@
  */
 import type { JsonValue } from '@earendil-works/chord'
 import { defineApi } from '../../shared/extension-api.ts'
+import type { ClassifyAnswer, ClassifyQuestion } from './refs.ts'
 
-/** One question: its instructions and the criteria for each choice, outcome or score. */
-export type ClassifyQuestion =
-  | { type: 'choice'; instructions: JsonValue; criteria: Record<string, JsonValue> }
-  | { type: 'noul'; instructions: JsonValue; criteria?: { true?: JsonValue; false?: JsonValue } }
-  | { type: 'score'; instructions: JsonValue; criteria: JsonValue[] }
-
-/** The answer to one question, with its confidence. */
-export type ClassifyAnswer =
-  | { type: 'choice'; choice: string; confidence: number; probabilities: Record<string, number> }
-  | { type: 'noul'; noul: number }
-  | {
-      type: 'score'
-      score: number
-      confidence: number
-      probabilities: Record<string, number>
-      legend: Record<string, JsonValue>
-    }
+export type { ClassifyAnswer, ClassifyQuestion } from './refs.ts'
 
 /** Every answer by question id, the model that gave them and the input tokens used. */
 export type ClassifyResult = {
@@ -31,7 +16,10 @@ export type ClassifyResult = {
 }
 
 export type ClassifyService = {
-  /** Answer `questions` about `state` in one request; throws without `TYPESAFE_API_KEY` or on a malformed response. */
+  /**
+   * Answer `questions` about `state`: cached answers locally, the rest in one request; throws without
+   * `TYPESAFE_API_KEY` (when anything is uncached) or on a malformed response.
+   */
   ask(
     request: { state: JsonValue; questions: Record<string, ClassifyQuestion> },
     signal: AbortSignal,
