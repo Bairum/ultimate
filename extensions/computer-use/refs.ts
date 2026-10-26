@@ -279,6 +279,8 @@ export type Teach = {
     endsAt: number
     status: TeachStatus
     endedBy?: 'unavailable'
+    /** Why the recorder stopped early, when it failed (a `recorder_failed` drop), for the card and the agent. */
+    failure?: string
     frames: FrameMeta[]
     narration: { at: number; entry: number }[]
     dropped: { reason: string; at: number }[]

@@ -125,6 +125,13 @@ export function createFakeDriver(options: { version?: string; name?: string } = 
         structured.elements = []
         structured.tree_markdown = ''
       }
+      // Like cua-driver 0.37.0: without the tree, no elements and no `truncated`, only `elements_complete: false`.
+      if (args.include_accessibility_tree === false) {
+        structured.elements = []
+        structured.tree_markdown = ''
+        structured.elements_complete = false
+        delete structured.truncated
+      }
       if (surface.thumbnail) {
         structured.window_bounds = { x: 0, y: 0, width: 113, height: 50 }
         structured.screenshot_width = 226

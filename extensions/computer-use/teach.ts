@@ -489,6 +489,9 @@ export async function launchRecorder(host: ExtensionHost, conversation: number) 
             runtime(host).clock?.now() ?? Date.now(),
           )
           doc.segment.dropped.push({ reason: 'recorder_failed', at: Date.now() })
+          // The card shows why; a message that could carry a credential cue is not kept.
+          const message = (error instanceof Error ? error.message : String(error)).slice(0, 300)
+          doc.segment.failure = credentialCue(message) ? 'the recorder stopped' : message
         }
       })
     })
@@ -1025,7 +1028,11 @@ export async function teachingFrames(host: ExtensionHost, conversation: number) 
   }
   return {
     output,
-    structuredOutput: { status: doc.segment.status, frames: doc.segment.frames.length },
+    structuredOutput: {
+      status: doc.segment.status,
+      frames: doc.segment.frames.length,
+      ...(doc.segment.failure ? { failure: doc.segment.failure } : {}),
+    },
     details: json({ teach: teachDetails(doc) }),
   }
 }

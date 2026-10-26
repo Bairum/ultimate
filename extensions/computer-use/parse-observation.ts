@@ -65,7 +65,11 @@ export function parseObservation(result: DriverResult, app: string): Observation
     title: string(data.window_title, 'window_title'),
     snapshot: string(data.snapshot_id, 'snapshot_id'),
     tree: string(data.tree_markdown, 'tree_markdown'),
-    truncated: boolean(data.truncated, 'truncated'),
+    // Without the tree (teach and practice captures) the Driver sends only `elements_complete: false`.
+    truncated:
+      data.truncated === undefined && typeof data.elements_complete === 'boolean'
+        ? !data.elements_complete
+        : boolean(data.truncated, 'truncated'),
     elements,
     ...(typeof data.degraded === 'boolean' ? { degraded: data.degraded } : {}),
     ...(typeof data.is_on_screen === 'boolean' ? { isOnScreen: data.is_on_screen } : {}),
