@@ -312,7 +312,9 @@ export function callTrace(file: string | (() => string), retention = { rows: 200
       polls.clear()
       try {
         database = new DatabaseSync(typeof file === 'string' ? file : file())
+        // Commits need not fsync: a crash may lose the newest trace rows, never corrupt the file.
         database.exec(`PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS calls (id TEXT PRIMARY KEY, parent TEXT, trace TEXT NOT NULL, at REAL NOT NULL,
   ms REAL NOT NULL, caller TEXT NOT NULL, callee TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL,
   ok INTEGER NOT NULL, error TEXT, args TEXT, result TEXT, conversation INTEGER, task INTEGER, entry INTEGER);
