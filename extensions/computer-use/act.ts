@@ -21,6 +21,7 @@ import { stepTarget } from './policy.ts'
 import { redactor } from './content.ts'
 import { path } from './parse-observation.ts'
 import { ObservationUnavailable } from './tool-helpers.ts'
+import { selectWindows } from './windows.ts'
 import { runGoal } from './jev.ts'
 import type { Candidate } from './jev.ts'
 import type {
@@ -297,8 +298,10 @@ export async function act(
       !args.goal &&
       (!observation ||
         (args.window !== undefined &&
-          args.window !== observation.windowId &&
-          !observation.title.includes(String(args.window))))
+          !selectWindows(
+            [{ window_id: observation.windowId, title: observation.title }],
+            args.window,
+          ).length))
     ) {
       await changeTask(host, conversation, (current) =>
         task.markInterrupted(current, 'crash', [], Date.now()),

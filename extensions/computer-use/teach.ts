@@ -8,22 +8,35 @@ import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from
 import { basename, dirname, join } from 'node:path'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { TeachDoc } from './refs.ts'
-import type { Teach, TeachStart, TaughtStep, ComputerDetails, FrameRef } from './refs.ts'
+import type {
+  Teach,
+  TeachStart,
+  TeachWindow,
+  TaughtStep,
+  ComputerDetails,
+  FrameRef,
+} from './refs.ts'
 import { driverFor, runtime, settings } from './runtime.ts'
 import { isStopped, readSession, updateSession } from './session.ts'
+import type { Session } from './session.ts'
 import {
   allGrants,
   canonicalConsent,
   consumeCanonical,
   describeCandidates,
   identityCandidates,
+  identityForPid,
+  listApps,
   matchesApp,
   resolveIdentity,
 } from './gates.ts'
+import type { Identity } from './gates.ts'
 import { parseWindow, windowFor } from './observe.ts'
-import { consequential } from './policy.ts'
+import { consequential, denyList } from './policy.ts'
 import { redactor, untrusted } from './content.ts'
-import { json, result } from './tool-helpers.ts'
+import { ObservationUnavailable, json, object, result } from './tool-helpers.ts'
+import { normalizeTitle, selectWindows, titleMatches, windowTitle } from './windows.ts'
+import type { PickableWindow } from './refs.ts'
 import {
   saveEvidence,
   teachDirectory,
@@ -70,14 +83,24 @@ export async function updateTeach(
   await host.harness().commit(async (tx) => {
     const doc = await tx.doc(ComputerTeach, conversation as ConversationId)
     change(doc)
-    if (doc.segment && teaching(doc))
-      live = { app: doc.segment.app, window: doc.segment.window, bundle: doc.segment.bundle }
+    if (doc.segment && teaching(doc)) live = segmentWindows(doc.segment)
   }, context)
   const state = recorders(host)
   if (live) state.live.set(conversation, live)
   else state.live.delete(conversation)
 }
 export const teaching = (doc: Teach) => ['recording', 'paused'].includes(doc.segment?.status ?? '')
+/** Every window a segment watches; segments started before multi-window watch their one window. */
+export const segmentWindows = (segment: NonNullable<Teach['segment']>): TeachWindow[] =>
+  segment.windows ?? [
+    {
+      app: segment.app,
+      ...(segment.bundle ? { bundle: segment.bundle } : {}),
+      window: segment.window,
+      windowTitle: segment.windowTitle ?? '',
+      ...(segment.onceGrantAt !== undefined ? { onceGrantAt: segment.onceGrantAt } : {}),
+    },
+  ]
 const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim() && v.length <= 2000
 const strings = (v: unknown) => Array.isArray(v) && v.length <= 50 && v.every(text)
 const obj = (v: unknown): v is Record<string, unknown> =>
@@ -171,7 +194,7 @@ export function validateSteps(
 }
 
 type Recorder = { abort: AbortController; done: Promise<void> }
-type LiveSegment = Pick<NonNullable<Teach['segment']>, 'app' | 'window' | 'bundle'>
+type LiveSegment = TeachWindow[]
 function recorders(host: ExtensionHost) {
   return host.resource('computer-use.teach', () => {
     const state = {
@@ -191,11 +214,20 @@ function recorders(host: ExtensionHost) {
 export async function captureTeach(
   driver: Driver,
   app: string,
-  window: string | number,
+  window: string | number | undefined,
   dimension: number,
   signal: AbortSignal,
 ) {
-  const target = await windowFor(driver, app, window, signal)
+  return captureWindow(driver, await windowFor(driver, app, window, signal), app, dimension, signal)
+}
+/** A screenshot of one listed window, without an accessibility tree. */
+export async function captureWindow(
+  driver: Driver,
+  target: { pid: number; window_id: number; isOnScreen?: boolean },
+  app: string,
+  dimension: number,
+  signal: AbortSignal,
+) {
   const observation = parseWindow(
     await driver.call(
       'get_window_state',
@@ -214,12 +246,15 @@ export async function captureTeach(
   observation.isOnScreen ??= target.isOnScreen
   return observation
 }
-async function consent(
-  host: ExtensionHost,
-  conversation: number,
-  app: string,
-  segment?: Teach['segment'],
-) {
+/** Whether `identity` may be observed. Start consumes once; only the segment holding that grant keeps observing. */
+function granted(identity: Identity, grants: Session['grants'], onceGrantAt?: number) {
+  const authorized = grants.map((g) =>
+    g.scope === 'once' && g.at === onceGrantAt ? { ...g, used: false } : g,
+  )
+  // The canonical name lets the start dialog grant the real app, even when a pid was typed.
+  return canonicalConsent(identity, authorized) === 'granted'
+}
+async function consent(host: ExtensionHost, conversation: number, app: string) {
   if (await isStopped(host, conversation)) throw new Error('Computer use is stopped')
   const driver = await driverFor(host)
   const identity = await resolveIdentity(driver, app)
@@ -227,15 +262,135 @@ async function consent(
     throw new Error(
       `app_identity: no single running app matches "${app}". Closest: ${describeCandidates(await identityCandidates(driver, app))}`,
     )
-  const grants = await allGrants(host, conversation, await readSession(host, conversation))
-  // Start consumes once; only this segment may keep observing under that consumed grant.
-  const authorized = grants.map((g) =>
-    g.scope === 'once' && g.at === segment?.onceGrantAt ? { ...g, used: false } : g,
+  if (
+    !granted(identity, await allGrants(host, conversation, await readSession(host, conversation)))
   )
-  // The canonical name lets the start dialog grant the real app, even when a pid was typed.
-  if (canonicalConsent(identity, authorized) !== 'granted')
     throw new Error(`consent_required: ${identity.name}`)
   return { driver, app: identity.name, identity }
+}
+/** Every window record of every app and helper process, from one unfiltered listing. */
+async function allWindows(driver: Driver, signal?: AbortSignal) {
+  const listed = await driver.call('list_windows', {}, signal)
+  if (!listed.ok) throw new Error(listed.text || 'Could not list windows')
+  return Array.isArray(listed.structured?.windows) ? listed.structured.windows.map(object) : []
+}
+/** The record of window `id` and the identity of its owning pid, so two processes sharing a name stay apart. */
+async function windowOwner(
+  driver: Driver,
+  records: Record<string, unknown>[],
+  id: number,
+  signal?: AbortSignal,
+) {
+  const record = records.find((w) => Number(w.window_id) === id)
+  const identity =
+    typeof record?.pid === 'number' ? await identityForPid(driver, record.pid, signal) : undefined
+  return {
+    record,
+    identity,
+    target: {
+      pid: Number(record?.pid),
+      window_id: id,
+      isOnScreen: typeof record?.is_on_screen === 'boolean' ? record.is_on_screen : undefined,
+    },
+  }
+}
+/**
+ * Recheck one watched window before a capture: still owned by its app, and that app still granted. A window that
+ * is gone reads as not visible, so the other windows keep recording.
+ */
+async function watchWindow(
+  host: ExtensionHost,
+  conversation: number,
+  window: TeachWindow,
+  signal?: AbortSignal,
+) {
+  if (await isStopped(host, conversation)) throw new Error('Computer use is stopped')
+  const driver = await driverFor(host)
+  const { record, identity, target } = await windowOwner(
+    driver,
+    await allWindows(driver, signal),
+    window.window,
+    signal,
+  )
+  if (!record) throw new ObservationUnavailable('window_not_visible', 'The window is gone.')
+  if (
+    !identity ||
+    !matchesApp(identity, window.app) ||
+    (window.bundle && identity.bundle !== window.bundle)
+  )
+    throw new Error(`app_identity: window ${window.window} no longer belongs to ${window.app}`)
+  const grants = await allGrants(host, conversation, await readSession(host, conversation))
+  if (!granted(identity, grants, window.onceGrantAt))
+    throw new Error(`consent_required: ${identity.name}`)
+  return { driver, target }
+}
+/** macOS's own window-only processes (overlays, the Dock, menu extras): never something a lesson shows. */
+const systemOwners = new Set([
+  'windowmanager',
+  'window server',
+  'dock',
+  'systemuiserver',
+  'control center',
+  'controlcenter',
+  'notification center',
+  'notificationcenter',
+  'spotlight',
+])
+/**
+ * The windows the start dialog offers: one unfiltered `list_windows` (every app and helper process) joined with
+ * `list_apps` for bundle ids, frontmost first. Untitled and tiny windows (badges, icons), macOS's own overlays and
+ * deny-listed apps are left out; so is a window-only owner sharing a listed app's name, which `identityForPid` would
+ * refuse.
+ */
+export async function pickableWindows(
+  host: ExtensionHost,
+  conversation: number,
+): Promise<PickableWindow[]> {
+  const driver = await driverFor(host)
+  const [{ apps }, listed] = await Promise.all([listApps(driver), driver.call('list_windows', {})])
+  if (!listed.ok) throw new Error(listed.text || 'Could not list windows')
+  const grants = await allGrants(host, conversation, await readSession(host, conversation))
+  const records = Array.isArray(listed.structured?.windows)
+    ? listed.structured.windows.map(object)
+    : []
+  const names = new Set(apps.map((a) => (typeof a.name === 'string' ? a.name.toLowerCase() : '')))
+  const windows: (PickableWindow & { z: number })[] = []
+  for (const w of records) {
+    const bounds = object(w.bounds)
+    const title = windowTitle(w)
+    if (
+      typeof w.pid !== 'number' ||
+      w.pid <= 0 ||
+      typeof w.app_name !== 'string' ||
+      !Number.isSafeInteger(Number(w.window_id)) ||
+      !normalizeTitle(title) ||
+      Number(bounds.width) < 100 ||
+      Number(bounds.height) < 60
+    )
+      continue
+    const owner = apps.find((a) => a.pid === w.pid)
+    if (!owner && names.has(w.app_name.toLowerCase())) continue
+    if (!owner && systemOwners.has(w.app_name.toLowerCase())) continue
+    const identity = owner
+      ? {
+          name: typeof owner.name === 'string' ? owner.name : w.app_name,
+          ...(typeof owner.bundle_id === 'string' ? { bundle: owner.bundle_id } : {}),
+        }
+      : { name: w.app_name }
+    if (denyList.some((name) => matchesApp(identity, name))) continue
+    windows.push({
+      app: identity.name,
+      ...(identity.bundle ? { bundle: identity.bundle } : {}),
+      pid: w.pid,
+      window: Number(w.window_id),
+      title,
+      onScreen: w.is_on_screen !== false,
+      currentSpace: w.on_current_space !== false,
+      consent: canonicalConsent(identity, grants),
+      z: typeof w.z_index === 'number' ? w.z_index : -1,
+    })
+  }
+  return windows.toSorted((a, b) => b.z - a.z).map(({ z: _z, ...w }) => w)
 }
 export async function teachingBlocked(
   host: ExtensionHost,
@@ -245,11 +400,14 @@ export async function teachingBlocked(
   const state = recorders(host)
   if (state.starting.has(conversation) || state.live.has(conversation)) return 'teaching'
   if (target)
-    for (const [id, segment] of state.live) {
+    for (const [id, windows] of state.live) {
       if (
         id !== conversation &&
-        (matchesApp({ name: segment.app, bundle: segment.bundle }, target.app) ||
-          Number(target.window) === segment.window)
+        windows.some(
+          (w) =>
+            matchesApp({ name: w.app, bundle: w.bundle }, target.app) ||
+            Number(target.window) === w.window,
+        )
       )
         return 'teaching_elsewhere'
     }
@@ -268,11 +426,17 @@ export async function launchRecorder(host: ExtensionHost, conversation: number) 
     if (!Number.isFinite(pollMs) || pollMs < 100 || pollMs > 10000)
       throw new Error('computerUse.teach.pollMs must be 100–10000')
     const directory = teachDirectory(host.home, conversation, segment.id)
+    const windows = segmentWindows(segment)
     await recordTeaching({
       driver: await driverFor(host),
-      capture: async (dimension) => {
-        const { driver } = await consent(host, conversation, segment.app, segment)
-        return captureTeach(driver, segment.app, segment.window, dimension, abort.signal)
+      capture: async (index, dimension) => {
+        const { driver, target } = await watchWindow(
+          host,
+          conversation,
+          windows[index],
+          abort.signal,
+        )
+        return captureWindow(driver, target, windows[index].app, dimension, abort.signal)
       },
       read: () => readTeach(host, conversation),
       update: (change) => updateTeach(host, conversation, change),
@@ -342,12 +506,7 @@ export async function openTeaching(host: ExtensionHost) {
   const state = recorders(host)
   state.live.clear()
   for (const { id, doc } of documents)
-    if (doc.segment && teaching(doc))
-      state.live.set(id, {
-        app: doc.segment.app,
-        bundle: doc.segment.bundle,
-        window: doc.segment.window,
-      })
+    if (doc.segment && teaching(doc)) state.live.set(id, segmentWindows(doc.segment))
   for (const { id, doc } of documents)
     if (doc.segment)
       protectTeachReview(host.home, id, doc.segment.id, doc.segment.status === 'review')
@@ -365,14 +524,34 @@ export async function openTeaching(host: ExtensionHost) {
     else await launchRecorder(host, id)
   }
 }
+const picked = (v: unknown) =>
+  obj(v) &&
+  only(v, ['app', 'window', 'match']) &&
+  text(v.app) &&
+  Number.isSafeInteger(v.window) &&
+  Number(v.window) > 0 &&
+  (v.match === undefined || (text(v.match) && v.match.length <= 200))
+/**
+ * Start watching `windows` (or the legacy `app` and optional `window`): each window is found by id in one
+ * unfiltered listing and its app resolved from the owning pid, so two processes sharing a name stay apart. Every
+ * distinct app needs consent; a once-grant is consumed per app and recorded on that app's windows.
+ */
 export async function startTeaching(host: ExtensionHost, args: TeachStart) {
   const state = recorders(host)
   if (
-    !text(args.app) ||
     !text(args.title) ||
-    (args.window !== undefined &&
-      typeof args.window !== 'string' &&
-      (!Number.isSafeInteger(args.window) || args.window < 1)) ||
+    (args.windows === undefined
+      ? !text(args.app) ||
+        (args.window !== undefined &&
+          typeof args.window !== 'string' &&
+          (!Number.isSafeInteger(args.window) || args.window < 1))
+      : args.app !== undefined ||
+        args.window !== undefined ||
+        !Array.isArray(args.windows) ||
+        !args.windows.length ||
+        args.windows.length > 6 ||
+        !args.windows.every(picked) ||
+        new Set(args.windows.map((w) => w.window)).size !== args.windows.length) ||
     !timeout(args.minutes ?? 5) ||
     (args.minutes ?? 5) < 1 ||
     (args.minutes ?? 5) > 10
@@ -386,26 +565,84 @@ export async function startTeaching(host: ExtensionHost, args: TeachStart) {
     if (runtime(host).busy || runtime(host).active.size > 0)
       throw new Error('Computer act is running')
     await stopRecorder(host, args.conversation)
-    const { driver, app, identity } = await consent(host, args.conversation, args.app)
-    const target = await windowFor(driver, app, args.window)
+    let entries = args.windows
+    if (!entries) {
+      const { driver, app } = await consent(host, args.conversation, args.app!)
+      entries = [{ app, window: (await windowFor(driver, app, args.window)).window_id }]
+    }
+    if (await isStopped(host, args.conversation)) throw new Error('Computer use is stopped')
+    const driver = await driverFor(host)
+    const records = await allWindows(driver)
+    const apps = new Map<string, Identity>()
+    const windows: (TeachWindow & { key: string })[] = []
+    for (const entry of entries) {
+      const { record, identity } = await windowOwner(driver, records, entry.window)
+      if (!record || !identity)
+        throw new Error(
+          `app_identity: no single running app owns window ${entry.window}. Closest: ${describeCandidates(await identityCandidates(driver, entry.app))}`,
+        )
+      if (!matchesApp(identity, entry.app))
+        throw new Error(
+          `app_identity: window ${entry.window} belongs to ${identity.name}, not ${entry.app}`,
+        )
+      const title = windowTitle(record)
+      if (entry.match !== undefined && !titleMatches(title, entry.match))
+        throw new Error(`window_title: window ${entry.window} no longer shows "${entry.match}"`)
+      const key = JSON.stringify([identity.name, identity.bundle])
+      apps.set(key, identity)
+      const fragment = entry.match ?? title
+      // A saved lesson finds the window by this fragment among its app's windows: it must name only this one.
+      const siblings = records.filter(
+        (w) =>
+          w.pid === record.pid ||
+          (typeof w.app_name === 'string' && matchesApp(identity, w.app_name)),
+      )
+      const found = normalizeTitle(fragment) ? selectWindows(siblings, fragment) : [record]
+      if (found.length !== 1 || found[0] !== record)
+        throw new Error(
+          `window_title: "${fragment}" also matches another ${identity.name} window; make it more specific`,
+        )
+      windows.push({
+        key,
+        app: identity.name,
+        ...(identity.bundle ? { bundle: identity.bundle } : {}),
+        window: entry.window,
+        windowTitle: credentialCue(fragment) ? '' : fragment,
+      })
+    }
+    const grants = await allGrants(
+      host,
+      args.conversation,
+      await readSession(host, args.conversation),
+    )
+    for (const identity of apps.values())
+      if (!granted(identity, grants)) throw new Error(`consent_required: ${identity.name}`)
     const now = runtime(host).clock?.now() ?? Date.now()
-    let onceGrantAt: number | undefined
+    const onceGrants = new Map<string, number>()
     await updateSession(host, args.conversation, (doc) => {
-      const consumed = consumeCanonical(identity, doc.grants)
-      onceGrantAt = consumed.find((g, i) => g.scope === 'once' && g.used && !doc.grants[i].used)?.at
-      doc.grants = consumed
+      for (const [key, identity] of apps) {
+        const consumed = consumeCanonical(identity, doc.grants)
+        const at = consumed.find((g, i) => g.scope === 'once' && g.used && !doc.grants[i].used)?.at
+        if (at !== undefined) onceGrants.set(key, at)
+        doc.grants = consumed
+      }
     })
+    const watched: TeachWindow[] = windows.map(({ key, ...w }) =>
+      onceGrants.has(key) ? { ...w, onceGrantAt: onceGrants.get(key) } : w,
+    )
+    const [first] = watched
     await updateTeach(host, args.conversation, (doc) => {
       if (runtime(host).busy || runtime(host).active.size > 0)
         throw new Error('Computer act is running')
       if (doc.segment) protectTeachReview(host.home, args.conversation, doc.segment.id, false)
       doc.segment = {
         id: randomUUID(),
-        app,
-        ...(identity.bundle ? { bundle: identity.bundle } : {}),
-        ...(onceGrantAt !== undefined ? { onceGrantAt } : {}),
-        window: target.window_id,
-        windowTitle: credentialCue(target.title) ? '' : target.title,
+        app: first.app,
+        ...(first.bundle ? { bundle: first.bundle } : {}),
+        ...(first.onceGrantAt !== undefined ? { onceGrantAt: first.onceGrantAt } : {}),
+        window: first.window,
+        windowTitle: first.windowTitle,
+        windows: watched,
         title: args.title,
         startedAt: now,
         endsAt: now + (args.minutes ?? 5) * 60000,
@@ -482,7 +719,11 @@ export async function resumeTeaching(host: ExtensionHost, conversation: number) 
     throw new Error('Computer act is running')
   if (doc.segment.endsAt <= (runtime(host).clock?.now() ?? Date.now()))
     return finishTeaching(host, conversation)
-  await consent(host, conversation, doc.segment.app, doc.segment)
+  // A hidden or closed window is not an authority change; the recorder skips it.
+  for (const window of segmentWindows(doc.segment))
+    await watchWindow(host, conversation, window).catch((error: unknown) => {
+      if (!(error instanceof ObservationUnavailable)) throw error
+    })
   await stopRecorder(host, conversation)
   await updateTeach(host, conversation, (d) => {
     if (d.segment?.status !== 'paused' || d.segment.id !== doc.segment!.id)
@@ -648,7 +889,12 @@ export async function saveTeaching(
     await writeFile(join(staged, 'SKILL.md'), markdown, { mode: 0o600 })
     for (const s of steps) {
       const frame = doc.segment.frames.find((f) => f.id === s.frame)!
-      frames[frame.id] = { id: frame.id, width: frame.width, height: frame.height }
+      frames[frame.id] = {
+        id: frame.id,
+        width: frame.width,
+        height: frame.height,
+        ...(frame.window ? { window: frame.window } : {}),
+      }
       if (frame.file) {
         const relative = `frames/${s.n}-${frame.id}.png`
         let copied = true
@@ -675,6 +921,12 @@ export async function saveTeaching(
               ? ''
               : (doc.segment.windowTitle ?? ''),
           },
+          // Found again by app and title fragment, never by the live window ids.
+          windows: segmentWindows(doc.segment).map((w) => ({
+            app: w.app,
+            bundle: w.bundle ?? '',
+            titleSubstring: credentialCue(w.windowTitle) ? '' : w.windowTitle,
+          })),
           frames,
           sha256: hash,
           savedAt: Date.now(),

@@ -103,16 +103,17 @@ narration entry references and dropped-frame reasons. Status is `recording`, `pa
 
 User-only actions (all return the teaching document except save):
 
-| Action        | Arguments                                                          | Effect                                                                               |
-| ------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| `teachStart`  | `{conversation, app, window?, minutes?: 1–10, title}`              | Consent-checked observation, default five minutes; refuses an active segment or act. |
-| `teachStop`   | `{conversation}`                                                   | Stop recording and move to drafting.                                                 |
-| `teachPause`  | `{conversation}`                                                   | Stop captures, retaining the original deadline.                                      |
-| `teachResume` | `{conversation}`                                                   | Recheck consent and resume before the deadline.                                      |
-| `teachEdit`   | `{conversation, steps}`                                            | Validate and replace the draft, without writing files.                               |
-| `teachSave`   | `{conversation, scope: 'project' or 'personal', name, overwrite?}` | Save reviewed approved steps; returns `{path, notes}`.                               |
-| `teachReopen` | `{conversation, scope, name}`                                      | Load a saved lesson into non-recording review; clear all approvals.                  |
-| `teachReject` | `{conversation}`                                                   | Delete the segment's private frames immediately.                                     |
+| Action         | Arguments                                                                                           | Effect                                                                                    |
+| -------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `teachStart`   | `{conversation, app, window?, minutes?: 1–10, title}` or `{conversation, windows, minutes?, title}` | Consent-checked observation, default five minutes; refuses an active segment or act.      |
+| `teachWindows` | `{conversation}`                                                                                    | Read-only: titled windows of every app and helper process, frontmost first, with consent. |
+| `teachStop`    | `{conversation}`                                                                                    | Stop recording and move to drafting.                                                      |
+| `teachPause`   | `{conversation}`                                                                                    | Stop captures, retaining the original deadline.                                           |
+| `teachResume`  | `{conversation}`                                                                                    | Recheck consent and resume before the deadline.                                           |
+| `teachEdit`    | `{conversation, steps}`                                                                             | Validate and replace the draft, without writing files.                                    |
+| `teachSave`    | `{conversation, scope: 'project' or 'personal', name, overwrite?}`                                  | Save reviewed approved steps; returns `{path, notes}`.                                    |
+| `teachReopen`  | `{conversation, scope, name}`                                                                       | Load a saved lesson into non-recording review; clear all approvals.                       |
+| `teachReject`  | `{conversation}`                                                                                    | Delete the segment's private frames immediately.                                          |
 
 Start, resume, reopen and save are also host-only actions: they grant observation or read/write files. Reopen additionally requires a user browser context.
 Stop and hardStop end every active teaching segment. Both `computer_act` and `computer_apps launch` refuse `teaching`
@@ -121,12 +122,24 @@ while recording **or paused**. Other conversations targeting the lesson's app or
 segment only; later segments require a new grant. Resume rechecks revocations and cannot undo Stop/Reject.
 Start and resume refuse any in-flight computer act across the project, checked again at commit. Live teaching
 guards use an in-memory index rebuilt on open, not a scan of conversation documents on each act. Window ids
-match numerically, including string arguments such as `"456"`.
+match numerically, including string arguments such as `"456"`; title fragments match case-insensitively with
+invisible characters removed and whitespace collapsed (`windows.ts`), so `microsoft edge` finds Citrix's
+`Microsoft\u200B Edge`. Exactly one window must match.
+
+`windows` (from the start dialog's picker) lists 1–6 distinct windows, `{app, window, match?}`, of one or several
+apps or processes. Each is found by id in one unfiltered `list_windows` and its app resolved from the owning pid,
+so two processes sharing a name stay apart; `match` (≤ 200 characters, default the whole title) must be in the
+live title, must not also be in another window of that app (`window_title` refuses it), and is what a saved
+lesson finds the window by. Every distinct app needs consent: the first missing
+one refuses `consent_required: <app>` before anything starts, and a once-grant is consumed per app. The segment
+stores them in `windows` (the first mirrored in `app`/`window`/`windowTitle`); every window counts for
+`teaching_elsewhere`. The legacy `{app, window?}` form writes a one-window `windows`.
 No keystroke, mouse or accessibility-tree recording is collected. The recorder
-polls captures of at most 800 pixels every `computerUse.teach.pollMs` (default 500; allowed 100–10000),
-and records a full capture plus text/icon OCR only after two unchanged polls following a change.
-Hidden windows drop `window_not_visible`; transient screenshot failures drop `observation_unavailable`.
-Only these two failures keep polling, bounded by the original deadline. Twenty unavailable reads in a row
+polls captures of at most 800 pixels of each window every `computerUse.teach.pollMs` (default 500; allowed 100–10000),
+and records a full capture plus text/icon OCR only after two unchanged polls following a change; frames of
+windows after the first carry `window` (their index). Each capture rechecks that window's owner and its app's consent.
+A window that is hidden, on another Space or gone is skipped while another is readable. Only a poll with no
+readable window drops `window_not_visible` or `observation_unavailable`; twenty such polls in a row
 end the segment in `drafting` with `endedBy: 'unavailable'`. Other OCR/schema failures end in drafting.
 No focus takeover is performed.
 
@@ -157,8 +170,10 @@ at most 64 characters; existing skills require `overwrite: true`. Saved steps ar
 The skill body starts with the untrusted-data notice. Only action kinds and validated param names accompany
 plain Markdown step numbers; every screen/model string is inside the exact `procedure.json` fenced data,
 with backticks escaped as `\u0060`. Logins use `type_secret` params.
-`teach.json` pins the title, canonical app/bundle, window id/title substring, frame mapping, procedure SHA256
-and save time. Credential-cued window titles are withheld; their numeric window binding remains available.
+`teach.json` pins the title, canonical app/bundle, window id/title substring, frame mapping (with each frame's
+`window` index), procedure SHA256 and save time, plus `windows: [{app, bundle, titleSubstring}]`. Saved lessons
+find their windows by app and title fragment, never by live ids. Credential-cued window titles are withheld; only
+the first window keeps its saved numeric id as a fallback.
 Saves stage outside discovery in `.ultimate/.skill-staging/`; unfinished staging older than 24 hours is
 cleaned on save, and on open only after teaching has been used in this project. Absent staging is skipped.
 Cleanup and save reject symlink/non-directory ancestors and destinations, and require the staging realpath
@@ -183,7 +198,10 @@ Optional consequential entries must equal whole normalized labels of server-flag
 other entries return `consequential_not_taught` at both practice start and practice replan, without changing the task.
 The pending task always needs user confirmation.
 
-The preset binds the taught app/window/actions, 2 × the steps and 15 minutes. More than 100 steps returns
+The preset binds the taught app/window/actions, 2 × the steps and 15 minutes. With several windows the scope lists
+every lesson app, but the run approval stays single-app: it binds the first app, and omits `window` when that app
+has several lesson windows; acts in other apps go through the ordinary gates without it. Each check captures its step frame's
+window, found by title fragment, after checking that window's owner and consent. More than 100 steps returns
 `practice_budget`. Upload/select become click; `type_secret` returns `unsupported_until_secrets`, never literal typing.
 Steps without expected labels return `expect_required`; reopen them to add OCR expectations before practice.
 After confirmation, run `{action: 'check', step, phase: 'before'}`, one explicit action from a fresh observation,

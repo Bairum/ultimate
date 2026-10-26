@@ -5,7 +5,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import type { FrameMeta, FrameRef, Teach, TeachPractice, TaughtStep } from './refs.ts'
 import type { Driver, Observation, Predicate, TaskSpec } from './types.ts'
 import {
-  captureTeach,
+  captureWindow,
   readTeach,
   savedSkillMarkdown,
   teaching,
@@ -17,7 +17,8 @@ import {
 import { taskTool, intentInConversation } from './task-tool.ts'
 import { readSession, updateSession, isStopped } from './session.ts'
 import { runtime, settings, setup } from './runtime.ts'
-import { allGrants, readConsent, matchesApp, resolveIdentity } from './gates.ts'
+import { allGrants, readConsent, matchesApp, identityForPid } from './gates.ts'
+import { windowFor } from './observe.ts'
 import {
   clock,
   containsLabel,
@@ -84,6 +85,7 @@ export async function readProcedure(
     title: string
     app: { name: string; bundle: string }
     window: { id: number; titleSubstring: string }
+    windows?: { app: string; bundle: string; titleSubstring: string }[]
     frames: Record<string, FrameRef>
     sha256: string
     savedAt: number
@@ -110,6 +112,28 @@ export async function readProcedure(
     manifest.sha256 !== createHash('sha256').update(procedure).digest('hex')
   )
     throw new Error('Invalid teach manifest')
+  const windows = manifest.windows
+  if (
+    windows !== undefined &&
+    (!Array.isArray(windows) ||
+      !windows.length ||
+      windows.length > 6 ||
+      !windows.every(
+        (w) =>
+          !!w &&
+          typeof w.app === 'string' &&
+          !!w.app.trim() &&
+          typeof w.bundle === 'string' &&
+          typeof w.titleSubstring === 'string' &&
+          w.titleSubstring.length <= 2000 &&
+          !credentialCue(w.titleSubstring),
+      ) ||
+      // The first window mirrors the single-window fields older readers use.
+      windows[0].app !== manifest.app.name ||
+      windows[0].bundle !== manifest.app.bundle ||
+      windows[0].titleSubstring !== manifest.window.titleSubstring)
+  )
+    throw new Error('Invalid teach windows')
   const frames: Record<string, FrameRef> = {}
   for (const [id, frame] of Object.entries(manifest.frames)) {
     if (
@@ -119,10 +143,19 @@ export async function readProcedure(
       !Number.isSafeInteger(frame.width) ||
       frame.width < 1 ||
       !Number.isSafeInteger(frame.height) ||
-      frame.height < 1
+      frame.height < 1 ||
+      (frame.window !== undefined &&
+        (!Number.isSafeInteger(frame.window) ||
+          frame.window < 1 ||
+          frame.window >= (windows?.length ?? 1)))
     )
       throw new Error('Invalid taught frame')
-    frames[id] = { id, width: frame.width, height: frame.height }
+    frames[id] = {
+      id,
+      width: frame.width,
+      height: frame.height,
+      ...(frame.window !== undefined ? { window: frame.window } : {}),
+    }
     if (frame.file !== undefined) {
       if (typeof frame.file !== 'string' || !/^frames\/\d+-[a-zA-Z0-9.-]+\.png$/.test(frame.file))
         throw new Error('Unsafe taught image')
@@ -150,7 +183,14 @@ export async function readProcedure(
     markdown !== savedSkillMarkdown(skill, manifest.title, steps, procedure.trimEnd())
   )
     throw new Error('Re-save the reviewed procedure')
-  return { manifest, frames, steps }
+  const lesson = windows ?? [
+    {
+      app: manifest.app.name,
+      bundle: manifest.app.bundle,
+      titleSubstring: manifest.window.titleSubstring,
+    },
+  ]
+  return { manifest, frames, steps, windows: lesson }
 }
 export function practiceCriteria(steps: TaughtStep[]): TaskSpec['criteria'] {
   return steps.map((step) => ({
@@ -234,7 +274,7 @@ export async function startPractice(
         message: 'Re-save this reviewed lesson with teachSave before practice.',
       })
     }
-    const { manifest, frames, steps } = saved
+    const { manifest, frames, steps, windows } = saved
     if (steps.some((s) => s.action === 'type_secret'))
       return result({
         status: 'unsupported_until_secrets',
@@ -282,16 +322,22 @@ export async function startPractice(
     const actions = [...new Set(steps.map((s) => actionKind(s.action)))].filter(
       (kind) => kind !== 'type_secret',
     )
+    // The run approval covers one app: with several windows of it there is no single window to bind.
+    const sameApp = windows.filter(
+      (w) => w.app === manifest.app.name && w.bundle === manifest.app.bundle,
+    )
     const spec = {
       id: `practice-${randomUUID()}`,
       intent: manifest.title,
       goal: manifest.title,
       criteria: practiceCriteria(steps),
-      scope: { apps: [manifest.app.name], actions, params, consequential },
+      scope: { apps: [...new Set(windows.map((w) => w.app))], actions, params, consequential },
       approval: {
         app: manifest.app.bundle || manifest.app.name,
         appName: manifest.app.name,
-        window: manifest.window.titleSubstring || manifest.window.id,
+        ...(sameApp.length > 1
+          ? {}
+          : { window: manifest.window.titleSubstring || manifest.window.id }),
         pixel: true as const,
         actions,
         steps: steps.length * 2,
@@ -313,6 +359,7 @@ export async function startPractice(
         app: manifest.app.name,
         bundle: manifest.app.bundle,
         window: manifest.window,
+        windows,
         frames,
         steps,
         checks: [],
@@ -400,29 +447,42 @@ export function beforePractice(
     ),
   )
 }
+/** Capture lesson window `index`, found by its title fragment, after checking its owner's identity and consent. */
 async function checkedCapture(
   host: ExtensionHost,
   conversation: number,
   practice: TeachPractice,
+  index: number,
   driver: Driver,
   signal: AbortSignal,
 ) {
   const session = await readSession(host, conversation)
-  const identity = await resolveIdentity(driver, practice.app, signal)
+  const window =
+    practice.windows?.[index] ??
+    (index
+      ? undefined
+      : {
+          app: practice.app,
+          bundle: practice.bundle,
+          titleSubstring: practice.window.titleSubstring,
+        })
+  if (!window) throw new Error('Practice window is missing from the lesson')
+  // Only the first window falls back to its saved id; an untitled other window must be its app's only one.
+  const target = await windowFor(
+    driver,
+    window.app,
+    window.titleSubstring || (index ? undefined : practice.window.id),
+    signal,
+  )
+  const identity = await identityForPid(driver, target.pid, signal)
   if (
     !identity ||
-    !matchesApp(identity, practice.app) ||
-    (practice.bundle && identity.bundle !== practice.bundle) ||
+    !matchesApp(identity, window.app) ||
+    (window.bundle && identity.bundle !== window.bundle) ||
     readConsent(identity, await allGrants(host, conversation, session)) !== 'granted'
   )
     throw new Error('Practice app consent or identity changed')
-  const observation = await captureTeach(
-    driver,
-    practice.app,
-    practice.window.titleSubstring || practice.window.id,
-    1568,
-    signal,
-  )
+  const observation = await captureWindow(driver, target, window.app, 1568, signal)
   requireVisible({ ...observation, degraded: true })
   if (!observation.capture || !observation.image) throw new Error('Practice requires a screenshot')
   const parsed = await parseRegions(
@@ -460,7 +520,14 @@ async function performCheck(
   do {
     if (signal.aborted || (await isStopped(host, conversation)))
       return { passed: false, status: 'stopped' }
-    latest = await checkedCapture(host, conversation, practice, driver, signal)
+    latest = await checkedCapture(
+      host,
+      conversation,
+      practice,
+      practice.frames[step.frame]?.window ?? 0,
+      driver,
+      signal,
+    )
     const { observation, regions } = latest
     passed =
       phase === 'before'
@@ -627,7 +694,7 @@ export async function reopenTeaching(
       ['active', 'awaiting_confirmation', 'stopped', 'paused_by_user'].includes(current.status)
     )
       throw new Error('Finish the practice partial or blocked before reopening')
-    const { manifest, frames, steps } = await readProcedure(host, args.name, args.scope)
+    const { manifest, frames, steps, windows } = await readProcedure(host, args.name, args.scope)
     const at = Date.now()
     await updateTeach(host, args.conversation, (doc) => {
       if (teaching(doc) || state.active.size)
@@ -641,6 +708,13 @@ export async function reopenTeaching(
         bundle: manifest.app.bundle,
         window: manifest.window.id,
         windowTitle: manifest.window.titleSubstring,
+        // A review never records: only the first window keeps a saved id, the others are found by title.
+        windows: windows.map((w, i) => ({
+          app: w.app,
+          ...(w.bundle ? { bundle: w.bundle } : {}),
+          window: i ? 0 : manifest.window.id,
+          windowTitle: w.titleSubstring,
+        })),
         title: manifest.title,
         startedAt: at,
         endsAt: at,
