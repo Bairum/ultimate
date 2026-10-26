@@ -328,7 +328,7 @@ it('saves private PNG evidence in the conversation folder and returns the last i
   expect(f.spawn.mock.calls[0]).toBeDefined()
 })
 
-it('saves JPEG evidence with its real type and skips an unknown image without failing the run', async () => {
+it('saves JPEG evidence once with its real type and skips an unknown image without failing the run', async () => {
   const f = await fixture()
   const { promise } = await running(f)
   const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46]).toString(
@@ -338,13 +338,10 @@ it('saves JPEG evidence with its real type and skips an unknown image without fa
     { type: 'image', mimeType: 'image/jpeg', data: jpeg },
     { type: 'image', mimeType: 'image/gif', data: Buffer.from('GIF89a').toString('base64') },
   ]
-  f.fake.item({
-    type: 'mcpToolCall',
-    server: 'computer-use',
-    tool: 'get_app_state',
-    status: 'completed',
-    result: { content },
-  })
+  const step = { type: 'mcpToolCall', server: 'computer-use', tool: 'js', status: 'completed' }
+  f.fake.item({ ...step, result: { content } })
+  // Bridgestone: Codex re-captured an unchanged screen; the bytes were saved twice.
+  f.fake.item({ ...step, result: { content: [content[0]] } })
   f.fake.complete()
   const value = await promise
   const details = data(value)
