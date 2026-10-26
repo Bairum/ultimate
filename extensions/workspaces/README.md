@@ -29,7 +29,7 @@ refuses worktrees outside one folder, or a team that keeps every tree in one pla
 ```
 
 - `path` is where each checkout goes. `{name}` is `ult-<hash>-<conversationId>` (the lander's is `ult-lander-<hash>`),
-  and a leading `~/` is expanded; the result must be absolute. Without it, checkouts go under `<home>/worktrees` and
+  and a leading `~/` is expanded; the template must contain `{name}` and the result must be absolute. Without it, checkouts go under `<home>/worktrees` and
   `<home>/lander`. Checkouts outside `<home>/worktrees` are not counted in the workspace disk stats.
 - `add` creates the checkout instead of `git worktree add`. It runs with `sh` in the source checkout, with `{name}`
   and `{path}` filled in as single shell words, and must leave a worktree of the source registered at `{path}`;

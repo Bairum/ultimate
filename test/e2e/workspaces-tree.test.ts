@@ -45,6 +45,9 @@ test('a configured path names checkouts, expands ~, resolves symlinks and must b
   await expect(treePath({ isolates: { worktree: { path: 'trees/{name}' } } }, 'a')).rejects.toThrow(
     'must be absolute',
   )
+  await expect(
+    treePath({ isolates: { worktree: { path: join(root, 'code') } } }, 'a'),
+  ).rejects.toThrow('must contain {name}')
   await expect(treePath({ isolates: { worktree: { path: 1 } } }, 'a')).rejects.toThrow(
     'isolates.worktree.path must be a string',
   )

@@ -35,6 +35,9 @@ export const treeName = (branch: string) => `ult-${branch.replace(/^ultimate\//,
 export async function treePath(settings: JsonObject, name: string) {
   const template = layout(settings).path
   if (template === undefined) return undefined
+  // Without `{name}` every checkout shares one folder, which the lander clears when it is not its registered worktree.
+  if (!template.includes('{name}'))
+    throw new Error(`isolates.worktree.path must contain {name}: ${template}`)
   const filled = template.replaceAll('{name}', name)
   const path = filled.startsWith('~/') ? join(homedir(), filled.slice(2)) : filled
   if (!isAbsolute(path))
