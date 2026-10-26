@@ -98,7 +98,7 @@ it('stops a remote read when its call is cancelled', async () => {
       ],
     } as unknown as ExtensionHost
     const controller = new AbortController()
-    const read = readProject(host, 'poe2-rust', 'trace', [], controller.signal)
+    const read = readProject(host, { project: 'poe2-rust' }, 'trace', [], controller.signal)
     await reached
     controller.abort()
     await expect(read).rejects.toThrow('poe2-rust on this machine did not answer')
@@ -138,16 +138,18 @@ it('reads a project on another machine through the register, with the cloud toke
       projects: async () => [{ name: 'ultimate', current: true }],
     } as unknown as ExtensionHost
     // Without remotes or cloud backups other machines are unknown.
-    await expect(readProject(host, 'poe2-rust', 'trace', [])).rejects.toThrow(
+    await expect(readProject(host, { project: 'poe2-rust' }, 'trace', [])).rejects.toThrow(
       'reached only through remotes in user settings or cloud backups',
     )
     process.env.ULTIMATE_CLOUD_URL = cloud.url.replace('http', 'ws')
     process.env.ULTIMATE_CLOUD_TOKEN = 'token'
-    expect(await readProject(host, 'poe2-rust', 'trace', [])).toEqual({ value: ['from haza-pc'] })
+    expect(await readProject(host, { project: 'poe2-rust' }, 'trace', [])).toEqual({
+      value: ['from haza-pc'],
+    })
     // The remote instance is asked with its own origin.
     expect(seen).toContain(`/api/extensions/codemode/actions/read ${remote.url}`)
     process.env.ULTIMATE_CLOUD_TOKEN = 'wrong'
-    await expect(readProject(host, 'poe2-rust', 'trace', [])).rejects.toThrow(
+    await expect(readProject(host, { project: 'poe2-rust' }, 'trace', [])).rejects.toThrow(
       'GET /sync/register returned 401',
     )
   } finally {
@@ -215,6 +217,34 @@ it('reaches another machine at the address the user set in remotes, with no clou
   await expect(locate(host, 'blog')).rejects.toThrow('blog runs on laptop, desktop in remotes')
   expect(await locate(host, 'blog', 'desktop')).toMatchObject({ machine: 'desktop' })
   await expect(locate(host, 'shop', 'laptop')).rejects.toThrow('Unknown project shop on laptop')
+})
+
+it('reads a project listed on several machines from the one the read names', async () => {
+  const server = createServer((_request, response) =>
+    response
+      .writeHead(200, { 'Content-Type': 'application/json' })
+      .end(JSON.stringify({ result: ['from desktop'] })),
+  )
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const userHome = await temp()
+    await writeJson(join(userHome, '.ultimate/settings.json'), {
+      remotes: {
+        laptop: { blog: 'http://127.0.0.1:1' },
+        desktop: { blog: `http://127.0.0.1:${(server.address() as AddressInfo).port}` },
+      },
+    })
+    const host = {
+      userHome,
+      notice: () => {},
+      projects: async () => [{ name: 'ultimate', current: true }],
+    } as unknown as ExtensionHost
+    expect(await readProject(host, { project: 'blog', machine: 'desktop' }, 'trace', [])).toEqual({
+      value: ['from desktop'],
+    })
+  } finally {
+    server.close()
+  }
 })
 
 it('names the machine when the project cannot be reached, and never offers a copy', () => {
