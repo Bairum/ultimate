@@ -72,24 +72,26 @@ Stop and ask me whenever a step needs my password, a login or a decision.
 By default you get Pi's coding agent in a web UI: read, write, edit, bash, codemode, and browser debugging tools,
 with the conversation, model and thinking controls, login, and footer, plus every other built-in building block.
 
-Needs Node 26 and pnpm, and a `pi` login (Ultimate shares `~/.pi/agent`: credentials, models, settings; personal skills and
-instructions go in `~/.ultimate/skills/` and `~/.ultimate/AGENTS.md`). The
+Needs Node 26 and pnpm; you log in to a model provider on first start, not before. Ultimate shares `~/.pi/agent` with
+`pi` (credentials, models, settings); personal skills and instructions go in `~/.ultimate/skills/` and
+`~/.ultimate/AGENTS.md`. The
 screenshot and browser tools need a Chromium: `/usr/bin/chromium`, Google Chrome, Playwright's cached Chromium, or
 `ULTIMATE_CHROMIUM=<path>`.
 
 ```bash
 pnpm install
+pnpm link --global  # once, in this clone, to get the `ultimate` command (`pnpm setup` first if pnpm's global bin is not on PATH)
 pnpm start          # Ultimate on its own repository; opens http://127.0.0.1:4747
-pnpm link --global  # once, in this clone, to get the `ultimate` command
-cd ~/Projects/app && ultimate
+cd ~/Projects/app && ultimate  # or Ultimate on one of your projects
 pnpm cli            # emergency terminal agent when the UI, server or database is broken
 ```
 
-- No `pi` login yet? Open the command palette (`Ctrl+K`, `⌘K` on macOS) → "Log in to a provider". Logins are shared
-  with `pi`, and so is logging out. Log in on each machine; never copy `~/.pi/agent/auth.json` between machines, since
-  a token refresh on one revokes the other's copy.
 - **First start** on a machine shows Get ready: log in to a provider and choose a model. Continue opens @ultimate,
   which offers inline setup cards, reads the project and writes the root's first context.
+- **Logins** happen inside the UI: Get ready, or later the command palette (`Ctrl+K`, `⌘K` on macOS) → "Log in to a
+  provider". Claude Code logs in with its own `claude auth login` (see "Recommended models"). Logins are shared with
+  `pi`, and so is logging out; already logged in to `pi`, you skip this step. Log in on each machine; never copy
+  `~/.pi/agent/auth.json` between machines, since a token refresh on one revokes the other's copy.
 - **A folder with its own `.ultimate/`** asks once: its setup or your global one. Its extensions, agents, and skills
   stay off until you choose it; @ultimate asks with an inline setup card during onboarding.
 - **The Extensions panel** (right panel, or `Ctrl+K` → "Extensions…") lists every extension and turns it on or off
