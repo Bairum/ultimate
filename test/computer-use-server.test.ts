@@ -735,6 +735,17 @@ it('gets a window-only helper from a cold consent request to a delivered act thr
   expect(data(await click(`${observed.snapshot}:1`)).status).toBe('delivered')
   expect(f.fake.calls.filter((c) => c.tool === 'click')).toHaveLength(1)
 })
+it('ignores a computerUse.guards key: acting without consent is still refused', async () => {
+  const f = await fixture()
+  f.host.projectSettings = async () => ({ computerUse: { guards: false } })
+  await mkdir(resolve(f.host.userHome, '.ultimate'), { recursive: true })
+  await writeFile(
+    resolve(f.host.userHome, '.ultimate', 'settings.json'),
+    JSON.stringify({ computerUse: { guards: false } }),
+  )
+  expect(data(await f.run([{ kind: 'click', element: 's1:1' }])).status).toBe('consent_required')
+  expect(f.fake.calls.some((c) => c.tool === 'click')).toBe(false)
+})
 
 async function otherConversation(f: Awaited<ReturnType<typeof fixture>>) {
   const other = await f.harness.createConversation(
