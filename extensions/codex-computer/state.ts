@@ -5,7 +5,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { StateDoc } from './refs.ts'
 import type { CodexState } from './refs.ts'
 
-const initial = (): CodexState => ({ acknowledged: false, grants: [], pending: [] })
+const initial = (): CodexState => ({})
 export const State = defineDoc<CodexState>({
   kind: StateDoc.kind,
   version: 1,
@@ -15,11 +15,6 @@ export const State = defineDoc<CodexState>({
   checkpointWhen: () => false,
   initial,
 })
-export async function readState(host: ExtensionHost, conversation: number): Promise<CodexState> {
-  return (
-    (await host.harness().snapshot(State, conversation as ConversationId, context)) ?? initial()
-  )
-}
 export async function updateState(
   host: ExtensionHost,
   conversation: number,
@@ -29,45 +24,22 @@ export async function updateState(
     .harness()
     .commit(async (tx) => change(await tx.doc(State, conversation as ConversationId)), context)
 }
-export const sameApp = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
-
-/** Atomically consume a once grant so two elicitations cannot use it. Local denies override project consent. */
-export async function consent(host: ExtensionHost, conversation: number, app: string) {
-  let decision: 'accept' | 'decline' | undefined
-  await host.harness().commit(async (tx) => {
-    const local = await tx.doc(State, conversation as ConversationId)
-    const project = await tx.doc(State, 1 as ConversationId)
-    const localGrant = local.grants.findLast((g) => sameApp(g.app, app) && g.scope !== 'project')
-    const projectGrant = project.grants.findLast(
-      (g) => sameApp(g.app, app) && g.scope === 'project',
-    )
-    const grant = localGrant ?? projectGrant
-    if (!grant) return
-    decision = grant.scope === 'deny' ? 'decline' : 'accept'
-    if (grant.scope === 'once')
-      local.grants = local.grants.filter((g) => !sameApp(g.app, app) || g.scope !== 'once')
-  }, context)
-  return decision
+/**
+ * Whether Codex may use `app` (its parsed name, else the whole request text). Without a project list every app is
+ * allowed; with one, a listed name matches loosely either way round, so "Chrome" covers "Google Chrome".
+ */
+export function allowed(app: string, list?: readonly string[]) {
+  if (!list) return true
+  const name = app.trim().toLowerCase()
+  return list.some((entry) => {
+    const listed = entry.trim().toLowerCase()
+    return !!listed && !!name && (name.includes(listed) || listed.includes(name))
+  })
 }
-export async function wake(
-  host: ExtensionHost,
-  conversation: number,
-  text: string,
-  requestId: string,
-) {
-  const target = await host.harness().conversation(conversation as ConversationId, context)
-  if (!target) throw new Error('Conversation not found; Continue remains pending')
-  await target.submit(
-    { type: 'input', content: text, requestId, entry: { kind: 'codex-computer.wake' } },
-    context,
-  )
-}
-
 export function validate<T>(
   args: T,
-  app = false,
 ): asserts args is T &
-  Exclude<T, string | number | boolean | unknown[] | null> & { conversation: number; app: string } {
+  Exclude<T, string | number | boolean | unknown[] | null> & { conversation: number } {
   if (
     !args ||
     typeof args !== 'object' ||
@@ -76,8 +48,6 @@ export function validate<T>(
     (args.conversation as number) < 1
   )
     throw new Error('conversation must be a positive integer')
-  if (app && (!('app' in args) || typeof args.app !== 'string' || !args.app.trim()))
-    throw new Error('app must be nonempty')
 }
 
 /** Screen strings are data, never instructions; escaping prevents closing the boundary from screen text. */

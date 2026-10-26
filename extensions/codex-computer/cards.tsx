@@ -1,7 +1,7 @@
 /**
  * `codex_operate` in the transcript: what Codex was asked, how the run ended, which apps it was let into, its steps and
  * screenshots, and what it says it saw. Everything Codex writes is screen-derived: shown as plain text with the
- * untrusted marker, never as Markdown or our own words. A request the run waits on renders under the newest call.
+ * untrusted marker, never as Markdown or our own words.
  */
 import { CircleStopIcon, LoaderCircleIcon } from 'lucide-react'
 import { useState } from 'react'
@@ -17,20 +17,10 @@ import {
   ToolSection,
 } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import {
-  api,
-  cn,
-  errorMessage,
-  useConversation,
-  useDoc,
-  useToolDuration,
-  useTranscript,
-} from '@/sdk'
+import { api, cn, errorMessage, useConversation, useToolDuration } from '@/sdk'
 import type { ToolCallView } from '@/sdk'
-import { StateDoc, StopAction } from './refs.ts'
+import { StopAction } from './refs.ts'
 import type { CodexDetails } from './refs.ts'
-import { Requests } from './requests.tsx'
-import type { Pending } from './requests.tsx'
 
 type Status = CodexDetails['status']
 type Tone = 'good' | 'wait' | 'bad'
@@ -43,9 +33,8 @@ const toneClass: Record<Tone, string> = {
 /** How each outcome reads, and its tone: amber when the user can move it on, red when something is broken. */
 const outcomes: Record<Status, [string, Tone]> = {
   done: ['done', 'good'],
-  budget: ['budget used up', 'wait'],
+  budget: ['8 h limit reached', 'wait'],
   stopped: ['stopped', 'wait'],
-  opt_in_required: ['needs screen-sharing consent', 'wait'],
   declined: ['app declined', 'wait'],
   failed: ['failed', 'bad'],
   codex_missing: ['Codex not found', 'bad'],
@@ -81,12 +70,11 @@ function Untrusted() {
 
 /**
  * Progress while a call runs, read from its streamed output: `Step n: <tool>` lines and Codex's own messages (both
- * inside the untrusted boundary), and the consent wait.
+ * inside the untrusted boundary).
  */
 function liveOf(output: string) {
   const steps: string[] = []
   let message = ''
-  let waiting = false
   const blocks = output.split(new RegExp(`(${OPEN}[\\s\\S]*?${CLOSE})`))
   for (let index = 0; index < blocks.length; index++) {
     const block = blocks[index]
@@ -96,10 +84,8 @@ function liveOf(output: string) {
       else message = inner
       continue
     }
-    if (block.includes('Waiting for app consent')) waiting = true
-    if (/App consent: /.test(block)) waiting = false
   }
-  return { steps, message, waiting }
+  return { steps, message }
 }
 
 /** A step's outcome as one mark, the same glyphs as the computer-use step lists. */
@@ -301,75 +287,28 @@ function Footer({ children }: { children: ReactNode }) {
   )
 }
 
-/** Budget used and the session to resume, the way the computer-use task line shows its counters. */
-function Budget({ details }: { details: CodexDetails }) {
-  const { items, minutes } = details.counts
-  return (
-    <Footer>
-      <span className={items >= 40 ? 'text-warning' : undefined}>steps {items}/50</span>
-      <span className={minutes >= 24 ? 'text-warning' : undefined}>
-        {minutes < 1 ? '<1' : Math.round(minutes)}/30 min
-      </span>
-      {details.session && (
-        <span className="min-w-0 truncate" title={details.session}>
-          session {details.session.slice(0, 8)}
-        </span>
-      )}
-    </Footer>
-  )
-}
-
-/** Whether `call` is the newest codex_operate call in the transcript: requests show once, under it. */
-function useNewest(call: ToolCallView) {
-  const entries = useTranscript()
-  let newest: string | undefined
-  for (const entry of entries) {
-    const message = entry.model?.[0]
-    if (entry.kind !== 'pi.assistant' || message?.role !== 'assistant') continue
-    for (const block of message.content)
-      if (block.type === 'toolCall' && block.name === 'codex_operate') newest = block.id
-  }
-  return newest === call.id
-}
-
 export function Operate({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   const conversation = useConversation((c) => c.id)
-  const state = useDoc(StateDoc)
-  const newest = useNewest(call)
-  return (
-    <OperateCard
-      call={call}
-      conversation={conversation}
-      duration={duration}
-      pending={newest ? (state?.pending ?? []) : []}
-    />
-  )
+  return <OperateCard call={call} conversation={conversation} duration={duration} />
 }
 
-/** The card itself, from the call and what the conversation waits on; `pending` only for the newest call. */
+/** The card itself, from the call. */
 export function OperateCard({
   call,
   conversation,
-  pending: waiting,
   duration,
 }: {
   call: ToolCallView
   conversation?: number
-  pending: readonly Pending[]
   duration?: string
 }) {
   const details = detailsOf(call)
   const running = call.status === 'running'
   const live = running ? liveOf(call.output) : undefined
-  const pending = conversation === undefined ? [] : waiting
   const status = details?.status
   const [words, tone] = status ? outcomes[status] : ['', 'good' as Tone]
   const resumed = !!text(call.args.session)
-  // A request card under the call already says why it stopped and what to do: no second line for it.
-  const answered =
-    (status === 'budget' && pending.some((p) => p.kind === 'continue')) ||
-    (status === 'opt_in_required' && pending.some((p) => p.kind === 'acknowledge'))
   return (
     <Tool defaultOpen>
       <ToolHeader
@@ -380,11 +319,7 @@ export function OperateCard({
         }
         meta={
           <>
-            {running && pending.some((p) => p.kind === 'consent') ? (
-              <span className="text-warning">needs you</span>
-            ) : (
-              status && <span className={toneClass[tone]}>{words}</span>
-            )}
+            {status && <span className={toneClass[tone]}>{words}</span>}
             {running && live && live.steps.length > 0 && (
               <span>{plural(live.steps.length, 'step')}</span>
             )}
@@ -431,18 +366,12 @@ export function OperateCard({
                 <Untrusted />
               </p>
             )}
-            {live.waiting || pending.some((p) => p.kind === 'consent') ? (
-              <p className="text-warning">waiting for your answer below</p>
-            ) : (
-              <Shimmer className="text-[12px]">
-                {live.steps.length ? 'Codex is working…' : 'starting Codex…'}
-              </Shimmer>
-            )}
+            <Shimmer className="text-[12px]">
+              {live.steps.length ? 'Codex is working…' : 'starting Codex…'}
+            </Shimmer>
           </ToolSection>
         )}
-        {status && status !== 'done' && !answered && (
-          <Problem error={details?.error} status={status} />
-        )}
+        {status && status !== 'done' && <Problem error={details?.error} status={status} />}
         {details && <Answer answer={details.answer.text} />}
         {details && <Apps apps={details.apps} />}
         {details && <Shots call={call} saved={details.screenshots} />}
@@ -450,15 +379,20 @@ export function OperateCard({
         {details && (
           <Steps open={status !== 'done' && details.steps.length <= 8} steps={details.steps} />
         )}
-        {pending.length > 0 && conversation !== undefined && (
-          <ToolSection>
-            <Requests conversation={conversation} counts={details?.counts} pending={pending} />
-          </ToolSection>
-        )}
         {call.status === 'error' && <ToolOutput isError output={call.output} />}
         <ToolDiagnostics diagnostics={call.diagnostics} />
       </ToolContent>
-      {details && (details.session || details.counts.items > 0) && <Budget details={details} />}
+      {details && (details.session || details.counts.items > 0) && (
+        <Footer>
+          <span>steps {details.counts.items}</span>
+          <span>{details.counts.minutes < 1 ? '<1' : Math.round(details.counts.minutes)} min</span>
+          {details.session && (
+            <span className="min-w-0 truncate" title={details.session}>
+              session {details.session.slice(0, 8)}
+            </span>
+          )}
+        </Footer>
+      )}
     </Tool>
   )
 }

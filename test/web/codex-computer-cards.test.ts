@@ -2,19 +2,15 @@ import { cn } from 'cn'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi } from 'vitest'
-import type { CodexDetails, CodexState } from '../../extensions/codex-computer/refs.ts'
+import type { CodexDetails } from '../../extensions/codex-computer/refs.ts'
 import type { ToolCallView } from '../../web/src/sdk/types.ts'
 
 vi.mock('@/sdk', () => ({
   api: {},
   cn,
   errorMessage: String,
-  formatDuration: (ms: number) => `${Math.round(ms / 1000)}s`,
   useConversation: () => 7,
-  useDoc: () => null,
-  useNow: () => 0,
   useToolDuration: () => undefined,
-  useTranscript: () => [],
 }))
 
 const { OperateCard } = await import('../../extensions/codex-computer/cards.tsx')
@@ -29,7 +25,7 @@ const details = (more: Partial<CodexDetails>): CodexDetails => ({
   counts: { items: 0, minutes: 0 },
   ...more,
 })
-const render = (value: CodexDetails, pending: CodexState['pending'] = []) =>
+const render = (value: CodexDetails) =>
   renderToStaticMarkup(
     createElement(OperateCard, {
       call: {
@@ -44,7 +40,6 @@ const render = (value: CodexDetails, pending: CodexState['pending'] = []) =>
         result: { role: 'toolResult' },
       } as unknown as ToolCallView,
       conversation: 7,
-      pending,
     }),
   )
 
@@ -62,26 +57,6 @@ it('shows the outcome and Codex’s answer as plain, marked text', () => {
   expect(html).not.toContain('<a ')
   expect(html).toContain('“Citrix Viewer”')
   expect(html).toContain('2 screenshots saved privately')
-})
-
-it('puts each blocking request under the call with its buttons', () => {
-  const budget = render(details({ status: 'budget', counts: { items: 50, minutes: 12 } }), [
-    { kind: 'continue', at: 0 },
-  ])
-  expect(budget).toContain('data-codex-request="continue"')
-  expect(budget).toContain('>Continue<')
-
-  const consent = render(details({ status: 'failed' }), [
-    { kind: 'consent', id: 'k', app: 'Citrix Viewer', at: 0 },
-  ])
-  for (const label of ['Allow once', 'This conversation', 'This project', 'Deny'])
-    expect(consent).toContain(`>${label}<`)
-
-  const acknowledge = render(details({ status: 'opt_in_required' }), [
-    { kind: 'acknowledge', at: 0 },
-  ])
-  expect(acknowledge).toContain('to <span class="font-medium">OpenAI</span>')
-  expect(acknowledge).toContain('>Allow for this project<')
 })
 
 it('names a refusal in words with its code', () => {

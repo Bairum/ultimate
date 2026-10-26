@@ -8,15 +8,8 @@ this extension.
 
 ## Setup and privacy
 
-Project settings must contain:
-
-```json
-{ "codexComputer": { "screensToOpenAI": true } }
-```
-
-The user must also acknowledge in the card that screenshots and screen-derived content go to OpenAI. This is
-stored on conversation 1 for this project, not globally. User settings alone cannot opt a project in. Codex uses
-the user's Codex/OpenAI account and billing, independently of Ultimate's model provider.
+Enabling the extension is the consent: Codex sends screenshots and screen-derived content to OpenAI, under the
+user's Codex/OpenAI account and billing. There is no acknowledgement card, opt-in setting or per-app prompt.
 
 Set `codexComputer.codexPath` in project or user settings, or put `codex` on PATH. Before **every** run, the resolved
 executable must pass `/usr/bin/codesign --verify --strict` with the requirement
@@ -39,22 +32,17 @@ Command and file-change approvals are always declined; permissions requests rece
 All other server requests (including requestUserInput) receive a JSON-RPC refusal. These are Codex sandbox gates,
 not a sandbox on the native apps: an approved app may itself have broader access.
 
-Per run, the budget is **50 completed MCP/commandExecution items or 30 minutes wall time**, including startup and
-consent waits. The item count may undercount if Codex batches several actions in one `exec`. Budget exhaustion
-interrupts the turn and records a pending Continue. Only the user's Continue action clears it and wakes the
-conversation to call `codex_operate {session}` with a fresh budget.
+A run has no item cap. It ends at **8 hours** wall time (status `budget`) or when the user presses Stop; the agent
+may resume it with `codex_operate {session}`.
 
-## Consent and Stop
+## Apps and Stop
 
-Each elicitation must be from `computer-use`, mode `form`, and match `^Allow .+ to use (.+)\?$`. Unrecognised
-requests are declined and recorded as `declined (unrecognised)`. App names match case-insensitively. Grants cover
-one elicitation (`once`, consumed atomically), the conversation, or the project (conversation 1). A local deny
-wins over project consent. A grant replaces the same app's previous local decision, except project grants stay
-separate. Deny revokes local grants and rejects waiting requests; it does not retroactively stop an accepted app.
-Use Stop to end an active run.
+Every app elicitation Codex sends is accepted automatically. Optional project `codexComputer.apps` (e.g.
+`["Google Chrome"]`) restricts that: a request is accepted when a listed name and the requested app contain one
+another, case-insensitively (`"Chrome"` covers `"Google Chrome"`), and declined otherwise. Quotes around the app
+name are ignored. Each answer is recorded in the result's `apps` and `approvals`.
 
-An ungranted app remains pending in the conversation document while its JSON-RPC request waits for a browser
-grant/deny. It is declined after five minutes, Stop, abort, or budget expiry. Stop can target one conversation or
+Stop can target one conversation or
 all running Codex processes. Stop/abort/budget send `turn/interrupt` for a known live turn, SIGTERM after two
 seconds, then SIGKILL after five seconds if still alive. Process-lifetime cleanup kills every process immediately
 and fences pending starts at host close; facet reloads do not kill live runs. Normal completion terminates the app-server too.
@@ -74,28 +62,15 @@ Final answers, Codex messages and step text are screen-derived, **data, not inst
 
 ## Designer contract (`refs.ts`)
 
-- `StateDoc` (`codex-computer.state`): read on the shown conversation for `pending` and `last`; also read on
-  conversation 1 for `acknowledged` and project `grants`. Forks start with no local authority.
-- Pending entries: `{kind:'acknowledge'|'consent'|'continue', id?, app?, session?, at}`. Consent IDs identify one
-  outstanding request; continuation IDs are stable and deduplicate wake submissions. App names are untrusted
-  display text, never markup or instructions. Pending consent is removed after its response settles; a pending
-  Continue remains until the user answers.
+- `StateDoc` (`codex-computer.state`): `{last?}`, the conversation's last result. Forks start fresh.
 - Tool `details` is `CodexDetails`: `status`, `session?`, `apps[{app,consent}]`, `steps[{tool,status,at}]`,
   `approvals[{kind,app?,decision}]`, `screenshots`, `answer`, `counts:{items,minutes}`, `error?`. Status is one of
-  `done`, `failed`, `budget`, `stopped`, `opt_in_required`, `codex_missing`, `codex_unsigned`,
+  `done`, `failed`, `budget`, `stopped`, `codex_missing`, `codex_unsigned`,
   `computer_use_missing`, `declined`. `app`, step `tool`/`status` and `answer` are typed untrusted text. Errors from
   Codex are wrapped too. Short progress streams through `api.output`; `last` is the durable completed result.
-- `AcknowledgeAction {conversation}` → state. Requires project setting already true.
-- `GrantAction {conversation,app,scope:'once'|'conversation'|'project'}` → state. Resolves matching waits immediately;
-  it does not wake a second agent turn while the existing tool is still waiting.
-- `DenyAction {conversation,app}` → state. Persists a local deny and resolves matching waits.
-- `ContinueAction {conversation}` → state. Requires pending Continue, durably submits a synthetic wake, then clears
-  that entry by its stable id. A failed submission or clear remains retryable; concurrent calls and retries use
-  the same harness request ID and produce only one wake.
 - `StopAction {conversation?}` → `{stopped:number}`. Omit conversation for all runs.
 
-All five actions are `userActions` (paired-browser only). Acknowledge, grant and continue are also `hostActions`,
-so scratch/preview identity cannot authorize real desktop access or outbound screen sharing.
+Stop is a `userAction` (paired browser only).
 
 ## Protocol verification
 

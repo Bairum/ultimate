@@ -11,14 +11,10 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
-import codexComputer, {
-  actions,
-  userActions,
-  hostActions,
-} from '../extensions/codex-computer/server.ts'
+import codexComputer, { actions, userActions } from '../extensions/codex-computer/server.ts'
+import { CEILING_MS } from '../extensions/codex-computer/app-server.ts'
 import type { Child } from '../extensions/codex-computer/app-server.ts'
 import type { CodexDetails } from '../extensions/codex-computer/refs.ts'
-import { readState, updateState } from '../extensions/codex-computer/state.ts'
 import { removeTemp, temp, until } from './helpers.ts'
 import { pruneEvidence, resultsDirectory } from '../extensions/codex-computer/evidence.ts'
 
@@ -87,7 +83,7 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).toReversed()) await close()
   vi.useRealTimers()
 })
-async function fixture(acknowledged = true) {
+async function fixture(apps?: string[]) {
   const home = await temp()
   const path = join(home, 'signed-codex')
   await writeFile(path, 'fake executable, never launched', { mode: 0o700 })
@@ -110,7 +106,9 @@ async function fixture(acknowledged = true) {
   const host = {
     home,
     userHome: home,
-    projectSettings: async () => ({ codexComputer: { screensToOpenAI: true, codexPath: path } }),
+    projectSettings: async () => ({
+      codexComputer: { codexPath: path, ...(apps ? { apps } : {}) },
+    }),
     harness: () => harness,
     onClose: (close: () => Promise<void>) =>
       (creatingResource ? processCloses : facetCloses).push(close),
@@ -147,7 +145,6 @@ async function fixture(acknowledged = true) {
     context,
   )
   const ctx = { host } as ActionContext
-  if (acknowledged) await actions.acknowledge({ conversation: root.id }, ctx)
   const tools = extension.tools as unknown as ToolRegistration[]
   const progress: string[] = []
   const invoke = (
@@ -191,8 +188,6 @@ async function fixture(acknowledged = true) {
     tools,
     closeResources,
     reload,
-    grant: (scope: 'once' | 'conversation' | 'project' = 'conversation') =>
-      actions.grant({ conversation: root.id, app: 'calculator', scope }, ctx),
   }
 }
 const data = (value: { details?: unknown }) => value.details as CodexDetails
@@ -202,25 +197,13 @@ async function running(f: Awaited<ReturnType<typeof fixture>>, signal?: AbortSig
   return { promise }
 }
 
-it('requires project screen opt-in AND a paired-browser acknowledgement before spawning', async () => {
-  const f = await fixture(false)
-  expect(data(await f.invoke()).status).toBe('opt_in_required')
-  expect((await readState(f.host, f.root.id)).pending[0]?.kind).toBe('acknowledge')
-  expect(f.spawn).not.toHaveBeenCalled()
-  f.host.projectSettings = async () => ({ codexComputer: { screensToOpenAI: false } })
-  await expect(actions.acknowledge({ conversation: f.root.id }, f.ctx)).rejects.toThrow(
-    'Enable project',
-  )
-  f.host.projectSettings = async () => ({
-    codexComputer: { screensToOpenAI: true, codexPath: join(f.home, 'signed-codex') },
-  })
-  await actions.acknowledge({ conversation: f.root.id }, f.ctx)
+it('needs no opt-in, card or user action before spawning; Stop is the only user action', async () => {
+  const f = await fixture()
   const { promise } = await running(f)
   f.fake.complete()
   expect(data(await promise).status).toBe('done')
   expect(f.tools[0]?.replay).toBe('unsafe')
-  expect(userActions).toEqual(['acknowledge', 'grant', 'deny', 'continue', 'stop'])
-  expect(hostActions).toEqual(['acknowledge', 'grant', 'continue'])
+  expect(userActions).toEqual(['stop'])
 })
 it('refuses Codex when strict signature verification fails, without spawning', async () => {
   const f = await fixture()
@@ -228,60 +211,33 @@ it('refuses Codex when strict signature verification fails, without spawning', a
   expect(data(await f.invoke()).status).toBe('codex_unsigned')
   expect(f.spawn).not.toHaveBeenCalled()
 })
-it('accepts a case-insensitive project grant and declines unrecognised elicitations', async () => {
+it('accepts every app request automatically, including USG\'s quoted "Google Chrome"', async () => {
   const f = await fixture()
-  await f.grant('project')
-  expect((await readState(f.host, 1)).grants[0]?.scope).toBe('project')
   const { promise } = await running(f)
-  f.fake.elicit()
-  await until(() => !!f.fake.reply(100))
+  // USG #68982: the app name arrived quoted and was declined before the user saw anything.
+  f.fake.elicit(100, 'Allow ChatGPT to use "Google Chrome"?')
+  f.fake.elicit(101, 'Unexpected request shape', { serverName: 'other', mode: 'url' })
+  await until(() => !!f.fake.reply(101))
   expect(f.fake.reply(100)?.result).toEqual({ action: 'accept', content: {}, _meta: null })
-  f.fake.elicit(101, 'Unexpected consent')
-  expect(f.fake.reply(101)?.result?.action).toBe('decline')
-  f.fake.elicit(102, 'Allow ChatGPT to use Calculator?', { serverName: 'other' })
-  expect(f.fake.reply(102)?.result?.action).toBe('decline')
+  expect(f.fake.reply(101)?.result?.action).toBe('accept')
   f.fake.complete()
   const details = data(await promise)
-  expect(details.apps.map((a) => a.consent)).toEqual([
-    'accepted',
-    'declined (unrecognised)',
-    'declined (unrecognised)',
+  expect(details.status).toBe('done')
+  expect(details.apps.map((a) => [a.app.text, a.consent])).toEqual([
+    ['Google Chrome', 'accepted'],
+    ['Unexpected request shape', 'accepted'],
   ])
 })
-it('keeps ungranted elicitation waiting; once grant accepts one request and deny resolves the next', async () => {
-  const f = await fixture()
+it('with a project app list, accepts listed apps loosely and declines the rest', async () => {
+  const f = await fixture(['Chrome'])
   const { promise } = await running(f)
-  f.fake.elicit()
-  await until(async () =>
-    (await readState(f.host, f.root.id)).pending.some((p) => p.kind === 'consent'),
-  )
-  expect(f.fake.reply(100)).toBeUndefined()
-  await f.grant('once')
-  expect(f.fake.reply(100)?.result?.action).toBe('accept')
-  expect((await readState(f.host, f.root.id)).grants).toEqual([])
+  f.fake.elicit(100, 'Allow ChatGPT to use “Google Chrome”?')
   f.fake.elicit(101)
-  await until(async () =>
-    (await readState(f.host, f.root.id)).pending.some((p) => p.kind === 'consent'),
-  )
-  expect(f.fake.reply(101)).toBeUndefined()
-  await actions.deny({ conversation: f.root.id, app: 'CALCULATOR' }, f.ctx)
+  await until(() => !!f.fake.reply(101))
+  expect(f.fake.reply(100)?.result?.action).toBe('accept')
   expect(f.fake.reply(101)?.result?.action).toBe('decline')
   f.fake.complete()
   expect(data(await promise).status).toBe('declined')
-  expect((await readState(f.host, f.root.id)).pending).toEqual([])
-})
-it('declines app consent after five minutes without real waiting', async () => {
-  const f = await fixture()
-  vi.useFakeTimers()
-  const { promise } = await running(f)
-  f.fake.elicit()
-  await until(async () =>
-    (await readState(f.host, f.root.id)).pending.some((p) => p.kind === 'consent'),
-  )
-  await vi.advanceTimersByTimeAsync(5 * 60_000)
-  expect(f.fake.reply(100)?.result?.action).toBe('decline')
-  f.fake.complete()
-  expect(data(await promise).apps[0]?.consent).toBe('timeout')
 })
 it('declines command, file and permission approvals; unknown requests get a JSON-RPC error', async () => {
   const f = await fixture()
@@ -300,54 +256,26 @@ it('declines command, file and permission approvals; unknown requests get a JSON
   f.fake.complete()
   await promise
 })
-it('interrupts at 50 MCP/exec items and requires Continue before resuming', async () => {
-  const f = await fixture()
-  const { promise } = await running(f)
-  for (let i = 0; i < 50; i++)
-    f.fake.item({
-      type: i % 2 ? 'mcpToolCall' : 'commandExecution',
-      server: 'computer-use',
-      tool: 'exec',
-      status: 'completed',
-    })
-  const details = data(await promise)
-  expect(details.status).toBe('budget')
-  expect(details.counts.items).toBe(50)
-  expect(f.fake.sent.find((m) => m.method === 'turn/interrupt')?.params).toEqual({
-    threadId: 'thread-1',
-    turnId: 'turn-1',
-  })
-  expect((await readState(f.host, f.root.id)).pending[0]?.kind).toBe('continue')
-  expect((await readState(f.host, f.root.id)).pending[0]?.id).toEqual(expect.any(String))
-  expect(data(await f.invoke({ brief: 'Continue', session: 'thread-1' })).status).toBe('budget')
-  expect(f.spawn).toHaveBeenCalledOnce()
-  await actions.continue({ conversation: f.root.id }, f.ctx)
-  expect((await readState(f.host, f.root.id)).pending).toEqual([])
-  await f.harness.waitForIdle(context)
-  const entries = (await f.root.entries({}, 100, undefined, context)).items
-  expect(entries.some((e) => e.kind === 'codex-computer.wake')).toBe(true)
-})
-it('enforces the hard 30-minute deadline while Codex is silent', async () => {
+it('has no item cap, and stops at the 8 h ceiling while Codex is silent', async () => {
   const f = await fixture()
   vi.useFakeTimers()
   const { promise } = await running(f)
-  await vi.advanceTimersByTimeAsync(30 * 60_000)
+  for (let i = 0; i < 200; i++)
+    f.fake.item({ type: 'mcpToolCall', server: 'computer-use', tool: 'exec', status: 'completed' })
+  await vi.advanceTimersByTimeAsync(CEILING_MS - 1)
+  expect(f.fake.sent.some((m) => m.method === 'turn/interrupt')).toBe(false)
+  await vi.advanceTimersByTimeAsync(1)
   const details = data(await promise)
   expect(details.status).toBe('budget')
-  expect(details.counts.minutes).toBe(30)
+  expect(details.counts.items).toBe(200)
   expect(f.fake.sent.some((m) => m.method === 'turn/interrupt')).toBe(true)
 })
-it('Stop declines waiting consent, interrupts, then sends TERM at 2s and KILL at 5s', async () => {
+it('Stop interrupts, then sends TERM at 2s and KILL at 5s', async () => {
   const f = await fixture()
   vi.useFakeTimers()
   f.fake.ignoreTerm = true
   const { promise } = await running(f)
-  f.fake.elicit()
-  await until(async () =>
-    (await readState(f.host, f.root.id)).pending.some((p) => p.kind === 'consent'),
-  )
   expect(await actions.stop({ conversation: f.root.id }, f.ctx)).toEqual({ stopped: 1 })
-  expect(f.fake.reply(100)?.result?.action).toBe('decline')
   expect(data(await promise).status).toBe('stopped')
   expect(f.fake.sent.some((m) => m.method === 'turn/interrupt')).toBe(true)
   expect(f.fake.kills).toEqual([])
@@ -432,66 +360,6 @@ it('keeps a live run across facet reloads, but process close fences pending and 
   expect(data(await pending).status).toBe('stopped')
   expect(data(await f.invoke()).status).toBe('stopped')
   expect(f.spawn).toHaveBeenCalledOnce()
-})
-
-it('leaves Continue pending when its wake throws, so the user can retry', async () => {
-  const f = await fixture()
-  await updateState(f.host, f.root.id, (doc) => {
-    doc.pending.push({ kind: 'continue', id: 'retry-1', session: 'thread-1', at: Date.now() })
-  })
-  vi.spyOn(f.harness, 'conversation').mockResolvedValueOnce(undefined)
-  await expect(actions.continue({ conversation: f.root.id }, f.ctx)).rejects.toThrow(
-    'Conversation not found',
-  )
-  expect((await readState(f.host, f.root.id)).pending[0]?.kind).toBe('continue')
-  vi.spyOn(f.harness, 'conversation').mockResolvedValueOnce(f.root)
-  const submit = vi.spyOn(f.root, 'submit').mockRejectedValueOnce(new Error('wake failed'))
-  await expect(actions.continue({ conversation: f.root.id }, f.ctx)).rejects.toThrow('wake failed')
-  expect((await readState(f.host, f.root.id)).pending[0]?.kind).toBe('continue')
-  submit.mockRestore()
-  await actions.continue({ conversation: f.root.id }, f.ctx)
-  expect((await readState(f.host, f.root.id)).pending).toEqual([])
-  await f.harness.waitForIdle(context)
-})
-
-it('deduplicates concurrent Continue wakes and retries after clearing fails', async () => {
-  const f = await fixture()
-  await updateState(f.host, f.root.id, (doc) => {
-    doc.pending.push({ kind: 'continue', id: 'continue-1', session: 'thread-1', at: Date.now() })
-  })
-  vi.spyOn(f.harness, 'conversation').mockResolvedValue(f.root)
-  const submit = f.root.submit.bind(f.root)
-  const arrived = Promise.withResolvers<void>()
-  let calls = 0
-  const ids: import('@earendil-works/pi-durable').SubmissionId[] = []
-  vi.spyOn(f.root, 'submit').mockImplementation(async (...args) => {
-    if (++calls === 2) arrived.resolve()
-    await arrived.promise
-    const receipt = await submit(...args)
-    ids.push(receipt.id)
-    return receipt
-  })
-  const commit = vi
-    .spyOn(f.harness, 'commit')
-    .mockRejectedValueOnce(new Error('clear failed'))
-    .mockRejectedValueOnce(new Error('clear failed'))
-  const attempts = await Promise.allSettled([
-    actions.continue({ conversation: f.root.id }, f.ctx),
-    actions.continue({ conversation: f.root.id }, f.ctx),
-  ])
-  expect(attempts.map((attempt) => attempt.status)).toEqual(['rejected', 'rejected'])
-  expect(
-    attempts.map((attempt) => attempt.status === 'rejected' && attempt.reason.message),
-  ).toEqual(['clear failed', 'clear failed'])
-  expect((await readState(f.host, f.root.id)).pending[0]?.id).toBe('continue-1')
-  commit.mockRestore()
-  await actions.continue({ conversation: f.root.id }, f.ctx)
-  expect(ids).toHaveLength(3)
-  expect(new Set(ids).size).toBe(1)
-  expect((await readState(f.host, f.root.id)).pending).toEqual([])
-  await f.harness.waitForIdle(context)
-  const entries = (await f.root.entries({}, 100, undefined, context)).items
-  expect(entries.filter((entry) => entry.kind === 'codex-computer.wake')).toHaveLength(1)
 })
 
 it('never follows links or descends into directories planted inside the conversation folder', async () => {

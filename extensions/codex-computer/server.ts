@@ -5,22 +5,19 @@ import { defineExtension, defineTool } from '@earendil-works/pi-durable'
 import { access, realpath } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
-import { randomUUID } from 'node:crypto'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { exec } from '../../lib/exec.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { AcknowledgeAction, ContinueAction, DenyAction, GrantAction, StopAction } from './refs.ts'
+import { StopAction } from './refs.ts'
 import type { CodexDetails } from './refs.ts'
-import { State, readState, updateState, validate, sameApp, wake, untrusted } from './state.ts'
+import { State, updateState, validate, untrusted } from './state.ts'
 import { operate, spawnServer } from './app-server.ts'
 import type { Run, Spawn } from './app-server.ts'
 import { resultsDirectory, pruneEvidence } from './evidence.ts'
 
 export const docs = [State]
-export const userActions = ['acknowledge', 'grant', 'deny', 'continue', 'stop']
-// These grant authority over the real desktop and send its screen contents outside the instance.
-export const hostActions = ['acknowledge', 'grant', 'continue']
+export const userActions = ['stop']
 export type Dependencies = { spawn: Spawn; codesign: (path: string) => Promise<void> }
 function runtime(host: ExtensionHost) {
   return host.resource('codex-computer.runs', () => {
@@ -141,24 +138,9 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
               'Delegate to codex-operator with exactly codex_operate and read tools',
             )
           const project = config(await host.projectSettings())
-          if (project.screensToOpenAI !== true || !(await readState(host, 1)).acknowledged) {
-            await updateState(host, conversation, (doc) => {
-              if (!doc.pending.some((p) => p.kind === 'acknowledge'))
-                doc.pending.push({ kind: 'acknowledge', at: Date.now() })
-            })
-            return refuse(
-              'opt_in_required',
-              'Enable project codexComputer.screensToOpenAI and acknowledge that screens go to OpenAI in the card',
-            )
-          }
-          if (
-            args.session &&
-            (await readState(host, conversation)).pending.some((p) => p.kind === 'continue')
-          )
-            return refuse(
-              'budget',
-              'The user must approve Continue in the card before resuming this session',
-            )
+          const apps = Array.isArray(project.apps)
+            ? project.apps.filter((app): app is string => typeof app === 'string')
+            : undefined
           const user = config(await readSettings(userSettingsPath(host.userHome)))
           const configured = project.codexPath ?? user.codexPath ?? 'codex'
           if (typeof configured !== 'string' || !configured.trim())
@@ -208,6 +190,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
             brief: args.brief,
             ...(args.session ? { session: args.session } : {}),
             ...(args.model ? { model: args.model } : {}),
+            ...(apps ? { apps } : {}),
             spawn: deps.spawn,
             signal: ctx.abortSignal,
             output: (text) => api.output(text),
@@ -215,16 +198,6 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
           })
           await updateState(host, conversation, (doc) => {
             doc.last = value.details
-            if (
-              value.details.status === 'budget' &&
-              !doc.pending.some((p) => p.kind === 'continue')
-            )
-              doc.pending.push({
-                kind: 'continue',
-                id: randomUUID(),
-                ...(value.details.session ? { session: value.details.session } : {}),
-                at: Date.now(),
-              })
           })
           return result(value.details, value.image)
         },
@@ -234,67 +207,6 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
 }
 
 export const actions = {
-  acknowledge: implementAction(AcknowledgeAction, async (args, { host }) => {
-    validate(args)
-    if (config(await host.projectSettings()).screensToOpenAI !== true)
-      throw new Error('Enable project codexComputer.screensToOpenAI first')
-    await updateState(host, 1, (doc) => {
-      doc.acknowledged = true
-    })
-    await updateState(host, args.conversation, (doc) => {
-      doc.pending = doc.pending.filter((p) => p.kind !== 'acknowledge')
-    })
-    return readState(host, args.conversation)
-  }),
-  grant: implementAction(GrantAction, async (args, { host }) => {
-    validate(args, true)
-    if (!['once', 'conversation', 'project'].includes(args.scope as string))
-      throw new Error('Invalid grant scope')
-    const app = args.app.trim(),
-      scope = args.scope as 'once' | 'conversation' | 'project'
-    await updateState(host, scope === 'project' ? 1 : args.conversation, (doc) => {
-      doc.grants = doc.grants.filter(
-        (g) =>
-          !sameApp(g.app, app) ||
-          (scope === 'project' ? g.scope !== 'project' : g.scope === 'project'),
-      )
-      doc.grants.push({ app, scope, at: Date.now() })
-    })
-    for (const run of runtime(host).live)
-      if (scope === 'project' || run.conversation === args.conversation) await run.changed(app)
-    return readState(host, args.conversation)
-  }),
-  deny: implementAction(DenyAction, async (args, { host }) => {
-    validate(args, true)
-    const app = args.app.trim()
-    await updateState(host, args.conversation, (doc) => {
-      doc.grants = doc.grants.filter((g) => !sameApp(g.app, app) || g.scope === 'project')
-      doc.grants.push({ app, scope: 'deny', at: Date.now() })
-    })
-    for (const run of runtime(host).live)
-      if (run.conversation === args.conversation) await run.changed(app)
-    return readState(host, args.conversation)
-  }),
-  continue: implementAction(ContinueAction, async (args, { host }) => {
-    validate(args)
-    const pending = (await readState(host, args.conversation)).pending.find(
-      (p) => p.kind === 'continue',
-    )
-    if (!pending) throw new Error('No budget continuation pending')
-    if (!pending.id) throw new Error('Pending continuation has no id')
-    const session = pending.session
-    await wake(
-      host,
-      args.conversation,
-      `The user approved another Codex computer budget. ${session ? `Resume with codex_operate session ${JSON.stringify(session)}` : 'Codex did not return a session; call codex_operate again'} with the remaining brief.`,
-      `codex-computer:continue:${pending.id}`,
-    )
-    // submit() durably admits the wake before resolving; failures leave Continue retryable.
-    await updateState(host, args.conversation, (doc) => {
-      doc.pending = doc.pending.filter((p) => p.id !== pending.id)
-    })
-    return readState(host, args.conversation)
-  }),
   stop: implementAction(StopAction, async (args, { host }) => {
     if (!args || typeof args !== 'object' || Array.isArray(args))
       throw new Error('Expected {conversation?}')
