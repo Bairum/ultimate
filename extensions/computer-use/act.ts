@@ -1107,9 +1107,9 @@ export function appsTool(host: ExtensionHost) {
         if (consent !== 'granted') {
           const refusal = {
             refuse: consent === 'denied' ? 'denied' : 'consent_required',
-            message: `Consent required for ${args.launch}`,
+            message: `Consent required for ${identity.name}`,
           }
-          await pending(host, api.conversationId, args.launch, refusal)
+          await pending(host, api.conversationId, identity.name, refusal)
           return result({ status: refusal.refuse })
         }
         const state = runtime(host)

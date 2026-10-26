@@ -232,7 +232,7 @@ it('starts teaching a window-only helper app by pid once its name is granted', a
   await updateSession(f.host, f.root.id, (doc) => {
     doc.grants.push({ app: 'Citrix Viewer', scope: 'conversation', at: 0 })
   })
-  await startTeaching(f.host, { ...args, app: 'Citrix Viewer' })
+  await startTeaching(f.host, args)
   expect((await readTeach(f.host, f.root.id)).segment).toMatchObject({
     app: 'Citrix Viewer',
     window: 7,

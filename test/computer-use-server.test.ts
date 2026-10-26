@@ -29,7 +29,12 @@ import { matchLabel } from '../extensions/computer-use/perception.ts'
 import type { Region } from '../extensions/computer-use/perception.ts'
 import { readFile } from 'node:fs/promises'
 import { waitFor } from '../extensions/computer-use/wait.ts'
-import { frontmostGate, preflightGates, resolveIdentity } from '../extensions/computer-use/gates.ts'
+import {
+  frontmostGate,
+  identityForPid,
+  preflightGates,
+  resolveIdentity,
+} from '../extensions/computer-use/gates.ts'
 import type { GateContext } from '../extensions/computer-use/gates.ts'
 
 vi.mock('@earendil-works/pi-coding-agent', async (importOriginal) => {
@@ -570,6 +575,10 @@ it('keeps ambiguous identities unresolved, without a window fallback after sever
     { ...citrix, pid: 29201, window_id: 2, title: 'Two' },
   ]
   expect(await resolveIdentity(f.driver, 'Citrix Viewer')).toBeUndefined()
+  // A window-only process named like a listed app never inherits that app's identity.
+  f.fake.windows = [{ app_name: 'Calculator', pid: 555, window_id: 3, title: 'Fake' }]
+  expect(await resolveIdentity(f.driver, '555')).toBeUndefined()
+  expect(await identityForPid(f.driver, 555)).toBeUndefined()
   f.fake.replyFor('list_apps', {
     content: [],
     structuredContent: {

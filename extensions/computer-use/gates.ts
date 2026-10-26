@@ -400,7 +400,11 @@ export async function identityForPid(
   const app = apps.find((a) => a.pid === pid)
   if (app) return typeof app.name === 'string' ? appIdentity(app) : undefined
   const owner = (await windowOwners(driver, { pid }, signal)).find((w) => w.pid === pid)
-  return owner && { name: owner.name }
+  // A window-only owner sharing a listed app's name would inherit that app's grants and takeovers.
+  const name = owner?.name.toLowerCase()
+  if (!owner || apps.some((a) => typeof a.name === 'string' && a.name.toLowerCase() === name))
+    return undefined
+  return { name: owner.name }
 }
 
 export async function resolveIdentity(

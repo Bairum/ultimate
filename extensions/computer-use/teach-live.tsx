@@ -651,9 +651,13 @@ function StartFailure({
   conversation: number
 }) {
   const [error, setError] = useState<string>()
-  if (failure.includes('consent_required')) {
+  // app_identity echoes the typed app, so only a failure without it carries a server-resolved name.
+  const consent = failure.includes('app_identity')
+    ? undefined
+    : /consent_required(?:: (.+))?$/.exec(failure)
+  if (consent) {
     // The canonical name the server resolved, so typing a pid still grants the real app.
-    const name = /consent_required: (.+)$/.exec(failure)?.[1]?.trim() || app.trim()
+    const name = consent[1]?.trim() || app.trim()
     return (
       <div className="space-y-2 text-[12px] leading-relaxed">
         <p className="text-warning">
