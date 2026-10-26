@@ -43,6 +43,7 @@ import type { Read } from './projects.ts'
 import { closedChapter, id, limit, readChapter } from './chapters.ts'
 import type { HistoryRead } from './chapters.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { HistoryApi } from '../history/api.ts'
 import { MessagesApi } from '../messages/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
 import type { SummaryModel } from '../conversations/summary-model.ts'
@@ -127,9 +128,26 @@ function localReads(host: ExtensionHost, context: Context) {
   }
   const search = async (
     text: unknown,
-    options: { conversationId?: number; limit?: number } = {},
+    options: { conversationId?: number; limit?: number; ranked?: boolean } = {},
   ) => {
     if (typeof text !== 'string' || !text) throw new Error('search text must be nonempty')
+    if (options.ranked) {
+      const history = host.want(HistoryApi)
+      if (!history)
+        throw new Error(
+          'Ranked search needs the history extension, which is disabled; enable it with extensions.enable: ["history"]',
+        )
+      return history.search(
+        text,
+        {
+          ...(options.limit !== undefined && { limit: options.limit }),
+          ...(options.conversationId !== undefined && {
+            conversationId: id(options.conversationId),
+          }),
+        },
+        context,
+      )
+    }
     const count = limit(options.limit)
     const records =
       options.conversationId === undefined
@@ -178,6 +196,8 @@ function localReads(host: ExtensionHost, context: Context) {
     (op: HistoryRead, at: number, live: (args: unknown[]) => unknown) =>
     async (args: unknown[]) => {
       const database = await closedChapter(host.home, host.chapter.name, args[at])
+      if (database && (args[at] as { ranked?: unknown }).ranked)
+        throw new Error('Ranked search covers the active chapter only')
       return database ? readChapter(database, op, args) : live(args)
     }
   return {
@@ -186,7 +206,7 @@ function localReads(host: ExtensionHost, context: Context) {
       entries(conversation, options as Parameters<typeof entries>[1]),
     ),
     search: history('search', 1, ([text, options]) =>
-      search(text, options as { conversationId?: number; limit?: number }),
+      search(text, options as { conversationId?: number; limit?: number; ranked?: boolean }),
     ),
     trace: ([query]) => host.trace.query(query ?? {}),
     traceTree: ([traceId]) => {
@@ -371,9 +391,9 @@ function globals(
     {
       name: 'search',
       description:
-        'Case-sensitive substring search over all stored entry JSON, including history before resets and compactions.',
+        'Case-sensitive substring search over all stored entry JSON, including history before resets and compactions. ranked: true ranks words and "phrases" (stemmed, case-insensitive, every word must match) with bm25 over the active chapter\'s local index instead, returning at most 100 { conversation, entry, kind, score, snippet }, best first.',
       signature:
-        '(text: string, options?: { conversationId?: number; limit?: number; project?: string; chapter?: string }): Promise<unknown[]>',
+        '(text: string, options?: { conversationId?: number; limit?: number; ranked?: boolean; project?: string; chapter?: string }): Promise<unknown[]>',
       execute: read('search', 1),
     },
     {

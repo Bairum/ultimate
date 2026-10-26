@@ -32,6 +32,8 @@ Only inside codemode (not standalone model tools):
   busy, inputAt and concluded.
 - `ultimate.entries(conversationId, { kinds?, limit?, before? })` — newest-first fork-aware history, including entries before resets/compactions; `before` is an exclusive entry ID.
 - `ultimate.search(text, { conversationId?, limit? })` — case-sensitive substring over stored entry JSON, including pre-reset/pre-compaction history.
+  With `ranked: true` it asks the `history` extension instead: bm25-ranked `{ conversation, entry, kind, score, snippet }`
+  (at most 100) over the active chapter's local full-text index; it throws when history is disabled or with a closed `chapter`.
 - `ultimate.taskGraph()` — live tasks and ownership graph.
 
 ### Other chapters
