@@ -6,8 +6,11 @@ import {
   getClaudeStatus,
   closeClaudeProcesses,
 } from '@earendil-works/pi-claude-code/src/claude-cli.ts'
+import { defineExtension, GenerationTask, hook, ProviderDoc } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { ClaudeCodeEnv } from './api.ts'
+import type { ClaudeCodeEnvService } from './api.ts'
 import { StatusAction } from './refs.ts'
 
 export function createUltimateClaudeCodeProvider() {
@@ -30,6 +33,17 @@ export default function claudeCode(host: ExtensionHost) {
     const provider = createUltimateClaudeCodeProvider()
     const active = new Set<Promise<unknown>>()
     let closing = false
+    // Requests carry Pi's provider session id, not a conversation: `beforeRequest` below maps one to the other.
+    const sessions = new Map<string, number>()
+    // The current facet's optional ClaudeCodeEnv provider; this resource outlives facets.
+    let envOf = (): ClaudeCodeEnvService | undefined => undefined
+    const withEnv = <O extends { env?: Record<string, string | undefined>; sessionId?: string }>(
+      options: O | undefined,
+    ) => {
+      const sessionId = options?.sessionId
+      const extra = envOf()?.env(sessionId === undefined ? undefined : sessions.get(sessionId))
+      return extra ? ({ ...options, env: { ...options?.env, ...extra } } as O) : options
+    }
     const track = (response: ReturnType<typeof provider.streamSimple>) => {
       const settled = response.result()
       active.add(settled)
@@ -52,16 +66,22 @@ export default function claudeCode(host: ExtensionHost) {
           )
       else await closeClaudeProcesses()
     })
-    const stream: typeof provider.stream = (...args) => {
+    const stream: typeof provider.stream = (model, context, options) => {
       if (closing) throw new Error('Claude Code provider is closing')
-      return track(provider.stream(...args))
+      return track(provider.stream(model, context, withEnv(options)))
     }
-    const streamSimple: typeof provider.streamSimple = (...args) => {
+    const streamSimple: typeof provider.streamSimple = (model, context, options) => {
       if (closing) throw new Error('Claude Code provider is closing')
-      return track(provider.streamSimple(...args))
+      return track(provider.streamSimple(model, context, withEnv(options)))
     }
-    return { provider: { ...provider, stream, streamSimple }, facets: new Set<symbol>() }
+    return {
+      provider: { ...provider, stream, streamSimple },
+      facets: new Set<symbol>(),
+      sessions,
+      setEnv: (resolve: typeof envOf) => (envOf = resolve),
+    }
   })
+  shared.setEnv(() => host.want(ClaudeCodeEnv))
   const provider = { ...shared.provider }
   // Keep subscription accounting, but do not offer an in-app login for external auth.
   if (provider.auth.oauth) Reflect.deleteProperty(provider.auth.oauth, 'login')
@@ -74,7 +94,21 @@ export default function claudeCode(host: ExtensionHost) {
   // The replacement factory runs before the old facet closes. Keep its models
   // registered throughout that handoff, including disposal of a failed reload.
   host.modelRuntime.registerNativeProvider(provider)
-  return { name: 'claude-code' }
+  return defineExtension({
+    name: 'claude-code',
+    hooks: [
+      hook(GenerationTask, {
+        beforeRequest: async (_request, api, context) => {
+          const session = await api.snapshot(ProviderDoc, api.conversationId, context)
+          if (!session) return
+          shared.sessions.delete(session.sessionId)
+          shared.sessions.set(session.sessionId, api.conversationId)
+          if (shared.sessions.size > 10_000)
+            shared.sessions.delete(shared.sessions.keys().next().value!)
+        },
+      }),
+    ],
+  })
 }
 
 export const actions = {

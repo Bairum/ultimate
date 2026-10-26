@@ -246,6 +246,111 @@ if (process.argv.includes('status')) {
   expect(JSON.stringify(carrier)).toContain('"name":"mcp__pi__bash"')
 }, 60000)
 
+it("passes a ClaudeCodeEnv provider's per-conversation environment to the CLI", async () => {
+  const home = await temp()
+  const cli = join(home, 'claude')
+  const requests = join(home, 'requests')
+  await writeFile(
+    cli,
+    `#!${process.execPath}
+import { appendFileSync } from 'node:fs'
+import { createInterface } from 'node:readline'
+if (process.argv.includes('status')) {
+  console.log(JSON.stringify({ loggedIn: true, subscriptionType: 'max' }))
+} else {
+  const emit = (event) => console.log(JSON.stringify(event))
+  for await (const line of createInterface({ input: process.stdin })) {
+    const frame = JSON.parse(line)
+    if (frame.type !== 'user') continue
+    if (frame.shouldQuery === false) {
+      emit({ type: 'result', subtype: 'success', num_turns: 0 })
+      continue
+    }
+    appendFileSync(${JSON.stringify(requests)}, process.pid + ' ' + (process.env.CLAUDE_CONFIG_DIR || '-') + '\\n')
+    const message = { id: 'msg_env', role: 'assistant', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }
+    emit({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: 'ok' } } })
+    emit({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 } })
+    emit({ type: 'assistant', message })
+    emit({ type: 'stream_event', event: { type: 'message_stop' } })
+    emit({ type: 'result', subtype: 'success', usage: message.usage })
+  }
+}
+`,
+  )
+  await chmod(cli, 0o755)
+  vi.stubEnv('PI_CLAUDE_CODE_COMMAND', cli)
+  vi.stubEnv('PI_CLAUDE_CODE_CONFIG_DIR', '')
+  vi.stubEnv('CLAUDE_CONFIG_DIR', '')
+  const projectRoot = join(home, 'project')
+  await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
+  await writeFile(
+    join(projectRoot, '.ultimate/settings.json'),
+    JSON.stringify({ summaryModel: 'unavailable/test', extensions: { disable: ['tailscale'] } }),
+  )
+  new ProjectTrustStore(join(home, '.ultimate')).set(projectRoot, true)
+  const server = await createServer({
+    ultimateRoot: await sourceCopy(home),
+    projectRoot,
+    home: join(home, 'state'),
+    userHome: home,
+    port: 0,
+  })
+  const lines = async () =>
+    (await readFile(requests, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean)
+  try {
+    const model = { provider: 'claude-code', modelId: 'claude-sonnet-5' }
+    await server.host.modelRuntime.refresh({ allowNetwork: false })
+    const conversation = async () => {
+      const created = await server.harness.createConversation(
+        { ownership: { kind: 'ownerless' }, agent: { model } },
+        context,
+      )
+      const ask = async () =>
+        (await created.submit({ type: 'input', content: 'Hi.' }, context)).wait(context)
+      return Object.assign(ask, { id: created.id })
+    }
+    const [a, b] = [await conversation(), await conversation()]
+
+    // Without a provider the request runs in the ambient environment.
+    await a()
+    expect((await lines()).map((line) => line.split(' ')[1])).toEqual(['-'])
+
+    const folder = join(projectRoot, '.ultimate/extensions/claude-env')
+    await mkdir(folder, { recursive: true })
+    await writeFile(
+      join(folder, 'server.ts'),
+      `import { defineExtension } from '@earendil-works/pi-durable'
+export default function (host) {
+  host.implement({ name: 'claude-code.env' }, {
+    env: (conversationId) => ({ PI_CLAUDE_CODE_CONFIG_DIR: '/config/' + conversationId }),
+  })
+  return defineExtension({ name: 'claude-env' })
+}
+`,
+    )
+    server.vite.watcher.emit('change', join(folder, 'server.ts'))
+    await until(() =>
+      server.extensions
+        .catalogue()
+        .apis.some((api) => api.name === 'claude-code.env' && !!api.provider),
+    )
+    await a()
+    await b()
+    await a()
+    const [, first, second, third] = (await lines()).map((line) => line.split(' '))
+    expect([first[1], second[1], third[1]]).toEqual([
+      `/config/${a.id}`,
+      `/config/${b.id}`,
+      `/config/${a.id}`,
+    ])
+    // A distinct environment gets its own warm process; the same one reuses it.
+    expect(second[0]).not.toBe(first[0])
+    expect(third[0]).toBe(first[0])
+  } finally {
+    await server.close()
+  }
+}, 60000)
+
 for (const lifecycle of ['reload', 'reopen', 'swap', 'cancel', 'permanent'] as const) {
   it(`preserves Claude Code requests across ${lifecycle}`, async () => {
     const home = await temp()
