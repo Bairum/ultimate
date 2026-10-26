@@ -2,7 +2,7 @@
  * The searchable file set: what git lists in the scope, minus hidden files, build output, lockfiles, binaries and
  * credential material. Reads are text-only (a NUL byte in the first 8 KB means binary) and capped at 4 MB.
  */
-import { open, stat } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { exec } from '../../lib/exec.ts'
 
@@ -14,7 +14,8 @@ export type MatchedLine = { rel: string; line: number; text: string }
 
 /** Where the cascade lists, scans and reads files; tests use an in-memory one. */
 export type Source = {
-  list(): Promise<FileEntry[]>
+  /** Stops listing when `signal` aborts. */
+  list(signal?: AbortSignal): Promise<FileEntry[]>
   /** Lines containing any keyword (case-insensitive) in the listed files. */
   scan(keywords: readonly string[], signal: AbortSignal): Promise<MatchedLine[]>
   /** Up to `limit` bytes of text, or undefined for a binary, blank or unreadable file. */
@@ -86,6 +87,32 @@ export function eligible(rel: string, size: number) {
   return dot < 0 || !BINARY_EXTENSIONS.has(lower.slice(dot + 1))
 }
 
+/** Bytes of a file the search reads, lexically and for the judge. */
+export const READ_LIMIT = 4 * 1024 * 1024
+
+/** The size of a regular text file (no NUL byte in its first 8 KB); undefined for anything else or unreadable. */
+async function probe(path: string) {
+  let file
+  try {
+    file = await open(path, 'r')
+  } catch (error) {
+    // A path the index still lists may be deleted or unreadable: it is not a searchable file.
+    if (['ENOENT', 'EACCES', 'ELOOP'].includes((error as NodeJS.ErrnoException).code!))
+      return undefined
+    throw error
+  }
+  try {
+    const info = await file.stat()
+    // A submodule is listed as a directory.
+    if (!info.isFile()) return undefined
+    const head = Buffer.alloc(Math.min(8192, info.size))
+    const { bytesRead } = await file.read(head, 0, head.length, 0)
+    return head.subarray(0, bytesRead).includes(0) ? undefined : info.size
+  } finally {
+    await file.close()
+  }
+}
+
 /** Up to `limit` bytes of a text file, cut back to its last whole line when longer. */
 export async function readText(path: string, limit: number): Promise<ReadText | undefined> {
   const file = await open(path, 'r')
@@ -111,22 +138,22 @@ export async function readText(path: string, limit: number): Promise<ReadText | 
 /** Files git tracks or would track (gitignore respected) under `scope`, relative to `cwd`. */
 export function gitSource(cwd: string, scope: string): Source {
   let listed: Promise<FileEntry[]> | undefined
-  const list = () =>
+  const list = (signal?: AbortSignal) =>
     (listed ??= (async () => {
       const { stdout } = await exec(
         'git',
         ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', scope],
-        { cwd, maxBuffer: 64 * 1024 * 1024 },
+        { cwd, signal, maxBuffer: 64 * 1024 * 1024 },
       )
       const paths = [...new Set(stdout.split('\0').filter(Boolean))]
       const entries: FileEntry[] = []
       for (let start = 0; start < paths.length; start += 256) {
+        signal?.throwIfAborted()
         const sized = await Promise.all(
           paths.slice(start, start + 256).map(async (rel) => {
             if (!eligible(rel, 1)) return undefined
-            // A path the index still lists may be deleted or a submodule: it is not a searchable file.
-            const info = await stat(join(cwd, rel)).catch(() => undefined)
-            return info?.isFile() && eligible(rel, info.size) ? { rel, size: info.size } : undefined
+            const size = await probe(join(cwd, rel))
+            return size !== undefined && eligible(rel, size) ? { rel, size } : undefined
           }),
         )
         for (const entry of sized) if (entry) entries.push(entry)
@@ -142,11 +169,13 @@ export function gitSource(cwd: string, scope: string): Source {
         '--ignore-case',
         '--fixed-strings',
         '--line-number',
+        '--byte-offset',
         '--with-filename',
         '--null',
       ]
-      flags.push('--no-heading', '--color', 'never', '--max-count', '200', '--max-columns', '400')
-      flags.push('--max-filesize', '4M')
+      flags.push('--no-heading', '--color', 'never')
+      // Past 200 matching lines a file's log-scaled count barely moves; a long line counts by its first 400 chars.
+      flags.push('--max-count', '200', '--max-columns', '400', '--max-columns-preview')
       for (const keyword of keywords) flags.push('-e', keyword)
       let stdout: string
       try {
@@ -168,8 +197,11 @@ export function gitSource(cwd: string, scope: string): Source {
         // rg walks the tree itself: keep only what the eligible listing admits.
         if (!files.has(rel)) continue
         const rest = row.slice(nul + 1)
-        const colon = rest.indexOf(':')
-        lines.push({ rel, line: Number(rest.slice(0, colon)), text: rest.slice(colon + 1) })
+        const [line, offset] = rest.split(':', 2)
+        // Like reads, the lexical pass sees only a file's first 4 MB.
+        if (Number(offset) >= READ_LIMIT) continue
+        const text = rest.slice(line.length + offset.length + 2)
+        lines.push({ rel, line: Number(line), text })
       }
       return lines
     },

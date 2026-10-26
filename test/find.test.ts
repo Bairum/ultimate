@@ -236,3 +236,42 @@ it('sends nothing without the opt-in or without classify, and says why', async (
   }
   expect(ask).not.toHaveBeenCalled()
 })
+
+/** A promise that rejects only when `signal` aborts: work that outlives the cap. */
+const hang = <T>(signal?: AbortSignal) =>
+  new Promise<T>((_, reject) => signal?.addEventListener('abort', () => reject(signal.reason)))
+
+it('at the cap while scanning, ranks by file names and says it is partial; while listing, fails', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    const ask = vi.fn<ClassifyService['ask']>()
+    const scanning = {
+      ...memory(repository()),
+      scan: (_: unknown, signal: AbortSignal) => hang<never>(signal),
+    }
+    const options = {
+      query: 'where the lander fast-forwards main',
+      project: 'repo',
+      classify: { ask },
+    }
+    const running = find({ ...options, source: scanning, sendSource: true })
+    await vi.advanceTimersByTimeAsync(20_000)
+    const { text, details } = await running
+    expect(text.split('\n').slice(0, 3)).toEqual([
+      'Semantic find stopped at the 20 s cap during scanning before verifying anything; showing the lexical ranking',
+      '2 lexical matches for "where the lander fast-forwards main", strongest first',
+      'partial: stopped at the 20 s cap while scanning; ranked by file names only',
+    ])
+    expect(details.hits.map((hit) => hit.path)).toEqual(['src/lander.ts', 'test/lander.test.ts'])
+    expect(ask).not.toHaveBeenCalled()
+
+    const listing = { ...memory({}), list: (signal?: AbortSignal) => hang<never>(signal) }
+    const stuck = find({ ...options, source: listing, sendSource: false }).catch(
+      (error: unknown) => error,
+    )
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(await stuck).toEqual(new Error('find stopped at the 20 s cap while listing files'))
+  } finally {
+    vi.useRealTimers()
+  }
+})

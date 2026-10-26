@@ -6,6 +6,7 @@
 import { basename } from 'node:path'
 import type { JsonValue } from '@earendil-works/chord'
 import type { ClassifyQuestion, ClassifyService } from '../classify/api.ts'
+import { READ_LIMIT } from './files.ts'
 import type { FileEntry, Source } from './files.ts'
 import type { Passage, Range } from './lexical.ts'
 import {
@@ -39,7 +40,6 @@ const VERIFIED = 40
 const VERIFY_BATCH = 3
 /** Verified probability at which a passage counts and its file is a hit. */
 const THRESHOLD = 0.2
-const READ_LIMIT = 4 * 1024 * 1024
 const TIMEOUT = 20_000
 /** Lexical files shown when nothing is judged. */
 const LEXICAL_HITS = 10
@@ -236,11 +236,18 @@ export async function find(options: FindOptions): Promise<{ text: string; detail
   try {
     signal?.throwIfAborted()
     const words = deriveKeywords(query, options.keywords)
-    const entries = await source.list()
+    const entries = await source.list(deadline.signal).catch((error: unknown) => {
+      signal?.throwIfAborted()
+      // Nothing can be ranked without the file list.
+      if (stopped) throw new Error(`find stopped at the ${seconds} s cap while listing files`)
+      throw error
+    })
     stats.listed = entries.length
+    wave = 'scanning'
     const lines = await source.scan(words, deadline.signal).catch((error: unknown) => {
       signal?.throwIfAborted()
-      if (stopped) throw new Error(`find stopped at the ${seconds} s cap while scanning files`)
+      // Without counts, the ranking falls back to keywords in paths; the partial line says so.
+      if (stopped) return []
       throw error
     })
     const counts = index(words, lines)
@@ -261,7 +268,18 @@ export async function find(options: FindOptions): Promise<{ text: string; detail
         }))
       stats.cost = stats.inputTokens * PRICE
       stats.ms = performance.now() - started
-      const details: FindDetails = { query, mode: 'lexical', reason, hits, stats }
+      const partial =
+        stopped === 'scanning'
+          ? `partial: stopped at the ${seconds} s cap while scanning; ranked by file names only`
+          : undefined
+      const details: FindDetails = {
+        query,
+        mode: 'lexical',
+        reason,
+        ...(partial ? { partial } : {}),
+        hits,
+        stats,
+      }
       return { text: render(details), details }
     }
     if (!options.sendSource) return lexical(OPT_IN)

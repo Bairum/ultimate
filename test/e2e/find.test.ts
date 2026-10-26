@@ -23,18 +23,22 @@ it('lists and scans only git-visible, eligible text files', async () => {
       blob: Buffer.from('fastForward\0binary'),
       'empty.ts': '',
       'node_modules/pkg.js': 'fastForward vendored\n',
+      // A match past the first 4 MB is not counted.
+      'src/big.ts': `fastForward\n${'x'.repeat(4 * 1024 * 1024)}\nfastForward\n`,
     }
     for (const [rel, content] of Object.entries(files)) await writeFile(join(root, rel), content)
     await exec('git', ['add', 'src/lander.ts'], { cwd: root })
     const source = gitSource(root, '.')
-    // Tracked and untracked files alike; gitignore, credentials, binaries, empty and vendored files dropped.
+    // Tracked and untracked files alike; gitignore, credentials, binaries (by name or NUL byte), empty and vendored
+    // files dropped.
     expect((await source.list()).map((entry) => entry.rel)).toEqual([
-      'blob',
+      'src/big.ts',
       'src/lander.ts',
       'src/notes.md',
     ])
     const lines = await source.scan(['fastforward'], new AbortController().signal)
     expect(lines.map((line) => `${line.rel}:${line.line}`).toSorted()).toEqual([
+      'src/big.ts:1',
       'src/lander.ts:1',
       'src/notes.md:1',
     ])
@@ -44,6 +48,7 @@ it('lists and scans only git-visible, eligible text files', async () => {
       truncated: false,
     })
     expect((await gitSource(root, 'src').list()).map((entry) => entry.rel)).toEqual([
+      'src/big.ts',
       'src/lander.ts',
       'src/notes.md',
     ])
