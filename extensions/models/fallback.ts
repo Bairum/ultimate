@@ -45,15 +45,17 @@ export async function fallback(
   const paid = wasSubscription(host, from.provider)
   // Same model elsewhere first, then the definition's pin, then the configured default; a subscription takes only
   // another subscription.
-  const same = fresh.find((model) => model.id === from.modelId && model.provider !== from.provider)
+  const allowed = (provider: string) => !paid || subscription(host, provider)
+  const same = fresh.find(
+    (model) =>
+      model.id === from.modelId && model.provider !== from.provider && allowed(model.provider),
+  )
   const candidates: [Ref | undefined, Fallback['reason']][] = [
     [same && { provider: same.provider, modelId: same.id }, 'same'],
     [await host.want(Pin)?.pin(tx, conversationId), 'pin'],
     [configuredModel(fresh, host.settings), 'default'],
   ]
-  const found = candidates.find(
-    ([ref]) => hasLogin(fresh, ref) && (!paid || subscription(host, ref!.provider)),
-  )
+  const found = candidates.find(([ref]) => hasLogin(fresh, ref) && allowed(ref!.provider))
   const data: Fallback = found
     ? { from: name(from), to: name(found[0]!), reason: found[1] }
     : { from: name(from), reason: 'none' }
@@ -98,7 +100,10 @@ async function mayHaveLogin(host: ExtensionHost, provider: string) {
  * says `isSubscription`.
  */
 function wasSubscription(host: ExtensionHost, provider: string) {
-  return host.modelRuntime.getProvider(provider)?.auth.oauth?.isSubscription === true
+  return (
+    !BILLED.has(provider) &&
+    host.modelRuntime.getProvider(provider)?.auth.oauth?.isSubscription === true
+  )
 }
 
 /** Whether this conversation's newest fallback entry already asks about `from`, so each next input says it once. */

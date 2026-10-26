@@ -194,7 +194,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..269d75b22f2711a4d0d2bf76f58b11e6
        if (!usage || typeof usage.input_tokens !== "number" || typeof usage.output_tokens !== "number") {
          throw new Error("Claude Code response did not include complete token usage");
 diff --git a/src/provider.ts b/src/provider.ts
-index e579496219793f8668e0c8b26dc38efc453fe3bb..d888187d1263d8f48cfc72089da6a3700893e1fb 100644
+index e579496219793f8668e0c8b26dc38efc453fe3bb..50d13a1013f6056bdaa5a4bdefd527226d0eed53 100644
 --- a/src/provider.ts
 +++ b/src/provider.ts
 @@ -1,4 +1,4 @@
@@ -207,21 +207,22 @@ index e579496219793f8668e0c8b26dc38efc453fe3bb..d888187d1263d8f48cfc72089da6a370
  // through auth hooks. Remember the latest values so model discovery and the
  // status command look at the same Claude Code installation as requests do.
  let lastProviderEnv: ProviderEnv | undefined;
-+/** The last definite login check per provider environment, kept while a status probe gives no answer. */
-+const knownChecks = new Map<string, AuthCheck | undefined>();
++/** The last confirmed login per provider environment, kept while a status probe gives no answer. */
++const knownChecks = new Map<string, AuthCheck>();
  
  /** The environment used to locate and configure Claude Code. */
  export function claudeCodeEnv(): Record<string, string | undefined> {
-@@ -47,14 +49,25 @@ export function createClaudeCodeProvider() {
+@@ -47,14 +49,27 @@ export function createClaudeCodeProvider() {
          async check({ ctx, signal }) {
            const providerEnv = await providerEnvironment(ctx);
            lastProviderEnv = providerEnv;
 +          const key = JSON.stringify(providerEnv ?? {});
            const status = await getClaudeStatus(claudeCodeEnv(), signal);
-+          // A status Claude Code did not give (a timeout or a crash under load) changes nothing: the last answer for
-+          // this installation stands, so its models never vanish for one failed probe.
++          // A status Claude Code did not give (a timeout or a crash under load) is no logout: a login it confirmed
++          // before stands, so its models never vanish for one failed probe; without one the check fails as unknown.
 +          if (status.unknown) {
-+            if (knownChecks.has(key)) return knownChecks.get(key);
++            const known = knownChecks.get(key);
++            if (known) return known;
 +            throw new Error(status.detail ?? "Claude Code status unknown");
 +          }
            // Only report the provider as configured when Claude Code is
@@ -238,7 +239,8 @@ index e579496219793f8668e0c8b26dc38efc453fe3bb..d888187d1263d8f48cfc72089da6a370
 +                  type: status.subscription ? "oauth" : "api_key",
 +                  source: status.subscription ? `Claude Code ${status.plan ?? "subscription"}` : "Claude Code CLI",
 +                };
-+          knownChecks.set(key, check);
++          if (check) knownChecks.set(key, check);
++          else knownChecks.delete(key);
 +          return check;
          },
          async resolve({ ctx, signal }) {
