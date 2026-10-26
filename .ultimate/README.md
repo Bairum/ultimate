@@ -6,7 +6,8 @@ work, and changes its own code while you talk to it.
 Every built-in is already on; this setup adds how the repository is landed and reviewed:
 
 - `settings.json`: each worktree isolate installs its dependencies, and the lander runs `pnpm check`, then
-  `pnpm test` and `pnpm test:e2e` in parallel, and pushes to `origin`.
+  `pnpm test`, and pushes to `origin`. `pnpm test:e2e` is run by hand, not gated on landing: its fixtures read
+  Linux-only `/proc` and fail on macOS.
 - `agents/lander.md`: the lander fixes a submission that fails to land, then lands it once every check passes again.
 - `agents/reviewer-*.md`: the review team (correctness, simplicity, architecture), each on its own model; the shipped
   `reviewer` starts them in parallel and returns one merged verdict.
