@@ -9,6 +9,16 @@ Continue starts onboarding once per root, as above. Continue waits for both, sta
 there is no second page. Escape or the close button records completion without changing settings. Closing returns
 focus to the composer. An automated browser (`navigator.webdriver`) does not get this dialog.
 
+## Turning it off
+
+The extension is core tier, so `extensions.disable` ignores it. A machine whose user knows Ultimate sets
+`"onboarding": false` in `~/.ultimate/settings.json` (user settings only; a project cannot turn it off for its
+users). `status` then reports `off: true` and `firstRun: false`: no Get ready, no splash first-run version, no Start
+here card, so no `onboarding.start` input and no setup cards, and no "set up git" reminder. An undecided project
+setup keeps its **project setup** reminder, since nothing else asks; with onboarding off, clicking it opens the
+Extensions panel at the project decision instead of asking @ultimate. The Extensions panel, ⌘K Get ready… and Walk me
+through Ultimate still work on demand.
+
 ## Onboarding with @ultimate
 
 Continue on Get ready, or **Set up with @ultimate** on the Start here card, calls the user-only action

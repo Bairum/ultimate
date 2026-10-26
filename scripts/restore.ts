@@ -248,7 +248,7 @@ export async function main(args = process.argv.slice(2)) {
     },
   })
   if (!cloud)
-    throw new Error('Cloud backups are off: set cloud.url (⌘K → Join cloud fleet) and try again.')
+    throw new Error('Cloud backups are off: set cloud.url (⌘K → Join cloud backups) and try again.')
   const secret = process.env[SNAPSHOT_KEY] ?? (await readSecret(user, SNAPSHOT_KEY))
   if (!secret)
     throw new Error(`Missing ${SNAPSHOT_KEY}. Add it in the Secrets panel (⌘K → Secrets).`)

@@ -72,7 +72,7 @@ const KNOWN = new Set([
 ])
 
 /**
- * A structured summary of a failure instead of its text, so no credential can reach `health.json` or the cloud: the
+ * A structured summary of a failure instead of its text, so no credential can reach `health.json`: the
  * HTTP status when the message starts with one or names it (`status 401`, `HTTP 429`), then the words of `KNOWN` it
  * contains, in order, without duplicates. Anything else is dropped; without a recognisable part it is "request failed".
  */

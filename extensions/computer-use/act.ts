@@ -18,7 +18,7 @@ import { defineTool } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ClassifyApi } from '../classify/api.ts'
 import { stepTarget } from './policy.ts'
-import { redactor } from './content.ts'
+import { redactor, untrusted } from './content.ts'
 import { path } from './parse-observation.ts'
 import { ObservationUnavailable } from './tool-helpers.ts'
 import { selectWindows } from './windows.ts'
@@ -57,7 +57,13 @@ import {
 } from './gates.ts'
 import type { GateContext, Refusal } from './gates.ts'
 import * as task from './task.ts'
-import { pixelDefaults, screenStable } from './perception.ts'
+import {
+  matchLabel,
+  parseRegions,
+  pixelDefaults,
+  screenStable,
+  screenshotPoint,
+} from './perception.ts'
 import { verifyOcr, ocrEvidence } from './verify-ocr.ts'
 import { waitFor } from './wait.ts'
 import { pruneEvidence } from './evidence-files.ts'
@@ -212,7 +218,12 @@ export async function act(
     const redact = redactor(values)
     const needsPixels =
       runtimeState.observations.get(cacheKey(conversation, args.app))?.degraded ||
-      args.actions?.some((s) => ('x' in s && s.x !== undefined) || s.kind === 'wait') ||
+      args.actions?.some(
+        (s) =>
+          ('x' in s && s.x !== undefined) ||
+          ('expect_label' in s && !!s.expect_label) ||
+          s.kind === 'wait',
+      ) ||
       (Array.isArray(args.expect) ? args.expect.some((p) => p.ocr) : args.expect?.ocr)
     const maxDimension = await imageSize(host)
     const config = { ...pixelDefaults, ...(needsPixels ? (await settings(host)).pixel : {}) }
@@ -454,6 +465,52 @@ export async function act(
         if (matches.length === 1) {
           original = { ...original, element: matches[0].token }
           remapped = true
+        }
+      }
+      // A click naming only a label and a capture clicks the centre of the one OCR text region matching it there;
+      // the dispatch gates then check that point like any pixel click.
+      if (
+        (original.kind === 'click' ||
+          original.kind === 'double_click' ||
+          original.kind === 'right_click') &&
+        original.x === undefined &&
+        original.y === undefined &&
+        !original.element &&
+        original.expect_label &&
+        original.capture
+      ) {
+        if (original.capture !== observation?.capture?.id)
+          return { status: 'refused', code: 'stale', message: 'Pixels need the latest capture id.' }
+        const parsed = await parseRegions(driver, original.capture, {}, signal)
+        if (!screenshotPoint(parsed.coordinateSpace, { x: 0, y: 0 }))
+          return {
+            status: 'refused',
+            code: 'label_mismatch',
+            message: 'The capture has no usable coordinate metadata. Observe again.',
+          }
+        const found = matchLabel(
+          parsed.regions,
+          original.expect_label,
+          undefined,
+          0,
+          config.minConfidence,
+          true,
+        )
+        if (!found.match) {
+          const nearest = found.candidates.map((r) => redact(r.label).slice(0, 60))
+          return {
+            status: 'refused',
+            code: found.ambiguous ? 'label_ambiguous' : 'label_mismatch',
+            message: found.ambiguous
+              ? 'That label is on screen more than once; click it by x/y instead.'
+              : `No OCR text on the capture matches that label. On screen: ${untrusted(nearest)}`,
+          }
+        }
+        const { bounds } = found.match
+        original = {
+          ...original,
+          x: Math.round(bounds.x + bounds.width / 2),
+          y: Math.round(bounds.y + bounds.height / 2),
         }
       }
       let next = original
@@ -1207,7 +1264,12 @@ export const stepSchema = Type.Unsafe<Step>(
       x: Type.Optional(Type.Number()),
       y: Type.Optional(Type.Number()),
       capture: Type.Optional(Type.String()),
-      expect_label: Type.Optional(Type.String()),
+      expect_label: Type.Optional(
+        Type.String({
+          description:
+            'Screen text at the click; OCR spelling is tolerated. With capture and no x/y, clicks the centre of the one OCR text region matching it.',
+        }),
+      ),
     }),
     Type.Object({ kind: Type.Literal('type'), element, text: Type.String() }),
     Type.Object({ kind: Type.Literal('set_value'), element, value: Type.String() }),

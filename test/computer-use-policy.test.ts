@@ -11,6 +11,7 @@ import {
 import type { Grant } from '../extensions/computer-use/policy.ts'
 import type { Element, Observation, Step } from '../extensions/computer-use/types.ts'
 import { pngHeader } from './computer-use-fake-driver.ts'
+import { fuzzyLabel } from '../extensions/computer-use/perception.ts'
 
 const target: Element = {
   token: 's1:1',
@@ -221,4 +222,17 @@ it('confirms keypad and newline committing key aliases', () => {
     '\r',
   ])
     expect(consequential({ kind: 'key', key }, undefined).hit).toBe(true)
+})
+
+it('reads OCR-garbled and cut-off labels as the label, never a negation or another label', () => {
+  const label = 'Describe your problem or question'
+  expect(fuzzyLabel('Decibe .', label)).toBe(true)
+  expect(fuzzyLabel('Describe your probem', label)).toBe(true)
+  expect(fuzzyLabel('DESCRIBE', label)).toBe(true)
+  expect(fuzzyLabel('Read  elph ?', label)).toBe(false)
+  expect(fuzzyLabel('your problem', label)).toBe(false)
+  expect(fuzzyLabel('Uninstalled', 'installed')).toBe(false)
+  expect(fuzzyLabel('Not instaled', 'installed')).toBe(false)
+  expect(fuzzyLabel('Sned', 'Send')).toBe(false)
+  expect(fuzzyLabel('Contnue', 'Continue')).toBe(true)
 })

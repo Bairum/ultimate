@@ -1,5 +1,5 @@
-/* oxlint-disable ultimate/api-file-shape -- Shared browser-safe enum constants are part of this extension's public contract. */
 /** Advisor contract shared by server and web: config, documents, entry data, actions and events. Browser-safe. */
+/* oxlint-disable ultimate/api-file-shape -- Shared browser-safe enum constants are part of this extension's public contract. */
 import { actionRef, docRef } from '../../shared/extension-api.ts'
 import { defineEvent } from '../../shared/events.ts'
 

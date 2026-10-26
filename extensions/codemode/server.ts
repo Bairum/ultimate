@@ -235,6 +235,12 @@ function globals(
    * Read `op` here, or in the project its last argument's `project` names (the option `options` at `at`), through
    * that project's running instance.
    */
+  /** A read's `machine` option: which machine's instance of the project answers when it runs on several. */
+  const remoteMachine = (machine: unknown) => {
+    if (machine !== undefined && (typeof machine !== 'string' || !machine))
+      throw new Error('machine must be nonempty')
+    return machine
+  }
   const read =
     (op: Read, at: number): CodemodeTool['execute'] =>
     async (values, { signal }) => {
@@ -252,10 +258,16 @@ function globals(
         )
           throw new Error('chapter and project cannot be used together')
         if (typeof project !== 'string' || !project) throw new Error('project must be nonempty')
-        const { project: _project, ...rest } = options as Record<string, unknown>
+        const { project: _project, machine, ...rest } = options as Record<string, unknown>
         args[at] = rest
         // The call's own signal ends with the script, its timeout or the conversation's abort.
-        const remote = await readProject(host, project, op, args as JsonValue[], signal)
+        const remote = await readProject(
+          host,
+          { project, machine: remoteMachine(machine) },
+          op,
+          args as JsonValue[],
+          signal,
+        )
         if (remote) return remote.value
       }
       return reads[op](args)
@@ -320,14 +332,15 @@ function globals(
       description:
         'Recorded calls (service, action, reactor, tool, model): the newest `limit` (default 100, at most 1000), oldest first; filter by trace id, conversation or ISO `since`.',
       signature:
-        '(query?: { trace?: string; conversation?: number; since?: string; limit?: number; project?: string }): Promise<{ id: string; parent?: string; trace: string; at: string; ms: number; caller: string; callee: string; kind: string; name: string; ok: boolean; error?: string; args?: string; result?: string; conversation?: number; task?: number; entry?: number }[]>',
+        '(query?: { trace?: string; conversation?: number; since?: string; limit?: number; project?: string; machine?: string }): Promise<{ id: string; parent?: string; trace: string; at: string; ms: number; caller: string; callee: string; kind: string; name: string; ok: boolean; error?: string; args?: string; result?: string; conversation?: number; task?: number; entry?: number }[]>',
       execute: read('trace', 0),
     },
     {
       name: 'traceTree',
       description:
         'The calls of one trace nested under their parents (`children`), in start order.',
-      signature: '(traceId: string, options?: { project?: string }): Promise<unknown[]>',
+      signature:
+        '(traceId: string, options?: { project?: string; machine?: string }): Promise<unknown[]>',
       execute: read('traceTree', 1),
     },
     {
@@ -377,7 +390,8 @@ function globals(
       name: 'conversations',
       description:
         'All stored conversations: id, owner, and for listed ones title, label, cwd, busy, inputAt and concluded. chapter reads another chapter read-only (not with project); cross-chapter links are written <chapter>#123.',
-      signature: '(options?: { project?: string; chapter?: string }): Promise<unknown[]>',
+      signature:
+        '(options?: { project?: string; machine?: string; chapter?: string }): Promise<unknown[]>',
       execute: read('conversations', 0),
     },
     {
@@ -385,7 +399,7 @@ function globals(
       description:
         'Newest-first fork-aware stored history, including before resets and compactions. before is an exclusive entry ID.',
       signature:
-        '(conversationId: number, options?: { kinds?: string[]; limit?: number; before?: number; project?: string; chapter?: string }): Promise<unknown[]>',
+        '(conversationId: number, options?: { kinds?: string[]; limit?: number; before?: number; project?: string; machine?: string; chapter?: string }): Promise<unknown[]>',
       execute: read('entries', 1),
     },
     {
@@ -393,7 +407,7 @@ function globals(
       description:
         'Case-sensitive substring search over all stored entry JSON, including history before resets and compactions. ranked: true ranks words and "phrases" (stemmed, case-insensitive, every word must match) with bm25 over the active chapter\'s local index instead, returning at most 100 { conversation, entry, kind, score, snippet }, best first.',
       signature:
-        '(text: string, options?: { conversationId?: number; limit?: number; ranked?: boolean; project?: string; chapter?: string }): Promise<unknown[]>',
+        '(text: string, options?: { conversationId?: number; limit?: number; ranked?: boolean; project?: string; machine?: string; chapter?: string }): Promise<unknown[]>',
       execute: read('search', 1),
     },
     {
@@ -429,7 +443,7 @@ function globals(
       description:
         'Read an exported extension document or pi.agent, pi.inbox, pi.live or pi.usage by kind; defaults to this conversation, or to conversation 1 in another project.',
       signature:
-        '(kind: string, conversationId?: number, options?: { project?: string }): Promise<unknown>',
+        '(kind: string, conversationId?: number, options?: { project?: string; machine?: string }): Promise<unknown>',
       // Another project has no conversation of yours to default to: it reads conversation 1 unless one is named.
       execute: async (values, { signal }) => {
         const [kind, conversation, options] = values as [unknown, unknown, unknown]
@@ -440,7 +454,8 @@ function globals(
         if (project !== undefined) {
           if (typeof project !== 'string' || !project) throw new Error('project must be nonempty')
           const args = [kind, conversation ?? ROOT_CONVERSATION_ID] as JsonValue[]
-          const remote = await readProject(host, project, 'doc', args, signal)
+          const machine = remoteMachine((options as Record<string, unknown>).machine)
+          const remote = await readProject(host, { project, machine }, 'doc', args, signal)
           if (remote) return remote.value
         }
         return reads.doc([kind, conversation ?? conversationId])

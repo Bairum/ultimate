@@ -4,7 +4,7 @@ Encrypted project backups in the user's cloud, inert until configured. A project
 starts it on; the cloud holds its backups and a register of which machine backed up what, and `pnpm restore` installs
 a backup on another machine.
 
-Configure once in **user** settings (`~/.ultimate/settings.json`), or with ⌘K → **Join cloud fleet**:
+Configure once in **user** settings (`~/.ultimate/settings.json`), or with ⌘K → **Join cloud backups**:
 
 ```json
 { "cloud": { "url": "wss://example.com", "machine": "my-machine" } }
@@ -35,20 +35,9 @@ Its backups then refuse before uploading anything, forced or not, for agents, Dr
 status line shows `satellite · no backups` with no backup buttons. The satellite still reads the register, so it
 reaches the owner (answers to its `tell`s included).
 
-A satellite never commits a backup, so the register holds no tailnet address for it. On each machine that reaches it,
-name its address in user settings, per machine and project:
-
-```json
-{
-  "cloud": {
-    "satellites": { "my-laptop": { "ultimate": "https://my-laptop.tail1234.ts.net:4747" } }
-  }
-}
-```
-
-`tell({ project, machine })` and codemode reads with that machine then go to that URL (`lib/remote.ts`), before the
-register is asked. The URL is the satellite's Tailscale Serve address (its status line's tailnet link), and the caller's
-tailnet login must be in the satellite's `tailscale.allow`.
+A satellite never commits a backup, so the register holds no tailnet address for it. Machines that reach it name its
+address in the general `remotes` user setting ([Discovery and settings](../../docs/settings.md)), which is asked
+before the register.
 
 `api.ts` exposes optional `CloudApi`: `status()` returns `off`, `local`, `satellite` or `on`, and `backup()` performs the same
 non-forced backup of the active chapter as the user action. Dream uses it for the final backup before falling asleep;
@@ -119,7 +108,7 @@ Only that chapter's old state moves aside, into `~/.ultimate/backups/restore-<ti
 locks still guard the restore. Restoring a later chapter registers it in `chapters.json` if needed and makes it active.
 The first chapter keeps the original key, paths and restore behaviour.
 
-**Join** (⌘K → **Join cloud fleet**, or **Join** on the setup row) asks for the cloud URL, machine name and both
+**Join** (⌘K → **Join cloud backups**, or **Join** on the setup row) asks for the cloud URL, machine name and both
 secrets, checks `GET /sync/register` with the token (401: "The cloud refused the token"; anything else but 200:
 "Cannot reach <host>"), and only then stores the secrets and `cloud.url`/`cloud.machine`. It lists the projects the
 register knows. Backups read the configuration from the next start on.

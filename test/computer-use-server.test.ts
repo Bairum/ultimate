@@ -1921,11 +1921,60 @@ it('uses whole tokens for OCR disappears evidence', async () => {
   expect(data(finished).status).toBe('done')
 })
 
-it('inverts affine action coordinates before grounding a click', async () => {
+// Citrix: a 1920-point window captured at 1568 pixels. Click x/y and OCR regions are both screenshot pixels; the
+// gate inverted the action transform and so checked the label next to the one the agent clicked.
+async function scaledComposer() {
   const f = await pixelFixture()
-  f.fake.surface.coordinateSpace = { kind: 'affine', m11: 2, m12: 0, m21: 0, m22: 1, tx: 10, ty: 0 }
-  expect(data(await f.run([{ ...f.pixel, x: 250, y: 90 } as Step], true)).status).toBe('delivered')
-  expect(f.fake.calls.find((c) => c.tool === 'click')?.args).toMatchObject({ x: 250, y: 90 })
+  f.fake.surface.coordinateSpace = {
+    kind: 'affine',
+    m11: 1920 / 1568,
+    m12: 0,
+    m21: 0,
+    m22: 1050 / 858,
+    tx: 0,
+    ty: 0,
+  }
+  f.fake.surface.regions = [
+    { ...textRegion('Read  elph ?', 'r1'), bounds: { x: 693, y: 345, width: 412, height: 39 } },
+    {
+      ...textRegion('Decibe .', 'r2'),
+      confidence: 0.52,
+      bounds: { x: 592, y: 413, width: 215, height: 28 },
+    },
+  ]
+  const view = await f.observe()
+  return { ...f, capture: view.capture!.id }
+}
+it('checks a pixel click on a scaled capture in screenshot pixels, tolerating OCR spelling', async () => {
+  const f = await scaledComposer()
+  const click = {
+    kind: 'click',
+    x: 808,
+    y: 426,
+    capture: f.capture,
+    expect_label: 'Describe your problem or question',
+  } as Step
+  expect(data(await f.run([click], true)).status).toBe('delivered')
+  expect(f.fake.calls.find((c) => c.tool === 'click')?.args).toMatchObject({ x: 808, y: 426 })
+})
+it('clicks the centre of the one OCR region matching a label when no x/y is given', async () => {
+  const f = await scaledComposer()
+  const click = { kind: 'click', capture: f.capture, expect_label: 'Describe your problem' } as Step
+  expect(data(await f.run([click], true)).status).toBe('delivered')
+  expect(f.fake.calls.find((c) => c.tool === 'click')?.args).toMatchObject({ x: 700, y: 427 })
+})
+it('refuses a label-only click when the label is missing or on screen twice', async () => {
+  const f = await scaledComposer()
+  const missing = { kind: 'click', capture: f.capture, expect_label: 'Send message' } as Step
+  expect(data(await f.run([missing], true)).outcomes[0]).toMatchObject({ code: 'label_mismatch' })
+  f.fake.surface.regions = [
+    textRegion('Delete', 'r1'),
+    { ...textRegion('Delete', 'r2'), bounds: { x: 400, y: 80, width: 90, height: 20 } },
+  ]
+  const view = await f.observe()
+  const twice = { kind: 'click', capture: view.capture!.id, expect_label: 'Delete' } as Step
+  expect(data(await f.run([twice], true)).outcomes[0]).toMatchObject({ code: 'label_ambiguous' })
+  expect(f.fake.calls.filter((c) => c.tool === 'click')).toHaveLength(0)
 })
 
 it('finishes OCR verification through a visible window after a hidden window returns unknown', async () => {

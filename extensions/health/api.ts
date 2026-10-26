@@ -1,6 +1,6 @@
 /**
  * Health: whether each model provider with a login on this machine works, from its real calls, kept in
- * `~/.ultimate/health.json` and sent along with each cloud backup.
+ * `~/.ultimate/health.json`.
  */
 import { defineApi } from '../../shared/extension-api.ts'
 import type { ProviderHealth } from './refs.ts'

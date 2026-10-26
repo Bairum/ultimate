@@ -18,7 +18,7 @@ import {
   LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import { afterAll, beforeAll, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import { Metadata } from '../server/metadata.ts'
 import { Overview } from '../extensions/conversations/overview.ts'
@@ -123,7 +123,8 @@ it.each(['agent', 'lander'])(
 
 const luna = { provider: 'openai-codex', id: 'gpt-6-luna', thinking: 'medium' } as const
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
-afterAll(async () => {
+// Release each fixture promptly instead of retaining every Vite server until the whole file ends.
+afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()))
 })
 // One read-only copy of the source for every server here, instead of a copy per launch.

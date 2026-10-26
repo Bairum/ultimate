@@ -10,15 +10,18 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 export const READS = ['conversations', 'entries', 'search', 'trace', 'traceTree', 'doc'] as const
 export type Read = (typeof READS)[number]
 
-/** Run read `op` in `project`: undefined when it is this project, so the caller reads its own storage. */
+/**
+ * Run read `op` in `project`, on `machine` when one is named: undefined when it is this project, so the caller reads its
+ * own storage.
+ */
 export async function readProject(
   host: ExtensionHost,
-  project: string,
+  { project, machine }: { project: string; machine?: string },
   op: Read,
   args: JsonValue[],
   signal?: AbortSignal,
 ): Promise<{ value: unknown } | undefined> {
-  const target = await locate(host, project)
+  const target = await locate(host, project, machine)
   if ('current' in target) return undefined
   return { value: await postAction(target, 'codemode', 'read', { op, args }, signal) }
 }

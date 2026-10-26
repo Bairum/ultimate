@@ -46,10 +46,6 @@ A project is a forest of conversation trees, like commit histories.
 
 `extensions/lineage/README.md` has the mechanics.
 
-**Cloud backups** (`extensions/cloud/README.md`): a project backs up to the user's Worker
-(the private repo `HazAT/ultimate-fleet`) from the status line, and `pnpm restore <name>` installs a backup on another
-machine.
-
 ## Layers and how they reload
 
 | Path                          | What lives there                                                                                                                                                                                      | How a change goes live                                                                                                                                                                                 |

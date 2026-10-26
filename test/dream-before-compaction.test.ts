@@ -36,14 +36,20 @@ import {
   DREAM_WAIT_MS,
   ensureAutomation,
   HANDOFF_WAIT_MS,
+  PAUSE_NAME,
+  PauseDoc,
 } from '../extensions/dream/before-compaction.ts'
 import type { Origin } from '../extensions/dream/before-compaction.ts'
 import { buildSeed } from '../extensions/dream/seed.ts'
 import { apis, eventHost, temp, until } from './helpers.ts'
 
 const openedHosts: OpenHost[] = []
+/** The extensions' close callbacks: automations' minute timer stops before its harness closes. */
+const closers: (() => Promise<void>)[] = []
 afterEach(async () => {
+  for (const close of closers.splice(0)) await close()
   for (const opened of openedHosts.splice(0)) await opened.close()
+  vi.useRealTimers()
 })
 
 async function fixture() {
@@ -102,7 +108,7 @@ async function fixture() {
     },
     metadata: Metadata,
     onRelease: () => {},
-    onClose: () => {},
+    onClose: (callback: () => Promise<void>) => void closers.push(callback),
     onOpen: (callback: () => Promise<void>) => void openers.push(callback),
     projectSetup: async () => ({ decision: false }),
     projectSettings: async () => ({}),
@@ -133,6 +139,9 @@ async function fixture() {
   const sessions = async () =>
     (await harness.snapshot(Sessions, ROOT_CONVERSATION_ID, context))?.sessions ?? []
   const own = async () => (await harness.snapshot(BuiltInDoc, ROOT_CONVERSATION_ID, context))?.id
+  const ownPause = async () => (await harness.snapshot(PauseDoc, ROOT_CONVERSATION_ID, context))?.id
+  /** Every automation's id: the two built-ins, and whatever a test made. */
+  const ids = async () => Object.keys((await harness.snapshot(Automations, context))!.automations)
   const record = async (id: string) =>
     (await harness.snapshot(Automations, context))!.automations[id]
   const compact = (conversation: number) =>
@@ -194,6 +203,8 @@ async function fixture() {
     call,
     sessions,
     own,
+    ownPause,
+    ids,
     record,
     compact,
     usage,
@@ -229,14 +240,13 @@ it('ships one enabled "Dream before compaction" automation that wakes @ultimate,
   })
   expect(made.event).toBeUndefined()
   // Opening again (a facet reload, a restart) makes no second one.
+  const pause = (await f.ownPause())!
   await ensureAutomation(f.host)
-  expect(Object.values((await f.harness.snapshot(Automations, context))!.automations)).toHaveLength(
-    1,
-  )
+  expect(await f.ids()).toEqual([id, pause])
   // The user deletes it: it stays deleted.
   await f.action('delete', { id })
   await ensureAutomation(f.host)
-  expect((await f.harness.snapshot(Automations, context))!.automations).toEqual({})
+  expect(await f.ids()).toEqual([pause])
   expect(await f.harness.snapshot(BuiltInDoc, ROOT_CONVERSATION_ID, context)).toMatchObject({
     deleted: true,
   })
@@ -281,7 +291,7 @@ it('migrates the old "Dream after compaction" in place: same id, enabled state a
   }, context)
   await ensureAutomation(f.host)
   expect(await f.own()).toBe(id)
-  expect(Object.keys((await f.harness.snapshot(Automations, context))!.automations)).toEqual([id])
+  expect(await f.ids()).toEqual([id, await f.ownPause()])
   expect((await f.record(id)).condition?.above).toBe(70)
   // The user's threshold stays: a later check leaves a migrated automation as it is.
   await f.action('update', { id, condition: { metric: 'context', of: '@ultimate', above: 60 } })
@@ -440,10 +450,17 @@ it('starts nothing once its automation is paused or deleted', async () => {
 })
 
 /** A compaction's session with `applied` applied proposals and the rest rejected, all settled. */
-async function settledSession(f: Awaited<ReturnType<typeof fixture>>, applied: number) {
+async function settledSession(
+  f: Awaited<ReturnType<typeof fixture>>,
+  applied: number,
+  pause?: number,
+) {
   await f.harness.commit(async (tx) => {
     await startSession(tx, 1, {
-      beforeCompaction: { automation: (await f.own())!, name: AUTOMATION_NAME, at: 1 },
+      beforeCompaction:
+        pause === undefined
+          ? { automation: (await f.own())!, name: AUTOMATION_NAME, at: 1 }
+          : { automation: (await f.ownPause())!, name: PAUSE_NAME, at: 1, pause },
       handoff: { task: 9, missing: 'no handoff within 30 minutes of the request' },
     })
     await fileJournal(
@@ -499,6 +516,42 @@ it.each([
   expect((await submitted())?.type).toBe(result === 'ask' ? 'input' : 'write')
 })
 
+it('ships "Dream after a pause" at 50% after 8 h idle; its fire carries the pause and its dream always offers a fresh chapter', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  const f = await fixture()
+  const id = (await f.ownPause())!
+  expect(await f.record(id)).toMatchObject({
+    name: PAUSE_NAME,
+    enabled: true,
+    condition: { of: '@ultimate', above: 50, idleFor: 8 * 3600_000 },
+    subscribers: [f.ultimate],
+  })
+  // Eight hours and a bit without the user's input, at 55%: it fires and asks for a handoff that names the pause.
+  vi.setSystemTime(Date.now() + 9 * 3600_000)
+  await f.usage(55)
+  await f.settle()
+  await until(async () => (await f.waiting()) !== undefined)
+  const waiting = (await f.waiting())!
+  expect(waiting.automation).toMatchObject({ id, name: PAUSE_NAME })
+  expect(waiting.automation!.pause).toBeGreaterThanOrEqual(9 * 3600_000)
+  // Its session settles with fewer changes than dream.asleepAfter, and still asks the user.
+  await f.harness.commit(async (tx) => {
+    delete (await tx.doc(Sessions, ROOT_CONVERSATION_ID)).waiting
+  }, context)
+  const { settle } = compactionDream(f.host, f.deps)
+  await settledSession(f, 0, 9 * 3600_000)
+  await settle(1)
+  expect((await f.sessions())[0].beforeCompaction?.outcome).toMatchObject({
+    changes: 0,
+    result: 'ask',
+  })
+  expect((await f.sessions())[0].sleep).toBeUndefined()
+  const submitted = () =>
+    f.harness.commit((tx) => tx.submissionByRequest(f.ultimate, 'dream.settled:1'), context)
+  await until(async () => (await submitted()) !== undefined)
+  expect((await submitted())?.type).toBe('input')
+})
+
 it('never adopts a same-name automation that watches something else', async () => {
   const f = await fixture()
   await f.action('delete', { id: (await f.own())! })
@@ -531,7 +584,7 @@ it('adopts its own automation after a lost receipt, even with changed subscriber
   }, context)
   await ensureAutomation(f.host)
   expect(await f.own()).toBe(id)
-  expect(Object.keys((await f.harness.snapshot(Automations, context))!.automations)).toEqual([id])
+  expect(await f.ids()).toEqual([id, await f.ownPause()])
   expect((await f.record(id)).enabled).toBe(false)
   expect((await f.record(id)).condition?.above).toBe(80)
 })
@@ -558,7 +611,7 @@ it('keeps a chapter seed paused whichever check runs first', async () => {
   }, context)
   await writeJson(`${f.host.chapter.dir}/seed.json`, { builtIn: null })
   await ensureAutomation(f.host)
-  expect((await f.harness.snapshot(Automations, context))!.automations).toEqual({})
+  expect(await f.ids()).toEqual([await f.ownPause()])
 })
 
 it('makes it in a chapter whose seed predates the feature', async () => {

@@ -7,6 +7,7 @@ import { fauxServer, post, temp, removeTemp } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { git } from '../lib/git.ts'
 import { projectDecision } from '../server/project-setup.ts'
+import { updateSettings } from '../lib/settings.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
 it.concurrent('gates project resources, remembers choices, and applies onboarding settings actions live', async () => {
@@ -196,6 +197,15 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
       custom: 'user',
       extensions: { extra: 2, enable: ['splash'], disable: ['sounds', 'automations'] },
     })
+    // `"onboarding": false` in the user's settings skips the first run without its marker.
+    await updateSettings(userFile, (value) => {
+      value.onboarding = false
+    })
+    expect(await action('status')).toMatchObject({ firstRun: false, off: true })
+    await updateSettings(userFile, (value) => {
+      delete value.onboarding
+    })
+    expect(await action('status')).toMatchObject({ firstRun: true, off: false })
     await action('firstRunDone')
     expect((await action('status')).firstRun).toBe(false)
     await server.close()
@@ -413,7 +423,7 @@ it.concurrent('shares one choice between a checkout and its linked worktrees', a
     await mkdir(join(main, '.ultimate/agents'), { recursive: true })
     await writeFile(join(main, '.ultimate/agents/y.md'), '---\nname: y\ndescription: Y\n---\nY.')
     await git(main, 'init', '-b', 'main')
-    await git(main, 'add', '.')
+    await git(main, 'add', '-f', '.ultimate')
     await git(main, '-c', 'user.name=T', '-c', 'user.email=t@example.com', 'commit', '-m', 'base')
     await git(main, 'worktree', 'add', worktree, '-b', 'branch')
     expect(projectDecision(worktree, home)).toBe(null)
