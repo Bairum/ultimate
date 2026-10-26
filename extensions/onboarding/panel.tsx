@@ -487,6 +487,12 @@ function Row({
               {sources[extension.source]}
               <span className="text-muted-foreground/60"> · {label}</span>
             </span>
+            {secrets.some((secret) => !secret.set) && (
+              <span className="flex shrink-0 items-center gap-1 self-center text-[10.5px] text-warning">
+                <TriangleAlertIcon className="size-3" />
+                secret missing
+              </span>
+            )}
           </span>
           <Line
             className={cn(
