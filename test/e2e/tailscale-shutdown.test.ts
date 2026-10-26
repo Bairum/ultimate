@@ -40,7 +40,7 @@ const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, args.join(' ') + '\\n');
 const config = JSON.parse(fs.readFileSync(${JSON.stringify(config)}, 'utf8'));
 if (args[0] === 'status') console.log(JSON.stringify(config.node));
-else if (args.join(' ') === 'serve status --json') { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000); console.log(JSON.stringify(config.serve)); }
+else if (args.join(' ') === 'serve status --json') { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000); console.log(JSON.stringify(config.serve)); }
 else if (args[0] === 'serve') {
   const port = args.find((arg) => arg.startsWith('--https=')).split('=')[1];
   config.serve.Web ??= {};
