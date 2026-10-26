@@ -21,6 +21,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
 import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
+import { projectEnv } from '../../lib/exec.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { definitionAgent, discoverAgents, hostDefaultModel } from '../../lib/agents.ts'
 import { CheckRan, Handoff, SubmissionLanded } from './api.ts'
@@ -262,7 +263,7 @@ export async function runLanderCheck(
     try {
       exitCode = await runGroup('/bin/bash', ['-c', command], {
         cwd: path,
-        env: { ...process.env, TMPDIR: tmp },
+        env: projectEnv({ TMPDIR: tmp }),
         pidFile: join(pids, `${process.pid}-${randomUUID()}.pid`),
         signal,
         grace: 2000,

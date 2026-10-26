@@ -1,5 +1,5 @@
 import type { JsonObject } from '@earendil-works/pi-durable'
-import { exec } from '../../lib/exec.ts'
+import { exec, projectEnv } from '../../lib/exec.ts'
 
 /** Run the project's `isolates.worktree.setup` commands in a new worktree at `path`, branched from `source`. */
 export async function setup(
@@ -17,7 +17,7 @@ export async function setup(
     try {
       const pending = exec('sh', ['-c', command], {
         cwd: path,
-        env: { ...process.env, ULTIMATE_SOURCE: source },
+        env: projectEnv({ ULTIMATE_SOURCE: source }),
         signal,
         timeout: 120000,
         killSignal: 'SIGKILL',

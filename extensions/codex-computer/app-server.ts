@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { projectEnv } from '../../lib/exec.ts'
 import type { CodexDetails } from './refs.ts'
 import { allowed, untrusted } from './state.ts'
 import { saveImage } from './evidence.ts'
@@ -12,7 +13,7 @@ export type Child = Pick<
 >
 export type Spawn = (path: string, args: string[], cwd: string) => Child
 export const spawnServer: Spawn = (path, args, cwd) =>
-  spawn(path, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] })
+  spawn(path, args, { cwd, env: projectEnv(), stdio: ['pipe', 'pipe', 'pipe'] })
 export type Run = {
   conversation: number
   stop: () => void

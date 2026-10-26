@@ -17,6 +17,7 @@ import {
 } from '../../lib/process-group.ts'
 import type { Group, GroupProcess } from '../../lib/process-group.ts'
 import { readSecret, validateName } from '../../lib/secrets.ts'
+import { projectEnv } from '../../lib/exec.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { MessagesApi } from '../messages/api.ts'
 import { Done, Exited, Started } from './refs.ts'
@@ -490,11 +491,10 @@ export function supervisor(
     if (recorded) await cleanup(id, recorded)
     const dir = folder(id)
     await mkdir(join(dir, 'state'), { recursive: true })
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
+    const env = projectEnv({
       AUTOMATION_ID: id,
       AUTOMATION_STATE: join(dir, 'state'),
-    }
+    })
     for (const name of sub.script!.secrets ?? []) {
       const value = await readSecret(host.userHome, name)
       if (!value) throw new Error(`Missing secret ${name}; add it in Secrets (⌘K → Secrets)`)

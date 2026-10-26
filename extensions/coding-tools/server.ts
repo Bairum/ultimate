@@ -67,7 +67,11 @@ const hooks = (conversation: number) => ({
   'post-rewrite': `while read -r old new rest; do printf 'rewrite\\t%s\\t\\t\\t%s\\t%s\\n' "$new" "$(git rev-parse --path-format=absolute --git-common-dir)" "$old"; done 2>/dev/null >> "$ULTIMATE_COMMIT_LOG" || true #`,
 })
 
-/** What the supervisor tells this server about itself (`bin/ultimate.ts`), as `extensions/instance` also drops them. */
+/**
+ * What the supervisor tells this server about itself (`bin/ultimate.ts`), as `extensions/instance` also drops them,
+ * and the `NODE_ENV=development` Vite's dev server sets on this process: inherited, it turns a project's `vite build`
+ * into a development bundle.
+ */
 const serverEnv = [
   'ULTIMATE_HOME',
   'ULTIMATE_PROJECT',
@@ -76,6 +80,7 @@ const serverEnv = [
   'ULTIMATE_GENERATION',
   'ULTIMATE_PUBLIC_URL',
   'ULTIMATE_PREVIOUS_BUILD',
+  'NODE_ENV',
 ]
 
 /**
