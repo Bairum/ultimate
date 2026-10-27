@@ -84,7 +84,7 @@ export default defineWebExtension({
   entries: {
     'board.message': MessageInput,
     'board.reply': MessageInput,
-    // The message's row already says it woke the agent: `action`.
+    // Retired: triage's wake-up pointer in older transcripts.
     'board.wake': () => null,
     // The agent's reminder of the questions still open; the user sees them in the To-dos panel.
     'board.open': () => null,

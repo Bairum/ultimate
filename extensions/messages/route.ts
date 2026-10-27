@@ -1,29 +1,54 @@
 /** `board.route`: a branch's final answers reach the conversation that started it. */
-import { defineDoc, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { GenerationResult, SubmissionId, TaskId } from '@earendil-works/pi-durable'
+import { defineTask, InboxDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  GenerationResult,
+  SubmissionId,
+  TaskId,
+  Tx,
+} from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { Subagents } from '../subagents/api.ts'
+import { WorkspacesApi } from '../workspaces/api.ts'
 import { Messages } from './api.ts'
-import { needsDecision } from './triage.ts'
 import { terminal } from './log.ts'
 import { send } from './send.ts'
 
 /**
- * Who started a branch through `branch`, so its later final answers reach that conversation. `yielded` is the newest
- * generation observed, so a replayed hook creates no second observer.
+ * Whether branch `id` still has work under way that will wake it again: a run or queued input, a subagent running or
+ * its report on the way, a submission in the lander's queue, or a reply-enabled message still waiting on its answer.
  */
-export const Started = defineDoc<{ by?: number; yielded?: number }>({
-  kind: 'board.started',
-  checkpointWhen: () => false,
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({}),
-})
+async function underway(host: ExtensionHost, tx: Tx, id: ConversationId): Promise<boolean> {
+  if ((await tx.doc(LiveDoc, id)).run || (await tx.doc(InboxDoc, id)).items.length) return true
+  const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
+  if (
+    log.messages.some(
+      (m) => m.from === id && m.reply && (m.state === 'sent' || m.state === 'delivered'),
+    )
+  )
+    return true
+  const queue = (await tx.doc(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID)).queue
+  if (queue.some((item) => item.conversationId === id)) return true
+  return children(tx, id)
+}
+/** Whether a subagent of `id` (at any depth) runs or has input queued, or its report is still on the way. */
+async function children(tx: Tx, id: ConversationId): Promise<boolean> {
+  const state = await tx.doc(Subagents, id)
+  if (Object.values(state.actions).some((action) => action.status === undefined)) return true
+  for (const child of Object.values(state.agents)) {
+    const childId = child.conversationId
+    if ((await tx.doc(LiveDoc, childId)).run || (await tx.doc(InboxDoc, childId)).items.length)
+      return true
+    if (await children(tx, childId)) return true
+  }
+  return false
+}
+
 /**
- * After a branch's run, its final answer reaches the conversation that started it, unless that answer already does:
- * as the answer to the starter's reply-enabled message, or because the run messaged the starter itself. Routing only
- * goes from a branch to its starter, which existed first, and a routed message is one-way: it cannot ping-pong.
+ * After a branch's run, its final answer reaches the conversation that started it, unless it already does as the
+ * answer to the starter's reply-enabled message. A branch that stops with nothing under way reports: its answer wakes
+ * the starter. One that still waits on work (subagents, the lander, a reply) leaves it as a note. Routing goes only
+ * from a branch to its starter, which existed first, and a routed message is one-way: it cannot ping-pong.
  */
 export function route(host: ExtensionHost) {
   return defineTask<
@@ -53,26 +78,21 @@ export function route(host: ExtensionHost) {
         )
         const { by } = task.input
         const id = runtime.conversationId
-        const text = await host.harness().commit(async (tx) => {
+        const routed = await host.harness().commit(async (tx) => {
           // A continued generation's answer is no run's final answer: only inputs it settled make one.
           const answered = inputs.flatMap((input) =>
             input?.type === 'input' && input.status === 'done' && input.answer === answer
               ? [input.entry]
               : [],
           )
-          let since = Number.POSITIVE_INFINITY
-          let replies = 0
+          if (!answered.length) return undefined
           for (const entryId of answered) {
             const entry = await tx.entry(entryId)
-            // board.delivery returns the answer to the starter's reply-enabled message; a one-way one gets none.
+            // board.delivery returns the answer to the starter's reply-enabled message.
             const data = entry?.data as { from?: unknown; reply?: unknown } | undefined
             if (entry?.kind === 'board.message' && data?.from === by && data.reply === true)
               return undefined
-            if (entry?.kind === 'board.reply' && data?.from === by) replies++
-            since = Math.min(since, entry?.model?.[0]?.timestamp ?? since)
           }
-          // A run woken only by the starter's own replies reacts to what the starter already knows.
-          if (!answered.length || replies === answered.length) return undefined
           const message = (await tx.entry(answer))?.model?.[0]
           if (
             message?.role !== 'assistant' ||
@@ -80,31 +100,15 @@ export function route(host: ExtensionHost) {
             message.stopReason === 'aborted'
           )
             return undefined
-          const until = message.timestamp
-          // Only tool calls count: an earlier run's routed answer can land after this run's input.
-          const messaged = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.some(
-            (m) =>
-              m.from === id &&
-              m.to === by &&
-              m.call !== undefined &&
-              m.at >= since &&
-              m.at <= until,
-          )
-          if (messaged) return undefined
-          return message.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
+          const text = message.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
+          return { text, report: !(await underway(host, tx, id)) }
         }, ctx)
-        if (text?.trim())
-          await send(
-            host,
-            id,
-            { to: `#${by}`, text, reply: false },
-            ctx,
-            undefined,
-            undefined,
-            `route:${answer}`,
-            undefined,
-            !needsDecision(text),
-          )
+        if (routed?.text.trim())
+          await send(host, id, { to: `#${by}`, text: routed.text, reply: false }, ctx, {
+            requestId: `route:${answer}`,
+            note: !routed.report,
+            report: routed.report,
+          })
         await runtime.commit(() => terminal, ctx)
       },
     },
