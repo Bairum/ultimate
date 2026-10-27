@@ -74,6 +74,7 @@ New UI is a new extension folder, not a change to `web/`: follow the `write-exte
 - [Durability](docs/durability.md): before changing persistence, replay or durable UI state.
 - [Extension mechanics and introspection](docs/extensions.md): before wiring facets, documents, events or runtime inspection.
 - [Subagents](docs/subagents.md): before delegating, changing definitions or configuring the review team.
+- [Graveyard of ideas](docs/graveyard/README.md): before building a feature, check whether it was built and removed before, and why.
 - [Borrowed from Pi](docs/pi-upstream.md): on Pi upgrades or changes to upstream couplings; includes upstream references.
 
 ## Push permission
