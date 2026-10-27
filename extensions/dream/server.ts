@@ -364,6 +364,19 @@ async function finalBackup(host: ExtensionHost): Promise<NonNullable<Sleep['back
 }
 
 /**
+ * The first cloud backup of a chapter Fall asleep opened, when backups are on here and the chapter has none yet. Every
+ * open checks again, so a backup a restart cut short runs on the next one; once any backup of the chapter, this one or
+ * @ultimate's, is recorded, none follows. Cloud runs one backup at a time and reports a failed upload itself.
+ */
+export async function firstBackup(host: ExtensionHost) {
+  const cloud = host.want(CloudApi)
+  if ((await cloud?.status()) !== 'on' || (await cloud!.lastBackup())) return
+  // A refusal means another backup is running (@ultimate's, or this one's before a facet reload), or Ultimate is
+  // paused: the record that backup writes, or the next open, settles it. Upload failures are already reported.
+  await cloud!.backup().catch(() => undefined)
+}
+
+/**
  * Journal the switch and restart into it. A successful restart never returns; a refused one returns its reason, and
  * the journal goes. Once the supervisor approves, nothing new starts here: the approval checks once more that nothing
  * else is busy and holds the scheduler until the new core takes over. A restart that fails after its approval reopens
@@ -677,7 +690,10 @@ export default function dream(host: ExtensionHost) {
   }
   host.onOpen(async () => {
     await settleSleep(host)
-    await applySeed(host)
+    const seed = await applySeed(host)
+    // In the background: an upload takes minutes, and the rest of the opening must not wait for it.
+    if (seed && !seed.gate)
+      firstBackup(host).catch((error: unknown) => host.notice(`Chapter backup: ${String(error)}`))
     await ensure()
   })
   // A fresh project has no @ultimate when it opens: the automation follows once it exists. Outside the transaction:

@@ -23,6 +23,8 @@ import type { Automation } from '../extensions/automations/types.ts'
 import type { Seed } from '../extensions/dream/types.ts'
 import dream, { Sessions, fileJournal, startSession } from '../extensions/dream/server.ts'
 import { applySeed, buildSeed, SeedState, writeSeed } from '../extensions/dream/seed.ts'
+import { CloudApi } from '../extensions/cloud/api.ts'
+import type { CloudService, LastBackup } from '../extensions/cloud/api.ts'
 import { temp, until, eventHost } from './helpers.ts'
 
 const openedHosts: OpenHost[] = []
@@ -41,6 +43,8 @@ async function fixture() {
   let opened: OpenHost
   let opener: () => Promise<void>
   let scripts: (Seed['scripts'][number] & { enabled: boolean })[] = []
+  /** A faked `CloudApi`: never the real Worker. */
+  let cloud: CloudService | undefined
   const tokens = [...lineageDocs, Messages, Todos, Sessions]
   const resources = new Map<string, unknown>()
   const invoke = vi.fn<ExtensionHost['invoke']>(async (extension, action, args) => {
@@ -80,6 +84,8 @@ async function fixture() {
       opener = callback
     },
     react: () => {},
+    notice: () => {},
+    want: (api: { name: string }) => (api.name === CloudApi.name ? cloud : undefined),
     need: () => ({
       standing: async () =>
         opened.harness.commit(async (tx) => {
@@ -119,6 +125,9 @@ async function fixture() {
     },
     scripts: (items: (Seed['scripts'][number] & { enabled: boolean })[]) => {
       scripts = items
+    },
+    cloud: (service: CloudService | undefined) => {
+      cloud = service
     },
     async source() {
       await opened.harness.commit(async (tx) => {
@@ -305,6 +314,31 @@ it('carries the seed into a fresh chapter once, including user memory and its pa
   expect(again.automations).toEqual(settled.automations)
   expect(await chapterEntries()).toEqual([entry])
 })
+
+it.each(['on', 'off'] as const)(
+  'backs up a chapter Fall asleep opened once, only with cloud backups on: %s',
+  async (status) => {
+    const f = await fixture()
+    await f.source()
+    const seed = await buildSeed(f.host, 1)
+    let last: LastBackup | undefined
+    const backup = vi.fn<CloudService['backup']>(async () => {
+      last = { id: 'first', at: 1, machine: 'here', bytes: 1, uploaded: 1 }
+      return last
+    })
+    f.cloud({ status: async () => status, backup, lastBackup: async () => last })
+    await writeSeed(join(f.home, 'chapters', 'fresh-roots'), seed)
+    await f.close()
+    await requestChapter(f.home, 'fresh-roots')
+    await f.open()
+    if (status === 'on') await until(() => last !== undefined)
+    // A facet reload and a later restart open the chapter again: its backup is recorded, so none follows.
+    await f.reopen()
+    await f.close()
+    await f.open()
+    expect(backup).toHaveBeenCalledTimes(status === 'on' ? 1 : 0)
+  },
+)
 
 it("wakes the next chapter's @ultimate with the compaction summary it was working from", async () => {
   const f = await fixture()

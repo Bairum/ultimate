@@ -7,6 +7,8 @@ export type { LastBackup } from './types.ts'
 export type CloudService = {
   /** Back up the active chapter, without overriding a conflict. */
   backup(): Promise<LastBackup>
+  /** This home's last backup of the active chapter; undefined unless backups are on and the chapter has one. */
+  lastBackup(): Promise<LastBackup | undefined>
   /** Off when unconfigured; local when the project has no GitHub origin; satellite when this machine never backs up. */
   status(): Promise<'off' | 'local' | 'satellite' | 'on'>
 }

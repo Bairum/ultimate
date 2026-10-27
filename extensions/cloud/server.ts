@@ -197,6 +197,10 @@ export const userActions = ['join']
 export default function cloud(host: ExtensionHost) {
   host.implement(CloudApi, {
     backup: () => backup(host, false),
+    lastBackup: async () => {
+      const ready = await setup(host)
+      return ready.status === 'on' ? (await readBackup(ready.dir, ready.key))?.last : undefined
+    },
     status: async () => (await setup(host)).status,
   })
   // Optional services, resolved where they are called; declared here so the catalogue lists them.
