@@ -594,6 +594,24 @@ const nested = (parent: number, parentCallId: string, id: string) => ({
   call: { type: 'toolCall', id, name: 'inner', arguments: {} },
 })
 
+it('records a tool that returns an error result as failed, with its text', async () => {
+  const { trace, execute } = await tracedTools({
+    broken: async () => ({ isError: true, output: [{ type: 'text', text: 'page did not load' }] }),
+    fine: async () => ({ output: [{ type: 'text', text: 'done' }] }),
+  })
+  const api = { conversationId: 1, taskId: 1, callId: 'call' }
+  expect(await execute('broken', api, model('call'))).toMatchObject({ isError: true })
+  await execute('fine', api, model('call'))
+  const rows = trace.reader.query()
+  expect(rows.find((row) => row.name === 'broken')).toMatchObject({
+    ok: false,
+    error: 'page did not load',
+  })
+  expect(rows.find((row) => row.name === 'fine')).toMatchObject({ ok: true })
+  expect(rows.find((row) => row.name === 'fine')).not.toHaveProperty('error')
+  trace.close()
+})
+
 it("finds a Pi nested call's caller by task and call id, not by a call id another conversation reuses", async () => {
   const gates = new Map([1, 2].map((id) => [id, Promise.withResolvers<void>()]))
   let entered = 0
