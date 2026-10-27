@@ -35,7 +35,6 @@ import { groups, meaning } from './kinds.ts'
 import type { Group, Meaning } from './kinds.ts'
 import { DescribeAction, RetryAction, StartedAction } from './refs.ts'
 import type { TaskFacts } from './refs.ts'
-import { mockFacts, mockGraph, mockStarted } from './preview-mock.ts'
 
 interface Tree {
   /** Live tasks by owner task id. */
@@ -441,7 +440,7 @@ function Background({ tasks, tree }: { tasks: TaskGraphNode[]; tree: Tree }) {
 }
 
 function TasksPanel() {
-  const graph = mockGraph(useTasks())
+  const graph = useTasks()
   const conversations = useConversations()
   const [concluded] = useUiState<number[]>('ext.conversations.concluded', [])
   const { tasks, children, roots, summaries } = build(graph, conversations, concluded)
@@ -449,8 +448,8 @@ function TasksPanel() {
   const overview = useOverview()
   const now = useNow(1000, tasks.length > 0)
   const ids = tasks.map((task) => task.id)
-  const started = mockStarted(useOnce(StartedAction, ids))
-  const facts = mockFacts(useOnce<TaskFacts>(DescribeAction, ids))
+  const started = useOnce(StartedAction, ids)
+  const facts = useOnce<TaskFacts>(DescribeAction, ids)
   const states = new Map(log?.messages.map((message) => [message.id, message.state]))
   const meanings = new Map(
     tasks.map((task) => {

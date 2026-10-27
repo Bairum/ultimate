@@ -61,43 +61,7 @@ function Section({
 /** The composer's chip for the shown conversation's open messages; a click lists them, and each opens its conversation. */
 export function OpenMessages() {
   const id = useConversation((conversation) => conversation.id)
-  const real = useDocOf(1, MessagesDoc) ?? emptyMessages
-  // PREVIEW ONLY: removed before submit.
-  const at = Date.now()
-  const mock = (m: Partial<Message>) =>
-    ({ id: 0, from: 418434, to: 1, text: '', at, reply: true, state: 'delivered', ...m }) as Message
-  const log = {
-    ...real,
-    messages: [
-      ...real.messages,
-      mock({
-        id: 9001,
-        to: 428039,
-        at: at - 22 * 60_000,
-        text: 'Size: assessment. Read the code and history and build nothing before the go.',
-      }),
-      mock({
-        id: 9002,
-        to: 429867,
-        at: at - 6 * 60_000,
-        text: 'Which of the graveyard entries should link their commits?',
-      }),
-      mock({
-        id: 9003,
-        from: 428055,
-        to: 418434,
-        at: at - 3 * 60_000,
-        text: 'Decision needed: keep the watcher agent or fold it into automations?',
-      }),
-      mock({
-        id: 9004,
-        to: 428021,
-        state: 'sent',
-        reply: false,
-        text: 'The user also wants stop and abort covered in the preview scenarios.',
-      }),
-    ],
-  }
+  const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const now = useNow(30_000)
   const { switchConversation } = useUltimate()
   const [shown, setShown] = useState(false)
