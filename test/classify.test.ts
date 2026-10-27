@@ -88,7 +88,7 @@ it('sends the pinned model, JSON questions, stored key and abort signal; parses 
   const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => Response.json(body))
   vi.stubGlobal('fetch', fetch)
   const signal = new AbortController().signal
-  expect(await service.ask(request, signal)).toEqual({
+  expect(await service.ask({ caller: 'test', ...request }, signal)).toEqual({
     model: 'jev-1.14.0',
     answers,
     usage: { inputTokens: 123 },
@@ -100,7 +100,7 @@ it('sends the pinned model, JSON questions, stored key and abort signal; parses 
     signal,
   })
   await writeSecret(root, 'TYPESAFE_API_KEY', 'updated-sentinel')
-  await service.ask({ ...request, state: { message: 'Tests failed' } }, signal)
+  await service.ask({ caller: 'test', ...request, state: { message: 'Tests failed' } }, signal)
   expect(fetch.mock.calls[1][1]?.headers).toEqual({
     Authorization: 'Bearer updated-sentinel',
     'Content-Type': 'application/json',
@@ -121,10 +121,16 @@ it('answers repeated questions from the cache and sends only the uncached ones',
   vi.stubGlobal('fetch', fetch)
   const signal = new AbortController().signal
   const { phase, passed } = request.questions
-  const first = await service.ask({ state: request.state, questions: { phase } }, signal)
+  const first = await service.ask(
+    { caller: 'test', state: request.state, questions: { phase } },
+    signal,
+  )
   // The same question under another id, with its keys in another order, is the same cache entry.
   const reordered = { criteria: phase.criteria, instructions: phase.instructions, type: phase.type }
-  const again = await service.ask({ state: request.state, questions: { other: reordered } }, signal)
+  const again = await service.ask(
+    { caller: 'test', state: request.state, questions: { other: reordered } },
+    signal,
+  )
   expect(fetch).toHaveBeenCalledTimes(1)
   expect(again).toEqual({
     model: 'jev-1.14.0',
@@ -132,17 +138,23 @@ it('answers repeated questions from the cache and sends only the uncached ones',
     usage: { inputTokens: 0 },
   })
 
-  const partial = await service.ask({ state: request.state, questions: { phase, passed } }, signal)
+  const partial = await service.ask(
+    { caller: 'test', state: request.state, questions: { phase, passed } },
+    signal,
+  )
   expect(fetch).toHaveBeenCalledTimes(2)
   expect(Object.keys(JSON.parse(fetch.mock.calls[1][1]?.body as string).questions)).toEqual([
     'passed',
   ])
   expect(partial.answers).toEqual({ phase: answers.phase, passed: answers.passed })
 
-  const stats = actions.stats(null, ctx)
+  service.count('find.lexical', { ms: 40 })
+
+  const stats = await actions.stats(null, ctx)
+  const day = new Date().toISOString().slice(0, 10)
   expect(stats.days).toEqual([
     {
-      day: new Date().toISOString().slice(0, 10),
+      day,
       requests: 2,
       cachedQuestions: 2,
       sentQuestions: 2,
@@ -152,6 +164,19 @@ it('answers repeated questions from the cache and sends only the uncached ones',
   ])
   expect(stats.cache.rows).toBe(2)
   expect(stats.cache.bytes).toBeGreaterThan(0)
+  // Each caller's asks: three, one answered wholly from the cache, two paid for.
+  expect(stats.uses).toEqual([
+    {
+      day,
+      name: 'ask:test',
+      calls: 3,
+      cached: 1,
+      failed: 0,
+      avgMs: expect.any(Number),
+      usd: (246 * 0.042) / 1e6,
+    },
+    { day, name: 'find.lexical', calls: 1, cached: 0, failed: 0, avgMs: 40, usd: 0 },
+  ])
 })
 
 it('rejects batches over the caps before asking', async () => {
@@ -225,9 +250,9 @@ it('names the missing key and Secrets panel without sending a request', async ()
   const { service } = await fixture(false)
   const fetch = vi.fn<typeof globalThis.fetch>()
   vi.stubGlobal('fetch', fetch)
-  await expect(service.ask(request, new AbortController().signal)).rejects.toThrow(
-    /TYPESAFE_API_KEY.*Secrets panel/,
-  )
+  await expect(
+    service.ask({ caller: 'test', ...request }, new AbortController().signal),
+  ).rejects.toThrow(/TYPESAFE_API_KEY.*Secrets panel/)
   expect(fetch).not.toHaveBeenCalled()
 })
 
@@ -237,9 +262,9 @@ it('includes the HTTP status and truncated response body without retrying', asyn
     .fn<typeof globalThis.fetch>()
     .mockResolvedValue(new Response('x'.repeat(2000), { status: 429 }))
   vi.stubGlobal('fetch', fetch)
-  await expect(service.ask(request, new AbortController().signal)).rejects.toThrow(
-    `TypeSafe 429: ${'x'.repeat(1000)}`,
-  )
+  await expect(
+    service.ask({ caller: 'test', ...request }, new AbortController().signal),
+  ).rejects.toThrow(`TypeSafe 429: ${'x'.repeat(1000)}`)
   expect(fetch).toHaveBeenCalledTimes(1)
 })
 
@@ -254,7 +279,7 @@ it.each([
     'fetch',
     vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json(malformed)),
   )
-  await expect(service.ask(request, new AbortController().signal)).rejects.toThrow(
-    'Malformed TypeSafe response',
-  )
+  await expect(
+    service.ask({ caller: 'test', ...request }, new AbortController().signal),
+  ).rejects.toThrow('Malformed TypeSafe response')
 })

@@ -76,7 +76,7 @@ it('builds the bounded request, relative paths, stripped commands and failed res
   expect(state.agentSaid).toBe('Checking now')
 })
 
-async function fixture(service?: ClassifyService) {
+async function fixture(service?: Pick<ClassifyService, 'ask'>) {
   const registry = createRegistry()
   let harness: Harness
   const extension = phase({

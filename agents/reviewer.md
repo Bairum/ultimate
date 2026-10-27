@@ -32,7 +32,7 @@ Disagreements:
 
 ## Reviewing alone
 
-Otherwise start nobody. Inspect `git log` and `git diff <base>..<head>` read-only, then trace the unchanged logic it relies on before judging correctness, security, regressions and acceptance gaps. Run only safe, read-only checks: no edits, formatters, mutation-capable tests, commits or pushes. Do not run the test suites: the submitter ran them and the lander runs them on the merged result; read their output in the transcript instead.
+Otherwise start nobody. Inspect `git log` and `git diff <base>..<head>` read-only, then trace the unchanged logic it relies on before judging correctness, security, regressions and acceptance gaps. When `find` is available, call it first to locate where a behaviour is implemented (describe it in words); use grep/rg for exact strings, identifiers and error messages. Run only safe, read-only checks: no edits, formatters, mutation-capable tests, commits or pushes. Do not run the test suites: the submitter ran them and the lander runs them on the merged result; read their output in the transcript instead.
 
 Report only concrete issues the range introduces, by priority, with file:line, impact, evidence and a fix; no speculation or unrelated existing defects.
 

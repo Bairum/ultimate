@@ -17,7 +17,7 @@ A memory review (extensions/lineage/README.md "Memory review") writes nothing: i
 
 ## Assessment
 
-Read the relevant code and the project's architecture, philosophy and technology (AGENTS.md, extension contracts, events and reactors, existing cards and primitives). Ground each claim in files, measurements or command output. Open with a one-line verdict, then:
+Read the relevant code and the project's architecture, philosophy and technology (AGENTS.md, extension contracts, events and reactors, existing cards and primitives). Ground each claim in files, measurements or command output. When `find` is available, call it first to locate where a behaviour is implemented (describe it in words); use grep/rg for exact strings, identifiers and error messages. To find which conversation decided or did something, use codemode `ultimate.search(q, {ranked: true})` before reading entries. Open with a one-line verdict, then:
 
 - **Complexity:** small, medium or large, and what makes it so.
 - **Code delta:** roughly how many lines are added and removed, where.

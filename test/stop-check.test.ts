@@ -54,6 +54,7 @@ async function fixture(options: { classify?: boolean; settings?: object } = {}) 
     answers: { stop: { type: 'noul', noul } },
     usage: { inputTokens: 1 },
   }))
+  const count = vi.fn<ClassifyService['count']>()
   let label: string | undefined
   const notice = vi.fn<(message: string) => void>()
   const host = {
@@ -65,7 +66,7 @@ async function fixture(options: { classify?: boolean; settings?: object } = {}) 
     conversations: () => [{ id, label, busy: true, cwd: home }],
     doc: (kind: string) => (kind === 'sidechat' ? SideChat : undefined),
     want: (api: unknown) =>
-      api === ClassifyApi && options.classify !== false ? { ask } : undefined,
+      api === ClassifyApi && options.classify !== false ? { ask, count } : undefined,
   } as unknown as ExtensionHost
   const extension = stopCheck(host)
   registry.install(extension)
@@ -106,6 +107,7 @@ async function fixture(options: { classify?: boolean; settings?: object } = {}) 
     notice,
     id,
     ask,
+    count,
     hooks,
     api,
     define,
@@ -134,6 +136,8 @@ it('continues a subagent once per run, with a card that never enters the model c
   // The continuation's own generation never continues again in the same run.
   expect(await f.hooks.onYield(promise, f.api(), context)).toBeUndefined()
   expect(f.ask).toHaveBeenCalledTimes(1)
+  // Counted once for the adoption review, not again on the replay.
+  expect(f.count).toHaveBeenCalledExactlyOnceWith('stop-check.continued', { ms: 0 })
   expect(f.notice).not.toHaveBeenCalled()
 })
 

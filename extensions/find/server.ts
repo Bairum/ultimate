@@ -25,7 +25,12 @@ export default function findExtension(host: Pick<ExtensionHost, 'want' | 'projec
   host.want(ClassifyApi)
   return defineExtension({
     name: 'find',
-    sections: [section('find', () => guidance)],
+    // Only for agents offered the tool: a definition's `tools` list can leave it out (@ultimate's does).
+    sections: [
+      section('find', ({ agent }) =>
+        agent.tools.some((tool) => tool.name === 'find') ? guidance : undefined,
+      ),
+    ],
     tools: [
       defineTool({
         name: 'find',
@@ -58,14 +63,20 @@ export default function findExtension(host: Pick<ExtensionHost, 'want' | 'projec
           const scope = relative(cwd, resolve(cwd, args.path ?? '.'))
           if (scope.startsWith('..') || isAbsolute(scope))
             throw new Error(`path must be inside the working directory: ${args.path}`)
+          const classify = host.want(ClassifyApi)
           const { text, details } = await find({
             query: args.query,
             keywords: args.keywords,
             project: basename(cwd),
             source: gitSource(cwd, scope || '.'),
-            classify: host.want(ClassifyApi),
+            classify,
             sendSource: sendsSource(await host.projectSettings()),
             signal: context.abortSignal,
+          })
+          // Usage for the adoption review; without classify there is no ledger and find is lexical anyway.
+          classify?.count(details.mode === 'semantic' ? 'find' : 'find.lexical', {
+            ms: details.stats.ms,
+            usd: details.stats.cost,
           })
           await api.details(details, context)
           return { output: [{ type: 'text', text }] }

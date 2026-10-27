@@ -77,7 +77,7 @@ export type FindOptions = {
   query: string
   keywords?: readonly string[]
   source: Source
-  classify: ClassifyService | undefined
+  classify: Pick<ClassifyService, 'ask'> | undefined
   sendSource: boolean
   signal?: AbortSignal
   timeoutMs?: number
@@ -293,7 +293,7 @@ export async function find(options: FindOptions): Promise<{ text: string; detail
       stats.bytesSent += Buffer.byteLength(JSON.stringify(request))
       stats.requests++
       try {
-        const result = await classify.ask(request, deadline.signal)
+        const result = await classify.ask({ caller: 'find', ...request }, deadline.signal)
         stats.inputTokens += result.usage.inputTokens
         const answers: Record<string, number> = {}
         for (const [key, answer] of Object.entries(result.answers))
