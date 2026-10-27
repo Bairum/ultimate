@@ -3,28 +3,10 @@ import { useState } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { formatAgo, useConversation, useDocOf, useNow, useUltimate } from '@/sdk'
 import { Address } from './cards.tsx'
-import { emptyMessages, isOpen } from './data.tsx'
+import { useConcludedSince } from '../conversations/ui.tsx'
+import { emptyMessages, openMessages } from './data.tsx'
 import { MessagesDoc } from './refs.ts'
 import type { Message } from './refs.ts'
-
-/**
- * A conversation's open messages: answers it waits for, what it owes (an open question, or a branch's report it has not
- * messaged the branch about since), and messages still on their way.
- */
-export function openMessages(messages: readonly Message[], id: number) {
-  const reports = new Map<number | 'user' | 'remote', Message>()
-  for (const m of messages)
-    if (m.to === id && m.report) reports.set(m.from, m)
-    else if (m.from === id) reports.delete(m.to)
-  return {
-    waiting: messages.filter((m) => m.from === id && isOpen(m) && m.state === 'delivered'),
-    owed: [
-      ...messages.filter((m) => m.to === id && isOpen(m) && m.state === 'delivered'),
-      ...reports.values(),
-    ].toSorted((a, b) => a.id - b.id),
-    delivering: messages.filter((m) => m.from === id && m.state === 'sent'),
-  }
-}
 
 const gist = (text: string) => text.replace(/\s+/g, ' ').trim()
 
@@ -72,11 +54,12 @@ function Section({
 export function OpenMessages() {
   const id = useConversation((conversation) => conversation.id)
   const log = useDocOf(1, MessagesDoc) ?? emptyMessages
+  const concludedSince = useConcludedSince()
   const now = useNow(30_000)
   const { switchConversation } = useUltimate()
   const [shown, setShown] = useState(false)
   if (id === undefined) return null
-  const { waiting, owed, delivering } = openMessages(log.messages, id)
+  const { waiting, owed, delivering } = openMessages(log.messages, id, concludedSince)
   const parts = [
     waiting.length && `${waiting.length} waiting`,
     owed.length && `${owed.length} owed`,
