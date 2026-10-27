@@ -94,7 +94,9 @@ Captures are saved as Codex took them, never cropped. Codex's capture service (S
 ScreenCaptureKit) captures at the main display's pixel scale: on a Retina Mac with a 1x external monitor, a window on
 that monitor arrives at double size with its content in the top-left quarter, and Codex's clicks from it land at half
 the intended point (Bridgestone, 2026-10-26: image pixel [1783,368] clicked window point 891,184). Keep the
-target window on the built-in display. "Screenshot unavailable" for an app happened while its menu (Citrix's View
+target window on the built-in display. When it cannot be, a fixed rule tells Codex to double its click coordinates,
+only when the capture's right and bottom halves are blank and the target is in the top-left quarter, preferring AX
+element indexes and checking the first such click. "Screenshot unavailable" for an app happened while its menu (Citrix's View
 menu) was still open with no window in front; cancelling the menu and raising the window fixed it, so the fixed
 rules say so. Codex asks for app approval once per new cua_repl, several times per run; each is accepted and recorded.
 
