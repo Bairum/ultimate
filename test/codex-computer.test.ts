@@ -224,6 +224,7 @@ async function fixture(apps?: string[]) {
     codesign,
     progress,
     tools,
+    extension,
     faux,
     notes,
     reports,
@@ -598,6 +599,48 @@ it('saves private PNG evidence in the conversation folder and returns the last i
   expect(f.spawn.mock.calls[0]).toBeDefined()
 })
 
+it('never puts a frame Codex cut short into the result, and drops one already stored before the next request', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  // USG #71197: Codex shortened a long frame inside its nested text ("…5781 chars truncated…"). Node's lenient
+  // base64 decode still found JPEG bytes, so the result carried it, and every later Anthropic request got a 400.
+  const good = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 1, 2]).toString('base64')
+  const cut = `${good.slice(0, 8)}…5781 chars truncated…${good.slice(8)}`
+  const step = { type: 'mcpToolCall', server: 'cua_repl', tool: 'js', status: 'completed' }
+  f.fake.item({
+    ...step,
+    result: { content: [{ type: 'image', data: cut, mimeType: 'image/jpeg' }] },
+  })
+  f.fake.complete()
+  const value = await promise
+  expect(data(value).screenshots).toEqual([])
+  expect(value.output).toHaveLength(1)
+  expect(f.progress.join('')).toContain('Skipped an image Codex returned: not valid base64')
+
+  const hook = f.extension.hooks![0] as unknown as {
+    handlers: {
+      beforeRequest: (input: { messages: unknown[] }) => Promise<{ messages: (typeof stored)[] }>
+    }
+  }
+  const stored = {
+    role: 'toolResult' as const,
+    toolCallId: 't',
+    toolName: 'codex_operate',
+    isError: false,
+    timestamp: 0,
+    content: [
+      { type: 'text' as const, text: 'Codex: done.' },
+      { type: 'image' as const, data: cut, mimeType: 'image/jpeg' },
+      { type: 'image' as const, data: good, mimeType: 'image/jpeg' },
+    ],
+  }
+  const sent = await hook.handlers.beforeRequest({ messages: [stored] })
+  expect(sent.messages[0].content).toEqual([
+    stored.content[0],
+    { type: 'text', text: '[screenshot dropped: not valid base64]' },
+    stored.content[2],
+  ])
+})
 it('saves post-action frames that cua_repl nests as serialised content inside text parts', async () => {
   const f = await fixture()
   const { promise } = await running(f)

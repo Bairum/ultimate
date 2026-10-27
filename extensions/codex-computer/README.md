@@ -116,8 +116,13 @@ and fences pending starts at host close; facet reloads do not kill live runs. No
 
 Evidence is stored under `<host.home>/codex-computer/<conversation>/` (0700), with exclusive-create image files
 (0600). PNG, JPEG and WebP payloads are accepted (Computer Use returns JPEG); the type comes from the magic bytes,
-which also pick the file extension and the mimeType passed to the model. Any other payload is skipped with a note,
-never failing the run. Pruning keeps 30 days, at most 200 MB per conversation and 1 GB overall, oldest first.
+which also pick the file extension and the mimeType passed to the model. An image is accepted only when it is
+strict, canonical base64 (Node's decoder would skip junk) of at most 3.5 MB: Codex shortens long frames in its
+output ("…5781 chars truncated…"), and one such frame in a result broke every later Anthropic request of its
+conversation with a 400 (USG #71197). Anything else is skipped with a note, never failing the run. Before each model
+request the extension also replaces any bad image already stored in a `codex_operate` result with a text note, so a
+conversation that stored one before this check works again without editing its history. Pruning keeps 30 days, at
+most 200 MB per conversation and 1 GB overall, oldest first.
 Pruning only visits regular `.png`, `.jpeg`, `.jpg` and `.webp` files,
 never planted symlinks or nested directories; exclusive-create saves refuse planted destinations. The sandbox lets
 Codex write only inside its conversation folder. Swapping that folder or its parents requires the user's own

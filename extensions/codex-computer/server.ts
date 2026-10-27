@@ -1,7 +1,7 @@
 /** Signed Codex app-server bridge: enabling it is the consent; optional project app list and codex.md; 8 h ceiling, Stop and steering. */
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
-import { defineExtension, defineTool } from '@earendil-works/pi-durable'
+import { defineExtension, defineTool, GenerationTask, hook } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { access, readFile, realpath } from 'node:fs/promises'
 import { constants } from 'node:fs'
@@ -15,7 +15,7 @@ import type { CodexDetails } from './refs.ts'
 import { State, updateState, validate, untrusted } from './state.ts'
 import { operate, spawnServer } from './app-server.ts'
 import type { Run, Spawn } from './app-server.ts'
-import { resultsDirectory, pruneEvidence } from './evidence.ts'
+import { checkImage, resultsDirectory, pruneEvidence } from './evidence.ts'
 import { LineageApi } from '../lineage/api.ts'
 
 export const docs = [State]
@@ -137,6 +137,28 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
   }
   return defineExtension({
     name: 'codex-computer',
+    hooks: [
+      hook(GenerationTask, {
+        // A bad image already stored in a codex_operate result (USG #71197, before checkImage) fails every request
+        // with the provider's 400; leave the history as it is and send a note in its place.
+        beforeRequest: ({ messages }) => {
+          let changed = false
+          const next = messages.map((message) => {
+            if (message.role !== 'toolResult' || message.toolName !== 'codex_operate')
+              return message
+            const content = message.content.map((part) => {
+              if (part.type !== 'image') return part
+              const checked = checkImage(part.data)
+              if (!('error' in checked)) return part
+              changed = true
+              return { type: 'text' as const, text: `[screenshot dropped: ${checked.error}]` }
+            })
+            return { ...message, content }
+          })
+          return changed ? { messages: next } : undefined
+        },
+      }),
+    ],
     tools: [
       defineTool({
         name: 'codex_operate',

@@ -80,11 +80,30 @@ export function imageType(bytes: Buffer) {
     return { mimeType: 'image/webp', extension: 'webp' }
   return undefined
 }
-/** Saves PNG, JPEG or WebP evidence; returns undefined for any other bytes, so the run carries on. */
-export async function saveImage(home: string, conversation: number, data: string) {
+/** Anthropic refuses a request whose image is over 5 MB; stay well under it, as base64 grows the bytes by a third. */
+export const IMAGE_LIMIT = 3.5 * 1024 * 1024
+/**
+ * The image's bytes when `data` is strict, canonical base64 of a PNG, JPEG or WebP under the cap, else why not.
+ * Node's decoder skips characters it does not know, so a frame Codex cut short ("…5781 chars truncated…") once
+ * decoded "fine" and broke every later request in its conversation (USG #71197).
+ */
+export function checkImage(
+  data: string,
+): { bytes: Buffer; mimeType: string; extension: string } | { error: string } {
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length % 4 !== 0)
+    return { error: 'not valid base64' }
   const bytes = Buffer.from(data, 'base64')
+  if (bytes.toString('base64') !== data) return { error: 'not valid base64' }
+  if (bytes.length > IMAGE_LIMIT) return { error: `larger than ${IMAGE_LIMIT / 1024 / 1024} MB` }
   const type = imageType(bytes)
-  if (!type) return undefined
+  if (!type) return { error: 'not a PNG, JPEG or WebP image' }
+  return { bytes, ...type }
+}
+/** Saves PNG, JPEG or WebP evidence; returns why not for anything else, so the run carries on. */
+export async function saveImage(home: string, conversation: number, data: string) {
+  const checked = checkImage(data)
+  if ('error' in checked) return checked
+  const { bytes, ...type } = checked
   const directory = await resultsDirectory(home, conversation)
   const path = join(directory, `${Date.now()}-${randomUUID()}.${type.extension}`)
   // Exclusive creation refuses any planted destination, including symlinks.
