@@ -813,18 +813,24 @@ export function createLander(
           }
           return undefined
         }, context)
+        // The starter wakes once when the branch's work ends: here when the landing concluded it, else with the
+        // branch's own report when it stops, so the card goes as a note.
         const starter = await after.starter(branch, context)
+        const content = `${text}\nDiverged: ${outcome.divergence}\n${concluded ? `#${branch} is concluded.` : `#${branch} still has work under way; it reports when it stops.`}`
         if (starter !== undefined && starter !== branch)
           await (
             await runtime.conversation(starter as ConversationId, context)
           )?.submit(
-            {
-              type: 'input',
-              content: `${text}\nDiverged: ${outcome.divergence}\n${concluded ? `#${branch} is concluded.` : `#${branch} still has work under way; it reports when it stops.`}`,
-              entry,
-              whenBusy: 'followUp',
-              requestId: `lander:${id}`,
-            },
+            concluded
+              ? { type: 'input', content, entry, whenBusy: 'followUp', requestId: `lander:${id}` }
+              : {
+                  type: 'write',
+                  requestId: `lander:${id}`,
+                  entry: {
+                    ...entry,
+                    model: [{ role: 'user', content, timestamp: Date.now() }],
+                  },
+                },
             context,
           )
         await runtime.commit(
