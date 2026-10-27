@@ -187,6 +187,14 @@ export async function applySeed(host: ExtensionHost) {
   if (!seed) return undefined
   const harness = host.harness()
   const state = await harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context)
+  // A seed an older Ultimate wrote just before the restart that brought this code: the chapter opens empty, and the
+  // one it came from is as it was left, so the user goes back and falls asleep again.
+  if (state?.applied === undefined && !Array.isArray(seed.learned)) {
+    host.notice(
+      `Chapter ${host.chapter.name} has a seed from an older Ultimate and was not seeded: switch back to ${seed.from.name} with Chapters… and fall asleep again`,
+    )
+    return undefined
+  }
   if (state?.applied === undefined) {
     const ultimate = await host.need(SubagentsApi).standing('ultimate', context)
     await harness.commit(async (tx) => {

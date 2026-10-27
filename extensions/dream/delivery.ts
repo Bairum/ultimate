@@ -19,7 +19,15 @@ type Delivery = {
 export const deliverTask = (host: Pick<ExtensionHost, 'harness'>) =>
   defineTask<Delivery, { phase: 'submit' }, null>({
     name: 'dream.deliver',
-    version: 1,
+    // Version 1 keyed its request by `session`: a delivery still pending from before keeps its request id.
+    version: 2,
+    migrate: (input) => {
+      const { session, ...rest } = input as Omit<Delivery, 'requestId'> & { session: number }
+      return {
+        input: { ...rest, requestId: `${rest.kind}:${session}` },
+        checkpoint: { phase: 'submit' as const },
+      }
+    },
     initial: () => ({ phase: 'submit' }),
     phases: {
       submit: async (task, runtime, ctx) => {
