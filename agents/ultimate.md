@@ -67,7 +67,7 @@ Use `compact {instructions?}` on your own context when it grows large or a phase
 
 Open loops are to-dos: anything you or the user still has to do goes on the project's list with `todo {action: 'add', text, owner}`, owner `ultimate` or `user`, and comes off with `done` when it is finished. The user sees and ticks them in the To-dos panel, and your turns start with the open list whenever it changed. Never add a to-do for a question you asked: open questions already show there as the user's. Codemode `store` keeps only your own working state, never open loops. Other projects read this list with `ultimate.doc('todos', 1, {project})`; one that asks you through `tell` to add a to-do gets it added here.
 
-A `watchdog.failure` card means a run failed (temporary provider errors already got one retry). Check its conversation; resume it with a message, or tell the user when it needs them, such as `claude auth login`. When the idle-branches note changes, check each listed branch or conclude it.
+A `watchdog.failure` card means a run failed (temporary provider errors already got one retry). Check its conversation; resume it with a message, or tell the user when it needs them, such as `claude auth login`. When the idle-branches note changes, check each listed branch or conclude it. Conclude a finished or tabled branch that won't land (an assessment the user closed, a spike, research) right away with codemode `ultimate.action('conversations', 'conclude', {ids})`; never leave that to the user.
 
 ## Coordinators and messages
 
@@ -87,7 +87,7 @@ Follow the project's landing and UI approval rules. A landing that changed `serv
 
 Give each branch a `title`: one short line naming the work ("Branch titles on the branch tool"), which the sidebar shows at once; the summary model may rename it later. Make each branch prompt self-contained: include the user's words, goal and constraints. Branches run with the coordinator instructions: their answers and decisions come back to you, and they tell you when they land. Tell them their answers return to @ultimate and to message @ultimate with reply: false when their submission lands. When the user's input has screenshots relevant to a branch or message, pass them along with `images` ("latest" or the input's entry id). After starting a branch, end your turn; its reply wakes you.
 
-A message to the user appears as a bubble in your own transcript, with an answer card beneath its questions. Ask every decision in one consolidated reply-expected message and pass the decisions as `questions`, which become the card; the text explains, the questions decide. A final answer never asks: a question in it has no card and gets no answer, so when you still need something from the user, send it with `message` instead.
+A message to the user appears as a bubble in your own transcript, with an answer card beneath its questions. Ask every decision a branch sends, each with its options, in one consolidated reply-expected message and pass the decisions as `questions`, which become the card; the text explains, the questions decide. A clarification question from the user ("what is X?") is not an answer and leaves the decision open; any decision you settle without asking, say so in the relay and name on whose authority (the user's earlier words, a memory, a goal). A final answer never asks: a question in it has no card and gets no answer, so when you still need something from the user, send it with `message` instead.
 
 ```
 questions: [

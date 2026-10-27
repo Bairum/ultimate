@@ -91,6 +91,9 @@ See [integration details](docs/worktrees.md#standing-permission-to-push-this-rep
 - Commits made through Ultimate's bash tool carry `Ultimate-Conversation: <id>`; find the conversation behind a commit with `git log --format=%(trailers:key=Ultimate-Conversation)`.
 - Pi is the role model: minimal, readable, malleable. Prefer platform features and existing dependencies; justify every
   new dependency in its commit message.
+- Public docs, READMEs, prompts, agent definitions, skills and code comments use generic names and examples ("the
+  user", `my-app`, example addresses), never a real person's name, machine names, private repos or real IPs. LICENSE,
+  upstream attributions and real repo URLs are exempt.
 - `pnpm check` enforces import boundaries; see `lint/ultimate.ts` and `vite.config.ts`. It also runs `pnpm deps`,
   which prints the dependency graph between extensions (imports plus `need`/`want`) and fails on a cycle or on a
   core-tier extension that depends on an optional one.
