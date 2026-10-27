@@ -57,6 +57,11 @@ turn starts on the same thread with the guidance; the card and the result's `gui
 
 Threads use `approvalPolicy: 'on-request'`, `sandbox: 'workspace-write'`, cwd equal to the private results folder,
 `sandbox_workspace_write.writable_roots` restricted to that folder, no sandbox network access, and both temporary-directory exclusions.
+
+Optional project `codexComputer.writable` adds folders Codex may write to, e.g. a mounted results share:
+`{ "codexComputer": { "writable": ["/Volumes/bridgestone/Test/b4/results"] } }`. Each entry must be an absolute path
+to an existing folder (links are resolved); otherwise the run is refused before Codex starts, so an unmounted share
+says so instead of failing inside Codex. Only list folders Codex should change: it can write anything in them.
 Static inspection of Codex 0.163.0 shows `workspaceWrite` with `writableRoots`, but no writable roots on `readOnly`.
 Command and file-change approvals are always declined; permissions requests receive an empty permission grant.
 All other server requests (including requestUserInput) receive a JSON-RPC refusal. These are Codex sandbox gates,

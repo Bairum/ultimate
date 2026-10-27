@@ -3,7 +3,7 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool, GenerationTask, hook } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
-import { access, readFile, realpath } from 'node:fs/promises'
+import { access, readFile, realpath, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -39,6 +39,24 @@ async function instructions(host: ExtensionHost) {
         .toString('utf8')
         .replace(/\uFFFD$/, '')}\n[cut at 8 KB]`
     : bytes.toString('utf8')
+}
+/** Project `codexComputer.writable`: absolute paths of existing directories, resolved through links; else an error. */
+async function writableRoots(value: unknown) {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value))
+    throw new Error('codexComputer.writable must be a list of absolute folder paths')
+  return Promise.all(
+    value.map(async (path) => {
+      if (typeof path !== 'string' || !isAbsolute(path))
+        throw new Error(`codexComputer.writable: ${JSON.stringify(path)} is not an absolute path`)
+      const real = await realpath(path).catch(() => {
+        throw new Error(`codexComputer.writable: ${path} does not exist (is the share mounted?)`)
+      })
+      if (!(await stat(real)).isDirectory())
+        throw new Error(`codexComputer.writable: ${path} is not a folder`)
+      return real
+    }),
+  )
 }
 /** The live run in a conversation, or a clear refusal. */
 function liveRun(host: ExtensionHost, conversation: number) {
@@ -212,6 +230,12 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
           const apps = Array.isArray(project.apps)
             ? project.apps.filter((app): app is string => typeof app === 'string')
             : undefined
+          let writable: string[] | undefined
+          try {
+            writable = await writableRoots(project.writable)
+          } catch (error) {
+            return refuse('failed', error instanceof Error ? error.message : String(error))
+          }
           const user = config(await readSettings(userSettingsPath(host.userHome)))
           const configured = project.codexPath ?? user.codexPath ?? 'codex'
           if (typeof configured !== 'string' || !configured.trim())
@@ -264,6 +288,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
             ...(args.session ? { session: args.session } : {}),
             ...(args.model ? { model: args.model } : {}),
             ...(apps ? { apps } : {}),
+            ...(writable?.length ? { writable } : {}),
             spawn: deps.spawn,
             signal: ctx.abortSignal,
             output: (text) => api.output(text),

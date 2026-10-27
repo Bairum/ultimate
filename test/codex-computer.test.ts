@@ -10,7 +10,16 @@ import { createRegistry, defineTool, Harness, MemoryStorage } from '@earendil-wo
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
-import { mkdir, writeFile, readFile, stat, lstat, symlink, utimes } from 'node:fs/promises'
+import {
+  mkdir,
+  writeFile,
+  readFile,
+  realpath,
+  stat,
+  lstat,
+  symlink,
+  utimes,
+} from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { ActionContext } from '../server/actions.ts'
@@ -107,7 +116,7 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).toReversed()) await close()
   vi.useRealTimers()
 })
-async function fixture(apps?: string[]) {
+async function fixture(apps?: string[], settings: Record<string, unknown> = {}) {
   const home = await temp()
   const path = join(home, 'signed-codex')
   await writeFile(path, 'fake executable, never launched', { mode: 0o700 })
@@ -140,7 +149,7 @@ async function fixture(apps?: string[]) {
     }),
     projectSetup: async () => ({ config: true, decision: true }),
     projectSettings: async () => ({
-      codexComputer: { codexPath: path, ...(apps ? { apps } : {}) },
+      codexComputer: { codexPath: path, ...(apps ? { apps } : {}), ...settings },
     }),
     harness: () => harness,
     onClose: (close: () => Promise<void>) =>
@@ -597,6 +606,29 @@ it('saves private PNG evidence in the conversation folder and returns the last i
     approvalPolicy: 'on-request',
   })
   expect(f.spawn.mock.calls[0]).toBeDefined()
+})
+it('adds existing absolute codexComputer.writable folders to the sandbox, and refuses anything else', async () => {
+  const share = await temp()
+  cleanup.push(() => removeTemp(share))
+  const f = await fixture(undefined, { writable: [share] })
+  const { promise } = await running(f)
+  f.fake.complete()
+  await promise
+  const config = f.spawn.mock.calls[0][1].find((arg) =>
+    arg.startsWith('sandbox_workspace_write.writable_roots='),
+  )!
+  expect(JSON.parse(config.split('=')[1])).toEqual([
+    join(f.home, 'codex-computer', String(f.root.id)),
+    await realpath(share),
+  ])
+  for (const writable of [['relative/path'], [join(share, 'missing')], 'not a list']) {
+    const g = await fixture(undefined, { writable })
+    expect(data(await g.invoke())).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('codexComputer.writable'),
+    })
+    expect(g.spawn).not.toHaveBeenCalled()
+  }
 })
 
 it('never puts a frame Codex cut short into the result, and drops one already stored before the next request', async () => {
