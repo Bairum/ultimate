@@ -249,12 +249,10 @@ export async function runLanderCheck(
     () => stop(`Timed out after ${seconds(limits.total)}`),
     limits.total * 1000,
   )
-  /** A watchdog report: the limit that fired, the failed tests seen so far, then the output tail. */
-  const watchdogFailure = (reason: string) => {
+  /** A failure report: what ended the check, the failed tests seen (at most 20), then the output tail. */
+  const report = (reason: string, heading: string) => {
     const tests = [...failed].slice(-20)
-    return [reason, ...(tests.length ? ['Failed tests so far:', ...tests] : []), output]
-      .join('\n')
-      .trim()
+    return [reason, ...(tests.length ? [heading, ...tests] : []), output].join('\n').trim()
   }
   const onOutput = (text: string) => {
     output = (output + text).slice(-3000)
@@ -283,8 +281,8 @@ export async function runLanderCheck(
       return { failure: `${output}\n${String(error)}`.trim() }
     }
     context.abortSignal?.throwIfAborted()
-    if (stopped) return { failure: watchdogFailure(stopped), timedOut: true }
-    if (exitCode !== 0) return { failure: `${output}\nexit ${exitCode}`.trim() }
+    if (stopped) return { failure: report(stopped, 'Failed tests so far:'), timedOut: true }
+    if (exitCode !== 0) return { failure: report(`exit ${exitCode}`, 'Failed tests:') }
     const last = lines(stripVTControlCharacters(output)).findLast((line) => line.trim())
     return { summary: last?.trim().slice(0, 200) }
   } finally {
