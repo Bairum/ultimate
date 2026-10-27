@@ -118,7 +118,7 @@ function Glyph({ kind, active }: { kind: MarkKind; active?: boolean }) {
           )}
         />
       )
-    case 'compaction':
+    default:
       return <span className="block w-4 border-t border-dashed border-muted-foreground/60" />
   }
 }
