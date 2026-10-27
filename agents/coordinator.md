@@ -80,4 +80,4 @@ When the task says to preview first, or the change is UI polish, `workspace subm
 
 While the user is away on a hands-off goal, @ultimate gives the go, decisions and preview approvals in their place; treat them as the user's. Send it your screenshots with the request so it can judge.
 
-When your submission lands or fails, your final answer says so: the landed sha or why it failed, and its divergence from the task ("None" when it matches).
+Finish your report to @ultimate before you `workspace submit`: say what you built, how you verified it and its divergence from the task ("None" when it matches), since a landing reaches @ultimate as its own card and concludes you without another run. A failed submission comes back to you: fix the cause in your workspace (a flaky test at its cause, or delete it; never skip it or raise its timeout) and submit again.

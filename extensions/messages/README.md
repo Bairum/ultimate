@@ -13,7 +13,7 @@ that entry. The reference resolves when the message is admitted (at most
 the same ones. `branch` takes the same `images` for its first message. @ultimate's messages to the user carry them
 too: its bubble shows that entry's images as thumbnails that open full size.
 Address a conversation
-as `#123` or `123`, a standing agent as `@name`, or the project's existing lander as `@lander`.
+as `#123` or `123`, or a standing agent as `@name`. The lander runs no model and takes no messages.
 Only the `ultimate` resident's standing conversation may message `user`; other senders must send @ultimate a one-way update to relay.
 Self-messages, unknown conversations and tallies are refused; use `note` for a tally. Unknown standing names list
 the valid ones. Standing agents are resolved and configured through the `subagents` service at delivery admission.
@@ -21,8 +21,8 @@ Each post emits `board.sent` `{ message, from, to, reply, steer }` (`MessageSent
 text; replies are no posts and emit nothing.
 
 An idle recipient wakes. A busy one receives a follow-up after its current run, or steering during that run with
-`steer: true`. `steer` defaults to `true` for @ultimate's messages, to any recipient including `@lander` and other
-standing agents, and to `false` for everyone else; an explicit value always wins. The typed `board.message` input identifies its sender and explains where its answer goes. Its `delivery`
+`steer: true`. `steer` defaults to `true` for @ultimate's messages, to any recipient including standing agents, and
+to `false` for everyone else; an explicit value always wins. The typed `board.message` input identifies its sender and explains where its answer goes. Its `delivery`
 field records `steer` or `followUp`.
 The answer returns as `board.reply`, steering the sender. An unanswered input produces a failure reply instead.
 Answer directly rather than messaging the sender. A reply-enabled agent message back to a sender whose
@@ -57,13 +57,14 @@ conversation that started you is a note, and stopping with nothing under way is 
   hook) looks at its final answer. The answer to the starter's reply-enabled message already returns as that
   message's reply, so it is skipped, as are empty, failed and aborted answers. Otherwise, if nothing of the branch is
   still under way (no run or queued input in it or a subagent at any depth, no subagent report or waking `notify`
-  on its way, no submission in the lander's queue or being reported, no reply-enabled message of its own still
-  waiting), the answer goes to the starter as a one-way message with
+  on its way, no submission in the lander's queue or a failure being reported, no reply-enabled message of its own
+  still waiting), the answer goes to the starter as a one-way message with
   `report: true`, which wakes it as a follow-up. While something is still under way it goes as a note: the branch
-  will run again when that work wakes it.
+  will run again when that work wakes it. A landing ends a branch's work without a run: the lander concludes it
+  unless `underway` says otherwise and wakes the starter itself (`extensions/workspaces/README.md`), asking through
+  the `workspaces.branches` extension point that this extension provides (`starter`, `underway`).
 - **Everything else wakes.** Reply-enabled messages, and one-way messages from anyone who is not the recipient's
-  child or branch (another branch, the lander's deploy handoff, an automation's escalation, another project's
-  Ultimate), are inputs.
+  child or branch (another branch, an automation's escalation, another project's Ultimate), are inputs.
 
 Routing cannot loop: it goes only from a branch to its starter, which existed before it, and a routed message is
 one-way, so the starter's answer to it goes nowhere. Request id `route:<answer entry>` deduplicates delivery in the
@@ -122,7 +123,7 @@ delivered like any other: its input resumes it, and its next request recreates a
 ## Ultimate and branches
 
 Talk to `@ultimate` in its own conversation to start and steer work, using the first sidebar row (on phones, the top-bar @ultimate button). It is the built-in standing orchestrator, not a coding worker.
-Model-facing messages identify standing senders as `#12 (@ultimate)` and the lander as `#40 (@lander)`; ordinary
+Model-facing messages identify standing senders as `#12 (@ultimate)`; ordinary
 conversations stay `#id`, and user replies say `user`. Before delivery, standing recipients are refreshed from their
 current definitions, including numeric-address messages and automatic replies.
 
@@ -212,16 +213,15 @@ The reply's `answer` links to the recipient's assistant entry; the original also
 
 ## Actions
 
-- `addresses({}) → { agents, lander?, conversations }`: resident names/descriptions with an id if already created,
-  the existing project lander id, and up to 50 recent top-level conversation summaries (including title and label).
+- `addresses({}) → { agents, conversations }`: resident names/descriptions with an id if already created, and up to
+  50 recent top-level conversation summaries (including title and label).
 
 Users type in @ultimate's conversation or answer a question card; there is no user posting action.
 Agents use the `message` tool. The prompt section is stable and lists resident names and descriptions.
 
 ## Service
 
-`host.want(MessagesApi)` exposes `send`, a one-way message from a conversation (the lander's deploy
-handoff), and `answer`, the user's reply to an open message (the questions answer card). Landings and submissions
+`host.want(MessagesApi)` exposes `send`, a one-way message from a conversation, and `answer`, the user's reply to an open message (the questions answer card). Landings and submissions
 append no log items. `MessagesApi`, `Message` and the `Messages` document live in `api.ts`.
 
 ## Files
@@ -230,7 +230,7 @@ Server side, imported in one direction (`log`, `images`, `addresses`, `questions
 `send` → `route` → `branch`; `remote` → `delivery`), each sharing only the `Messages` log and explicit helpers:
 
 - `server.ts`: wiring: the extension definition, the `message` tool, the prompt section, hooks, actions and the
-  `MessagesApi` and `Handoff` services.
+  `MessagesApi` service and the `workspaces.branches` extension point.
 - `send.ts`: `send()`, its validation, receipts (`Sent`, `Requests`) and the conversion of a message to a sender you
   owe an answer into that answer.
 - `delivery.ts`: the `board.delivery` task, its `deliver` and `reply` phases.
