@@ -1,58 +1,70 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode, RefObject } from 'react'
+import type { RefObject } from 'react'
 import {
   cn,
   defineWebExtension,
+  events,
+  formatTime,
+  useAction,
   useConversation,
   useConversations,
-  useExtensionUiState,
+  useDocOf,
   useViewport,
 } from '@/sdk'
-import { kindLabel, milestones, mockMarks } from './mock.tsx'
-import type { Mark, MarkKind, Profile } from './mock.tsx'
+import { StandingDoc } from '../subagents/ui.tsx'
+import { MarksAction } from './refs.ts'
+import type { Mark, MarkKind } from './refs.ts'
 
-type Variant = 'ticks' | 'list' | 'lanes'
+type Profile = 'ultimate' | 'coordinator' | 'worker'
 
-/** Rough guess for the mock: @ultimate is the standing `agent`, owned conversations are workers, the rest coordinators. */
-function useProfile(): Profile {
-  const { id } = useConversation()
+const kindLabel: Record<MarkKind, string> = {
+  user: 'You',
+  answer: 'Answer',
+  message: 'Message',
+  branch: 'Branch started',
+  landed: 'Landed',
+  failed: 'Failed',
+  submit: 'Submitted',
+  commit: 'Commit',
+  preview: 'Preview started',
+  subagent: 'Subagent started',
+  report: 'Subagent reported',
+  screenshot: 'Screenshot',
+  restart: 'Restart',
+  compaction: 'Compacted',
+}
+
+/** The milestones each kind of conversation shows in its third lane; other kinds stay off the rail. */
+const milestones: Record<Profile, readonly MarkKind[]> = {
+  ultimate: ['branch', 'landed', 'failed', 'compaction', 'restart'],
+  coordinator: [
+    'commit',
+    'preview',
+    'subagent',
+    'report',
+    'submit',
+    'landed',
+    'failed',
+    'compaction',
+  ],
+  worker: ['commit', 'screenshot', 'preview', 'failed', 'compaction'],
+}
+
+/** @ultimate, a worker or another agent owned by a conversation, else a branch's coordinator. */
+function useProfile(id: number | undefined): Profile {
+  const ultimate = useDocOf(1, StandingDoc)?.ultimate
   const summary = useConversations().find((conversation) => conversation.id === id)
+  if (id !== undefined && id === ultimate) return 'ultimate'
   if (summary?.parentConversationId !== undefined) return 'worker'
-  if (summary?.label === 'agent' && summary.branchOf === undefined) return 'ultimate'
   return 'coordinator'
 }
 
-/** The transcript's scroller next to this overlay, and how far through it the reader is. */
-function useScroller(root: RefObject<HTMLDivElement | null>) {
-  const [view, setView] = useState({ top: 0, size: 1 })
-  const scroller = () =>
-    root.current?.parentElement?.querySelector<HTMLElement>('[role="log"] > div') ?? undefined
-  useEffect(() => {
-    const element = scroller()
-    if (!element) return undefined
-    const update = () => {
-      const height = Math.max(1, element.scrollHeight)
-      const top = element.scrollTop / height
-      const size = element.clientHeight / height
-      setView((last) => (last.top === top && last.size === size ? last : { top, size }))
-    }
-    update()
-    element.addEventListener('scroll', update, { passive: true })
-    const observer = new ResizeObserver(update)
-    observer.observe(element)
-    return () => {
-      element.removeEventListener('scroll', update)
-      observer.disconnect()
-    }
-  })
-  /** The mock jumps by order: mark `index` of `count` lands at the same share of the transcript. */
-  const jump = (index: number, count: number) => {
-    const element = scroller()
-    if (!element) return
-    const range = element.scrollHeight - element.clientHeight
-    element.scrollTo({ top: (range * index) / Math.max(1, count - 1), behavior: 'smooth' })
-  }
-  return { view, jump }
+/** Lane 0 is the user, lane 1 the agent's answers and messages, lane 2 milestones; undefined leaves it off. */
+function laneOf(kind: MarkKind, profile: Profile) {
+  if (kind === 'user') return 0
+  if (milestones[profile].includes(kind)) return 2
+  if (kind === 'answer' || kind === 'message') return 1
+  return undefined
 }
 
 /** One mark's glyph: shape and colour carry the kind, so a glance says what happened where. */
@@ -60,11 +72,16 @@ function Glyph({ kind, active }: { kind: MarkKind; active?: boolean }) {
   const bar = (width: string, tone: string) => (
     <span className={cn('block h-[2px] rounded-full', width, active ? 'bg-foreground' : tone)} />
   )
+  const dot = (tone: string, ring: string) => (
+    <span className={cn('block size-[7px] rounded-full', tone, active && `ring-2 ${ring}`)} />
+  )
   switch (kind) {
     case 'user':
-      return bar(active ? 'w-4' : 'w-3', 'bg-muted-foreground/70')
+      return bar(active ? 'w-3.5' : 'w-2.5', 'bg-muted-foreground/80')
     case 'answer':
-      return bar(active ? 'w-4' : 'w-2', 'bg-muted-foreground/30')
+      return bar(active ? 'w-3.5' : 'w-2.5', 'bg-muted-foreground/35')
+    case 'message':
+      return bar(active ? 'w-3' : 'w-1.5', 'bg-muted-foreground/35')
     case 'branch':
       return (
         <span
@@ -75,18 +92,16 @@ function Glyph({ kind, active }: { kind: MarkKind; active?: boolean }) {
         />
       )
     case 'landed':
+      return dot('bg-success', 'ring-success/40')
+    case 'failed':
+      return dot('bg-error', 'ring-error/40')
+    case 'submit':
       return (
         <span
           className={cn(
-            'block size-[7px] rounded-full bg-success',
-            active && 'ring-2 ring-success/40',
+            'block size-[7px] rounded-full border-[1.5px] border-dashed border-success',
+            active && 'bg-success',
           )}
-        />
-      )
-    case 'failed':
-      return (
-        <span
-          className={cn('block size-[7px] rounded-full bg-error', active && 'ring-2 ring-error/40')}
         />
       )
     case 'commit':
@@ -108,9 +123,9 @@ function Glyph({ kind, active }: { kind: MarkKind; active?: boolean }) {
         />
       )
     case 'subagent':
-      return bar('w-2.5', 'bg-brand/50')
+      return bar('w-2', 'bg-brand/50')
     case 'report':
-      return bar('w-3.5', 'bg-brand/80')
+      return bar('w-3', 'bg-brand/85')
     case 'screenshot':
       return (
         <span
@@ -120,16 +135,18 @@ function Glyph({ kind, active }: { kind: MarkKind; active?: boolean }) {
           )}
         />
       )
+    case 'restart':
+      return dot('bg-warning', 'ring-warning/40')
     default:
-      return <span className="block w-4 border-t border-dashed border-muted-foreground/60" />
+      return <span className="block w-3 border-t border-dashed border-muted-foreground/60" />
   }
 }
 
 /** The floating label next to a mark: kind, time, and its line of text. */
-function Tip({ mark, top }: { mark: Mark; top: number }) {
+function Tip({ mark, more, top }: { mark: Mark; more: number; top: number }) {
   return (
     <div
-      className="pointer-events-none absolute right-7 z-20 w-64 -translate-y-1/2 rounded-md border border-border bg-popover px-2.5 py-1.5 shadow-md"
+      className="pointer-events-none absolute right-14 z-20 w-72 -translate-y-1/2 rounded-md border border-border bg-popover px-2.5 py-1.5 shadow-md"
       style={{ top }}
     >
       <div className="flex items-center gap-1.5 font-mono text-[10.5px] text-muted-foreground">
@@ -137,16 +154,21 @@ function Tip({ mark, top }: { mark: Mark; top: number }) {
           <Glyph kind={mark.kind} />
         </span>
         {kindLabel[mark.kind]}
-        <span className="ml-auto">{mark.at}</span>
+        {mark.at !== undefined && <span className="ml-auto">{formatTime(mark.at)}</span>}
       </div>
-      <div className="mt-0.5 line-clamp-2 text-[12.5px] leading-snug text-popover-foreground">
-        {mark.text}
+      <div className="mt-0.5 line-clamp-3 text-[12.5px] leading-snug text-popover-foreground">
+        {mark.text || kindLabel[mark.kind]}
       </div>
+      {more > 0 && (
+        <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground/70">
+          +{more} nearby
+        </div>
+      )}
     </div>
   )
 }
 
-/** Turn the wheel over the rail into steps from mark to mark; the page does not scroll meanwhile. */
+/** Turn the wheel over the rail into steps from mark to mark; the transcript does not scroll meanwhile. */
 function useWheelSteps(element: RefObject<HTMLElement | null>, step: (delta: number) => void) {
   const latest = useRef(step)
   latest.current = step
@@ -157,7 +179,7 @@ function useWheelSteps(element: RefObject<HTMLElement | null>, step: (delta: num
     const onWheel = (event: WheelEvent) => {
       event.preventDefault()
       carry += event.deltaY
-      // A notch is about 100 px on a mouse; a trackpad sends many small deltas.
+      // A mouse notch is about 100 px; a trackpad sends many small deltas.
       while (Math.abs(carry) >= 40) {
         latest.current(Math.sign(carry))
         carry -= Math.sign(carry) * 40
@@ -168,318 +190,235 @@ function useWheelSteps(element: RefObject<HTMLElement | null>, step: (delta: num
   }, [element])
 }
 
-const GAP = 7
-const MAX_HEIGHT = 420
-
-interface RailProps {
-  marks: Mark[]
-  profile: Profile
-  view: { top: number; size: number }
-  jump: (index: number) => void
+/** The scroller of the transcript this overlay sits on: the nearest ancestor holding one. */
+function transcriptOf(element: HTMLElement | null) {
+  for (let at = element?.parentElement; at; at = at.parentElement) {
+    const found = at.querySelector<HTMLElement>('[role="log"] > div')
+    if (found) return found
+  }
+  return undefined
 }
 
-/** Rows of the rail: one per mark, evenly spaced by order. */
-function layout(count: number) {
-  const gap = Math.max(3, Math.min(GAP, MAX_HEIGHT / Math.max(1, count)))
-  return { gap, height: gap * count }
+/** The entry ids on screen in the transcript beside `root`: the first and last visible row. */
+function useVisible(root: RefObject<HTMLDivElement | null>, id: number | undefined) {
+  const [visible, setVisible] = useState<[number, number]>()
+  useEffect(() => {
+    const scroller = transcriptOf(root.current)
+    if (!scroller) return undefined
+    let frame = 0
+    const update = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        const box = scroller.getBoundingClientRect()
+        let first: number | undefined
+        let last: number | undefined
+        for (const row of scroller.querySelectorAll('[data-entry-id]')) {
+          const rect = row.getBoundingClientRect()
+          if (rect.bottom < box.top || rect.top > box.bottom || rect.height === 0) continue
+          const entry = Number(
+            row.getAttribute('data-run-last') ?? row.getAttribute('data-entry-id'),
+          )
+          const start = Number(row.getAttribute('data-entry-id'))
+          first = Math.min(first ?? start, start)
+          last = Math.max(last ?? entry, entry)
+        }
+        setVisible((previous) =>
+          first === undefined || last === undefined
+            ? previous
+            : previous?.[0] === first && previous[1] === last
+              ? previous
+              : [first, last],
+        )
+      })
+    }
+    update()
+    scroller.addEventListener('scroll', update, { passive: true })
+    const observer = new ResizeObserver(update)
+    observer.observe(scroller)
+    return () => {
+      cancelAnimationFrame(frame)
+      scroller.removeEventListener('scroll', update)
+      observer.disconnect()
+    }
+  }, [root, id])
+  return visible
 }
 
-/** The current-view bracket along the rail. */
-function ViewBand({ view, height }: { view: RailProps['view']; height: number }) {
-  return (
-    <span
-      className="pointer-events-none absolute -right-1 w-[2px] rounded-full bg-foreground/25"
-      style={{ top: view.top * height, height: Math.max(6, view.size * height) }}
-    />
-  )
+const LANE = 14
+const MAX_GAP = 14
+const MIN_GAP = 4
+
+/** Which mark wins a shared slot in its lane: milestones before talk, failures first. */
+const weight: Partial<Record<MarkKind, number>> = {
+  failed: 9,
+  landed: 8,
+  branch: 7,
+  restart: 6,
+  preview: 6,
+  submit: 5,
+  commit: 4,
+  report: 3,
+  subagent: 2,
+  screenshot: 1,
 }
 
-/** Variant A: ticks only; hover or wheel shows one floating label. */
-function Ticks({ marks, view, jump }: RailProps) {
+interface Row {
+  mark: Mark
+  lane: number
+}
+
+/**
+ * Rows packed into `count` slots by order: each slot holds a run of neighbours, and draws per lane the one that weighs
+ * most (the latest on a tie). With room for every row, a slot is one row.
+ */
+function pack(rows: readonly Row[], count: number) {
+  const slots: { rows: Row[]; shown: Row[] }[] = []
+  const per = Math.max(1, Math.ceil(rows.length / Math.max(1, count)))
+  for (let start = 0; start < rows.length; start += per) {
+    const run = rows.slice(start, start + per)
+    const shown = [0, 1, 2].flatMap((lane) => {
+      const inLane = run.filter((row) => row.lane === lane)
+      const best = inLane.reduce<Row | undefined>(
+        (top, row) =>
+          !top || (weight[row.mark.kind] ?? 0) >= (weight[top.mark.kind] ?? 0) ? row : top,
+        undefined,
+      )
+      return best ? [best] : []
+    })
+    slots.push({ rows: run, shown })
+  }
+  return slots
+}
+
+function Lanes({ marks, profile, id }: { marks: Mark[]; profile: Profile; id: number }) {
   const rail = useRef<HTMLDivElement>(null)
   const [active, setActive] = useState<number>()
-  const { gap, height } = layout(marks.length)
-  useWheelSteps(rail, (delta) =>
-    setActive((index) =>
-      clamp((index ?? Math.round(view.top * marks.length)) + delta, marks.length),
-    ),
+  const [room, setRoom] = useState(400)
+  useEffect(() => {
+    const element = rail.current?.parentElement
+    if (!element) return undefined
+    const observer = new ResizeObserver(() => setRoom(element.clientHeight))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  const rows = useMemo(
+    () =>
+      marks.flatMap((mark) => {
+        const lane = laneOf(mark.kind, profile)
+        return lane === undefined ? [] : [{ mark, lane }]
+      }),
+    [marks, profile],
   )
+  const visible = useVisible(rail, id)
+  // Slots share the height evenly by order; with more rows than fit, neighbours share a slot.
+  const fits = Math.max(1, Math.floor((room - 8) / MIN_GAP))
+  const slots = useMemo(() => pack(rows, fits), [rows, fits])
+  const gap = Math.max(MIN_GAP, Math.min(MAX_GAP, (room - 8) / Math.max(1, slots.length)))
+  const height = gap * slots.length
+  const band = useMemo(() => {
+    if (!visible || !slots.length) return undefined
+    const first = slots.findIndex((slot) => slot.rows.at(-1)!.mark.entry >= visible[0])
+    const after = slots.findIndex((slot) => slot.rows[0].mark.entry > visible[1])
+    const from = first === -1 ? slots.length : first
+    const to = after === -1 ? slots.length : after
+    return { top: from * gap, size: Math.max(4, (to - from) * gap) }
+  }, [visible, slots, gap])
+  /** A slot's target: its milestone when it has one, else its first row. */
+  const target = (index: number) => {
+    const { rows: run, shown } = slots[index]
+    return (shown.find((row) => row.lane === 2) ?? run[0]).mark
+  }
+  const jump = (index: number) =>
+    events.emit('ultimate:reveal-entry', { conversationId: id, entryId: target(index).entry })
+  useWheelSteps(rail, (delta) =>
+    setActive((index) => {
+      const start =
+        index ??
+        slots.findIndex(
+          (slot) => visible !== undefined && slot.rows.at(-1)!.mark.entry >= visible[0],
+        )
+      return Math.max(0, Math.min(slots.length - 1, (start === -1 ? slots.length : start) + delta))
+    }),
+  )
+  if (!slots.length) return null
   return (
     <div
-      className="relative w-6 cursor-pointer py-1"
+      className="group/lanes pointer-events-auto relative w-12 cursor-pointer py-1"
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' && active !== undefined) jump(active)
+      }}
       onPointerLeave={() => setActive(undefined)}
       ref={rail}
       style={{ height: height + 8 }}
     >
-      <ViewBand height={height} view={view} />
-      {marks.map((mark, index) => (
-        <button
-          aria-label={`${kindLabel[mark.kind]}: ${mark.text}`}
-          className="absolute right-1 flex w-5 items-center justify-end"
-          key={index}
-          onClick={() => jump(index)}
-          onPointerEnter={() => setActive(index)}
-          style={{ top: 4 + index * gap, height: gap }}
-          type="button"
-        >
-          <Glyph active={active === index} kind={mark.kind} />
-        </button>
-      ))}
-      {active !== undefined && <Tip mark={marks[active]} top={4 + active * gap + gap / 2} />}
-    </div>
-  )
-}
-
-/** Variant C: three lanes, you · agent · milestones, rows aligned by order. */
-function Lanes({ marks, profile, view, jump }: RailProps) {
-  const rail = useRef<HTMLDivElement>(null)
-  const [active, setActive] = useState<number>()
-  const { gap, height } = layout(marks.length)
-  const lane = (kind: MarkKind) =>
-    kind === 'user' ? 0 : milestones[profile].includes(kind) ? 2 : 1
-  useWheelSteps(rail, (delta) =>
-    setActive((index) =>
-      clamp((index ?? Math.round(view.top * marks.length)) + delta, marks.length),
-    ),
-  )
-  return (
-    <div
-      className="group/lanes relative w-12 cursor-pointer py-1"
-      onPointerLeave={() => setActive(undefined)}
-      ref={rail}
-      style={{ height: height + 8 }}
-    >
-      <div className="pointer-events-none absolute -top-4 right-0 flex w-12 justify-around font-mono text-[9px] text-muted-foreground/0 transition-colors group-hover/lanes:text-muted-foreground/70">
-        <span>you</span>
-        <span>ai</span>
-        <span>★</span>
-      </div>
       {[0, 1, 2].map((column) => (
         <span
-          className="pointer-events-none absolute top-1 bottom-1 w-px bg-border/60"
+          className="pointer-events-none absolute top-1 bottom-1 w-px bg-border/40 transition-colors group-hover/lanes:bg-border"
           key={column}
-          style={{ left: 8 + column * 16 }}
+          style={{ left: 7 + column * LANE }}
         />
       ))}
-      <ViewBand height={height} view={view} />
-      {marks.map((mark, index) => (
+      {band && (
+        <span
+          className="pointer-events-none absolute right-0 left-0 rounded-sm bg-foreground/[0.06]"
+          style={{ top: 4 + band.top, height: band.size }}
+        />
+      )}
+      {slots.map((slot, index) => (
         <button
-          aria-label={`${kindLabel[mark.kind]}: ${mark.text}`}
-          className={cn('absolute right-0 left-0', active === index && 'bg-foreground/5')}
-          key={index}
+          aria-label={`${kindLabel[target(index).kind]}: ${target(index).text}`}
+          className={cn(
+            'absolute right-0 left-0 cursor-pointer',
+            active === index && 'bg-foreground/5',
+          )}
+          key={`${slot.rows[0].mark.entry}:${index}`}
           onClick={() => jump(index)}
           onPointerEnter={() => setActive(index)}
           style={{ top: 4 + index * gap, height: gap }}
           type="button"
         >
-          <span
-            className="absolute top-1/2 flex w-4 -translate-y-1/2 justify-center"
-            style={{ left: lane(mark.kind) * 16 }}
-          >
-            <Glyph active={active === index} kind={mark.kind} />
-          </span>
+          {slot.shown.map(({ mark, lane }) => (
+            <span
+              className="absolute top-1/2 flex w-3.5 -translate-y-1/2 justify-center"
+              key={lane}
+              style={{ left: lane * LANE }}
+            >
+              <Glyph active={active === index} kind={mark.kind} />
+            </span>
+          ))}
         </button>
       ))}
-      {active !== undefined && <Tip mark={marks[active]} top={4 + active * gap + gap / 2} />}
-    </div>
-  )
-}
-
-type Filter = 'milestones' | 'yours' | 'all'
-
-/** Variant B: the rail, and hovering it opens a list with filters; the wheel moves through the list. */
-function List({ marks, profile, view, jump }: RailProps) {
-  const rail = useRef<HTMLDivElement>(null)
-  const [open, setOpen] = useState(false)
-  const [stored, setFilter] = useExtensionUiState('mock.filter', 'milestones')
-  const filter = stored as Filter
-  const [active, setActive] = useState<number>()
-  const close = useRef<ReturnType<typeof setTimeout>>(undefined)
-  const { gap, height } = layout(marks.length)
-  const shown = marks
-    .map((mark, index) => ({ mark, index }))
-    .filter(({ mark }) =>
-      filter === 'all'
-        ? true
-        : filter === 'yours'
-          ? mark.kind === 'user'
-          : milestones[profile].includes(mark.kind),
-    )
-  const position = shown.findIndex((row) => row.index === active)
-  useWheelSteps(rail, (delta) => {
-    setOpen(true)
-    const from =
-      position === -1 ? shown.findIndex((row) => row.index >= view.top * marks.length) : position
-    setActive(shown[clamp(from + delta, shown.length)]?.index)
-  })
-  const list = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    list.current?.querySelector('[data-active]')?.scrollIntoView({ block: 'nearest' })
-  }, [active])
-  const enter = () => {
-    clearTimeout(close.current)
-    setOpen(true)
-  }
-  const leave = () => {
-    close.current = setTimeout(() => {
-      setOpen(false)
-      setActive(undefined)
-    }, 180)
-  }
-  const chip = (value: Filter, label: string) => (
-    <button
-      className={cn(
-        'h-6 cursor-pointer rounded-md px-2 font-mono text-[11px]',
-        filter === value
-          ? 'bg-accent text-foreground'
-          : 'text-muted-foreground hover:text-foreground',
+      {active !== undefined && slots[active] && (
+        <Tip
+          mark={target(active)}
+          more={slots[active].rows.length - 1}
+          top={4 + active * gap + gap / 2}
+        />
       )}
-      onClick={() => setFilter(value)}
-      type="button"
-    >
-      {label}
-    </button>
-  )
-  return (
-    <div className="relative flex" onPointerEnter={enter} onPointerLeave={leave}>
-      {open && (
-        <div className="absolute top-0 right-7 z-20 flex max-h-[min(440px,70vh)] w-80 flex-col rounded-lg border border-border bg-popover shadow-lg">
-          <div className="flex items-center gap-1 border-b border-border/70 p-1.5">
-            {chip('milestones', 'Milestones')}
-            {chip('yours', 'Yours')}
-            {chip('all', 'All')}
-            <span className="ml-auto pr-1 font-mono text-[10.5px] text-muted-foreground/70">
-              {shown.length}
-            </span>
-          </div>
-          <div className="min-h-0 overflow-y-auto p-1" ref={list}>
-            {shown.map(({ mark, index }) => (
-              <button
-                className={cn(
-                  'flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-left',
-                  active === index ? 'bg-accent' : 'hover:bg-accent/60',
-                )}
-                data-active={active === index ? '' : undefined}
-                key={index}
-                onClick={() => jump(index)}
-                onPointerEnter={() => setActive(index)}
-                type="button"
-              >
-                <span className="mt-[7px] flex w-4 shrink-0 justify-center">
-                  <Glyph kind={mark.kind} />
-                </span>
-                <span className="min-w-0 flex-1 truncate text-[13px] text-popover-foreground">
-                  {mark.text}
-                </span>
-                <span className="mt-0.5 shrink-0 font-mono text-[10.5px] text-muted-foreground/70">
-                  {mark.at}
-                </span>
-              </button>
-            ))}
-            {shown.length === 0 && (
-              <div className="px-2 py-3 font-mono text-[11px] text-muted-foreground">
-                Nothing of this kind yet
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-      <div className="relative w-6 cursor-pointer py-1" ref={rail} style={{ height: height + 8 }}>
-        <ViewBand height={height} view={view} />
-        {marks.map((mark, index) => (
-          <button
-            aria-label={`${kindLabel[mark.kind]}: ${mark.text}`}
-            className="absolute right-1 flex w-5 items-center justify-end"
-            key={index}
-            onClick={() => jump(index)}
-            onPointerEnter={() => setActive(index)}
-            style={{ top: 4 + index * gap, height: gap }}
-            type="button"
-          >
-            <Glyph active={active === index} kind={mark.kind} />
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-const clamp = (index: number, count: number) => Math.max(0, Math.min(count - 1, index))
-
-/** Preview-only switcher between the variants and conversation kinds. */
-function Switcher({
-  variant,
-  setVariant,
-  profile,
-  setProfile,
-}: {
-  variant: Variant
-  setVariant: (variant: Variant) => void
-  profile: Profile
-  setProfile: (profile: Profile) => void
-}) {
-  const option = <T extends string>(
-    value: T,
-    current: T,
-    set: (value: T) => void,
-    label: ReactNode,
-  ) => (
-    <button
-      className={cn(
-        'h-5 cursor-pointer rounded px-1.5',
-        current === value
-          ? 'bg-accent text-foreground'
-          : 'text-muted-foreground hover:text-foreground',
-      )}
-      onClick={() => set(value)}
-      type="button"
-    >
-      {label}
-    </button>
-  )
-  return (
-    <div className="pointer-events-auto flex flex-col items-end gap-1 font-mono text-[10px]">
-      <div className="flex rounded-md border border-dashed border-border bg-background/80 p-0.5">
-        {option('ticks', variant, setVariant, 'A ticks')}
-        {option('list', variant, setVariant, 'B list')}
-        {option('lanes', variant, setVariant, 'C lanes')}
-      </div>
-      <div className="flex rounded-md border border-dashed border-border bg-background/80 p-0.5">
-        {option('ultimate', profile, setProfile, '@ultimate')}
-        {option('coordinator', profile, setProfile, 'coord')}
-        {option('worker', profile, setProfile, 'worker')}
-      </div>
     </div>
   )
 }
 
 function Minimap() {
-  const root = useRef<HTMLDivElement>(null)
   const viewport = useViewport()
-  const detected = useProfile()
-  const [stored, setVariant] = useExtensionUiState('mock.variant', 'ticks')
-  const [chosen, setChosen] = useExtensionUiState('mock.profile', '')
-  const variant = stored as Variant
-  const profile = (chosen || detected) as Profile
-  const marks = useMemo(() => mockMarks(profile), [profile])
-  const { view, jump } = useScroller(root)
-  if (viewport === 'phone') return <div hidden ref={root} />
-  const props: RailProps = { marks, profile, view, jump: (index) => jump(index, marks.length) }
+  const { id, entries } = useConversation()
+  const profile = useProfile(id)
+  const latest = entries.at(-1)?.id
+  const shown = viewport !== 'phone' && id !== undefined
+  const { data, refetch } = useAction(
+    MarksAction,
+    { conversationId: id ?? 0 },
+    { enabled: shown, onError: () => undefined },
+  )
+  // New entries may bring marks; the server reads only what is new since its last call.
+  useEffect(() => {
+    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined.
+    if (shown && latest !== undefined) void refetch()
+  }, [shown, latest, refetch])
+  if (!shown || !data) return null
   return (
-    <div className="pointer-events-none absolute inset-0" ref={root}>
-      <div className="absolute top-3 right-5 flex flex-col items-end gap-6">
-        <Switcher
-          profile={profile}
-          setProfile={setChosen}
-          setVariant={setVariant}
-          variant={variant}
-        />
-        <div className="pointer-events-auto">
-          {variant === 'ticks' && <Ticks {...props} />}
-          {variant === 'list' && <List {...props} />}
-          {variant === 'lanes' && <Lanes {...props} />}
-        </div>
-      </div>
+    <div className="pointer-events-none absolute top-4 right-4 bottom-40 flex flex-col items-end">
+      <Lanes id={id} marks={data} profile={profile} />
     </div>
   )
 }
