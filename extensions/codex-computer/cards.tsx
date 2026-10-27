@@ -652,7 +652,7 @@ export function QuestionCard({ entry }: { entry: EntryRecord }) {
   const open = useDocOf(data.conversation, StateDoc)?.question
   const now = useNow(30_000)
   // Past its deadline nobody waits on it, even if a crash left it in the state.
-  const waiting = open?.key === data.key && now < open.until
+  const waiting = !!open && open.key === data.key && now < open.until
   return (
     <div
       className="my-1 overflow-hidden rounded-md border border-border/70 bg-card text-[12px]"
