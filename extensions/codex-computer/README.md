@@ -105,6 +105,13 @@ element indexes and checking the first such click. "Screenshot unavailable" for 
 menu) was still open with no window in front; cancelling the menu and raising the window fixed it, so the fixed
 rules say so. Codex asks for app approval once per new cua_repl, several times per run; each is accepted and recorded.
 
+A remote session can map clicks wrongly on its own side even when Codex's capture and click agree (USG, 2026-10-26:
+Citrix HTML5 in Chrome; Codex clicked the breadcrumb exactly, Citrix opened the remote address bar about 47 points
+higher). The session fixed its scale at launch and the window had changed since; reconnecting the session, or
+refitting it to the window, fixes it. The fixed rules make Codex check each remote click's effect and stop with
+"remote click mapping out of sync" instead of clicking on, and retry `windowNotFoundAtPosition` once after raising
+the window. Keep other windows of the same browser (such as Ultimate's own UI) off the screen the session is on.
+
 ## Apps and Stop
 
 Every app elicitation Codex sends is accepted automatically. Optional project `codexComputer.apps` (e.g.
