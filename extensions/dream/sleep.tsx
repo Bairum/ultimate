@@ -32,9 +32,6 @@ const titles: Record<Step, string> = {
   switching: 'Switch',
 }
 
-/** The step a failed sleep stopped at, from what it recorded before failing. */
-const failedAt = (sleep: Sleep): Step => (sleep.backup ? 'switching' : 'seeding')
-
 /** `0:42` since `at`, for the step that is running. */
 const elapsed = (now: number, at: number) => {
   const seconds = Math.max(0, Math.floor((now - at) / 1000))
@@ -206,7 +203,7 @@ function Failed({ sleep }: { sleep: Sleep }) {
     >
       <p className="flex items-center gap-2 text-[12.5px] text-foreground">
         <Moon status="failed" />
-        {titles[failedAt(sleep)]} failed
+        Falling asleep failed
         <span className="ml-auto font-mono text-[11px] text-muted-foreground">
           {formatTime(sleep.at)}
         </span>
