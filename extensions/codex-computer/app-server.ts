@@ -3,7 +3,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { projectEnv } from '../../lib/exec.ts'
-import type { CodexDetails } from './refs.ts'
+import type { CodexDetails, CodexResult } from './refs.ts'
 import { allowed, untrusted } from './state.ts'
 import { saveImage } from './evidence.ts'
 
@@ -40,7 +40,95 @@ const preamble =
   'Right window: before acting on a capture or accessibility state, check its window title is the window you are operating. After any capture error, or when a different app or window comes back (another window of the same browser counts), get the app handle again and Raise the target window by its title, then capture again. Never type or click on the strength of a capture of the wrong window. After 2 failed tries, stop and report "captured the wrong window".\n\n'
 // Every turn: a new turn starts a fresh cua_repl, and Ultimate itself records screenshots and app approvals.
 const turnNote =
-  'Each turn starts a fresh cua_repl: get app handles again (cua.getApp) before using them. Ultimate saves every screenshot and returns its path, and records app approvals; do not report either.\n\n'
+  'Each turn starts a fresh cua_repl: get app handles again (cua.getApp) before using them. Ultimate saves every screenshot and returns its path, and records app approvals; do not report either. In your final answer, refer to screenshots by number: 1 is the first image a capture returned after the latest "Brief:", counting every image, including repeats.\n\n'
+/** Codex's final answer for every turn: a result the parent can read without parsing prose. Strict: every field required. */
+export const resultSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['status', 'summary', 'findings', 'actions', 'remaining'],
+  properties: {
+    status: {
+      type: 'string',
+      enum: ['done', 'blocked', 'partial'],
+      description:
+        'done: the brief is complete; blocked: you stopped on something only the operator can resolve; partial: some of it is done.',
+    },
+    summary: { type: 'string', description: 'Two or three sentences: what you did and found.' },
+    findings: {
+      type: 'array',
+      description: 'What the screen showed that answers the brief, one entry per fact.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['claim', 'quote', 'screenshots'],
+        properties: {
+          claim: { type: 'string', description: 'The fact, in your words.' },
+          quote: {
+            type: 'string',
+            description:
+              'The on-screen text that shows it, quoted exactly; empty if nothing on screen says it.',
+          },
+          screenshots: {
+            type: 'array',
+            items: { type: 'integer', minimum: 1 },
+            description: 'Numbers of the screenshots that show it.',
+          },
+        },
+      },
+    },
+    actions: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'What you changed (clicks that saved, typed, submitted), in order; empty for a read-only run.',
+    },
+    remaining: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'What is left undone or blocks you, and what you need to go on.',
+    },
+  },
+} as const
+/**
+ * Codex's final answer read as the result schema, its screenshot numbers resolved to the saved paths in `frames` (one
+ * per image Codex received, in order); `undefined` when the answer is prose.
+ */
+export function parseResult(
+  answer: string,
+  frames: readonly string[],
+): { result: CodexResult; summary: string } | undefined {
+  let value: Record<string, unknown>
+  try {
+    value = object(JSON.parse(answer))
+  } catch {
+    // A turn that ended before its final answer, or a Codex without outputSchema, answers in prose: keep it as text.
+    return undefined
+  }
+  const status = value.status
+  if (status !== 'done' && status !== 'blocked' && status !== 'partial') return undefined
+  const list = (items: unknown) => (Array.isArray(items) ? items : [])
+  const lines = (items: unknown) =>
+    list(items)
+      .filter((item): item is string => typeof item === 'string')
+      .map(text)
+  const frame = (n: unknown) => (Number.isSafeInteger(n) ? frames[(n as number) - 1] : undefined)
+  return {
+    summary: string(value.summary),
+    result: {
+      status,
+      findings: list(value.findings).map((item) => {
+        const finding = object(item)
+        return {
+          claim: text(string(finding.claim)),
+          quote: text(string(finding.quote)),
+          screenshots: [...new Set(list(finding.screenshots).flatMap((n) => frame(n) || []))],
+        }
+      }),
+      actions: lines(value.actions),
+      remaining: lines(value.remaining),
+    },
+  }
+}
 /**
  * Every image in a tool result, in order. A cua_repl call that chains an action and an observation (`drag();
  * getAXState(); getScreenshot()`) returns its frame inside MCP content serialised into a text part, one level deeper
@@ -163,6 +251,8 @@ export async function operate(input: {
   /** A turn that ended while a steer was in flight; ends the run unless the steer starts a new turn. */
   let held: (() => void) | undefined
   let image: { type: 'image'; mimeType: string; data: string } | undefined
+  /** One saved path per image Codex received this run, in order ('' for a skipped one): Codex's screenshot numbers. */
+  const frames: string[] = []
   const done = Promise.withResolvers<void>()
   const requests = new Map<
     number,
@@ -255,6 +345,7 @@ export async function operate(input: {
               await request('turn/start', {
                 threadId,
                 input: [{ ...message, text: turnNote + message.text }],
+                outputSchema: resultSchema,
               }),
             )
             turnId = string(object(turn.turn).id) || turnId
@@ -371,13 +462,18 @@ export async function operate(input: {
       const data = part.data
       imageWork = imageWork
         .then(async () => {
-          // Codex repeats a capture when the screen has not changed; keep one copy.
-          if (image?.data === data) return
+          // Codex repeats a capture when the screen has not changed; keep one copy, and its number points at it.
+          if (image?.data === data) {
+            frames.push(details.screenshots.at(-1) ?? '')
+            return
+          }
           const saved = await saveImage(host.home, conversation, data)
           if ('error' in saved) {
+            frames.push('')
             output(`Skipped an image Codex returned: ${saved.error}\n`)
             return
           }
+          frames.push(saved.path)
           details.screenshots.push(saved.path)
           image = { type: 'image', mimeType: saved.mimeType, data }
         })
@@ -442,6 +538,7 @@ export async function operate(input: {
           request('turn/start', {
             threadId: details.session,
             input: [{ type: 'text', text: turnNote + resumeNote, text_elements: [] }],
+            outputSchema: resultSchema,
           }).then(
             (value) => {
               turnId = string(object(object(value).turn).id) || turnId
@@ -474,9 +571,17 @@ export async function operate(input: {
     })
     if (ended) throw new Error('Run ended')
     send({ method: 'initialized' })
+    // The fixed rules and the project's codex.md are the thread's developer instructions: they outlive compaction,
+    // and the user turn carries only the brief. A resumed thread keeps the ones it started with (Codex 0.163.0 ignores
+    // new ones on resume, checked live), so they are sent on start only.
+    const developerInstructions =
+      preamble +
+      (input.instructions
+        ? `Project instructions (from the project's .ultimate/codex.md):\n${input.instructions}\n`
+        : '')
     const thread = object(
       await request(input.session ? 'thread/resume' : 'thread/start', {
-        ...(input.session ? { threadId: input.session } : {}),
+        ...(input.session ? { threadId: input.session } : { developerInstructions }),
         cwd: input.directory,
         approvalPolicy: 'on-request',
         sandbox: 'workspace-write',
@@ -489,22 +594,8 @@ export async function operate(input: {
     const turn = object(
       await request('turn/start', {
         threadId: details.session,
-        input: [
-          {
-            type: 'text',
-            text:
-              (input.session
-                ? ''
-                : preamble +
-                  (input.instructions
-                    ? `Project instructions (from the project's .ultimate/codex.md):\n${input.instructions}\n\n`
-                    : '')) +
-              turnNote +
-              'Brief:\n' +
-              input.brief,
-            text_elements: [],
-          },
-        ],
+        input: [{ type: 'text', text: `${turnNote}Brief:\n${input.brief}`, text_elements: [] }],
+        outputSchema: resultSchema,
       }),
     )
     turnId = string(object(turn.turn).id) || turnId
@@ -516,6 +607,11 @@ export async function operate(input: {
     input.signal?.removeEventListener('abort', abort)
     await Promise.all(work)
     details.counts.minutes = (Date.now() - startedAt) / 60_000
+    const parsed = parseResult(details.answer.text, frames)
+    if (parsed) {
+      details.result = parsed.result
+      details.answer = text(parsed.summary)
+    }
   }
   return { details, ...(image ? { image } : {}) }
 }

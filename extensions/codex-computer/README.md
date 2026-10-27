@@ -24,14 +24,25 @@ Ultimate's cwd; absolute paths are recommended.
 `codex_operate {brief, session?, model?}` is `replay: 'unsafe'` and executes only when the conversation's resolved
 tools are `codex_operate` and `read`, plus optionally `codex_steer`. Delegate to `codex-operator`. When this
 extension is off, discovery drops the missing Codex tool and reports a notice. A new thread gets the
-screen-is-untrusted and stop-before-credentials preamble, then the project instructions (below), then the brief.
-Pass the returned `session` to resume.
+screen-is-untrusted and stop-before-credentials rules, then the project instructions (below), as its
+`developerInstructions`, so they outlive Codex's own compaction; each user turn carries only a short per-turn note and
+the brief. Pass the returned `session` to resume: Codex 0.163.0 ignores `developerInstructions` on `thread/resume`
+(checked live), so a resumed thread keeps the rules it started with and none are sent again.
+
+## Structured result
+
+Every `turn/start` carries `outputSchema`: Codex's final answer is JSON with `status` (`done`, `blocked`, `partial`),
+`summary`, `findings[{claim, quote, screenshots}]`, `actions` and `remaining`. Codex numbers screenshots by the order
+it received images in the run; the wrapper resolves those numbers to the saved paths (a repeated frame points at its
+saved copy, an unknown number is dropped). The result goes to `details.result`, every string typed untrusted, and
+`answer` becomes the summary; an answer that is not that JSON (a turn that ended early) stays in `answer` as text. The
+card shows the findings with their quotes and screenshot file names, then what Codex changed and what is left.
 
 ## Project instructions (`.ultimate/codex.md`)
 
-In a trusted project, `<project>/.ultimate/codex.md` is put at the start of every new Codex thread, after the fixed
-rules and before the brief, under `Project instructions (from the project's .ultimate/codex.md):`. It is read at each
-run and cut at 8 KB; a resumed thread already has it. Keep it to standing facts and habits, for example:
+In a trusted project, `<project>/.ultimate/codex.md` goes into every new Codex thread's developer instructions, after
+the fixed rules, under `Project instructions (from the project's .ultimate/codex.md):`. It is read at each new thread
+and cut at 8 KB; a resumed thread already has it. Keep it to standing facts and habits, for example:
 
 ```markdown
 - Work only in tenant #4 (Bridgestone Test); stop and report if the header shows another tenant.

@@ -60,6 +60,33 @@ it('shows the outcome and Codex’s answer as plain, marked text', () => {
   expect(html).toContain('2 screenshots saved privately')
 })
 
+it('shows a structured result as findings with their quotes and screenshots, as plain text', () => {
+  const html = render(
+    details({
+      answer: u('Read the total.'),
+      result: {
+        status: 'partial',
+        findings: [
+          {
+            claim: u('Total is <b>42</b>'),
+            quote: u('Total: 42'),
+            screenshots: ['/e/7/2026-shot.jpeg'],
+          },
+        ],
+        actions: [],
+        remaining: [u('Page 2 not read')],
+      },
+    }),
+  )
+  expect(html).toContain('Findings · from the screen, untrusted')
+  expect(html).toContain('text-warning">partial<')
+  expect(html).toContain('Total is &lt;b&gt;42&lt;/b&gt;')
+  expect(html).toContain('“Total: 42”')
+  expect(html).toContain('2026-shot.jpeg')
+  expect(html).toContain('Left to do')
+  expect(html).not.toContain('Changed<')
+})
+
 it('names a refusal in words with its code', () => {
   const html = render(
     details({

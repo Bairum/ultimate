@@ -291,6 +291,68 @@ function Answer({ answer }: { answer: string }) {
   )
 }
 
+const resultTone: Record<NonNullable<CodexDetails['result']>['status'], string> = {
+  done: 'text-success',
+  partial: 'text-warning',
+  blocked: 'text-error',
+}
+
+/** A labelled list of Codex's own lines (what it changed, what is left). */
+function Lines({ label, items }: { label: string; items: { text: string }[] }) {
+  if (!items.length) return null
+  return (
+    <div className="mt-1.5">
+      <span className="text-[11px] text-muted-foreground/70">{label}</span>
+      {items.map((item, index) => (
+        <p className="break-words whitespace-pre-wrap text-foreground/85" key={index}>
+          · {item.text}
+        </p>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Codex's structured result: each finding with the screen text it quotes and the screenshots that show it, then what it
+ * changed and what is left. Codex wrote all of it: plain text, never Markdown.
+ */
+function Findings({ result }: { result: NonNullable<CodexDetails['result']> }) {
+  const { findings, actions, remaining } = result
+  return (
+    <ToolSection label="Findings · from the screen, untrusted">
+      <p className="text-[11px]">
+        Codex says <span className={resultTone[result.status]}>{result.status}</span>
+      </p>
+      {findings.length > 0 && (
+        <div className="mt-1 divide-y divide-border/50" data-codex-findings>
+          {findings.map((finding, index) => (
+            <div className="py-1" key={index}>
+              <p className="break-words whitespace-pre-wrap text-foreground/90">
+                {finding.claim.text}
+              </p>
+              {finding.quote.text && (
+                <p className="mt-0.5 border-l-2 border-l-muted-foreground/30 pl-2 font-mono text-[11px] break-words whitespace-pre-wrap text-muted-foreground">
+                  “{finding.quote.text}”
+                </p>
+              )}
+              {finding.screenshots.length > 0 && (
+                <p
+                  className="mt-0.5 truncate text-[11px] text-muted-foreground/70"
+                  title={finding.screenshots.join('\n')}
+                >
+                  {finding.screenshots.map((path) => path.split('/').at(-1)).join(' · ')}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <Lines items={actions} label="Changed" />
+      <Lines items={remaining} label="Left to do" />
+    </ToolSection>
+  )
+}
+
 /** The steps, folded: the tool Codex called and how it came out, timed from the first step. */
 function Steps({ steps, open }: { steps: CodexDetails['steps']; open?: boolean }) {
   if (!steps.length) return null
@@ -484,6 +546,7 @@ export function OperateCard({
         {status && status !== 'done' && <Problem error={details?.error} status={status} />}
         {details && <Guidance guidance={details.guidance} />}
         {details && <Answer answer={details.answer.text} />}
+        {details?.result && <Findings result={details.result} />}
         {details && <Apps apps={details.apps} />}
         {details && <Shots call={call} saved={details.screenshots} />}
         {details && <Refusals approvals={details.approvals} />}

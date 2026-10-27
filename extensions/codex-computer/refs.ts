@@ -20,7 +20,10 @@ export type CodexDetails = {
   steps: { tool: UntrustedText; status: UntrustedText; at: number }[]
   approvals: { kind: string; app?: UntrustedText; decision: 'accept' | 'decline' | 'error' }[]
   screenshots: string[]
+  /** Codex's final answer: its `summary` when it answered in the result schema, else its whole text. */
   answer: UntrustedText
+  /** Codex's answer in the result schema, with each finding's capture numbers resolved to saved screenshots. */
+  result?: CodexResult
   counts: { items: number; minutes: number }
   /** Times Codex said it was reconnecting to OpenAI and would retry; the run carried on. */
   retries?: number
@@ -38,6 +41,12 @@ export type CodexDetails = {
     delivery: 'steered' | 'restarted'
   }[]
   error?: string
+}
+export type CodexResult = {
+  status: 'done' | 'blocked' | 'partial'
+  findings: { claim: UntrustedText; quote: UntrustedText; screenshots: string[] }[]
+  actions: UntrustedText[]
+  remaining: UntrustedText[]
 }
 export type CodexState = { last?: CodexDetails }
 /** A conversation's last Codex outcome. Forks start fresh. */
