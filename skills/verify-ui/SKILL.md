@@ -19,6 +19,11 @@ Never claim a UI change works without an image of it.
   `theme: 'light'` and `'dark'` for both themes. Omit `path` so the PNG stays outside your checkout.
 - `browser {url, steps}` to drive a state: `click`, `fill` (`#composer-input` is the composer), `press`
   (`Control+k` opens ⌘K), `wait`, `eval`. The result lists console errors and failed requests: read them.
+- `eval` takes one expression and returns its value: `document.title`,
+  `[...document.querySelectorAll('[data-entry-id]')].length`. Statements or `await` go in an async IIFE:
+  `(async () => { const r = await fetch('/api/x'); return r.status })()`. A bare `const x = …; return x` fails.
+- Scope selectors to the card or panel under test: `[data-entry-id="42"] button:has-text("Retry")`, not
+  `button:has-text("Retry")`, which clicks the first match anywhere on the page.
 - Wait on Ultimate's state, never a guessed time: `{send: 'prompt'}` submits without the composer, then
   `{until: 'idle'}` returns when that turn is done, `{until: 'quiet'}` when nothing runs (branches and subagents
   included), `{until: {entry: 'pi.tool-result'}}` or `{until: {event: 'workspaces.landed', where: {…}}}` when that
