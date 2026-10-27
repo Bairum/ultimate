@@ -21,6 +21,7 @@ export type SlotName =
   | 'transcript.start'
   | 'transcript.end'
   | 'overlay'
+  | 'shell.rail'
 
 /**
  * A slot component, optionally with an `order` (default 0; ties keep folder-name order). In the status line, `phone`

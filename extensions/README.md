@@ -328,6 +328,7 @@ title bar the host shows above every surface.
 | `transcript.start`     | Above a transcript's first row once its whole history is loaded; `useTranscript()` inside                    |
 | `transcript.end`       | After a transcript's last row, before the working line: a turn still forming, such as live speech            |
 | `overlay`              | Always mounted at the root, above every surface: dialogs, toasts, global effects                             |
+| `shell.rail`           | Full-height column at the window's left edge, beside the title bar and every surface; not in a frame         |
 
 ```tsx
 slots: { 'header.right': [Badge], sidebar: { component: Conversations, order: -1 } }
