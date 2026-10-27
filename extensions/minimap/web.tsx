@@ -272,7 +272,7 @@ interface Row {
  * most (the latest on a tie). With room for every row, a slot is one row.
  */
 function pack(rows: readonly Row[], count: number) {
-  const slots: { rows: Row[]; shown: Row[] }[] = []
+  const slots: { rows: Row[]; shown: Row[]; first: number }[] = []
   const per = Math.max(1, Math.ceil(rows.length / Math.max(1, count)))
   for (let start = 0; start < rows.length; start += per) {
     const run = rows.slice(start, start + per)
@@ -285,34 +285,20 @@ function pack(rows: readonly Row[], count: number) {
       )
       return best ? [best] : []
     })
-    slots.push({ rows: run, shown })
+    slots.push({ rows: run, shown, first: start })
   }
-  return slots
+  return { slots, per }
 }
 
-function Lanes({ marks, profile, id }: { marks: Mark[]; profile: Profile; id: number }) {
+/** The rail; mounted only with rows to show, so its element exists when its listeners attach. */
+function Lanes({ rows, room, id }: { rows: Row[]; room: number; id: number }) {
   const rail = useRef<HTMLDivElement>(null)
+  // The row hovered or stepped to; every row is reachable, also those sharing a slot.
   const [active, setActive] = useState<number>()
-  const [room, setRoom] = useState(400)
-  useEffect(() => {
-    const element = rail.current?.parentElement
-    if (!element) return undefined
-    const observer = new ResizeObserver(() => setRoom(element.clientHeight))
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [])
-  const rows = useMemo(
-    () =>
-      marks.flatMap((mark) => {
-        const lane = laneOf(mark.kind, profile)
-        return lane === undefined ? [] : [{ mark, lane }]
-      }),
-    [marks, profile],
-  )
   const visible = useVisible(rail, id)
   // Slots share the height evenly by order; with more rows than fit, neighbours share a slot.
   const fits = Math.max(1, Math.floor((room - 8) / MIN_GAP))
-  const slots = useMemo(() => pack(rows, fits), [rows, fits])
+  const { slots, per } = useMemo(() => pack(rows, fits), [rows, fits])
   const gap = Math.max(MIN_GAP, Math.min(MAX_GAP, (room - 8) / Math.max(1, slots.length)))
   const height = gap * slots.length
   const band = useMemo(() => {
@@ -323,24 +309,16 @@ function Lanes({ marks, profile, id }: { marks: Mark[]; profile: Profile; id: nu
     const to = after === -1 ? slots.length : after
     return { top: from * gap, size: Math.max(4, (to - from) * gap) }
   }, [visible, slots, gap])
-  /** A slot's target: its milestone when it has one, else its first row. */
-  const target = (index: number) => {
-    const { rows: run, shown } = slots[index]
-    return (shown.find((row) => row.lane === 2) ?? run[0]).mark
-  }
-  const jump = (index: number) =>
-    events.emit('ultimate:reveal-entry', { conversationId: id, entryId: target(index).entry })
+  const jump = (row: number) =>
+    events.emit('ultimate:reveal-entry', { conversationId: id, entryId: rows[row].mark.entry })
   useWheelSteps(rail, (delta) =>
-    setActive((index) => {
+    setActive((row) => {
       const start =
-        index ??
-        slots.findIndex(
-          (slot) => visible !== undefined && slot.rows.at(-1)!.mark.entry >= visible[0],
-        )
-      return Math.max(0, Math.min(slots.length - 1, (start === -1 ? slots.length : start) + delta))
+        row ?? rows.findIndex(({ mark }) => visible !== undefined && mark.entry >= visible[0])
+      return Math.max(0, Math.min(rows.length - 1, (start === -1 ? rows.length : start) + delta))
     }),
   )
-  if (!slots.length) return null
+  const activeSlot = active === undefined ? undefined : Math.floor(active / per)
   return (
     <div
       className="group/lanes pointer-events-auto relative w-12 cursor-pointer py-1"
@@ -365,34 +343,35 @@ function Lanes({ marks, profile, id }: { marks: Mark[]; profile: Profile; id: nu
         />
       )}
       {slots.map((slot, index) => (
-        <button
-          aria-label={`${kindLabel[target(index).kind]}: ${target(index).text}`}
-          className={cn(
-            'absolute right-0 left-0 cursor-pointer',
-            active === index && 'bg-foreground/5',
-          )}
+        <div
+          className={cn('absolute right-0 left-0', activeSlot === index && 'bg-foreground/5')}
           key={`${slot.rows[0].mark.entry}:${index}`}
-          onClick={() => jump(index)}
-          onPointerEnter={() => setActive(index)}
           style={{ top: 4 + index * gap, height: gap }}
-          type="button"
         >
-          {slot.shown.map(({ mark, lane }) => (
-            <span
-              className="absolute top-1/2 flex w-3.5 -translate-y-1/2 justify-center"
-              key={lane}
-              style={{ left: lane * LANE }}
-            >
-              <Glyph active={active === index} kind={mark.kind} />
-            </span>
-          ))}
-        </button>
+          {slot.shown.map((shown) => {
+            const row = slot.first + slot.rows.indexOf(shown)
+            return (
+              // Each lane's glyph is its own target: a shared slot still jumps to what it draws.
+              <button
+                aria-label={`${kindLabel[shown.mark.kind]}: ${shown.mark.text}`}
+                className="absolute inset-y-0 flex w-3.5 cursor-pointer items-center justify-center"
+                key={shown.lane}
+                onClick={() => jump(row)}
+                onPointerEnter={() => setActive(row)}
+                style={{ left: shown.lane * LANE }}
+                type="button"
+              >
+                <Glyph active={active === row} kind={shown.mark.kind} />
+              </button>
+            )
+          })}
+        </div>
       ))}
-      {active !== undefined && slots[active] && (
+      {active !== undefined && activeSlot !== undefined && (
         <Tip
-          mark={target(active)}
-          more={slots[active].rows.length - 1}
-          top={4 + active * gap + gap / 2}
+          mark={rows[active].mark}
+          more={slots[activeSlot].rows.length - 1}
+          top={4 + activeSlot * gap + gap / 2}
         />
       )}
     </div>
@@ -415,10 +394,30 @@ function Minimap() {
     // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined.
     if (shown && latest !== undefined) void refetch()
   }, [shown, latest, refetch])
-  if (!shown || !data) return null
+  const rows = useMemo(
+    () =>
+      (data ?? []).flatMap((mark) => {
+        const lane = laneOf(mark.kind, profile)
+        return lane === undefined ? [] : [{ mark, lane }]
+      }),
+    [data, profile],
+  )
+  const box = useRef<HTMLDivElement>(null)
+  const [room, setRoom] = useState(0)
+  useEffect(() => {
+    const element = box.current
+    if (!element) return undefined
+    const observer = new ResizeObserver(() => setRoom(element.clientHeight))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [shown])
+  if (!shown) return null
   return (
-    <div className="pointer-events-none absolute top-4 right-4 bottom-40 flex flex-col items-end">
-      <Lanes id={id} marks={data} profile={profile} />
+    <div
+      className="pointer-events-none absolute top-4 right-4 bottom-40 flex flex-col items-end"
+      ref={box}
+    >
+      {rows.length > 0 && room > 0 && <Lanes id={id} room={room} rows={rows} />}
     </div>
   )
 }

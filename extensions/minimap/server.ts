@@ -11,18 +11,22 @@ import type { Mark } from './refs.ts'
 
 const PAGE = 512
 
-/** Per conversation, what earlier calls read; module state, so a reinstalled classifier starts over. */
-const scans = new Map<number, Scan>()
-
 /**
- * Marks of one conversation read so far: those up to entry `upTo`, of which the ones from `open` on belong to the turn
- * still open (its last answer may change), with that turn's entries to classify again with what follows.
+ * What earlier calls read of one conversation: its entries up to `upTo`, whose marks from the open turn on (`open`,
+ * still classified again with what follows: its last answer may change) are not final; the assistant entries that
+ * may anchor a commit; and its commits up to event `events`.
  */
 interface Scan {
   upTo: number
   marks: Mark[]
   open: EntryRecord[]
+  anchors: number[]
+  events: number
+  commits: Mark[]
 }
+
+/** Per conversation; module state, so a reinstalled classifier starts over. */
+const scans = new Map<number, Scan>()
 
 /** The conversation's own entries after `after`, oldest first; inherited fork history is the source's. */
 async function entriesAfter(host: ExtensionHost, id: ConversationId, after: number) {
@@ -43,21 +47,23 @@ async function entriesAfter(host: ExtensionHost, id: ConversationId, after: numb
   return found
 }
 
-/** Commits made from conversation `id` after event `after`, each placed at the newest entry before it. */
-async function commits(host: ExtensionHost, id: number, after: number, entries: readonly number[]) {
+/**
+ * Commits made from conversation `id` after event `after`. Entry and event ids share one sequence, so the bash call
+ * that committed is in the newest assistant entry before the event: the row the transcript shows for it.
+ */
+async function commitsAfter(host: ExtensionHost, id: number, after: number, anchors: number[]) {
   const marks: Mark[] = []
-  for (let since = after; ;) {
+  let last = after
+  for (;;) {
     const page = await host.eventLog.recent({
       events: [Committed],
-      since,
+      since: last,
       order: 'ascending',
       limit: PAGE,
     })
     for (const event of page) {
-      if (event.data.conversation !== id) continue
-      // Entry and event ids share one sequence: the bash call that committed comes just before.
-      const entry = entries.findLast((candidate) => candidate < event.id)
-      if (entry !== undefined)
+      const entry = anchors.findLast((candidate) => candidate < event.id)
+      if (event.data.conversation === id && entry !== undefined)
         marks.push({
           entry,
           kind: 'commit',
@@ -65,8 +71,8 @@ async function commits(host: ExtensionHost, id: number, after: number, entries: 
           at: Date.parse(event.at),
         })
     }
-    if (page.length < PAGE) return marks
-    since = page.at(-1)!.id
+    if (page.length) last = page.at(-1)!.id
+    if (page.length < PAGE) return { marks, last }
   }
 }
 
@@ -77,29 +83,37 @@ export const actions = {
       args && typeof args === 'object' && !Array.isArray(args) ? args.conversationId : undefined
     if (typeof id !== 'number' || !Number.isSafeInteger(id))
       throw new Error('Expected { conversationId }')
-    const previous = scans.get(id) ?? { upTo: 0, marks: [], open: [] }
+    const previous = scans.get(id) ?? {
+      upTo: 0,
+      marks: [],
+      open: [],
+      anchors: [],
+      events: 0,
+      commits: [],
+    }
     const fresh = await entriesAfter(host, id as ConversationId, previous.upTo)
-    if (!fresh.length && scans.has(id)) return previous.marks
-    const open = previous.open[0]?.id
-    const kept =
-      open === undefined ? previous.marks : previous.marks.filter((mark) => mark.entry < open)
     const turn = [...previous.open, ...fresh]
-    const ids = turn.map((entry) => entry.id)
+    const open = previous.open[0]?.id
     const marks = [
-      ...kept,
-      ...[
-        ...classify(turn),
-        ...(await commits(host, id, ids[0] ? ids[0] - 1 : previous.upTo, ids)),
-      ].toSorted((a, b) => a.entry - b.entry),
+      ...(open === undefined ? previous.marks : previous.marks.filter((mark) => mark.entry < open)),
+      ...classify(turn),
     ]
+    const anchors = [
+      ...previous.anchors,
+      ...fresh.filter((entry) => entry.kind === 'pi.assistant').map((entry) => entry.id),
+    ]
+    const found = await commitsAfter(host, id, previous.events, anchors)
     const start = turn.findLastIndex(isInput)
-    const scan = {
+    const scan: Scan = {
       upTo: turn.at(-1)?.id ?? previous.upTo,
       marks,
       open: start === -1 ? turn : turn.slice(start),
+      anchors,
+      events: found.last,
+      commits: [...previous.commits, ...found.marks],
     }
     scans.set(id, scan)
-    return marks
+    return [...scan.marks, ...scan.commits].toSorted((a, b) => a.entry - b.entry)
   }),
 }
 
