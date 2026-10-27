@@ -96,8 +96,9 @@ export const Automations = defineDoc<Ledger>({
   },
 })
 type Change = { result: JsonValue; abort?: TaskId; effect?: Effect }
-const Receipt = defineDoc<Partial<Change>>({
-  kind: 'ultimate.automation-receipt',
+/** Per tool call, by call id: a codemode script's nested calls share its task, so the task alone does not name a call. */
+const Receipts = defineDoc<Record<string, Partial<Change>>>({
+  kind: 'ultimate.automation-receipts',
   checkpointWhen: () => false,
   version: 1,
   scope: 'task',
@@ -857,6 +858,9 @@ export default function automations(host: ExtensionHost) {
         name: 'automation',
         // Receipts deduplicate ledger changes; process effects reuse their committed pid on replay.
         replay: 'safe',
+        // Calls in one round apply in the order written: a parallel unsubscribe could otherwise commit before the
+        // subscribe meant to replace it and be refused for leaving nobody to wake.
+        executionMode: 'sequential',
         description:
           'Automate background work with one trigger (schedule, ask, event or condition) and one or both actions (prompt, subscribers). create {name,schedule?|ask?|event?|condition?,once?,secrets?,prompt?,agent?,model?,thinking?,subscribers?: (#id|@name)[],scope?,slug?,to?,key?}. To be reminded or woken, subscribe (cheap); add a prompt only when fresh work must run. @name subscribers follow that standing agent across chapters. key makes create idempotent: a repeated key returns the automation it made. ask starts a watcher that writes a supervised script: stdout FIRE wakes subscribers and/or starts a prompt run; DONE then exit 0 stops recurring scripts. event {name,where?} watches domain events; events lists names and fields. condition {metric:"context",of:"@name"|"#id",above:1-99,cooldownMs?,idleFor?} watches context fill; idleFor (ms) waits until the user gave it no input for that long. Scripts spend tokens only on setup and repair; prompt runs spend tokens every fire. Schedules: cron "0 9 * * 1-5" Europe/Vienna, at 2026-12-01T09:00:00Z, in 30m, every 15m. IDs A<n>, or lowercase slugs for project scripts in <project>/.ultimate/automations/<slug>/; the to (@name, default @ultimate) in their automation.json is woken on every machine. Project scripts never start themselves. list; update; pause/resume; run (fire trigger now or relaunch script); runs; log {id,lines?}; abort {id,runId}; escalate {id,reason}; subscribe/unsubscribe {id,to?: "#id"|"@name"} (default caller); delete (keeps files and conversations). Without prompt or subscribers, caller subscribes. Optional agent selects an existing definition (isolates ignored), model {provider,modelId} and thinking override it; otherwise runs copy the root agent. Failures wake only the watcher; the third in a row, or a watcher ending its turn mid-repair, escalates: subscribers and @ultimate are notified.',
         parameters: Type.Object({
@@ -919,16 +923,15 @@ export default function automations(host: ExtensionHost) {
               ? await actingAs(host, tool.conversationId, context)
               : tool.conversationId
           let receipt = await tool.commit(
-            async (tx) => json(await tx.doc(Receipt, tool.taskId)),
+            async (tx) => json((await tx.doc(Receipts, tool.taskId))[tool.callId] ?? {}),
             context,
           )
           if (receipt.result === undefined) {
             const prepared = await api.prepare(args, caller)
             receipt = await tool.commit(async (tx) => {
-              const saved = await tx.doc(Receipt, tool.taskId)
-              if (saved.result === undefined)
-                Object.assign(saved, await api.change(tx, args, prepared, caller))
-              return json(saved)
+              const saved = await tx.doc(Receipts, tool.taskId)
+              saved[tool.callId] ??= json(await api.change(tx, args, prepared, caller))
+              return json(saved[tool.callId])
             }, context)
           }
           await api.apply(receipt)
@@ -957,7 +960,8 @@ function concise(value: JsonValue): string {
   if (Array.isArray(value)) return value.length ? value.map(concise).join('\n') : 'None.'
   if (value && typeof value === 'object' && 'enabled' in value) {
     const a = value as Automation
-    return `${a.id} ${a.name} — ${describeTrigger(a)} — ${a.enabled ? 'enabled' : 'paused'}`
+    const to = a.subscribers.map((s) => (typeof s === 'number' ? `#${s}` : s)).join(', ')
+    return `${a.id} ${a.name} — ${describeTrigger(a)} — ${a.enabled ? 'enabled' : 'paused'}${to ? ` → ${to}` : ''}`
   }
   if (value && typeof value === 'object' && typeof value.text === 'string') return value.text
   return JSON.stringify(value)
