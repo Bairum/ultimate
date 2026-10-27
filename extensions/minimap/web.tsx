@@ -395,7 +395,7 @@ function Minimap() {
   useEffect(() => {
     const before = seen.current
     seen.current = { id, latest }
-    if (!shown || latest === undefined || before.id !== id || before.latest === undefined) return
+    if (!shown || latest === undefined || before.id !== id) return
     // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined.
     void refetch()
   }, [shown, id, latest, refetch])

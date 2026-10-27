@@ -314,4 +314,19 @@ describe('web replica store', () => {
     ])
     store.stop()
   })
+
+  it('retries models a failed fetch left missing, also when the system info is unchanged', async () => {
+    const { store, latest, fetch } = setup()
+    fetch.mockRejectedValueOnce(new Error('offline'))
+    latest().open()
+    const system = {
+      process: { pid: 1, generation: 1, node: 'v26', startedAt: '', url: '' },
+    } as ServerEvents['system']
+    latest().send('system', system)
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce())
+    expect(store.getState().models).toBeUndefined()
+    latest().send('system', system)
+    await vi.waitFor(() => expect(store.getState().models).toEqual({ providers: [], models: [] }))
+    store.stop()
+  })
 })

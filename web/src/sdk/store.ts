@@ -261,9 +261,13 @@ export function createStore(options: StoreOptions = {}) {
         const raw = (event as MessageEvent<string>).data
         if (name === 'view') receiveView(raw)
         else if (snapshots.has(name)) {
-          if (lastRaw[name] === raw) return
-          lastRaw[name] = raw
-          handle(name, JSON.parse(raw))
+          if (lastRaw[name] !== raw) {
+            lastRaw[name] = raw
+            handle(name, JSON.parse(raw))
+          } else if (name === 'system' && !state.models)
+            // The same system info still retries models a failed fetch left missing.
+            // oxlint-disable-next-line typescript/no-floating-promises -- refreshModels catches fetch failures and retries on the next system event.
+            void refreshModels()
         } else handle(name, JSON.parse(raw))
       })
   }
