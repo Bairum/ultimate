@@ -390,11 +390,16 @@ function Minimap() {
     { conversationId: id ?? 0 },
     { enabled: shown, onError: () => undefined },
   )
-  // New entries may bring marks; the server reads only what is new since its last call.
+  // New entries may bring marks; the server reads only what is new since its last call. A newly shown conversation's
+  // first entries are covered by the call its new args start.
+  const seen = useRef<{ id?: number; latest?: number }>({})
   useEffect(() => {
+    const before = seen.current
+    seen.current = { id, latest }
+    if (!shown || latest === undefined || before.id !== id) return
     // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined.
-    if (shown && latest !== undefined) void refetch()
-  }, [shown, latest, refetch])
+    void refetch()
+  }, [shown, id, latest, refetch])
   const rows = useMemo(
     () =>
       (data ?? []).flatMap((mark) => {
