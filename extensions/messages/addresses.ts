@@ -1,6 +1,6 @@
 /** Who a message is from and to: resolving addresses, naming senders, and a subagent's parent. */
 import type { Context } from '@earendil-works/chord'
-import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
@@ -8,6 +8,24 @@ import { isolatable } from '../../lib/git.ts'
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import type { Remote } from './refs.ts'
 
+/**
+ * Who started a branch through `branch`, so its later final answers reach that conversation. `yielded` is the newest
+ * generation observed, so a replayed hook creates no second observer.
+ */
+export const Started = defineDoc<{ by?: number; yielded?: number }>({
+  kind: 'board.started',
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
+/** The conversation that started branch `id`, which hears its final answers; undefined for anything else. */
+export async function starterOf(host: ExtensionHost, id: number | 'user', ctx: Context) {
+  if (typeof id !== 'number') return undefined
+  return (await host.harness().snapshot(Started, id as ConversationId, ctx))?.by
+}
 /** The conversation that started `id` as a subagent, which is the only one it may message. */
 export async function parentOf(host: ExtensionHost, id: number, ctx: Context) {
   const owner = (await host.harness().commit((tx) => tx.conversation(id as ConversationId), ctx))

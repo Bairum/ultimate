@@ -21,8 +21,7 @@ produce a notice. To skip onboarding on a machine whose user knows Ultimate, set
 `~/.ultimate/settings.json` (user settings only): no Get ready, no Start here, no setup cards and no "set up git"
 reminder, while the Extensions panel and ⌘K Get ready… stay available and an undecided project setup keeps its
 status-line reminder. `summaryModel` (`"provider/id[:thinking]"`, default `openai-codex/gpt-6-luna:medium`; project over user)
-picks the model for automatic titles, summaries, reply summaries, tree abstracts and the
-triage that decides whether an agent's update wakes @ultimate. Set it in either file or with
+picks the model for automatic titles, summaries, reply summaries and tree abstracts. Set it in either file or with
 the "Summary model…" command, and it applies to the next request. `fastModels` (`["openai-codex/<id>", …]`, or `openai/`; project over
 user) runs those models on the priority tier through the `fast` extension, at a higher usage rate. `instance.model`
 (`"provider/id"`, project over user, default `openai-codex/gpt-6.1-sol`; `null` turns it off) is the one model every
