@@ -36,9 +36,9 @@ run and cut at 8 KB; a resumed thread already has it. Keep it to standing facts 
 ```markdown
 - Work only in tenant #4 (Bridgestone Test); stop and report if the header shows another tenant.
 - Results go to `/Volumes/bridgestone/Test/b4/results/`.
-- Maximise the Citrix Viewer window before the first screenshot: if "Enter Full Screen" is greyed out, use the
-  window's green zoom button or Window > Zoom. A window smaller than the screen is captured in the top-left of a
-  full-screen frame with the rest blank.
+- Keep the Citrix Viewer window on the MacBook's built-in (Retina) display, maximised. Codex captures every
+  window at the main display's scale (2x): a window on a 1x external monitor comes back as a double-size frame with
+  the session in the top-left quarter and the rest blank, and clicks computed from it land at half the coordinates.
 ```
 
 ## Steering a running turn
@@ -90,9 +90,13 @@ character by character and is slow; there is no other input path.
 
 Every image Codex receives is saved, including frames from chained calls (`click(); getAXState();
 getScreenshot()`), which cua_repl returns as MCP content serialised inside a text part, nested once per wrapper.
-Captures are saved as Codex took them, never cropped: a window smaller than the screen fills only the top-left of a
-full-screen frame (Codex's capture, not ours), so maximise it. Codex asks for app approval once per new cua_repl,
-several times per run; each is accepted and recorded.
+Captures are saved as Codex took them, never cropped. Codex's capture service (SkyComputerUseService, via
+ScreenCaptureKit) captures at the main display's pixel scale: on a Retina Mac with a 1x external monitor, a window on
+that monitor arrives at double size with its content in the top-left quarter, and Codex's clicks from it land at half
+the intended point (Bridgestone, 2026-10-26: image pixel [1783,368] clicked window point 891,184). Keep the
+target window on the built-in display. "Screenshot unavailable" for an app happened while its menu (Citrix's View
+menu) was still open with no window in front; cancelling the menu and raising the window fixed it, so the fixed
+rules say so. Codex asks for app approval once per new cua_repl, several times per run; each is accepted and recorded.
 
 ## Apps and Stop
 
