@@ -29,6 +29,7 @@ import type { ModelsResponse } from '../../../shared/protocol.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
 import { composerRenderers, inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
+import { storeImages, storedImages } from './draft-images.ts'
 import {
   atFirstLine,
   mergedSteer,
@@ -186,7 +187,7 @@ function createDraft(id: number | string | undefined) {
   const key = id === undefined ? undefined : `ultimate.draft.${id}`
   let value: Draft = {
     text: key ? (localStorage.getItem(key) ?? '') : '',
-    images: [],
+    images: key ? storedImages(key) : [],
     sending: false,
     revision: 0,
   }
@@ -201,7 +202,9 @@ function createDraft(id: number | string | undefined) {
       }
     },
     set: (change: Partial<Draft>) => {
+      const images = value.images
       value = { ...value, ...change }
+      if (key && value.images !== images) storeImages(key, value.images)
       for (const listener of listeners) listener()
     },
   }
