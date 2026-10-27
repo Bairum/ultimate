@@ -502,17 +502,18 @@ function backend(host: ExtensionHost) {
     }
   }
   async function prepare(args: Args, caller?: number): Promise<Prepared> {
+    // A key that already made an automation is answered from it before anything else runs: validation may make a
+    // standing agent's conversation, and preparation may publish a manifest. The transaction checks it is still there.
+    if (
+      args.action === 'create' &&
+      typeof args.key === 'string' &&
+      Object.values(
+        (await host.harness().snapshot(Automations, BACKGROUND_CONTEXT))?.automations ?? {},
+      ).some((a) => a.key === args.key)
+    )
+      return { keyed: true }
     await validate(args, caller)
     if (args.action === 'create') {
-      // A key that already made an automation is answered from it, with nothing prepared or published again; the
-      // transaction checks it is still there.
-      if (
-        args.key !== undefined &&
-        Object.values(
-          (await host.harness().snapshot(Automations, BACKGROUND_CONTEXT))?.automations ?? {},
-        ).some((a) => a.key === args.key)
-      )
-        return { keyed: true }
       const subscribers = args.subscribers?.length
         ? [...new Set(await Promise.all(args.subscribers.map(subscriber)))]
         : undefined
