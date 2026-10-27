@@ -166,13 +166,13 @@ it('ships both built-in triggers, each waking @ultimate, and keeps a deletion', 
     name: AUTOMATION_NAME,
     enabled: true,
     condition: { metric: 'context', of: '@ultimate', above: 70, armed: true },
-    subscribers: [f.ultimate],
+    subscribers: ['@ultimate'],
   })
   expect(await f.record(pause)).toMatchObject({
     name: PAUSE_NAME,
     enabled: true,
     condition: { of: '@ultimate', above: 50, idleFor: 8 * 3600_000 },
-    subscribers: [f.ultimate],
+    subscribers: ['@ultimate'],
   })
   // Opening again (a facet reload, a restart) makes no second one.
   await ensureAutomation(f.host)
@@ -188,7 +188,7 @@ it('adopts its own automation after a lost receipt, and keeps a chapter seed pau
   const id = (await f.own())!
   await f.action('update', { id, condition: { metric: 'context', of: '@ultimate', above: 80 } })
   await f.action('pause', { id })
-  // The create committed but its receipt was lost: adopted, not made twice, the user's threshold kept.
+  // The create committed but its receipt was lost: its key returns it, not made twice, the user's threshold kept.
   await f.harness.commit(async (tx) => {
     delete (await tx.doc(BuiltInDoc, ROOT_CONVERSATION_ID)).id
   }, context)

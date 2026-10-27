@@ -26,6 +26,13 @@ export const SeedState = defineDoc<{ applied?: number; automations: string[] }>(
   initial: () => ({ automations: [] }),
 })
 
+/**
+ * Whether a seeded trigger is made again in the new chapter: it has a prompt run or a standing agent to wake, and does
+ * not watch a numbered conversation, which does not exist there. Others become to-dos to recreate by hand.
+ */
+const carries = (item: Seed['automations'][number]) =>
+  (!!item.prompt || !!item.subscribers?.length) && !item.condition?.of.startsWith('#')
+
 /** Exported conversation documents are resolved at call time, including after a facet reload. */
 async function document<T>(host: ExtensionHost, tx: Tx, kind: string, id = 1): Promise<T> {
   const token = host.doc(kind)
@@ -87,9 +94,12 @@ export async function buildSeed(host: ExtensionHost, prepared: Prepared): Promis
       )
       .map((item) => {
         const { name, prompt, agent, model, thinking } = item
+        // A standing agent's @name means the same in the new chapter; a #id does not exist there.
+        const subscribers = item.subscribers.filter((s): s is string => typeof s === 'string')
         return {
           name,
           prompt,
+          ...(subscribers.length ? { subscribers } : {}),
           ...(item.schedule ? { schedule: item.schedule } : {}),
           ...(item.event
             ? {
@@ -221,7 +231,7 @@ export async function applySeed(host: ExtensionHost) {
             text: `Recreate script ${id} (${name}): ${ask}${prompt ? ` · prompt: ${prompt}${agent ? ` (agent ${agent})` : ''}` : ''}`,
           })),
         ...seed.automations
-          .filter((item) => !item.prompt || item.condition?.of.startsWith('#'))
+          .filter((item) => !carries(item))
           .map(({ name, schedule, event, condition }) => ({
             owner: 'ultimate' as const,
             text: `Recreate ${schedule ? 'schedule' : event ? 'event' : 'context'} automation (${name}) with new ${condition?.of.startsWith('#') ? 'conversation target' : 'subscribers'}: ${JSON.stringify(schedule ?? event ?? condition)}`,
@@ -248,18 +258,16 @@ export async function applySeed(host: ExtensionHost) {
   }
   const signal = new AbortController().signal
   for (const automation of seed.automations) {
-    if (!automation.prompt || automation.condition?.of.startsWith('#')) continue
+    if (!carries(automation)) continue
     const receipt = await harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context)
     if (receipt?.automations.includes(automation.name)) continue
-    // Names are unique in a seed and the destination starts empty: a matching name is a create whose receipt was lost.
-    // A rediscovered project script may share the name: only a carried trigger counts as the lost create.
-    const current = (await host.invoke('automations', 'list', null, signal)) as Automation[]
-    if (
-      !current.some(
-        (item) => (item.schedule || item.event || item.condition) && item.name === automation.name,
-      )
+    // Names are unique in a seed: a create whose receipt was lost gets its automation back from the key.
+    await host.invoke(
+      'automations',
+      'create',
+      { ...automation, key: `seed:${host.chapter.name}:${automation.name}` },
+      signal,
     )
-      await host.invoke('automations', 'create', automation, signal)
     await harness.commit(async (tx) => {
       const saved = await tx.doc(SeedState, ROOT_CONVERSATION_ID)
       if (!saved.automations.includes(automation.name)) saved.automations.push(automation.name)

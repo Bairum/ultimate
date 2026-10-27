@@ -290,6 +290,53 @@ it('delivers FIRE once, investigates exits only in the owning agent, recovers, a
   })
 })
 
+it('escalates on the third failure in a row, and when its watcher ends a turn without repairing', async () => {
+  const { app, folder } = await fixture()
+  const caller = await app.harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
+  const invoke = (action: string, args: JsonValue) =>
+    app.extensions.invoke('automations', action, args, new AbortController().signal, caller.id)
+  const get = async (id: string) =>
+    (await app.harness.snapshot(Automations, context))!.automations[id]
+  const escalated = async () =>
+    (await (await app.harness.conversation(caller.id, context))!.context(context)).entries.filter(
+      (e) => e.conversationId === caller.id && e.kind === 'automations.escalated',
+    )
+  // Regression: a crash-looping script stayed `investigating` as long as its watcher kept resuming it.
+  const crash = (await invoke('create', { name: 'Crash', ask: 'Crash loop' })) as Automation
+  await writeRun(folder(crash.id), 'exit 1')
+  for (const failures of [1, 2]) {
+    await invoke('resume', { id: crash.id })
+    await until(async () => (await get(crash.id)).script!.failures === failures)
+    expect((await get(crash.id)).script!.state).toBe('investigating')
+  }
+  await invoke('resume', { id: crash.id })
+  await until(async () => (await escalated()).length === 1)
+  expect(await get(crash.id)).toMatchObject({
+    enabled: false,
+    script: {
+      state: 'failed',
+      failures: 3,
+      error: 'Failed 3 times in a row: Process exited with code 1',
+    },
+  })
+
+  // Regression: a watcher that answered without resuming or escalating left its script `writing` for good.
+  const answer = () => {
+    app.host.faux!.appendResponses([answer])
+    return fauxAssistantMessage('I could not find the CI API.')
+  }
+  app.host.faux!.setResponses([answer])
+  const stalled = (await invoke('create', { name: 'Stalled', ask: 'Watch CI' })) as Automation
+  await until(async () => (await escalated()).length === 2)
+  expect(await get(stalled.id)).toMatchObject({
+    enabled: false,
+    script: {
+      state: 'failed',
+      error: 'The watcher stopped while the script was writing: I could not find the CI API.',
+    },
+  })
+})
+
 it('stops a recurring script that prints DONE and exits 0 without waking anyone; start resumes it with its state', async () => {
   const { app, folder } = await fixture()
   const sub = (await app.extensions.invoke(
@@ -324,8 +371,9 @@ it('stops a recurring script that prints DONE and exits 0 without waking anyone;
   await call(app, 'resume', sub.id)
   await until(async () => (await get()).fires === 2 && (await get()).script!.state === 'stopped')
   expect(await readFile(join(folder(sub.id), 'state/n'), 'utf8')).toBe('2\n')
-  await until(async () => (await inputs(sub.subscribers[0])).length === 2)
-  expect(await inputs(sub.subscribers[0])).toEqual(['automations.fired', 'automations.fired'])
+  const subscriber = sub.subscribers[0] as number
+  await until(async () => (await inputs(subscriber)).length === 2)
+  expect(await inputs(subscriber)).toEqual(['automations.fired', 'automations.fired'])
   // The owning agent got only its writing brief: no failure input.
   expect(await inputs(sub.script!.conversationId)).toEqual(['automations.writing'])
 
@@ -429,8 +477,9 @@ it('discovers a committed project automation by slug only in a chosen project, a
     scope: 'project',
     name: 'Ship PRs',
     enabled: false,
-    subscribers: [],
-    script: { once: false, state: 'stopped' },
+    // Regression: discovered project scripts woke nobody. The manifest's `to` defaults to @ultimate.
+    subscribers: ['@ultimate'],
+    script: { once: false, state: 'stopped', to: '@ultimate' },
   })
   // Discovery never starts it; its agent conversation exists, idle.
   expect(found.script?.pid).toBeUndefined()
@@ -502,7 +551,7 @@ it('creates a project automation in the checkout with a committed manifest', asy
   expect(sub).toMatchObject({
     id: 'ship-prs',
     scope: 'project',
-    subscribers: [caller.id],
+    subscribers: ['@ultimate', caller.id],
     script: { state: 'writing' },
   })
   expect(
@@ -541,7 +590,7 @@ it('creates a project automation in the checkout with a committed manifest', asy
     ),
   ).rejects.toThrow('Automation ship-prs already exists')
   expect((await list(app))[0]).toMatchObject({
-    subscribers: [caller.id],
+    subscribers: ['@ultimate', caller.id],
     script: { state: 'writing' },
   })
 
@@ -573,7 +622,8 @@ it('creates a project automation in the checkout with a committed manifest', asy
     script: { ask: 'Watch merged PRs', once: true },
   })
 
-  // A discovered, unused record with the same manifest is adopted with its agent; inherited object keys are no slugs.
+  // A discovered, unused record with the same manifest is taken by the create, with its agent: a create that crashed
+  // after publishing its manifest replays to it. Inherited object keys are no slugs.
   await committed(root, 'ship-prs-2', 'true')
   const discovered = (await list(app)).find((s) => s.id === 'ship-prs-2')!
   const adopted = (await app.extensions.invoke(
@@ -590,8 +640,17 @@ it('creates a project automation in the checkout with a committed manifest', asy
     caller.id,
   )) as Automation
   expect(adopted).toMatchObject({
-    subscribers: [caller.id],
-    script: { conversationId: discovered.script?.conversationId },
+    subscribers: ['@ultimate', caller.id],
+    script: { conversationId: discovered.script?.conversationId, state: 'writing' },
+  })
+  // A manifest naming another standing agent wakes it instead, and the record follows an edit.
+  await writeFile(
+    join(root, '.ultimate/automations/ship-prs-2/automation.json'),
+    JSON.stringify({ name: 'Ship PRs', ask: 'Poll ship/* PRs', once: false, to: '@lander' }),
+  )
+  expect((await list(app)).find((s) => s.id === 'ship-prs-2')).toMatchObject({
+    subscribers: [caller.id, '@lander'],
+    script: { to: '@lander' },
   })
   await expect(
     app.extensions.invoke(
