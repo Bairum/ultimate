@@ -25,6 +25,7 @@ export function renderInput(
   latest?: string,
   compact = false,
   continuations: readonly string[] = [],
+  raised: readonly StoredNote[] = [],
 ) {
   const clean = entries.filter(
     (e) => e.kind !== 'advisor.note' && !isContinuation(e, continuations),
@@ -78,6 +79,10 @@ export function renderInput(
         .slice(-1)
         .map((e) => ({ entry: e.id, text: textOf(e).slice(0, compact ? 1500 : 8000) })),
     ledger: ledger === undefined ? undefined : JSON.stringify(ledger).slice(0, 8192),
+    // Notes routed here from finished children: the agent already has them, so never raise them again.
+    alreadyRaised: raised.length
+      ? raised.slice(-10).map((n) => `${n.severity}: ${n.note.slice(0, 300)}`)
+      : undefined,
     recentTools: calls.slice(compact ? -10 : -25),
   }).slice(0, compact ? 12_000 : 90_000)
 }
@@ -122,7 +127,7 @@ export function parseNotes(
     if (
       previous.some(
         (p) =>
-          p.conversation === conversation &&
+          (p.conversation === conversation || p.routedTo === conversation) &&
           p.at >= now - 86_400_000 &&
           normalize(p.note) === normalize(v.note) &&
           rank(p.severity) >= rank(v.severity),

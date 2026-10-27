@@ -1,25 +1,13 @@
 /** `board.route`: a branch's final answers reach the conversation that started it. */
-import { defineDoc, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { GenerationResult, SubmissionId, TaskId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { Messages } from './api.ts'
+import { Messages, Started } from './api.ts'
 import { needsDecision } from './triage.ts'
 import { terminal } from './log.ts'
 import { send } from './send.ts'
 
-/**
- * Who started a branch through `branch`, so its later final answers reach that conversation. `yielded` is the newest
- * generation observed, so a replayed hook creates no second observer.
- */
-export const Started = defineDoc<{ by?: number; yielded?: number }>({
-  kind: 'board.started',
-  checkpointWhen: () => false,
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial',
-  initial: () => ({}),
-})
+export { Started }
 /**
  * After a branch's run, its final answer reaches the conversation that started it, unless that answer already does:
  * as the answer to the starter's reply-enabled message, or because the run messaged the starter itself. Routing only

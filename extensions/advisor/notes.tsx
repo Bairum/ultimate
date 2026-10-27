@@ -11,7 +11,7 @@ import {
 import { cn, errorMessage, formatAgo, useConversations, useExtensionUiState } from '@/sdk'
 import { ConversationRef } from '../conversations/ui.tsx'
 import { AdviceText, control, DismissMenu, menuItem, NoteControls } from './card.tsx'
-import { ROLES, SEVERITIES } from './refs.ts'
+import { ROLES, SEVERITIES, recipient } from './refs.ts'
 import type { DismissReason, NoteSelection, Role, Severity, StoredNote } from './refs.ts'
 import {
   isLive,
@@ -569,7 +569,7 @@ function NoteItem({
   onSelect: (on: boolean) => void
 }) {
   const open = useOpenNote()
-  const known = useConversations().some((c) => c.id === note.conversation)
+  const known = useConversations().some((c) => c.id === recipient(note))
   const outcome = outcomeOf(note)
   const closed = note.status !== 'open'
   return (
@@ -600,11 +600,19 @@ function NoteItem({
             className="flex min-w-0 cursor-pointer items-center hover:text-foreground hover:underline disabled:cursor-default disabled:no-underline"
             disabled={!known}
             onClick={() => open(note)}
-            title={known ? `Show the note in #${note.conversation}` : 'Conversation not available'}
+            title={known ? `Show the note in #${recipient(note)}` : 'Conversation not available'}
             type="button"
           >
             <ConversationRef id={note.conversation} />
           </button>
+          {note.routedTo !== undefined && (
+            <span
+              className="shrink-0 text-muted-foreground/60"
+              title="Routed to the parent: the agent had finished"
+            >
+              → <ConversationRef id={note.routedTo} />
+            </span>
+          )}
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
             {outcome && (
               <span

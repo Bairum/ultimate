@@ -3,7 +3,8 @@ import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, HookApi } from '@earendil-works/pi-durable'
 import type { Message } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { AdvisorStateDoc, Role, RoleStats } from './refs.ts'
+import type { AdvisorStateDoc, Role, RoleStats, Timing } from './refs.ts'
+import { recipient } from './refs.ts'
 import { Runs, State } from './state.ts'
 
 type Pending = { refs: Map<string, string>; changed?: Set<string>; loading?: Promise<void> }
@@ -37,7 +38,7 @@ async function pending(host: ExtensionHost, id: ConversationId, context: Context
       const state = await host.harness().snapshot(State, ROOT_CONVERSATION_ID, context)
       for (const note of state?.notes ?? []) {
         if (
-          note.conversation === id &&
+          recipient(note) === id &&
           note.ref &&
           note.delivered &&
           note.delivered !== 'card' &&
@@ -115,7 +116,7 @@ export async function acknowledge(
     for (const match of matches) {
       const note = state.notes.find(
         (n) =>
-          n.conversation === id &&
+          recipient(n) === id &&
           n.ref === match[1].toLowerCase() &&
           n.delivered !== 'card' &&
           n.readAt !== undefined,
@@ -130,7 +131,7 @@ export async function acknowledge(
     }
   }, context)
 }
-export function stats(state: AdvisorStateDoc, since: number) {
+export function stats(state: AdvisorStateDoc, since: number, timings: readonly Timing[] = []) {
   const roles: Partial<Record<Role, RoleStats>> = {}
   for (const note of state.notes) {
     if (note.at < since) continue
@@ -138,6 +139,8 @@ export function stats(state: AdvisorStateDoc, since: number) {
       delivered: 0,
       read: 0,
       dismissed: 0,
+      routed: 0,
+      routedAddressed: 0,
       addressed: 0,
       deferred: 0,
       disputed: 0,
@@ -146,6 +149,10 @@ export function stats(state: AdvisorStateDoc, since: number) {
       late: 0,
       pending: 0,
     })
+    if (note.routedTo !== undefined) {
+      row.routed++
+      if (note.response?.status === 'addressed') row.routedAddressed++
+    }
     if (note.closedBy === 'user' && note.status === 'dismissed') row.dismissed++
     if (note.delivered && note.delivered !== 'card') {
       row.delivered++
@@ -154,5 +161,19 @@ export function stats(state: AdvisorStateDoc, since: number) {
     }
     if (note.response) row[note.response.status]++
   }
-  return { since, roles }
+  return { since, roles, latency: latency(timings, since) }
+}
+/** Review durations per `role:point`, silent and skipped reviews included. */
+function latency(timings: readonly Timing[], since: number) {
+  const groups = Map.groupBy(
+    timings.filter((t) => t.at >= since),
+    (t) => `${t.role}:${t.point}`,
+  )
+  return Object.fromEntries(
+    [...groups].map(([key, rows]) => {
+      const ms = rows.map((t) => t.ms).toSorted((a, b) => a - b)
+      const at = (q: number) => ms[Math.min(ms.length - 1, Math.floor(ms.length * q))]
+      return [key, { n: ms.length, p50: at(0.5), p90: at(0.9), max: ms[ms.length - 1] }]
+    }),
+  )
 }

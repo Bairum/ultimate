@@ -80,7 +80,26 @@ export type AdvisorConfig = {
 export type NoteStatus = 'open' | 'resolved' | 'dismissed'
 export type Feedback = 'up' | 'down'
 
-/** Data of an `advisor.note` entry: one review's accepted notes. */
+/**
+ * Why notes went where they did. `continue`/`steer`: they interrupted the agent (or rode with that continuation).
+ * `threshold`: below continueOn/steerOn. `cap`: the run was already continued once. `quiet`: a user or parent input
+ * arrived within quietMs. `ended`: the reviewed run had finished. `deadline`: the answer review overran the hold, so the
+ * answer left first and a background review followed. `default`: the role's delivery.
+ */
+export type DeliveryReason =
+  | 'continue'
+  | 'steer'
+  | 'threshold'
+  | 'cap'
+  | 'quiet'
+  | 'ended'
+  | 'deadline'
+  | 'default'
+
+/**
+ * Data of an `advisor.note` entry: one review's accepted notes. A routed review writes two entries: a card in the
+ * reviewed conversation with `routedTo`, and the delivered entry in that parent with `from`.
+ */
 export type AdvisorNoteEntry = {
   review: string
   advisor: string
@@ -89,6 +108,11 @@ export type AdvisorNoteEntry = {
   model: string
   delivered: 'card' | 'note' | 'steer' | 'continue'
   notes: { id: string; ref?: string; severity: Severity; note: string; evidence: string }[]
+  reason?: DeliveryReason
+  /** On the reviewed conversation's card: the parent its notes went to instead. */
+  routedTo?: number
+  /** On the parent's entry: the reviewed child the notes are about. */
+  from?: number
 }
 export const NOTE_ENTRY = 'advisor.note'
 
@@ -96,7 +120,7 @@ export const NOTE_ENTRY = 'advisor.note'
  * What the agent did with a note. `addressed`, `deferred` and `disputed` come from the agent's acknowledgement
  * (`ack`) or, without one, from a judge over the entries after delivery (`judged`). `ignored`: read, no response by the
  * end of the run. `unread`: never reached a request before the conversation finished. `late`: delivered after the
- * agent's last run ended. Cards go to the user only and get no response.
+ * agent's last run ended (never for notes routed to a parent). Cards go to the user only and get no response.
  */
 export const RESPONSES = ['addressed', 'deferred', 'disputed', 'ignored', 'unread', 'late'] as const
 export type ResponseStatus = (typeof RESPONSES)[number]
@@ -123,7 +147,11 @@ export type StoredNote = {
    * Absent on notes stored before lifecycle tracking.
    */
   ref?: string
+  /** The reviewed conversation (the subject), even when routed. */
   conversation: number
+  /** The parent that received the note instead of `conversation`, which could no longer act on it. */
+  routedTo?: number
+  reason?: DeliveryReason
   entry?: number
   advisor: string
   role: Role
@@ -151,17 +179,24 @@ export type StoredNote = {
 export const DISMISS_REASONS = ['false-alarm', 'handled', 'wont-fix'] as const
 export type DismissReason = (typeof DISMISS_REASONS)[number]
 
-/** Lifecycle counts for one role over a window. `dismissed` counts user dismissals, apart from agent responses. */
-export type RoleStats = { delivered: number; read: number; dismissed: number } & Record<
-  ResponseStatus | 'pending',
-  number
->
-/** Read-only `{ days? }` (default 7) → lifecycle counts per role, for the panel and audits. */
+/**
+ * Lifecycle counts for one role over a window. `dismissed` counts user dismissals, apart from agent responses.
+ * `routed`: notes sent to the parent; `routedAddressed`: those its parent addressed (also counted in `addressed`).
+ */
+export type RoleStats = {
+  delivered: number
+  read: number
+  dismissed: number
+  routed: number
+  routedAddressed: number
+} & Record<ResponseStatus | 'pending', number>
+/** Review duration percentiles in milliseconds, per `role:point`, including silent and skipped reviews. */
+export type Latency = Record<string, { n: number; p50: number; p90: number; max: number }>
+/** Read-only `{ days? }` (default 7) → lifecycle counts per role and review latency, for the panel and audits. */
 export const StatsAction = actionRef<
   { days?: number } | null,
-  { since: number; roles: Partial<Record<Role, RoleStats>> }
+  { since: number; roles: Partial<Record<Role, RoleStats>>; latency: Latency }
 >('advisor', 'stats')
-
 /** Which notes a bulk action touches: explicit ids, or every unarchived note matching all given filters. */
 export type NoteSelection = {
   notes?: string[]
@@ -190,6 +225,16 @@ export type ConversationActivity = {
   usd: number
   lastAt?: number
   lastSkip?: string
+}
+
+/** One review task's duration: every advisor of the role, as the agent waited for it at a held answer. */
+export type Timing = {
+  task: number
+  at: number
+  role: Role
+  point: ReviewPoint
+  ms: number
+  skipped?: string
 }
 
 /** On conversation 1: activity, notes (newest last, capped) and spend per UTC day and role. */
@@ -249,7 +294,7 @@ export const FeedbackAction = actionRef<
   StoredNote
 >('advisor', 'feedback')
 
-/** One review or skip, including role, advisor, note count and response cost. */
+/** One advisor's review or skip, including role, note count, response cost and its duration. */
 export const Reviewed = defineEvent<{
   conversation: number
   role: Role
@@ -257,5 +302,11 @@ export const Reviewed = defineEvent<{
   point: ReviewPoint
   notes: number
   usd: number
+  ms: number
   skipped?: string
+  reason?: DeliveryReason
+  routedTo?: number
 }>('advisor.reviewed')
+/** Who acts on a note: the parent it was routed to, else the reviewed conversation. */
+export const recipient = (note: { conversation: number; routedTo?: number }) =>
+  note.routedTo ?? note.conversation

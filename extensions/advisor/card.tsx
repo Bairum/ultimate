@@ -152,14 +152,33 @@ export function AdvisorNoteCard({ entry }: { entry: EntryRecord }) {
           {label}
           <span className="shrink-0 text-muted-foreground/70">
             {data.role} · {points[data.point]}
+            {data.from !== undefined && (
+              <>
+                {' '}
+                · about <MentionText text={`#${data.from}`} />
+              </>
+            )}
           </span>
           <span
             className={cn('ml-auto shrink-0', delivery.loud && 'text-foreground/85')}
             data-read={readAt !== undefined || undefined}
-            title={timeline}
+            title={
+              data.routedTo !== undefined
+                ? `The answer had left or the agent had finished, so the notes went to #${data.routedTo}, which can still act on them`
+                : timeline
+            }
           >
-            {delivery.loud && <span className="mr-1 text-brand">●</span>}
-            {readAt !== undefined ? delivery.read : delivery.word}
+            {data.routedTo !== undefined ? (
+              <>
+                routed to <MentionText text={`#${data.routedTo}`} />
+                {readAt !== undefined && ' · read'}
+              </>
+            ) : (
+              <>
+                {delivery.loud && <span className="mr-1 text-brand">●</span>}
+                {readAt !== undefined ? delivery.read : delivery.word}
+              </>
+            )}
             {readAt !== undefined && (
               <span className="text-muted-foreground/60"> {formatTime(readAt)}</span>
             )}

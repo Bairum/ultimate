@@ -45,6 +45,19 @@ export const Messages = defineDoc<{ messages: Message[]; next: number }>({
   fork: 'initial',
   initial: () => ({ messages: [], next: 1 }),
 })
+/**
+ * Who started a branch through `branch`, so its later final answers reach that conversation. `yielded` is the newest
+ * generation observed, so a replayed hook creates no second observer.
+ */
+export const Started = defineDoc<{ by?: number; yielded?: number }>({
+  kind: 'board.started',
+  checkpointWhen: () => false,
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({}),
+})
 
 export type MessagesService = {
   /**

@@ -28,6 +28,8 @@ export const Runs = defineDoc<{
     {
       run?: number
       continued?: boolean
+      /** The reviewed answer (its `answerAt`) whose blocker last woke the parent: one wake per answer. */
+      woke?: number
       rounds: number
       lastRound?: number
       pending?: number
@@ -46,6 +48,8 @@ export const Runs = defineDoc<{
   readRuns?: Record<string, number>
   closeouts?: Record<string, number>
   nextRef?: number
+  /** Review durations for latency stats, newest last; kept 14 days. */
+  timings?: import('./refs.ts').Timing[]
 }>({
   kind: 'advisor.runs',
   checkpointWhen: () => false,
@@ -82,6 +86,7 @@ export function pruneRuns(
   for (const id of Object.keys(runs.settledAt ?? {}))
     if (!retained.has(id)) delete runs.settledAt![id]
   for (const id of Object.keys(runs.deliveries)) if (!retained.has(id)) delete runs.deliveries[id]
+  if (runs.timings) runs.timings = runs.timings.filter((t) => t.at >= now - 14 * 86_400_000)
   for (const [id, row] of Object.entries(runs.conversations)) {
     if (concluded.has(Number(id))) {
       for (const delivery of row.deliveries ?? []) delete runs.deliveries[delivery]

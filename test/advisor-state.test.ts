@@ -97,7 +97,10 @@ it('counts retained lifecycle outcomes per role and excludes cards from delivery
         late: 0,
         dismissed: 1,
         pending: 2,
+        routed: 0,
+        routedAddressed: 0,
       },
     },
+    latency: {},
   })
 })

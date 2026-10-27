@@ -8,10 +8,10 @@ import {
   MemoryStorage,
   createRegistry,
   LiveDoc,
-  InboxDoc,
   ROOT_CONVERSATION_ID,
+  defineTask,
 } from '@earendil-works/pi-durable'
-import type { GenerationHooks, HookApi } from '@earendil-works/pi-durable'
+import type { ConversationId, GenerationHooks, HookApi } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
@@ -22,7 +22,7 @@ import { mergeConfig } from '../extensions/advisor/config.ts'
 import { Runs, State, Ledger, utcDay } from '../extensions/advisor/state.ts'
 import { review, runEntries } from '../extensions/advisor/review.ts'
 import { renderInput } from '../extensions/advisor/render.ts'
-import { Standing, Profile } from '../extensions/subagents/api.ts'
+import { Standing, Profile, Subagents } from '../extensions/subagents/api.ts'
 import type { AdvisorNoteEntry, Role } from '../extensions/advisor/refs.ts'
 import { closeOut, expireNotes } from '../extensions/advisor/lifecycle.ts'
 import { ClassifyApi } from '../extensions/classify/api.ts'
@@ -38,6 +38,21 @@ afterEach(async () => {
   for (const close of cleanups.splice(0)) await close()
 })
 const notes = [{ severity: 'blocker' as const, note: 'Required check failed', evidence: '#12' }]
+// Owns the reviewed subagent; it never runs.
+const anchor = defineTask<null, { phase: 'done' }, null>({
+  name: 'advisor-test.anchor',
+  version: 1,
+  initial: () => ({ phase: 'done' }),
+  abort: (_task, runtime, caller) =>
+    runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), caller),
+  phases: {
+    done: (_task, runtime, caller) =>
+      runtime.commit(
+        () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
+        caller,
+      ),
+  },
+})
 async function fixture(role: Role = 'worker') {
   const home = await mkdtemp(join(tmpdir(), 'advisor-delivery-'))
   await mkdir(join(home, '.ultimate'))
@@ -50,6 +65,7 @@ async function fixture(role: Role = 'worker') {
   )
   await writeFile(join(home, '.ultimate/settings.json'), JSON.stringify({ advisor: config }))
   const registry = createRegistry()
+  registry.install({ name: 'advisor-test', tasks: [anchor] })
   const models = createModels()
   const response = fauxAssistantMessage([fauxText(JSON.stringify({ notes }))])
   const stream = vi
@@ -60,11 +76,23 @@ async function fixture(role: Role = 'worker') {
     .mockReturnValue({ provider: 'faux', id: 'faux' } as never)
   const harness = await Harness.open(new MemoryStorage(), { registry, models }, context)
   const root = await harness.root(context)
-  const child = await harness.commit(
-    (tx) => tx.createConversation({ ownership: { kind: 'ownerless' } }),
-    context,
-  )
-  const id = child.id
+  // The reviewed agent is a subagent of `parent`, as `subagent start` makes it.
+  const { id, parent } = await harness.commit(async (tx) => {
+    const owning = (await tx.createConversation({ ownership: { kind: 'ownerless' } })).id
+    const owner = await tx.createTask(anchor, null, {
+      ownership: { kind: 'conversation' },
+      conversationId: owning,
+      background: true,
+    })
+    const child = (await tx.createConversation({ ownership: { kind: 'task', taskId: owner } })).id
+    ;(await tx.doc(Subagents, owning)).agents[String(child)] = {
+      conversationId: child,
+      agent: role,
+      background: false,
+      reported: [],
+    }
+    return { id: child, parent: owning }
+  }, context)
   const close = vi.fn<() => Promise<void>>(async () => {})
   const accountResponse = vi.fn<() => Promise<void>>(async () => {})
   const emit = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {})
@@ -115,7 +143,7 @@ async function fixture(role: Role = 'worker') {
     getModel.mockRestore()
     await rm(home, { recursive: true, force: true })
   })
-  return { host, harness, id, config, hooks, api, stream, response, emit }
+  return { host, harness, id, parent, config, hooks, api, stream, response, emit }
 }
 it('routes quiet periods, idle and ultimate without waking ultimate', () => {
   const profile = {
@@ -124,15 +152,20 @@ it('routes quiet periods, idle and ultimate without waking ultimate', () => {
     steerOn: 'concern' as const,
     quietMs: 100,
   }
-  expect(route('worker', profile, 'answer', notes, 0, 200, false, false)).toBe('continue')
-  expect(route('worker', profile, 'answer', notes, 0, 200, true, false)).toBe('card')
-  expect(route('worker', profile, 'answer', notes, 150, 200, false, false)).toBe('note')
-  expect(route('worker', profile, 'rounds', notes, 0, 200, false, false)).toBe('steer')
-  expect(route('worker', profile, 'rounds', notes, 150, 200, false, false)).toBe('note')
-  expect(route('worker', profile, 'idle', notes, 0, 200, false, false)).toBe('card')
+  const at = (point: 'answer' | 'rounds' | 'idle', last: number, continued?: 'run' | 'review') =>
+    route('worker', profile, point, notes, last, 200, continued, false)
+  expect(at('answer', 0)).toEqual({ delivered: 'continue', reason: 'continue' })
+  expect(at('answer', 0, 'run')).toEqual({ delivered: 'card', reason: 'cap' })
+  expect(at('answer', 0, 'review')).toEqual({ delivered: 'card', reason: 'continue' })
+  expect(at('answer', 150)).toEqual({ delivered: 'note', reason: 'quiet' })
+  expect(at('rounds', 0)).toEqual({ delivered: 'steer', reason: 'steer' })
+  expect(at('rounds', 150)).toEqual({ delivered: 'note', reason: 'quiet' })
+  expect(at('idle', 0)).toEqual({ delivered: 'card', reason: 'default' })
   for (const point of ['answer', 'rounds', 'idle', 'signals'] as const) {
-    expect(route('ultimate', profile, point, notes, undefined, 200, false, false)).toBe('card')
-    expect(route('ultimate', profile, point, notes, undefined, 200, false, true)).toBe('note')
+    const ultimate = (actionable: boolean) =>
+      route('ultimate', profile, point, notes, undefined, 200, undefined, actionable).delivered
+    expect(ultimate(false)).toBe('card')
+    expect(ultimate(true)).toBe('note')
   }
 })
 it('writes a card without model context, and a note as passive user context', async () => {
@@ -194,19 +227,104 @@ it('writes a card without model context, and a note as passive user context', as
     entries.find((e) => (e.data as AdvisorNoteEntry)?.review === 'note')?.id,
   )
 })
-it('continues at most once per run, even on a new generation', async () => {
+it('continues once per run, then routes the next answer blocker to the parent, which acknowledges it', async () => {
+  // USG #99825: a second answer's blockers, after the run's one continuation, sat unread in the finished worker.
   const f = await fixture()
   const yielded = await f.hooks.onYield(fauxAssistantMessage('I am finished'), f.api(), context)
   expect(JSON.stringify(f.stream.mock.calls[0]?.[1])).toContain('I am finished')
   expect(yielded).toMatchObject({ continue: expect.stringContaining('Required check failed') })
-  // A different blocker in the following generation must not trigger another continuation.
   f.response.content = [
     fauxText(JSON.stringify({ notes: [{ ...notes[0], note: 'Another failed check' }] })),
   ]
   expect(await f.hooks.onYield(f.response, f.api(), context)).toBeUndefined()
-  expect(
-    (await f.harness.snapshot(Runs, ROOT_CONVERSATION_ID, context))?.conversations[f.id]?.continued,
-  ).toBe(true)
+  const routed = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes.find(
+    (n) => n.note === 'Another failed check',
+  )!
+  expect(routed).toMatchObject({
+    conversation: f.id,
+    routedTo: f.parent,
+    reason: 'cap',
+    delivered: 'note',
+  })
+  const entries = async (id: ConversationId) =>
+    (
+      await (await f.harness.conversation(id, context))!.entries(
+        { order: 'ascending' },
+        20,
+        undefined,
+        context,
+      )
+    ).items.filter((e) => e.kind === 'advisor.note')
+  // The child keeps a card naming the parent; the parent gets the note in its model context.
+  const [card] = (await entries(f.id)).filter((e) => (e.data as AdvisorNoteEntry).routedTo)
+  expect(card.model).toBeUndefined()
+  const [note] = await entries(f.parent)
+  expect(note.data).toMatchObject({ from: f.id, routedTo: f.parent })
+  expect(note.model?.[0].content).toContain(`<advisory id="${routed.ref}"`)
+  expect(note.model?.[0].content).toContain(`Advisor review of #${f.id}'s work`)
+  // The parent reads and acknowledges it like its own advice.
+  const parentApi = { ...f.api(), conversationId: f.parent } as HookApi
+  await f.hooks.beforeRequest(
+    {
+      messages: [{ role: 'user', content: note.model![0].content as string, timestamp: 0 }],
+    },
+    parentApi,
+    context,
+  )
+  await f.hooks.afterResponse(
+    fauxAssistantMessage([fauxText(`advisor ${routed.ref}: addressed — reran the check`)]),
+    parentApi,
+    context,
+  )
+  const state = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
+  expect(state.notes.find((n) => n.id === routed.id)).toMatchObject({
+    readAt: expect.any(Number),
+    response: { status: 'addressed', source: 'ack' },
+  })
+  expect(await actions.stats({ days: 1 }, { host: f.host } as never)).toMatchObject({
+    roles: { worker: { routed: 1, routedAddressed: 1 } },
+    latency: { 'worker:answer': { n: 2 } },
+  })
+})
+it('routes advice on finished work to the parent, waking it once per answer for blockers only', async () => {
+  const f = await fixture()
+  await f.harness.commit(async (tx) => {
+    delete (await tx.doc(LiveDoc, f.id)).run
+  }, context)
+  f.harness.resume()
+  vi.spyOn(f.host, 'conversations').mockReturnValue([
+    { id: f.id, label: 'worker', busy: false, answerAt: 5, cwd: f.host.projectRoot },
+  ] as never)
+  const background = async (note: string, severity = 'blocker') => {
+    f.response.content = [fauxText(JSON.stringify({ notes: [{ ...notes[0], severity, note }] }))]
+    await review(f.host, f.api(), { role: 'worker', point: 'signals' }, f.config, [], context)
+  }
+  await background('First blocker')
+  await background('Second blocker')
+  await background('A concern', 'concern')
+  const state = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
+  expect(state.notes.map((n) => [n.note, n.delivered, n.reason, n.routedTo])).toEqual([
+    ['First blocker', 'steer', 'ended', f.parent],
+    ['Second blocker', 'note', 'ended', f.parent],
+    ['A concern', 'note', 'ended', f.parent],
+  ])
+  // Only the first blocker is an input, which wakes the idle parent; the others are passive notes in its context.
+  const kinds = await f.harness.commit(
+    async (tx) =>
+      Promise.all(
+        state.notes.map(
+          async (n) =>
+            (
+              await tx.submissionByRequest(
+                f.parent,
+                `advisor:${n.id.slice(0, n.id.lastIndexOf(':'))}`,
+              )
+            )?.type,
+        ),
+      ),
+    context,
+  )
+  expect(kinds).toEqual(['input', 'write', 'write'])
 })
 it('ultimate schedules a background review and never holds its answer or calls a model inline', async () => {
   const f = await fixture('ultimate')
@@ -315,13 +433,10 @@ it.each(['brief', 'steer', 'parent note'] as const)(
     try {
       const yielded = await f.hooks.onYield(fauxAssistantMessage('Finished'), f.api(), context)
       expect(yielded !== undefined).toBe(intervention === 'brief')
-      const inbox = await f.harness.snapshot(InboxDoc, f.id, context)
-      expect(
-        inbox?.items.some(
-          (item) =>
-            item.mode === 'write' && (item.entry.data as AdvisorNoteEntry)?.delivered === 'note',
-        ),
-      ).toBe(intervention !== 'brief')
+      // A suppressed continuation would leave with the answer unseen: the parent gets it as a passive note.
+      const stored = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes
+      expect(stored.map((n) => n.reason)).toEqual([intervention === 'brief' ? 'continue' : 'quiet'])
+      expect(stored[0].routedTo).toBe(intervention === 'brief' ? undefined : f.parent)
     } finally {
       submission.mockRestore()
     }

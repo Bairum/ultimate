@@ -5,6 +5,7 @@ import type { ConversationId, TaskId } from '@earendil-works/pi-durable'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { AdvisorConfig, NoteResponse, StoredNote } from './refs.ts'
+import { recipient } from './refs.ts'
 import { parseModel } from './config.ts'
 import { budgetExceeded, Runs, State, utcDay } from './state.ts'
 import { renderInput } from './render.ts'
@@ -150,7 +151,7 @@ async function judgeCloseOut(
   const runs = await host.harness().snapshot(Runs, ROOT_CONVERSATION_ID, context)
   const notes = (state?.notes ?? []).filter(
     (n) =>
-      n.conversation === runtime.conversationId &&
+      recipient(n) === runtime.conversationId &&
       n.delivered !== 'card' &&
       runs?.readRuns?.[n.id] === input.run,
   )
@@ -357,7 +358,7 @@ export async function failCloseOut(
     const state = await tx.doc(State, ROOT_CONVERSATION_ID)
     const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
     for (const note of state.notes) {
-      if (note.conversation !== id || runs.readRuns?.[note.id] !== run) continue
+      if (recipient(note) !== id || runs.readRuns?.[note.id] !== run) continue
       closeIgnored(note, reason)
       delete runs.readRuns[note.id]
       stored(host, id, [note], false)
@@ -377,28 +378,27 @@ export async function expireNotes(
     const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
     for (const note of state.notes) {
       if (!note.ref || !note.delivered || note.delivered === 'card') continue
+      const to = recipient(note)
       if (note.readAt !== undefined) {
         const run = runs.readRuns?.[note.id]
         if (note.response && run === undefined) continue
-        const live = await tx.doc(LiveDoc, note.conversation as ConversationId)
-        if (
-          !concluded.has(note.conversation) &&
-          live.run &&
-          (run === undefined || live.run.inputs[0] === run)
-        )
+        const live = await tx.doc(LiveDoc, to as ConversationId)
+        if (!concluded.has(to) && live.run && (run === undefined || live.run.inputs[0] === run))
           continue
-        const task = run === undefined ? undefined : runs.closeouts?.[`${note.conversation}:${run}`]
+        const task = run === undefined ? undefined : runs.closeouts?.[`${to}:${run}`]
         const record = task === undefined ? undefined : await tx.task(task as TaskId)
         if (record && record.state.status !== 'terminal') continue
         closeIgnored(note, 'run ended without close-out')
         if (runs.readRuns) delete runs.readRuns[note.id]
-        stored(host, note.conversation, [note], false)
+        stored(host, to, [note], false)
         continue
       }
       if (note.response) continue
-      const summary = summaries.find((s) => s.id === note.conversation)
-      const ended = concluded.has(note.conversation)
+      const summary = summaries.find((s) => s.id === to)
+      const ended = concluded.has(to)
+      // A routed note waits for its parent's next turn however long that takes: it is never late.
       const late =
+        note.routedTo === undefined &&
         summary?.answerAt !== undefined &&
         note.at > summary.answerAt &&
         (summary.inputAt ?? 0) <= summary.answerAt &&
@@ -409,7 +409,7 @@ export async function expireNotes(
       if (!late && !ended) continue
       note.response = { status: late ? 'late' : 'unread', source: 'auto', at: now }
       autoResolve(note, now)
-      stored(host, note.conversation, [note], false)
+      stored(host, to, [note], false)
     }
   }, context)
 }

@@ -3,13 +3,13 @@ import { join } from 'node:path'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { copyJson } from '@earendil-works/chord'
 import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId, EntryRecord, Cursor, HookApi } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryRecord, Cursor, HookApi, Tx } from '@earendil-works/pi-durable'
 import type { AssistantMessage, Message } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { ClassifyApi } from '../classify/api.ts'
 import { Gate } from '../messages/api.ts'
-import { Standing } from '../subagents/api.ts'
+import { Standing, Subagents } from '../subagents/api.ts'
 import { isInput } from '../../lib/entries.ts'
 import { parseModel } from './config.ts'
 import type {
@@ -17,13 +17,14 @@ import type {
   Role,
   ReviewPoint,
   AdvisorNoteEntry,
+  DeliveryReason,
   LedgerItem,
   RoleProfile,
 } from './refs.ts'
 import { Reviewed } from './refs.ts'
 import { State, Runs, Ledger, budgetExceeded, utcDay } from './state.ts'
 import { isContinuation, parseNotes, renderInput } from './render.ts'
-import { deliver, route } from './deliver.ts'
+import { deliver, parentOf, route } from './deliver.ts'
 import { reviewTools, toolDefinitions, scopedPath } from './tools.ts'
 
 import { stored } from './tracking.ts'
@@ -35,6 +36,8 @@ export type ReviewInput = {
   run?: number
   signal?: string
   latest?: string
+  /** An answer review that overran the hold: the answer left without it, so this one runs in the background. */
+  deadline?: true
 }
 async function startOf(host: ExtensionHost, id: ConversationId, context: Context, run?: number) {
   const first = run ?? (await host.harness().snapshot(LiveDoc, id, context))?.run?.inputs[0]
@@ -181,6 +184,7 @@ export async function review(
   abort?: AbortSignal,
 ) {
   const id = runtime.conversationId
+  const started = await runtime.memo('advisor:started', Date.now(), context)
   // Pin settings and rubrics to the durable task on replay.
   const kept = await runtime.memo<{
     config: AdvisorConfig
@@ -244,6 +248,9 @@ export async function review(
         input.signal,
         ledgerSnapshot,
         input.latest,
+        false,
+        [],
+        state.notes.filter((n) => n.routedTo === id && n.at >= Date.now() - 86_400_000),
       )
       if (!skipped && input.point !== 'answer' && profile.gate === 'jev') {
         const classify = host.want(ClassifyApi)
@@ -377,6 +384,7 @@ export async function review(
     usd = receipts.reduce((total, r) => total + r.usage.cost.total, 0)
     const intervention = await lastIntervention(host, id, context)
     let entry: AdvisorNoteEntry | undefined
+    let recipient: ConversationId = id
     await host.harness().commit(async (tx) => {
       const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
       if (runs.settled.includes(reviewId)) return
@@ -395,9 +403,14 @@ export async function review(
       if (intervention) row.lastInput = intervention
       else delete row.lastInput
       const live = await tx.doc(LiveDoc, id)
+      // The reviewed agent stopped and nothing will wake it again: what it can no longer act on goes to its parent.
+      const gone =
+        input.role !== 'ultimate' && live.run === undefined && !(await waiting(host, tx, id))
       if (
         input.point === 'answer' &&
         input.role !== 'ultimate' &&
+        !gone &&
+        !input.deadline &&
         input.run !== live.run?.inputs[0]
       )
         skipped = 'stale run'
@@ -439,18 +452,41 @@ export async function review(
                 new RegExp(`(?:#|entry[ :]+)${i.entry}\\b`, 'i').test(n.evidence)),
           ),
         )
-        let delivered = route(
+        let { delivered, reason } = route(
           input.role,
           profile,
           input.point,
           notes,
           row.lastInput,
           Date.now(),
-          !!row.continued || !!continuation,
+          continuation ? 'review' : row.continued ? 'run' : undefined,
           actionable,
         )
-        if (delivered === 'continue' && row.run !== input.run) delivered = 'note'
+        if (delivered === 'continue' && (row.run !== input.run || gone)) {
+          delivered = 'note'
+          reason = 'ended'
+        }
         if (delivered === 'continue') row.continued = true
+        // Advice that should have continued the agent but could not (already continued once, or a person just spoke)
+        // would leave with the held answer unseen; on finished work nobody else reads it. Its parent can still act.
+        const answering =
+          input.point === 'answer' &&
+          !input.deadline &&
+          (['cap', 'quiet'] as DeliveryReason[]).includes(reason)
+        const parent =
+          delivered !== 'card' && delivered !== 'continue' && (answering || gone)
+            ? await parentOf(tx, id)
+            : undefined
+        if (parent !== undefined) {
+          recipient = parent
+          if (gone) reason = input.deadline ? 'deadline' : 'ended'
+          // A blocker on finished work wakes the parent once per reviewed answer; the rest waits for its next turn.
+          const answer = host.conversations().find((c) => c.id === id)?.answerAt ?? 0
+          if (gone && notes.some((n) => n.severity === 'blocker') && row.woke !== answer) {
+            row.woke = answer
+            delivered = 'steer'
+          } else delivered = 'note'
+        }
         entry = {
           review: reviewId,
           advisor,
@@ -458,6 +494,8 @@ export async function review(
           point: input.point,
           model: modelName!,
           delivered,
+          reason,
+          ...(parent !== undefined ? { routedTo: parent } : {}),
           notes: notes.map((n, i) => {
             const noteId = `${reviewId}:${i}`
             runs.nextRef = (runs.nextRef ?? 0) + 1
@@ -469,6 +507,8 @@ export async function review(
           current.notes.push({
             ...n,
             conversation: id,
+            ...(parent !== undefined ? { routedTo: parent } : {}),
+            reason,
             advisor,
             role: input.role,
             point: input.point,
@@ -503,10 +543,13 @@ export async function review(
         point: input.point,
         notes: skipped ? 0 : notes.length,
         usd,
+        ms: Date.now() - started,
         ...(skipped ? { skipped } : {}),
+        ...(entry?.reason ? { reason: entry.reason } : {}),
+        ...(entry?.routedTo !== undefined ? { routedTo: entry.routedTo } : {}),
       })
     }, context)
-    if (entry) stored(host, id, entry.notes, entry.delivered !== 'card')
+    if (entry) stored(host, recipient, entry.notes, entry.delivered !== 'card')
     if (entry) {
       continuation = (await deliver(host, id, entry, context, input.run)) ?? continuation
       if (entry.delivered !== 'continue')
@@ -515,5 +558,24 @@ export async function review(
         }, context)
     }
   }
+  // How long the agent waited (at a held answer) or the review ran: every advisor, silent and skipped ones too.
+  await host.harness().commit(async (tx) => {
+    const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
+    runs.timings ??= []
+    if (runs.timings.some((t) => t.task === runtime.taskId)) return
+    runs.timings.push({
+      task: runtime.taskId,
+      at: started,
+      role: input.role,
+      point: input.point,
+      ms: Date.now() - started,
+      ...(signal.aborted ? { skipped: 'deadline' } : {}),
+    })
+  }, context)
   return continuation ? { continue: continuation } : undefined
+}
+/** Whether a stopped conversation still waits on a running subagent, whose report will wake it. */
+async function waiting(host: ExtensionHost, tx: Tx, id: ConversationId) {
+  const agents = Object.values((await tx.doc(Subagents, id)).agents)
+  return agents.some((a) => host.conversations().find((c) => c.id === a.conversationId)?.busy)
 }

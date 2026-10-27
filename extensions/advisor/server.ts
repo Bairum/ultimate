@@ -27,6 +27,7 @@ import {
   StatsAction,
   ManageAction,
   ROLES,
+  recipient,
 } from './refs.ts'
 import type { Role, ReviewPoint } from './refs.ts'
 import { configuration, NAME, validateConfig } from './config.ts'
@@ -42,6 +43,8 @@ import { pruneNotes, selected, setStatus, validateSelection, validReason } from 
 export { docs }
 export const userActions = ['setConfig', 'setRubric', 'feedback', 'manage']
 export const hostActions = ['setConfig', 'setRubric']
+/** How long a final answer waits for its review before it leaves and the review moves to the background. */
+export const HOLD_MS = 60_000
 export const actions = {
   stats: implementAction(StatsAction, async (args, { host }) => {
     if (args !== null && (typeof args !== 'object' || Array.isArray(args)))
@@ -50,7 +53,8 @@ export const actions = {
     if (typeof days !== 'number' || !Number.isFinite(days) || days <= 0)
       throw new Error('Invalid days')
     const state = await host.harness().snapshot(State, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
-    return stats(state ?? State.definition.initial(), Date.now() - days * 86_400_000)
+    const runs = await host.harness().snapshot(Runs, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
+    return stats(state ?? State.definition.initial(), Date.now() - days * 86_400_000, runs?.timings)
   }),
   manage: implementAction(ManageAction, async (args, { host }) => {
     validateSelection(args)
@@ -70,7 +74,7 @@ export const actions = {
           if (note.status !== 'open') continue
           setStatus(note, args.do === 'resolve' ? 'resolved' : 'dismissed', now, args.reason)
         }
-        invalidate(host, note.conversation)
+        invalidate(host, recipient(note))
         changed++
       }
       return { changed }
@@ -164,7 +168,7 @@ export const actions = {
         setStatus(note, args.status, Date.now(), reason)
       if (snoozeUntil === null) delete note.snoozedUntil
       else if (snoozeUntil !== undefined) note.snoozedUntil = snoozeUntil
-      invalidate(host, note.conversation)
+      invalidate(host, recipient(note))
       return { ...note }
     }, BACKGROUND_CONTEXT)
   }),
@@ -521,7 +525,8 @@ export default function advisor(host: ExtensionHost) {
                   }
                 }
               }, context)
-              const deadline = AbortSignal.timeout(90_000)
+              // Measured answer reviews: p50 3–14 s, max 41 s across roles (#81606); a slower one goes to the background.
+              const deadline = AbortSignal.timeout(HOLD_MS)
               let expired!: () => void
               const timeout = new Promise<undefined>((resolve) => {
                 expired = () => resolve(undefined)
@@ -548,7 +553,15 @@ export default function advisor(host: ExtensionHost) {
               })()
               try {
                 const result = await Promise.race([work, timeout])
-                if (deadline.aborted) return undefined
+                if (deadline.aborted) {
+                  // The answer leaves now; the review reruns in the background and routes what it finds upward.
+                  await background(
+                    api.conversationId,
+                    { role: target.role, point: 'answer', run, latest, deadline: true },
+                    context,
+                  )
+                  return undefined
+                }
                 return settleYield(api, result ?? null, context)
               } finally {
                 deadline.removeEventListener('abort', expired)

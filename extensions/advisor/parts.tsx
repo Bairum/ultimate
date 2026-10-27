@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { api, cn, events, formatAgo, useConversation, useDocOf, useUltimate } from '@/sdk'
-import { AdvisorState, FeedbackAction, ManageAction, NOTE_ENTRY } from './refs.ts'
+import { AdvisorState, FeedbackAction, ManageAction, NOTE_ENTRY, recipient } from './refs.ts'
 import type {
   AdvisorNoteEntry,
   AdvisorStateDoc,
@@ -196,19 +196,16 @@ export const reviewOf = (note: string) => note.slice(0, note.lastIndexOf(':'))
 
 let pending: { conversation: number; entry?: number; review: string } | undefined
 /**
- * Shows a note's conversation and scrolls to its card: the stored entry when known, else the loaded `advisor.note`
- * entry of its review.
+ * Shows the conversation that received a note (its parent when routed) and scrolls to its card: the stored entry when
+ * known, else the loaded `advisor.note` entry of its review.
  */
 export function useOpenNote() {
   const { switchConversation, showSurface } = useUltimate()
-  return (note: Pick<StoredNote, 'id' | 'conversation' | 'entry'>) => {
-    pending = {
-      conversation: note.conversation,
-      entry: note.entry,
-      review: reviewOf(note.id),
-    }
+  return (note: Pick<StoredNote, 'id' | 'conversation' | 'routedTo' | 'entry'>) => {
+    const conversation = recipient(note)
+    pending = { conversation, entry: note.entry, review: reviewOf(note.id) }
     showSurface('agent')
-    switchConversation(note.conversation)
+    switchConversation(conversation)
   }
 }
 /** Reveals a pending note's card once its conversation has loaded; mounted in the overlay so it outlives the switch. */
