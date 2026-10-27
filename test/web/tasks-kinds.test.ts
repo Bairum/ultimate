@@ -66,7 +66,11 @@ it('groups by meaning, whoever owns the task, and keeps an unknown kind under it
     text: 'Summarising',
     who: 5,
   })
-  expect(meaning(task('my-ext.thing', { status: 'pending', phase: 'go' }), undefined)).toEqual({
+  // Owning a conversation does not make an unknown kind a subagent.
+  const owning = { conversations: [12 as ConversationId] }
+  expect(
+    meaning(task('my-ext.thing', { status: 'pending', phase: 'go' }, owning), undefined),
+  ).toEqual({
     group: 'background',
     text: 'my-ext.thing',
   })

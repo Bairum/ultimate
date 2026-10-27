@@ -27,7 +27,10 @@ import {
 import type { TaskGraph, TaskGraphNode } from '@/sdk'
 import { store } from '@/sdk/client'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
-import { useWorkspaceConversations as useConversations } from '../workspaces/ui.tsx'
+import {
+  useWorkspaceConversations as useConversations,
+  useWorkspaceIndex,
+} from '../workspaces/ui.tsx'
 import { FeatureTag, hiddenConversationIds, useOverview } from '../conversations/ui.tsx'
 import { Address, MessagesDoc } from '../messages/ui.tsx'
 import { TaskChip, useTaskOf } from '../plan/ui.tsx'
@@ -206,6 +209,9 @@ const places = (count: number, { depth, rails = [], last = true }: Place) =>
     rails: [...rails.slice(0, depth - 1), ...(depth > 0 ? [!last] : [])],
     last: index === count - 1,
   }))
+
+/** The root conversation: the project itself, never shown as a conversation of its own. */
+const ROOT = 1
 
 /** Ten minutes: a running task or chore older than this shows in warning colour, so a stuck one stands out. */
 const LONG = 10 * 60_000
@@ -451,24 +457,32 @@ function TasksPanel() {
   const started = useOnce(StartedAction, ids)
   const facts = useOnce<TaskFacts>(DescribeAction, ids)
   const states = new Map(log?.messages.map((message) => [message.id, message.state]))
+  const { queue } = useWorkspaceIndex()
+  // A lander works its queue one submission after another: the one it lands now names it.
+  const landing = (fact: TaskFacts | undefined) => {
+    const item = queue.find((entry) => entry.source === fact?.source && entry.state === 'landing')
+    return item ? { ...fact, conversation: item.conversationId } : fact
+  }
   const meanings = new Map(
     tasks.map((task) => {
-      const fact = facts[task.id]
+      const fact = task.kind === 'workspaces.lander' ? landing(facts[task.id]) : facts[task.id]
       return [task.id, meaning(task, fact, fact?.message && states.get(fact.message.id))]
     }),
   )
   const groupOf = (task: TaskGraphNode) => meanings.get(task.id)?.group ?? 'background'
-  // Running work stays a tree under its conversation; the rest is listed by meaning, whoever owns it.
+  // Running work stays a tree under its conversation; the rest is listed by meaning, whoever owns it. The root's
+  // running work (an automation run) is the project's: listed on its own, never under a conversation header.
   const running = new Map(
     [...roots].flatMap(([id, list]) => {
       const kept = list.filter((task) => groupOf(task) === 'running')
-      return kept.length ? [[id, kept] as const] : []
+      return kept.length && id !== ROOT ? [[id, kept] as const] : []
     }),
   )
   const owned = new Set<number>(tasks.flatMap((task) => task.conversations))
   const top = [...running.keys()].filter((id) => !owned.has(id)).toSorted((a, b) => a - b)
   const listed = (group: Group) =>
     tasks.filter((task) => task.owner == null && groupOf(task) === group)
+  const project = (roots.get(ROOT) ?? []).filter((task) => groupOf(task) === 'running')
   const tree: Tree = {
     children,
     roots: running,
@@ -495,9 +509,12 @@ function TasksPanel() {
       </div>
       {groups.map(({ id, title }) => {
         if (id === 'running')
-          return top.length ? (
+          return top.length || project.length ? (
             <section data-group={id} key={id}>
               <Heading>{title}</Heading>
+              {project.map((task) => (
+                <TaskRow depth={0} key={task.id} task={task} tree={tree} />
+              ))}
               {top.map((conversation) => (
                 <ConversationRow depth={0} id={conversation} key={conversation} tree={tree} />
               ))}

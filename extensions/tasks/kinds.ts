@@ -54,7 +54,6 @@ const chores: Record<string, string> = {
   'side-chat.start': 'Opening a side chat',
   'side-chat.end': 'Closing a side chat',
   'voice-live.answer': 'Answering by voice',
-  'ultimate.subagent-anchor': 'Settling a subagent',
   'ultimate.automation-delivery': 'Delivering automation',
 }
 
@@ -69,10 +68,10 @@ export function meaning(
 ): Meaning {
   const phase = 'phase' in task.state ? task.state.phase : undefined
   const sleeping = task.state.status === 'sleeping' ? task.state.until : undefined
-  // A task that owns conversations (a subagent's anchor, a side chat) is the running tree's branch point for them.
-  if (task.conversations.length > 0 && task.kind !== 'pi.tool')
-    return { group: 'running', text: task.conversations.length > 1 ? 'Subagents' : 'Subagent' }
   switch (task.kind) {
+    // The task a subagent's conversation hangs from: the running tree's branch point for it.
+    case 'ultimate.subagent-anchor':
+      return { group: 'running', text: task.conversations.length > 1 ? 'Subagents' : 'Subagent' }
     case 'pi.generation':
       return { group: 'running', text: 'Turn' }
     case 'pi.tool':

@@ -1,11 +1,10 @@
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { AssistantEntry, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { AssistantEntry } from '@earendil-works/pi-durable'
 import type { EntryId, TaskId, Tx } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { AutomationsApi } from '../automations/api.ts'
 import type { Message } from '../messages/api.ts'
-import { WorkspacesApi } from '../workspaces/api.ts'
 import { DescribeAction, RetryAction, StartedAction } from './refs.ts'
 import type { TaskFacts } from './refs.ts'
 
@@ -59,13 +58,9 @@ async function facts(host: ExtensionHost, tx: Tx, kind: string, input: Input): P
       return { automation: (input!.automation as { name: string }).name }
     case 'ultimate.automation-delivery':
       return { automation: (input!.sub as { name: string }).name }
-    case 'workspaces.lander': {
-      const source = input?.source as string
-      const workspaces = host.want(WorkspacesApi)
-      const queue = workspaces ? (await tx.doc(workspaces.doc, ROOT_CONVERSATION_ID)).queue : []
-      const landing = queue.find((item) => item.source === source && item.state === 'landing')
-      return landing ? { source, conversation: landing.conversationId } : { source }
-    }
+    // Which submission it lands changes as it works the queue; the panel reads that from the live queue.
+    case 'workspaces.lander':
+      return { source: input?.source as string }
     default: {
       const conversation = conversationOf(input)
       return conversation === undefined ? {} : { conversation }
