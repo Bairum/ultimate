@@ -20,7 +20,8 @@ it("implements every action ref with implementAction(ref) in its extension's ser
   for (const folder of refFiles)
     for (const [exported, value] of Object.entries(await load(folder, 'refs.ts'))) {
       const ref = value as Ref
-      if (typeof ref?.name !== 'string' || event(ref)) continue
+      // Helper functions have a name too; action refs are objects.
+      if (typeof value !== 'object' || typeof ref?.name !== 'string' || event(ref)) continue
       expect(ref.extension, `${folder}/refs.ts ${exported}`).toBe(folder)
       if (servers[folder]?.actions?.[ref.name]?.ref !== ref)
         missing.push(`${folder}/refs.ts ${exported} → actions.${ref.name}`)
