@@ -102,6 +102,17 @@ it('names the tests that failed before the watchdog fired, even when they left t
   expect(failure.match(/FAIL/g)).toHaveLength(1)
 })
 
+it('names the failed tests of a check that exits nonzero', async () => {
+  vi.mocked(runGroup).mockImplementation(async (_program, _args, options) => {
+    options.onOutput(' × test/models.test.ts > falls back on logout 12ms\n' + 'noise\n'.repeat(600))
+    return 1
+  })
+  const failure = (await runLanderCheck('.', 'pnpm test', context)).failure!
+  expect(failure).toMatch(
+    /^exit 1\nFailed tests:\n× test\/models.test.ts > falls back on logout 12ms\nnoise/,
+  )
+})
+
 const settings = (checks: unknown) =>
   landerSettings({
     projectSettings: async () => ({ lander: { checks } }) as never,
