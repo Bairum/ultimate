@@ -5,7 +5,7 @@ import type { JsonValue } from '@earendil-works/chord'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { EventToken } from '../../shared/events.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { cloudConfig } from '../../lib/cloud.ts'
+import { cloudConfig, fetchRegister } from '../../lib/cloud.ts'
 import { projectIdentity } from '../../lib/project-identity.ts'
 import { readSecret } from '../../lib/secrets.ts'
 import { CloudApi } from './api.ts'
@@ -199,7 +199,16 @@ export default function cloud(host: ExtensionHost) {
     backup: () => backup(host, false),
     lastBackup: async () => {
       const ready = await setup(host)
-      return ready.status === 'on' ? (await readBackup(ready.dir, ready.key))?.last : undefined
+      if (ready.status !== 'on') return undefined
+      const saved = await readBackup(ready.dir, ready.key)
+      if (saved) return saved.last
+      // A backup the Worker registered before this home could record it (a restart in between) counts too.
+      const latest = (await fetchRegister(ready.config)).projects.find(
+        (project) => project.key === ready.key,
+      )?.latest
+      if (!latest) return undefined
+      const { id, at, machine, bytes, uploaded } = latest
+      return { id, at, machine, bytes, uploaded }
     },
     status: async () => (await setup(host)).status,
   })

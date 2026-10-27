@@ -75,6 +75,7 @@ async function fixture() {
       bytes: 1,
       uploaded: 1,
     })),
+    lastBackup: vi.fn<CloudService['lastBackup']>(async () => undefined),
   }
   const services = new Map<unknown, unknown>([
     [InstanceApi, instances],
