@@ -343,11 +343,18 @@ export function workspaces(host: Host) {
                 .find((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
             let registered = await list()
             const resumed = await runtime.memo<boolean>('started', context)
+            // How this preparation creates its checkout, fixed before it first registers one: a settings change across
+            // a crash must not make a default `--no-checkout` tree pass for a configured command's, or the reverse.
+            const custom = await runtime.memo<boolean>(
+              'custom-add',
+              resumed ? false : hasAddCommand(settings),
+              context,
+            )
             // A crash during a configured add command can leave its half-made checkout. It is this preparation's own:
             // `started` is recorded only after the path was found free. Clear it and run the command again.
             if (
               resumed &&
-              hasAddCommand(settings) &&
+              custom &&
               (registered
                 ? !registered.split('\n').includes(`branch refs/heads/${workspace.branch}`)
                 : await onDisk(workspace.path))
@@ -381,26 +388,25 @@ export function workspaces(host: Host) {
               await runtime.memo('started', true, context)
               created = true
               await addCheckout(
-                settings,
+                custom ? settings : {},
                 workspace.source,
                 workspace.path,
                 treeName(workspace.branch),
                 [
                   // Git registers the tree empty for populate to fill; a configured add command's tree is checked out.
-                  ...(hasAddCommand(settings) ? [] : ['--no-checkout']),
+                  ...(custom ? [] : ['--no-checkout']),
                   ...(task.input.preserve
                     ? [workspace.branch]
                     : [task.input.reset ? '-B' : '-b', workspace.branch, workspace.base]),
                 ],
               )
             }
+            populated = custom
           })
           created = true
           // A crash mid-clone leaves the registered checkout half filled; populate starts over by clearing it. A
           // configured add command's checkout is the project tooling's own and already checked out: it is not cloned.
-          populated =
-            hasAddCommand(settings) ||
-            ((await runtime.memo<boolean>('populated', context)) ?? false)
+          populated ||= (await runtime.memo<boolean>('populated', context)) ?? false
           if (!populated) {
             const result = await populate(workspace.source, workspace.path, mode)
             if (result.reason)
