@@ -37,7 +37,8 @@ const preamble =
   'Clicking a half-scale capture: a window on a non-Retina monitor of a Retina Mac can come back at double size, its content in the top-left quarter and the right and bottom halves blank (one flat colour). Only when a capture looks exactly like that, and your target lies in that top-left quarter, click at twice the pixel coordinates you read off the image (pixel [x, y] becomes [2x, 2y]). Prefer an accessibility element index over coordinates whenever one exists. After the first such click, check the next screenshot that it hit the target; if it did not, stop and report.\n\n' +
   'Remote sessions: after a click into a remote session (Citrix, a remote desktop in a browser), check the next capture shows the expected change. If it reacted somewhere else although your coordinates match the capture (for example the remote address bar opened instead of the page element), the session\'s own click mapping is out of sync: stop and report "remote click mapping out of sync; reconnect the session". Never keep clicking blindly.\n\n' +
   'windowNotFoundAtPosition means another window covers that screen point, often macOS Stage Manager\'s strip of recent apps along the left edge. Do not retry the same point: click a point further inside the target (away from the screen edge), or reach it with Tab or Shift-Tab and Enter. If that fails too, Raise the target window and try once more, then stop and report "a system overlay (Stage Manager?) covers this point".\n\n' +
-  'Right window: before acting on a capture or accessibility state, check its window title is the window you are operating. After any capture error, or when a different app or window comes back (another window of the same browser counts), get the app handle again and Raise the target window by its title, then capture again. Never type or click on the strength of a capture of the wrong window. After 2 failed tries, stop and report "captured the wrong window".\n\n'
+  'Right window: before acting on a capture or accessibility state, check its window title is the window you are operating. After any capture error, or when a different app or window comes back (another window of the same browser counts), get the app handle again and Raise the target window by its title, then capture again. Never type or click on the strength of a capture of the wrong window. After 2 failed tries, stop and report "captured the wrong window".\n\n' +
+  'getApp: if getApp for an app times out or finds no window, try it at most twice in all; then stop and report it instead of retrying.\n\n'
 /**
  * The host's local time, one line: Codex sees no clock inside a remote session, and developer instructions are not
  * refreshed on resume, so every turn carries it (Bridgestone #26101 spent two questions on the time).
@@ -287,6 +288,8 @@ export async function operate(input: {
   /** Ultimate's side of ask_operator and report_progress; offered only to a Codex that supports dynamic tools. */
   callbacks?: Callbacks
   spawn: Spawn
+  /** Running process ids of an app, by its executable's name; read-only. */
+  processes?: (app: string) => Promise<number[]>
   signal?: AbortSignal
   output: (text: string) => void
   live: Set<Run>
@@ -604,6 +607,45 @@ export async function operate(input: {
       send({ id, error: { code: -32601, message: 'Refused by Ultimate' } })
     }
   }
+  /** Apps already checked for duplicate processes this run: one check, one steer per app. */
+  const checked = new Set<string>()
+  /**
+   * Bridgestone 2026-10-27: with two Citrix Viewer processes, getApp("Citrix Viewer") timed out for minutes and
+   * Codex kept retrying. When getApp for an app fails to find or reach it, count that app's processes; with more
+   * than one, tell Codex to stop and say which the user must quit.
+   */
+  const checkDuplicates = (item: Record<string, unknown>) => {
+    if (!input.processes) return
+    const code = string(object(item.arguments).code)
+    const app = /getApp\(\s*["'`]([^"'`]{1,100})["'`]/.exec(code)?.[1]
+    if (!app || checked.has(app)) return
+    if (
+      !/timeoutReached|noWindowsAvailable|appNotFound|not found/i.test(
+        JSON.stringify(item.result ?? ''),
+      )
+    )
+      return
+    checked.add(app)
+    work.push(
+      input
+        .processes(app)
+        .then(async (pids) => {
+          if (ended || pids.length < 2) return
+          details.duplicates = [...(details.duplicates ?? []), { app, pids }]
+          const note = `${pids.length} processes of ${app} are running (pids ${pids.join(', ')})`
+          output(`${note}\n`)
+          await run.steer(
+            `${note}, so getApp cannot pick one. Stop now and report that the user must quit the extra ${app} and leave one running.`,
+            'operator',
+            'Ultimate',
+          )
+        })
+        .catch((error: unknown) => {
+          // Advice only: a failed process check or steer leaves the run as it was.
+          output(`Could not check for duplicate ${app} processes: ${String(error)}\n`)
+        }),
+    )
+  }
   const onItem = (item: Record<string, unknown>) => {
     if (ended) return
     if (item.type === 'agentMessage') {
@@ -619,6 +661,7 @@ export async function operate(input: {
         : `${string(item.server)}/${string(item.tool)}`
     details.steps.push({ tool: text(tool), status: text(string(item.status)), at: Date.now() })
     output(`Step ${details.counts.items}: ${untrusted(tool)}\n`)
+    checkDuplicates(item)
     for (const title of windowTitles(object(item.result).content)) {
       if (window !== undefined && title !== window) {
         details.windows = [

@@ -146,6 +146,12 @@ Citrix tab first, and relaunch the session from StoreFront only if clicks still 
 check each remote click's effect and stop with "remote click mapping out of sync" instead of clicking on. Keep other
 windows of the same browser (such as Ultimate's own UI) off the screen the session is on.
 
+Two processes of the same app make `getApp` time out or find no window, and Codex used to retry for minutes
+(Bridgestone, 2026-10-27: two Citrix Viewer processes). When a `getApp("<name>")` step fails that way, the wrapper
+lists running processes once per app (`ps -axo pid=,comm=`, executables named exactly `<name>`; read-only). With
+more than one it steers Codex to stop and report that the user must quit the extra one, and the card and result
+(`duplicates`) name the pids. A fixed rule caps `getApp` retries at two.
+
 `windowNotFoundAtPosition` from Codex's click means another window covers that screen point. On USG's Mac every such
 failure (screen x 52–105) fell on macOS Stage Manager's strip of recent apps along the left edge, over the OpsMate
 sidebar, while clicks further right worked. Turn Stage Manager off (Control Centre or Desktop & Dock), or turn its

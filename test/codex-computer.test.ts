@@ -129,6 +129,7 @@ async function fixture(apps?: string[], settings: Record<string, unknown> = {}) 
     () => fake as unknown as Child,
   )
   const codesign = vi.fn<(path: string) => Promise<void>>(async () => {})
+  const processes = vi.fn<(app: string) => Promise<number[]>>(async () => [])
   const resources = new Map<string, unknown>()
   const processCloses: (() => Promise<void>)[] = []
   const facetCloses: (() => Promise<void>)[] = []
@@ -169,7 +170,7 @@ async function fixture(apps?: string[], settings: Record<string, unknown> = {}) 
       return resources.get(key)
     },
   } as unknown as ExtensionHost
-  const extension = codexComputer(host, { spawn, codesign })
+  const extension = codexComputer(host, { spawn, codesign, processes })
   registry.install(extension)
   registry.install({
     name: 'test-read',
@@ -216,7 +217,7 @@ async function fixture(apps?: string[], settings: Record<string, unknown> = {}) 
   }
   const reload = async () => {
     for (const close of facetCloses.splice(0)) await close()
-    return codexComputer(host, { spawn, codesign })
+    return codexComputer(host, { spawn, codesign, processes })
   }
   cleanup.push(async () => {
     for (const close of facetCloses.splice(0)) await close()
@@ -237,6 +238,7 @@ async function fixture(apps?: string[], settings: Record<string, unknown> = {}) 
     progress,
     tools,
     extension,
+    processes,
     faux,
     notes,
     reports,
@@ -923,6 +925,33 @@ it('never puts a frame Codex cut short into the result, and drops one already st
     { type: 'text', text: '[screenshot dropped: not valid base64]' },
     stored.content[2],
   ])
+})
+it('on a getApp timeout with two processes of the app running, steers Codex to stop and names the pids', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  f.processes.mockResolvedValue([63045, 63877])
+  // Bridgestone 2026-10-27: two Citrix Viewer processes; getApp timed out for minutes while Codex retried.
+  const step = {
+    type: 'mcpToolCall',
+    server: 'cua_repl',
+    tool: 'js',
+    status: 'failed',
+    arguments: { code: "let app = await cua.getApp('Citrix Viewer');" },
+    result: {
+      content: [{ type: 'text', text: 'Computer Use server error -10005: timeoutReached' }],
+    },
+  }
+  f.fake.item(step)
+  f.fake.item(step)
+  await until(() => f.fake.sent.some((m) => m.method === 'turn/steer'))
+  expect(f.processes.mock.calls).toEqual([['Citrix Viewer']])
+  expect(JSON.stringify(f.fake.sent.find((m) => m.method === 'turn/steer'))).toContain(
+    '2 processes of Citrix Viewer are running (pids 63045, 63877)',
+  )
+  f.fake.complete()
+  const details = data(await promise)
+  expect(details.duplicates).toEqual([{ app: 'Citrix Viewer', pids: [63045, 63877] }])
+  expect(f.progress.join('')).toContain('2 processes of Citrix Viewer are running')
 })
 it('flags a switch to another window in the state Codex reads, including nested state text', async () => {
   const f = await fixture()

@@ -176,7 +176,19 @@ async function callbacks(host: ExtensionHost, conversation: number): Promise<Cal
     },
   }
 }
-export type Dependencies = { spawn: Spawn; codesign: (path: string) => Promise<void> }
+export type Dependencies = {
+  spawn: Spawn
+  codesign: (path: string) => Promise<void>
+  processes: (app: string) => Promise<number[]>
+}
+/** Pids whose executable is named `app` exactly (`…/Citrix Viewer.app/Contents/MacOS/Citrix Viewer`). */
+export async function processesOf(app: string) {
+  const { stdout } = await exec('/bin/ps', ['-axo', 'pid=,comm='], { timeout: 5000 })
+  return stdout.split('\n').flatMap((line) => {
+    const match = /^\s*(\d+)\s+(.*)$/.exec(line)
+    return match && match[2].split('/').at(-1) === app ? [Number(match[1])] : []
+  })
+}
 function runtime(host: ExtensionHost) {
   return host.resource('codex-computer.runs', () => {
     const state = {
@@ -248,6 +260,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
         { timeout: 10_000 },
       )
     },
+    processes: processesOf,
     ...seams,
   }
   return defineExtension({
@@ -398,6 +411,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
             ...(queued.length ? { queued } : {}),
             callbacks: await callbacks(host, conversation),
             spawn: deps.spawn,
+            processes: deps.processes,
             signal: ctx.abortSignal,
             output: (text) => api.output(text),
             live: state.live,

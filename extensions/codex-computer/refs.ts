@@ -31,6 +31,8 @@ export type CodexDetails = {
   resumes?: number
   /** Each time the window Codex's state reports changed during the run: window titles, from Codex, untrusted. */
   windows?: { from: UntrustedText; to: UntrustedText; at: number }[]
+  /** Apps Codex could not reach while more than one process of them ran: the user must quit the extra ones. */
+  duplicates?: { app: string; pids: number[] }[]
   /**
    * Guidance sent into the run: `steered` into the live turn; `restarted` when Codex refused a steer and the turn was
    * restarted with it; `queued` when no turn ran when it was sent, so the next turn started with it; `answered` when it

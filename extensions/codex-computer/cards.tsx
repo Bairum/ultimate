@@ -100,7 +100,8 @@ function liveOf(output: string) {
       if (
         line.startsWith('Guidance from ') ||
         line.startsWith('Answer from ') ||
-        line.startsWith('Connection to OpenAI dropped')
+        line.startsWith('Connection to OpenAI dropped') ||
+        / processes of .+ are running \(pids /.test(line)
       )
         steps.push({ guidance: line })
       if (line.startsWith('Connection to OpenAI dropped')) reconnecting = false
@@ -630,6 +631,11 @@ export function OperateCard({
               switched windows {details.windows.length}×
             </span>
           )}
+          {details.duplicates?.map((d) => (
+            <span className="text-error" key={d.app}>
+              {d.pids.length} {d.app} running (pids {d.pids.join(', ')}): quit the extra one
+            </span>
+          ))}
           <span>{details.counts.minutes < 1 ? '<1' : Math.round(details.counts.minutes)} min</span>
           {details.session && (
             <span className="min-w-0 truncate" title={details.session}>
