@@ -673,21 +673,24 @@ export function workspaces(host: Host) {
       const path = join(root, name)
       if (known.has(path)) continue
       await serial(source, async () => {
-        const branch = (await git(source, 'worktree', 'list', '--porcelain'))
+        const record = (await git(source, 'worktree', 'list', '--porcelain'))
           .split('\n\n')
-          .map((record) => record.split('\n'))
-          .find((record) => record[0] === `worktree ${path}`)
-          ?.find((line) => line.startsWith('branch refs/heads/'))
+          .map((lines) => lines.split('\n'))
+          .find((lines) => lines[0] === `worktree ${path}`)
+        // Not a worktree of this project: not ours to judge.
+        if (!record) return
+        const branch = record
+          .find((line) => line.startsWith('branch refs/heads/'))
           ?.slice('branch refs/heads/'.length)
-        // Not a worktree of this project with a branch: not ours to judge.
-        if (!branch) return
-        const work = await atRisk(0 as ConversationId, { path, branch, target })
+        // A detached checkout counts its HEAD's commits not on the target as work only it holds.
+        const work = await atRisk(0 as ConversationId, { path, branch: branch ?? '', target })
         if (work.uncommitted || work.unlanded) {
           kept.push(path)
           return
         }
         await git(source, 'worktree', 'remove', path)
-        if (await contains(source, branch, target)) await git(source, 'branch', '-D', branch)
+        if (branch && (await contains(source, branch, target)))
+          await git(source, 'branch', '-D', branch)
       })
     }
     if (kept.length)
