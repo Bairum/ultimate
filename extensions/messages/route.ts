@@ -14,13 +14,24 @@ import { Messages } from './api.ts'
 import { terminal } from './log.ts'
 import { send } from './send.ts'
 
-/** Live tasks of `kind` in `conversationId` (any conversation when undefined), newest first. */
+/** Every task state but `terminal`: queried by status, so finished tasks are never scanned. */
+const LIVE = ['pending', 'running', 'waiting', 'sleeping', 'completing'] as const
+/** Live tasks of `kind` in `conversationId` (any conversation when undefined). */
 async function live(tx: Tx, kind: string, conversationId?: ConversationId) {
-  const page = await tx.scanTasks(
-    { ...(conversationId === undefined ? {} : { conversationId }), kind, order: 'descending' },
-    100,
-  )
-  return page.items.filter((task) => task.state.status !== 'terminal')
+  const found = []
+  for (const status of LIVE) {
+    let cursor: Parameters<Tx['scanTasks']>[2]
+    do {
+      const page = await tx.scanTasks(
+        { ...(conversationId === undefined ? {} : { conversationId }), kind, status },
+        100,
+        cursor,
+      )
+      found.push(...page.items)
+      cursor = page.next
+    } while (cursor !== undefined)
+  }
+  return found
 }
 /**
  * Whether `id` runs or has input queued, or one of its tasks will wake it: a subagent's report until its input is
