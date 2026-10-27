@@ -1,5 +1,6 @@
 import { constants } from 'node:fs'
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { access, link, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -226,14 +227,21 @@ function backend(host: ExtensionHost) {
         throw taken()
       if (existing === undefined) {
         await mkdir(projectDir(slug), { recursive: true })
-        // Exclusive: of two creates racing for one slug, only one publishes; the other compares what it finds.
-        await writeFile(path, `${JSON.stringify(committedManifest(committed), null, 2)}\n`, {
-          flag: 'wx',
-        }).catch(async (error: NodeJS.ErrnoException) => {
-          if (error.code !== 'EEXIST') throw error
+        // Written whole to a temporary file, then linked into place: the link is atomic and exclusive, so a crash never
+        // leaves a partial manifest, and of two creates racing for one slug only one publishes.
+        const draft = `${path}.${process.pid}.${randomUUID()}`
+        await writeFile(draft, `${JSON.stringify(committedManifest(committed), null, 2)}\n`, {
+          flush: true,
+        })
+        try {
+          await link(draft, path)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
           const found = manifest(JSON.parse(await readFile(path, 'utf8')))
           if (JSON.stringify(found) !== JSON.stringify(committed)) throw taken()
-        })
+        } finally {
+          await rm(draft, { force: true })
+        }
       }
       // Discovery alone makes project records: the create then takes the record it made.
       await discover()
@@ -496,6 +504,15 @@ function backend(host: ExtensionHost) {
   async function prepare(args: Args, caller?: number): Promise<Prepared> {
     await validate(args, caller)
     if (args.action === 'create') {
+      // A key that already made an automation is answered from it, with nothing prepared or published again; the
+      // transaction checks it is still there.
+      if (
+        args.key !== undefined &&
+        Object.values(
+          (await host.harness().snapshot(Automations, BACKGROUND_CONTEXT))?.automations ?? {},
+        ).some((a) => a.key === args.key)
+      )
+        return { keyed: true }
       const subscribers = args.subscribers?.length
         ? [...new Set(await Promise.all(args.subscribers.map(subscriber)))]
         : undefined
@@ -533,6 +550,8 @@ function backend(host: ExtensionHost) {
       // A caller that lost its create's receipt (a crash, a retry) gets the automation it made, not a second one.
       const made = Object.values(state.automations).find((a) => a.key === args.key)
       if (made) return { result: json(made) }
+      if (prepared.keyed)
+        throw new Error(`The automation for key ${args.key} was deleted meanwhile; create it again`)
     }
     if (args.action === 'create' && args.ask !== undefined)
       return changeScript(tx, args, prepared, caller)

@@ -108,6 +108,8 @@ export type Prepared = {
   manifest?: Manifest
   /** A project update's ask before it rewrote the manifest, which a concurrent discovery may already apply. */
   previousAsk?: string
+  /** A create whose key had already made an automation: nothing was prepared for a new one. */
+  keyed?: boolean
 }
 type Run = {
   child: GroupProcess
