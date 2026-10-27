@@ -30,11 +30,25 @@ export type Counts = Partial<Omit<DayStats, 'day' | 'usd'>>
 /** One use of a feature or caller: its latency in ms, its USD, and whether the cache answered it whole or it failed. */
 export type Use = { ms: number; usd?: number; cached?: boolean; failed?: boolean }
 
-export type Cache = ReturnType<typeof openCache>
+export type Cache = ReturnType<typeof cacheOver>
+
+/**
+ * The cache's connection and answer count: what outlives a facet reload. Data and handles only, so the code that uses
+ * it (`cacheOver`) is always the current load's.
+ */
+export type CacheHandle = { db: DatabaseSync; rows?: number }
+
+export const openCacheDatabase = (path: string): CacheHandle => ({
+  db: new DatabaseSync(path, { timeout: 5000 }),
+})
 
 /** Open (creating) the cache at `path`; beyond `maxRows` answers, the oldest are pruned. */
-export function openCache(path: string, maxRows = 200_000) {
-  const db = new DatabaseSync(path, { timeout: 5000 })
+export const openCache = (path: string, maxRows = 200_000) =>
+  cacheOver(openCacheDatabase(path), maxRows)
+
+/** This code's cache over `handle`: creates any table it lacks, then prepares its statements. */
+export function cacheOver(handle: CacheHandle, maxRows = 200_000) {
+  const { db } = handle
   db.exec(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS answers (key TEXT PRIMARY KEY, answer TEXT NOT NULL, created INTEGER NOT NULL);
@@ -88,7 +102,7 @@ export function openCache(path: string, maxRows = 200_000) {
     'SELECT page_count * page_size AS bytes FROM pragma_page_count(), pragma_page_size()',
   )
   // Counting on every insert would scan the table; count once and prune when inserts pass the cap.
-  let rows = Number(count.get()!.rows)
+  handle.rows ??= Number(count.get()!.rows)
 
   return {
     get(key: string): ClassifyAnswer | undefined {
@@ -97,10 +111,10 @@ export function openCache(path: string, maxRows = 200_000) {
     },
     put(entries: [key: string, answer: ClassifyAnswer][], now = Date.now()) {
       for (const [key, answer] of entries) insert.run(key, JSON.stringify(answer), now)
-      rows += entries.length
-      if (rows > maxRows) {
+      handle.rows! += entries.length
+      if (handle.rows! > maxRows) {
         prune.run(maxRows)
-        rows = Number(count.get()!.rows)
+        handle.rows = Number(count.get()!.rows)
       }
     },
     count(counts: Counts, now = Date.now()) {

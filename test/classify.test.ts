@@ -39,7 +39,7 @@ async function fixture(key = true) {
   expect(extension.name).toBe('classify')
   expect(implement.mock.calls[0][0]).toBe(ClassifyApi)
   const ctx = { host, signal: new AbortController().signal } as ActionContext
-  return { root, service: implement.mock.calls[0][1], ctx, tools }
+  return { root, service: implement.mock.calls[0][1], ctx, tools, resources }
 }
 
 const request = {
@@ -282,4 +282,26 @@ it.each([
   await expect(
     service.ask({ caller: 'test', ...request }, new AbortController().signal),
   ).rejects.toThrow('Malformed TypeSafe response')
+})
+
+it('a reloaded facet runs its own code over the retained connection', async () => {
+  // Regression: the retained resource held the first load's methods, so after a reload that added `use`, every ask
+  // failed with "cache.use is not a function" until a restart.
+  const { service, ctx, resources } = await fixture()
+  service.count('before', { ms: 1 })
+  const [retained] = resources.values()
+  // The retained value is data and handles only: no behaviour a reload would leave stale.
+  expect(Object.values(retained as object).some((value) => typeof value === 'function')).toBe(false)
+  // A reload imports the module afresh; the host hands it the same retained resource.
+  vi.resetModules()
+  const reloaded = await import('../extensions/classify/server.ts')
+  let next!: ClassifyService
+  reloaded.default({
+    ...ctx.host,
+    implement: (_: unknown, value: ClassifyService) => (next = value),
+  } as unknown as ExtensionHost)
+  next.count('after', { ms: 1 })
+  expect([...resources.values()]).toEqual([retained])
+  const { uses } = await reloaded.actions.stats(null, ctx)
+  expect(uses.map((use) => use.name)).toEqual(['after', 'before'])
 })

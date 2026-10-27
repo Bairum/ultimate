@@ -9,8 +9,8 @@ import { locate, postAction } from '../../lib/remote.ts'
 import { readSecret } from '../../lib/secrets.ts'
 import { ClassifyApi } from './api.ts'
 import type { ClassifyAnswer, ClassifyQuestion, ClassifyResult, ClassifyService } from './api.ts'
-import { cacheKey, openCache, USD_PER_MILLION_INPUT } from './cache.ts'
-import type { Cache } from './cache.ts'
+import { cacheKey, cacheOver, openCacheDatabase, USD_PER_MILLION_INPUT } from './cache.ts'
+import type { Cache, CacheHandle } from './cache.ts'
 import { BatchAction, StatsAction } from './refs.ts'
 
 export const secrets = [
@@ -30,13 +30,21 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** The process's one cache connection, closed when the process closes. */
+/** This load's caches, by retained handle: a reload brings a new module, so new code over the same connection. */
+const caches = new WeakMap<CacheHandle, Cache>()
+
+/** The cache over the process's one connection, closed when the process closes. */
 function cacheOf(host: ExtensionHost) {
-  return host.resource('classify.cache', () => {
-    const cache = openCache(join(host.home, 'classify-cache.sqlite'))
-    host.onClose(async () => cache.close())
-    return cache
+  // Retained across facet reloads, so it holds only the connection and its row count, never behaviour. A new key,
+  // not `classify.cache`: hosts loaded before this still retain an object with methods under that one.
+  const handle = host.resource('classify.db', () => {
+    const opened = openCacheDatabase(join(host.home, 'classify-cache.sqlite'))
+    host.onClose(async () => opened.db.close())
+    return opened
   })
+  let cache = caches.get(handle)
+  if (!cache) caches.set(handle, (cache = cacheOver(handle)))
+  return cache
 }
 
 const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value))
