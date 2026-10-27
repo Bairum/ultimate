@@ -4,7 +4,7 @@ import type { Todo } from '../todos/refs.ts'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { CreateArgs, Schedule } from '../automations/refs.ts'
 
-/** Everything Fall asleep carries to a fresh chapter; numeric trigger targets and subscribers need recreating. */
+/** Everything Fall asleep carries to a fresh chapter; numeric trigger targets and `#id` subscribers need recreating. */
 export type Seed = {
   from: { name: string; number: number }
   /** The three lines @ultimate prepared: what it learned. */
@@ -15,6 +15,8 @@ export type Seed = {
   automations: {
     name: string
     prompt?: string
+    /** The standing agents it wakes, by `@name`: they exist in every chapter. */
+    subscribers?: string[]
     schedule?: Schedule
     event?: CreateArgs['event']
     condition?: CreateArgs['condition']

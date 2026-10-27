@@ -111,9 +111,9 @@ async function ensureOne(host: ExtensionHost, builtIn: BuiltIn, seed: Seed | und
     }, context)
   if (!state?.id && carried === null) return remember({ deleted: true })
   const signal = new AbortController().signal
-  // Session-scoped ledger: its list action reads it, as the seed does.
-  const list = (await host.invoke('automations', 'list', null, signal)) as Automation[]
   if (state?.id) {
+    // Session-scoped ledger: its list action reads it, as the seed does.
+    const list = (await host.invoke('automations', 'list', null, signal)) as Automation[]
     // Gone from the list: the user deleted it, and that choice holds.
     if (!list.some((item) => item.id === state.id)) return remember({ deleted: true })
     return
@@ -121,19 +121,13 @@ async function ensureOne(host: ExtensionHost, builtIn: BuiltIn, seed: Seed | und
   // Never made here: on a fresh project the automation follows @ultimate's start.
   const ultimate = (await harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
   if (ultimate === undefined) return
-  // A create whose receipt was lost is found by name and trigger target, not made twice. Not by threshold or
-  // subscribers: the user may change them, and that must not make a second one.
-  const found = list.find(
-    (item) => !item.prompt && item.name === name && item.condition?.of === condition.of,
-  )
-  const created =
-    found ??
-    ((await host.invoke(
-      'automations',
-      'create',
-      { name, condition, subscribers: [ultimate] },
-      signal,
-    )) as Automation)
+  // A create whose receipt was lost gets the automation it made back from its key, not a second one.
+  const created = (await host.invoke(
+    'automations',
+    'create',
+    { name, condition, subscribers: ['@ultimate'], key: `dream:${doc.definition.kind}` },
+    signal,
+  )) as Automation
   if (carried?.enabled === false && created.enabled)
     await host.need(AutomationsApi).pause(created.id)
   await remember({ id: created.id })
