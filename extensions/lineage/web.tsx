@@ -45,6 +45,7 @@ import { Open } from '../workspaces/ui.tsx'
 import { ForgetAction, MemoryDoc } from './refs.ts'
 import type { MemoryItem } from './refs.ts'
 import { column, MEMORY_FOCUS, MEMORY_PANEL, MemoryHeader, useRoots } from './ui.tsx'
+import { MemoryCall, NotifyCall, RememberCall } from './calls.tsx'
 import { GoBackAction, Rewound, RewoundDependent } from './rewind.tsx'
 
 function userText(entry: EntryRecord) {
@@ -617,7 +618,7 @@ function Roots() {
 }
 
 export default defineWebExtension({
-  tools: { note: NoteCall },
+  tools: { note: NoteCall, notify: NotifyCall, memory: MemoryCall, remember: RememberCall },
   entries: {
     'lineage.branched': Branched,
     'lineage.note': Note,

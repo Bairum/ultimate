@@ -3,6 +3,7 @@ import type { ConversationSummary } from '../../../shared/protocol.ts'
 import { events } from './events.ts'
 import { errorMessage } from './format.ts'
 import type {
+  CodeBlockRenderer,
   CompactCallTest,
   CompactDocs,
   CompactQuietTest,
@@ -131,6 +132,7 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
   inbox: [isComponent, 'an inbox renderer component'],
   composer: [isComponent, 'a composer renderer component'],
   link: [isComponent, 'a link renderer component'],
+  codeBlocks: [objectOf(isComponent), 'an object of code block language → component'],
   messageActions: [arrayOf(isComponent), 'an array of message action components'],
   messageDetails: [arrayOf(isComponent), 'an array of message detail components'],
   answerLabels: [arrayOf(isComponent), 'an array of answer label components'],
@@ -547,6 +549,22 @@ export function linkRenderers(
     const component = record.extension?.link
     return component ? [{ extension: record.name, version: record.version, component }] : []
   })
+}
+
+/** Every code block renderer of `language` in discovery order: each receives the previous rendering as `core`. */
+export function codeBlockRenderers(
+  records: readonly ExtensionRecord[],
+  language: string,
+): { extension: string; version: number; component: CodeBlockRenderer }[] {
+  return records.flatMap((record) => {
+    const component = record.extension?.codeBlocks?.[language]
+    return component ? [{ extension: record.name, version: record.version, component }] : []
+  })
+}
+
+/** The languages some extension renders code blocks of. */
+export function codeBlockLanguages(records: readonly ExtensionRecord[]): string[] {
+  return [...new Set(records.flatMap((record) => Object.keys(record.extension?.codeBlocks ?? {})))]
 }
 
 /** Message contributions, preserving discovery order and each facet's array order. */

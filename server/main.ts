@@ -279,12 +279,10 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
     }, 500).unref()
   }
   let server: Awaited<ReturnType<typeof prepareServer>> | undefined
-  let closing = false
-  const close = async () => {
-    if (closing) return
-    closing = true
-    await server?.close()
-  }
+  let closing: Promise<void> | undefined
+  // Every caller waits for the one close: under systemd the child gets SIGTERM and then the supervisor's `exit`, and
+  // exiting on the second while the first still tears down (the Tailscale mapping) would cut it short.
+  const close = () => (closing ??= Promise.resolve(server?.close()))
   const shutdown = () => {
     void close().then(
       () => process.exit(0),

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { lstat, mkdir, realpath, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import type { Context } from '@earendil-works/chord'
 import {
   configure,
@@ -16,9 +16,16 @@ import { git, isolatable } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { WorkspacesDoc } from './refs.ts'
-import { removeWorktree } from './remove.ts'
 import { setup } from './setup.ts'
 import { cloneMode, populate } from './clone.ts'
+import {
+  addCheckout,
+  clearCheckout,
+  hasAddCommand,
+  removeCheckout,
+  treeName,
+  treePath,
+} from './tree.ts'
 import { createLander, landerAgent, landerCheckout, landerPath, log } from './lander.ts'
 import type {
   LandResult,
@@ -245,7 +252,8 @@ export function workspaces(host: Host) {
     const { source, target } = 'source' in checkout ? checkout : {}
     const { change } = await landerAgent(host, context)
     // The conversation's cwd exists from the start, at the target tip, so it can answer before any submission.
-    const path = source && target && (await landerCheckout(host.home, source))
+    const path =
+      source && target && (await landerCheckout(host.home, source, await host.projectSettings()))
     await host.harness().commit(async (tx) => {
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       const landers: ConversationId[] = []
@@ -329,10 +337,24 @@ export function workspaces(host: Host) {
           // Git reads every `.git/worktrees/<name>` on list and add, and fails on one a concurrent add has only half
           // written ("failed to read .git/worktrees/<name>/locked"), so preparations of one source take turns.
           await serial(workspace.source, async () => {
-            const registered = (await git(workspace.source, 'worktree', 'list', '--porcelain'))
-              .split('\n\n')
-              .find((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+            const list = async () =>
+              (await git(workspace.source, 'worktree', 'list', '--porcelain'))
+                .split('\n\n')
+                .find((entry) => entry.split('\n').includes(`worktree ${workspace.path}`))
+            let registered = await list()
             const resumed = await runtime.memo<boolean>('started', context)
+            // A crash during a configured add command can leave its half-made checkout. It is this preparation's own:
+            // `started` is recorded only after the path was found free. Clear it and run the command again.
+            if (
+              resumed &&
+              hasAddCommand(settings) &&
+              (registered
+                ? !registered.split('\n').includes(`branch refs/heads/${workspace.branch}`)
+                : await onDisk(workspace.path))
+            ) {
+              await clearCheckout(workspace.source, workspace.path)
+              registered = await list()
+            }
             if (registered) {
               if (
                 !resumed ||
@@ -358,25 +380,27 @@ export function workspaces(host: Host) {
               }
               await runtime.memo('started', true, context)
               created = true
-              await git(
+              await addCheckout(
+                settings,
                 workspace.source,
-                'worktree',
-                'add',
-                '--no-checkout',
-                ...(task.input.preserve
-                  ? [workspace.path, workspace.branch]
-                  : [
-                      task.input.reset ? '-B' : '-b',
-                      workspace.branch,
-                      workspace.path,
-                      workspace.base,
-                    ]),
+                workspace.path,
+                treeName(workspace.branch),
+                [
+                  // Git registers the tree empty for populate to fill; a configured add command's tree is checked out.
+                  ...(hasAddCommand(settings) ? [] : ['--no-checkout']),
+                  ...(task.input.preserve
+                    ? [workspace.branch]
+                    : [task.input.reset ? '-B' : '-b', workspace.branch, workspace.base]),
+                ],
               )
             }
           })
           created = true
-          // A crash mid-clone leaves the registered checkout half filled; populate starts over by clearing it.
-          populated = (await runtime.memo<boolean>('populated', context)) ?? false
+          // A crash mid-clone leaves the registered checkout half filled; populate starts over by clearing it. A
+          // configured add command's checkout is the project tooling's own and already checked out: it is not cloned.
+          populated =
+            hasAddCommand(settings) ||
+            ((await runtime.memo<boolean>('populated', context)) ?? false)
           if (!populated) {
             const result = await populate(workspace.source, workspace.path, mode)
             if (result.reason)
@@ -406,13 +430,16 @@ export function workspaces(host: Host) {
             if (created) {
               if (registered)
                 // A half-filled copy has no index and looks dirty but holds nothing of its own, so it is forced;
-                // once populated, Git's refusal keeps a failed setup's dirty output.
-                await git(
-                  workspace.source,
-                  'worktree',
-                  'remove',
-                  ...(populated ? [] : ['--force']),
-                  workspace.path,
+                // once populated, the removal's refusal keeps a failed setup's dirty output.
+                await (
+                  populated
+                    ? removeCheckout(
+                        await host.projectSettings(),
+                        workspace.source,
+                        workspace.path,
+                        treeName(workspace.branch),
+                      )
+                    : git(workspace.source, 'worktree', 'remove', '--force', workspace.path)
                 ).catch(
                   // Best-effort rollback: the preparation error is recorded below and must not be replaced.
                   () => undefined,
@@ -548,9 +575,14 @@ export function workspaces(host: Host) {
           (await git(workspace.source, 'rev-parse', workspace.branch))
         )
           throw new Error(`Workspace #${id} no longer checks out its recorded branch tip`)
-        // Git refuses uncommitted changes made since the status check; removeWorktree forces only past submodules
-        // that hold nothing unique, after checking the checkout again.
-        await removeWorktree(workspace.source, workspace.path)
+        // The removal refuses uncommitted changes made since the status check; removeWorktree forces only past
+        // submodules that hold nothing unique, after checking the checkout again.
+        await removeCheckout(
+          await host.projectSettings(),
+          workspace.source,
+          workspace.path,
+          treeName(workspace.branch),
+        )
       } else if (await onDisk(workspace.path))
         // Release clears the leftover folder of its own checkout first; any other folder there is not ours to remove.
         throw new Error(`Workspace path is not a registered checkout: ${workspace.path}`)
@@ -750,7 +782,7 @@ export function workspaces(host: Host) {
     if ((await git(workspace.path, 'symbolic-ref', '--short', 'HEAD')) !== workspace.branch)
       throw new Error('Workspace branch changed')
     const tip = await git(workspace.path, 'rev-parse', 'HEAD')
-    const path = await landerPath(host.home, workspace.source)
+    const path = await landerPath(host.home, workspace.source, await host.projectSettings())
     const { change } = await landerAgent(host, context)
     const subject = await host.need(ConversationsApi).subject(id, context)
     const result = await host.harness().commit(async (tx) => {
@@ -950,17 +982,28 @@ export function workspaces(host: Host) {
       const { source, target } = checkout
       const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
       if (index.items[String(id)]) throw new Error('Conversation already has a workspace')
-      await mkdir(join(host.home, 'worktrees'), { recursive: true })
-      const parent = await realpath(join(host.home, 'worktrees'))
+      const branch = `ultimate/${createHash('sha256').update(host.home).digest('hex').slice(0, 6)}-${id}`
+      let path = await treePath(await host.projectSettings(), treeName(branch))
+      if (!path) {
+        await mkdir(join(host.home, 'worktrees'), { recursive: true })
+        path = join(await realpath(join(host.home, 'worktrees')), String(id))
+      }
       index.items[String(id)] = {
-        path: join(parent, String(id)),
-        branch: `ultimate/${createHash('sha256').update(host.home).digest('hex').slice(0, 6)}-${id}`,
+        path,
+        branch,
         base: await git(source, 'rev-parse', 'HEAD'),
         source,
         target,
         state: 'preparing',
       }
-      await configure(tx, id, { cwd: index.items[String(id)].path })
+      // A project in a subfolder of its repository opens in the same subfolder of its checkout.
+      const below = relative(source, await realpath(cwd))
+      await configure(tx, id, {
+        cwd:
+          below === '..' || below.startsWith(`..${sep}`) || isAbsolute(below)
+            ? path
+            : join(path, below),
+      })
       await tx.createTask(
         Preparation,
         { id },
@@ -994,7 +1037,13 @@ export function workspaces(host: Host) {
       if (!workspace) throw new Error('Conversation has no workspace')
       if (workspace.state === 'preparing') throw new Error('Workspace is preparing')
       if (workspace.state !== 'removed') {
-        if (await listedBySource(workspace)) await removeWorktree(workspace.source, workspace.path)
+        if (await listedBySource(workspace))
+          await removeCheckout(
+            await host.projectSettings(),
+            workspace.source,
+            workspace.path,
+            treeName(workspace.branch),
+          )
         await host.harness().commit(async (tx) => {
           ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].state = 'removed'
         }, context)

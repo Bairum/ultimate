@@ -267,6 +267,8 @@ export async function loadExtensions(
   const pollActions = new Map<string, string[]>()
   const settingsReloads = new Set<string>()
   const records = new Map<string, ExtensionInfo>()
+  /** Each loaded extension's folder with symlinks resolved, where Vite keys its modules. */
+  const targets = new Map<string, string>()
   const documents = new Map<string, ConversationDocToken<JsonObject>[]>()
   const findDoc = (kind: string) =>
     [
@@ -521,7 +523,16 @@ export async function loadExtensions(
       for (const message of diagnostics) notice(message)
       previousSettings = signature
     }
-    for (const { name, path, source, enabled, files, core, error: discoveryError } of winners) {
+    for (const {
+      name,
+      path,
+      target,
+      source,
+      enabled,
+      files,
+      core,
+      error: discoveryError,
+    } of winners) {
       const previous = records.get(name)
       host.extensionSources.set(name, source)
       const layer = settings.layers.get(name) ?? (source === 'builtin' ? 'default' : 'folder')
@@ -547,7 +558,8 @@ export async function loadExtensions(
       if (enabled && record.facets.server && (!servers || servers.has(name))) {
         const facetHost = scope(name)
         try {
-          const module = await vite.ssrLoadModule(join(path, 'server.ts'))
+          // Vite keeps a URL bound to the file it first resolved to, so a repointed link loads by its target.
+          const module = await vite.ssrLoadModule(join(target, 'server.ts'))
           const extension: Extension =
             typeof module.default === 'function' ? await module.default(facetHost) : module.default
           if (!extension || extension.name !== name)
@@ -594,6 +606,19 @@ export async function loadExtensions(
           )
             throw new Error('pollActions must contain registered action names')
           const secrets = validateSecrets(module.secrets ?? [])
+          // Pi lets the last extension win a tool name silently. A later source layer overriding a tool on purpose is
+          // fine (a project's bash over coding-tools); within one layer, the extension holding the name keeps it.
+          const taken = host.registry
+            .snapshot()
+            .tools()
+            .filter(
+              (entry) =>
+                entry.extension.name !== name &&
+                host.extensionSources.get(entry.extension.name) === source &&
+                extension.tools?.some((tool) => tool.name === entry.tool.name),
+            )
+            .map((entry) => `${entry.tool.name} is already provided by ${entry.extension.name}`)
+          if (taken.length) throw new Error(taken.join('; '))
           host.registry.install(trace.tools(extension))
           const previousHost = facetHosts.get(name)
           facetHosts.set(name, facetHost)
@@ -640,11 +665,13 @@ export async function loadExtensions(
       if (enabled && !record.server?.error) host.builds.extension(name, path)
       if (!enabled) host.builds.remove(name)
       records.set(name, record)
+      targets.set(name, target)
     }
     for (const name of records.keys()) {
       if (!folders.includes(name)) {
         await unload(name)
         records.delete(name)
+        targets.delete(name)
         host.extensionSources.delete(name)
         host.builds.remove(name)
       }
@@ -666,6 +693,7 @@ export async function loadExtensions(
               !previous ||
               previous.enabled !== entry.enabled ||
               previous.path !== entry.path ||
+              targets.get(entry.name) !== entry.target ||
               settingsReloads.has(entry.name)
             )
           })
@@ -709,7 +737,7 @@ export async function loadExtensions(
           if (visited.has(module)) return
           visited.add(module)
           for (const name of records.keys())
-            if (module.file === join(records.get(name)!.path, 'server.ts')) selected.add(name)
+            if (module.file === join(targets.get(name)!, 'server.ts')) selected.add(name)
           for (const importer of module.importers) visit(importer)
         }
         for (const module of modules ?? []) visit(module)

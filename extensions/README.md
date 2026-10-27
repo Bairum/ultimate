@@ -53,6 +53,11 @@ replaces the whole extension, both facets:
 | `user`    | `~/.ultimate/extensions/`         | Your additions, in every project                                   |
 | `project` | `<project>/.ultimate/extensions/` | One project's tools and apps, committed with the project; wins all |
 
+A tool name follows the same layering: a project or user extension may override a built-in's tool (a project `bash`
+replaces coding-tools'). Two extensions of the same source may not share one: the one that loaded second fails with
+a load error such as `web_search is already provided by parallel`, and takes the name on its next reload once the
+other is disabled or removed.
+
 Every extension folder is on by default, built-in, user or project: adding the folder is the opt-in. The exception is
 the built-ins listed in `defaultOff` (`shared/extension-api.ts`; see [settings](../docs/settings.md)), which need
 something of their own and ship off until `extensions.enable` names them (including `voice-live`, the live voice relay). Turn one off
@@ -401,6 +406,19 @@ code and links) into `#conversation-<id>[-<entry>]` links, and `MentionText` doe
 ```tsx
 link: ({ href, children, core }) =>
   href.startsWith('https://docs.example.com/') ? <a href={href}>{children}</a> : core
+```
+
+### Code block renderers
+
+`codeBlocks` renders the fenced code blocks of one language in Markdown that `MessageResponse` shows, keyed by the
+fence's language. Each receives `{ code, language, incomplete, core }`; `core` starts as the highlighted block with its
+copy button, and `incomplete` is true while the fence still streams. They compose in discovery order behind error
+boundaries that fall back to `core`. Return `core` while `incomplete`, so a half-written block never renders.
+
+```tsx
+codeBlocks: {
+  dot: ({ code, incomplete, core }) => (incomplete ? core : <Graph source={code} />),
+}
 ```
 
 ### Message actions

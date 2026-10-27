@@ -12,6 +12,9 @@ Every built-in is already on; this setup adds how the repository is landed and r
 - `agents/reviewer-*.md`: the review team (correctness, simplicity, architecture), each on its own model; the shipped
   `reviewer` starts them in parallel and returns one merged verdict.
 
+To adopt parts of this setup in another project, ask its @ultimate for a tour (the `adopt-ultimate-setup` skill);
+onboarding offers it too.
+
 ## How to work with it
 
 See [the work model](../AGENTS.md#how-work-is-organised-a-forest-of-conversation-trees) for coordination and

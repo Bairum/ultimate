@@ -104,6 +104,17 @@ export type EntryRenderer = ComponentType<{
  */
 export type LinkRenderer = ComponentType<{ href: string; children: ReactNode; core: ReactNode }>
 
+/**
+ * A fenced code block in Markdown, by its language: `code`, `language`, `incomplete` while the fence still streams, and
+ * `core`, the rendering so far, starting with the highlighted block with its copy button.
+ */
+export type CodeBlockRenderer = ComponentType<{
+  code: string
+  language: string
+  incomplete: boolean
+  core: ReactNode
+}>
+
 export type InboxRenderer = ComponentType<{ item: InboxItem; core: ReactNode; cancel: ReactNode }>
 
 /** Wraps the shown conversation's composer (`core`); `dock` when it sits in a narrow side region. */
@@ -293,6 +304,8 @@ export interface WebExtension {
   composer?: ComposerRenderer
   /** Renders links in Markdown; renderers compose in discovery order, each wrapping the one before it. */
   link?: LinkRenderer
+  /** Fenced code block renderers by language; they compose in discovery order, each wrapping the one before it. */
+  codeBlocks?: Readonly<Record<string, CodeBlockRenderer>>
   /** Contributions to the hover action row on stored messages, in discovery order. */
   messageActions?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Readouts on the hover action row on stored messages, before its time, in discovery order. */

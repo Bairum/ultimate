@@ -62,15 +62,25 @@ export function defaultModel(
   available: readonly Listed[],
   settings: Pick<SettingsManager, 'getDefaultProvider' | 'getDefaultModel'>,
 ): ModelRef | undefined {
-  const preview = previewModel()
+  const first = available[0]
+  return (
+    configuredModel(available, settings) ??
+    (first && { provider: first.provider, modelId: first.id })
+  )
+}
+
+/** A preview's model, else Pi's default, each only when it has a login here: `defaultModel` without its last resort. */
+export function configuredModel(
+  available: readonly Listed[],
+  settings: Pick<SettingsManager, 'getDefaultProvider' | 'getDefaultModel'>,
+): ModelRef | undefined {
   const configured = {
     provider: settings.getDefaultProvider(),
     modelId: settings.getDefaultModel(),
   }
-  for (const ref of [preview, configured])
+  for (const ref of [previewModel(), configured])
     if (ref?.provider && ref.modelId && hasLogin(available, ref as ModelRef)) return ref as ModelRef
-  const first = available[0]
-  return first && { provider: first.provider, modelId: first.id }
+  return undefined
 }
 
 /** `defaultModel` for a host's model runtime and Pi settings. */

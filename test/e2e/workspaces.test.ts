@@ -29,7 +29,11 @@ async function repository() {
   return { directory, projectRoot, home: join(directory, 'state') }
 }
 /** Open the workspaces extension on `paths` in this process, as the server does after a crash. */
-async function reopen(paths: Awaited<ReturnType<typeof repository>>, commands: string[]) {
+async function reopen(
+  paths: Awaited<ReturnType<typeof repository>>,
+  commands: string[],
+  worktree: Record<string, unknown> = {},
+) {
   const prepared = await prepareHarness({
     ...paths,
     userHome: paths.directory,
@@ -45,7 +49,7 @@ async function reopen(paths: Awaited<ReturnType<typeof repository>>, commands: s
     implement: () => {},
     need: () => ({}),
     want: () => undefined,
-    projectSettings: async () => ({ isolates: { worktree: { setup: commands } } }),
+    projectSettings: async () => ({ isolates: { worktree: { ...worktree, setup: commands } } }),
     extensions: () => [{ name: 'workspaces', enabled: true }],
     resource<T>(key: string, create: () => T): T {
       if (!resources.has(key)) resources.set(key, create())
@@ -62,6 +66,75 @@ async function reopen(paths: Awaited<ReturnType<typeof repository>>, commands: s
   })
   return workspaces(host)
 }
+it('clears and reruns a configured add command a crash interrupted', async () => {
+  const paths = await repository()
+  const started = join(paths.directory, 'started')
+  const gate = join(paths.directory, 'gate')
+  const idFile = join(paths.directory, 'id')
+  // The command registers the worktree, then hangs: the crash comes before Ultimate checks the branch out.
+  const worktree = {
+    path: join(paths.directory, 'trees', '{name}'),
+    add: `git worktree add --detach {path} HEAD && echo add >> '${started}' && while [ ! -f '${gate}' ]; do sleep 0.05; done`,
+  }
+  const script = `
+    import { writeFile } from 'node:fs/promises';
+    import { prepareHarness } from './server/harness.ts';
+    import extension, { actions } from './extensions/workspaces/server.ts';
+    const paths = ${JSON.stringify(paths)};
+    const prepared = await prepareHarness({ ...paths, ultimateRoot: paths.projectRoot, userHome: paths.directory });
+    let opened;
+    const resources = new Map();
+    const host = { ...prepared, harness: () => opened.harness, metadata: (await import('./server/metadata.ts')).Metadata,
+      projectSettings: async () => ({ isolates: { worktree: ${JSON.stringify(worktree)} } }),
+      extensions: () => [{ name: 'workspaces', enabled: true }],
+      implement: () => {}, need: () => ({}), want: () => undefined,
+      resource: (key, create) => { if (!resources.has(key)) resources.set(key, create()); return resources.get(key) },
+      onOpen: () => {}, onClose: () => {} };
+    prepared.registry.install(extension(host));
+    opened = await prepared.open();
+    await writeFile(${JSON.stringify(idFile)}, String((await actions.create({}, { host })).id));
+    setInterval(() => {}, 1000);
+  `
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: process.cwd(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let output = ''
+  child.stderr.on('data', (data) => {
+    output += data.toString()
+  })
+  try {
+    await until(async () => {
+      if (child.exitCode !== null) throw new Error(output)
+      return readFile(started, 'utf8').then(
+        () => true,
+        () => false,
+      )
+    })
+    child.kill('SIGKILL')
+    await once(child, 'exit')
+    const id = Number(await readFile(idFile, 'utf8')) as ConversationId
+    await writeFile(gate, '')
+    const service = await reopen(paths, [], worktree)
+    await service.ready(id, context)
+    const workspace = (await service.get(id, context))!
+    expect(workspace.state).toBe('ready')
+    expect(workspace.path).toBe(
+      join(
+        await realpath(paths.directory),
+        'trees',
+        `ult-${workspace.branch.slice('ultimate/'.length)}`,
+      ),
+    )
+    expect((await readFile(started, 'utf8')).trim().split('\n')).toHaveLength(2)
+    expect(await git(workspace.path, 'branch', '--show-current')).toBe(workspace.branch)
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGKILL')
+      await once(child, 'exit')
+    }
+  }
+})
 it.each(['symlinked home mid-setup', 'branch creation before registration'])(
   'resumes preparation after a process crash: %s',
   async (scenario) => {

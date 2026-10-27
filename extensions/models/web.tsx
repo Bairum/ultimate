@@ -155,10 +155,20 @@ function Switched({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   )
 }
 
-/** A conversation whose model had no login here switched to another as its next run started. */
+const switchedTo: Record<Exclude<Fallback['reason'], 'none'>, string> = {
+  same: 'the same model through another login',
+  pin: 'the model its agent definition pins',
+  default: 'the default model',
+}
+
+/**
+ * A conversation whose model had no login here switched to another as its next run started, or, with no subscription
+ * login to replace it, kept its model and waits for the user.
+ */
 function FellBack({ entry }: { entry: EntryRecord }) {
   const { from, to, reason } = entry.data as Fallback
   const actions = useUltimate()
+  const provider = from.split('/')[0]
   return (
     <section
       className="min-w-0 rounded-md border border-border border-l-2 border-l-warning/60 bg-muted/20"
@@ -166,17 +176,24 @@ function FellBack({ entry }: { entry: EntryRecord }) {
     >
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <CpuIcon className="size-3.5 text-warning" />
-        <span>model switched</span>
+        <span>{to ? 'model switched' : 'needs you · login missing'}</span>
       </header>
       <div className="space-y-2 px-3 py-3 text-[13px] leading-relaxed">
         <p className="font-mono text-[12px]">
-          <span className="text-muted-foreground line-through">{from}</span>
-          {' → '}
-          <span className="text-foreground">{to}</span>
+          {to ? (
+            <>
+              <span className="text-muted-foreground line-through">{from}</span>
+              {' → '}
+              <span className="text-foreground">{to}</span>
+            </>
+          ) : (
+            <span className="text-foreground">{from}</span>
+          )}
         </p>
         <p className="text-muted-foreground">
-          {from.split('/')[0]} has no login here, so this conversation now runs on{' '}
-          {reason === 'pin' ? 'the model its agent definition pins' : 'the default model'}.{' '}
+          {reason !== 'none'
+            ? `${provider} has no login here, so this conversation now runs on ${switchedTo[reason]}.`
+            : `${provider} has no login here, and no subscription login can take over, so this conversation keeps its model and its requests fail until you log in to ${provider}.`}{' '}
           <button
             className="cursor-pointer text-foreground hover:underline"
             onClick={() => openPicker(actions)}

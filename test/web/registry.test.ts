@@ -14,6 +14,8 @@ import {
   surfaceItems,
   toolRenderers,
   linkRenderers,
+  codeBlockLanguages,
+  codeBlockRenderers,
   messageItems,
   composerRenderers,
   compactDocs,
@@ -248,6 +250,7 @@ describe('web extension registry', () => {
         module({
           tools: { bash: First },
           link: First,
+          codeBlocks: { mermaid: First },
           entries: { 'pi.user': First },
           panels: [{ id: 'info', title: 'Info', component: First, order: 2 }],
           documents: [
@@ -259,6 +262,7 @@ describe('web extension registry', () => {
         module({
           tools: { bash: Second },
           link: Second,
+          codeBlocks: { mermaid: Second, dot: Second },
           entries: { 'pi.compaction': Second, 'pi.user': Second },
           panels: [{ id: 'tasks', title: 'Tasks', component: Second, order: 1 }],
           documents: [{ kind: 'ultimate.plan', title: 'My plan', component: Second }],
@@ -275,6 +279,11 @@ describe('web extension registry', () => {
       { extension: 'a', version: 1, component: First },
       { extension: 'b', version: 1, component: Second },
     ])
+    expect(codeBlockRenderers(records, 'mermaid')).toEqual([
+      { extension: 'a', version: 1, component: First },
+      { extension: 'b', version: 1, component: Second },
+    ])
+    expect(codeBlockLanguages(records)).toEqual(['mermaid', 'dot'])
     // Entry renderers compose instead of replacing each other: all of them, in folder order.
     expect(entryRenderers(records, 'pi.user').map((renderer) => renderer.extension)).toEqual([
       'a',

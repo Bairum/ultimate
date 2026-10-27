@@ -67,22 +67,33 @@ export function extensionModules(
       return dependency
     },
     async load(id) {
-      if (id.split('?')[0] === join(ultimateRoot, 'web/src/index.css'))
+      if (id.split('?')[0] === join(ultimateRoot, 'web/src/index.css')) {
+        // Tailwind skips a git-ignored symlinked extension inside a root, so its target is a source of its own.
+        // Tailwind reads sources once per process: links added later count after a restart.
+        const linked = (await discoverExtensions(ultimateRoot, projectRoot, userHome))
+          .filter(
+            (entry) => entry.source !== 'builtin' && !entry.error && entry.target !== entry.path,
+          )
+          .map((entry) => entry.target)
         return (
           (await readFile(join(ultimateRoot, 'web/src/index.css'), 'utf8')) +
           '\n' +
-          roots
-            .filter((_, index) => index !== 2 || useProjectSetup(projectRoot, userHome))
+          [
+            ...roots.filter((_, index) => index !== 2 || useProjectSetup(projectRoot, userHome)),
+            ...linked,
+          ]
             .map((root) => `@source ${JSON.stringify(root)};`)
             .join('\n')
         )
+      }
       if (id !== resolved) return undefined
       const facets = (await discoverExtensions(ultimateRoot, projectRoot, userHome)).filter(
         (entry) => entry.enabled && entry.files.includes('web.tsx'),
       )
       const entries = facets.map(
         (entry) =>
-          `${JSON.stringify(join(entry.path, 'web.tsx'))}: () => import(${JSON.stringify('/@fs/' + join(entry.path, 'web.tsx'))})`,
+          // By target, as the server facet loads: Vite keeps a URL bound to the file it first resolved to.
+          `${JSON.stringify(join(entry.path, 'web.tsx'))}: () => import(${JSON.stringify('/@fs/' + join(entry.target, 'web.tsx'))})`,
       )
       return `export const loaders = {${entries.join(',')}};`
     },

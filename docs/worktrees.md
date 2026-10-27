@@ -6,7 +6,9 @@ Start a subagent with `isolate: "worktree"` (the worker default) to give its too
 
 ### Main-agent final integration
 
-Coordinator branches started by @ultimate are isolated in their own worktrees by default.
+Coordinator branches started by @ultimate are isolated in their own worktrees by default: under `<home>/worktrees`, or
+where the project's `isolates.worktree.path` says, made by its `add` and `remove` commands when set
+(`extensions/workspaces/README.md`). A branch started in a subfolder of the repository works in that subfolder.
 `workspace status` shows its tip and the original checkout's tip.
 Read worker reports and diffs; rerun checks only for missing or thin evidence, reported failures, changes crossing
 workers, `server/` or `shared/` changes, or surprises in the diff, then land and call `workspace submit`.

@@ -71,7 +71,7 @@ A fork sends the parent's context and therefore costs more than a fresh child; t
 
 An isolate is where a child's tools run, separate from the parent. The workspaces extension owns its checkout and its record in the root `ultimate.workspaces` document. There are no sandboxes, containers or remote machines.
 
-`start {agent, task, isolate?: "none" | "worktree"}` overrides the definition's isolate. The default is none (the parent directory); the shipped worker uses worktree. Preparation creates `<home>/worktrees/<child id>` from the parent's committed HEAD. The child's cwd and instructions point there; its first request waits for setup. The child and checkout are reused on replay.
+`start {agent, task, isolate?: "none" | "worktree"}` overrides the definition's isolate. The default is none (the parent directory); the shipped worker uses worktree. Preparation creates `<home>/worktrees/<child id>` (or the project's `isolates.worktree.path`) from the parent's committed HEAD. The child's cwd and instructions point there, in the same subfolder as the parent's cwd; its first request waits for setup. The child and checkout are reused on replay.
 
 Optional project `.ultimate/settings.json` configuration:
 
