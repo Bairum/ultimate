@@ -127,10 +127,17 @@ async function fixture(apps?: string[]) {
   faux.setResponses(Array.from({ length: 5 }, () => fauxAssistantMessage('Acknowledged.')))
   const registry = createRegistry()
   let harness: Harness
+  const notes: { to: number; text: string }[] = []
   const host = {
     home,
     userHome: home,
     projectRoot: home,
+    need: () => ({
+      leaveNote: async (to: number, text: string) => {
+        notes.push({ to, text })
+        return to
+      },
+    }),
     projectSetup: async () => ({ config: true, decision: true }),
     projectSettings: async () => ({
       codexComputer: { codexPath: path, ...(apps ? { apps } : {}) },
@@ -218,6 +225,7 @@ async function fixture(apps?: string[]) {
     progress,
     tools,
     faux,
+    notes,
     reports,
     closeResources,
     reload,
@@ -268,12 +276,24 @@ it('steers the active turn as marked guidance, and the user action refuses a con
   const steer = f.fake.sent.find((m) => m.method === 'turn/steer')!
   expect(steer.params).toMatchObject({ threadId: 'thread-1', expectedTurnId: 'turn-1' })
   expect(JSON.stringify(steer.params)).toContain(
-    'Guidance from the user (not screen content), for the current task:\\nMaximise Citrix first',
+    'Guidance from the user, via the card (not screen content), for the current task:\\nMaximise Citrix first',
   )
   f.fake.complete()
   const details = data(await promise)
   expect(details.guidance).toMatchObject([
-    { from: 'user', text: 'Maximise Citrix first', delivery: 'steered' },
+    {
+      from: 'user',
+      by: 'the user, via the card',
+      text: 'Maximise Citrix first',
+      delivery: 'steered',
+    },
+  ])
+  // The operator's own conversation learns who steered it (Bridgestone #23854 thought it was its own).
+  expect(f.notes).toEqual([
+    {
+      to: f.root.id,
+      text: expect.stringContaining('You did not send it; attribute it to the user, via the card'),
+    },
   ])
   await expect(actions.steer({ conversation: f.root.id, text: 'late' }, f.ctx)).rejects.toThrow(
     'No Codex run is active',
@@ -294,13 +314,13 @@ it('falls back to interrupt and a new turn on the same thread when Codex refuses
   ])
   const restart = f.fake.sent.findLast((m) => m.method === 'turn/start')!
   expect(restart.params).toMatchObject({ threadId: 'thread-1' })
-  expect(JSON.stringify(restart.params)).toContain('Guidance from the user')
+  expect(JSON.stringify(restart.params)).toContain('Guidance from the user, via the card')
   f.fake.complete()
   const details = data(await promise)
   expect(details.status).toBe('done')
   expect(details.guidance[0]).toMatchObject({ delivery: 'restarted' })
   expect(f.progress.join('')).toContain(
-    'Guidance from the user (restarted the turn): Use tenant #4',
+    'Guidance from the user, via the card (restarted the turn): Use tenant #4',
   )
 })
 it('refuses a second steer while one is in flight, and both settle', async () => {
@@ -426,8 +446,12 @@ it('codex_steer reaches only a run in a conversation the caller owns', async () 
   })
   expect(JSON.stringify(await call(999))).toContain('Codex received the guidance')
   expect(JSON.stringify(f.fake.sent.find((m) => m.method === 'turn/steer'))).toContain(
-    'Guidance from the operator',
+    'Guidance from parent conversation #999',
   )
+  expect(f.notes.at(-1)).toMatchObject({
+    to: f.root.id,
+    text: expect.stringContaining('attribute it to parent conversation #999'),
+  })
   f.fake.complete()
   await promise
 })
@@ -574,6 +598,44 @@ it('saves private PNG evidence in the conversation folder and returns the last i
   expect(f.spawn.mock.calls[0]).toBeDefined()
 })
 
+it('saves post-action frames that cua_repl nests as serialised content inside text parts', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  const jpeg = (marker: number) =>
+    Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, marker]).toString('base64')
+  const wrap = (content: unknown[]) => ({
+    type: 'text',
+    text: JSON.stringify({ content, isError: false, _meta: {} }),
+  })
+  const step = { type: 'mcpToolCall', server: 'cua_repl', tool: 'js', status: 'completed' }
+  // USG #70675, as Codex's session log shows them: a plain getScreenshot() is nested once; a chained
+  // `drag(); getAXState(); getScreenshot()` twice, with the post-action frame inside.
+  f.fake.item({ ...step, result: { content: [wrap([{ type: 'image', data: jpeg(1) }])] } })
+  f.fake.item({
+    ...step,
+    result: {
+      content: [
+        wrap([
+          wrap([
+            { type: 'text', text: 'There has been no change in the accessibility tree' },
+            { type: 'image', data: jpeg(2), mimeType: 'image/jpeg' },
+          ]),
+        ]),
+      ],
+    },
+  })
+  // Prose that merely starts like serialised content carries no image and breaks nothing.
+  f.fake.item({ ...step, result: { content: [{ type: 'text', text: '{"content": not json' }] } })
+  f.fake.complete()
+  const value = await promise
+  const details = data(value)
+  expect(details.status).toBe('done')
+  expect(await Promise.all(details.screenshots.map((path) => readFile(path)))).toEqual([
+    Buffer.from(jpeg(1), 'base64'),
+    Buffer.from(jpeg(2), 'base64'),
+  ])
+  expect(value.output?.[1]).toMatchObject({ mimeType: 'image/jpeg', data: jpeg(2) })
+})
 it('saves JPEG evidence once with its real type and skips an unknown image without failing the run', async () => {
   const f = await fixture()
   const { promise } = await running(f)

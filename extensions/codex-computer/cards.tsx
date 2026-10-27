@@ -92,7 +92,7 @@ function liveOf(output: string) {
       continue
     }
     for (const line of block.split('\n')) {
-      if (line.startsWith('Guidance from the ') || line.startsWith('Connection to OpenAI dropped'))
+      if (line.startsWith('Guidance from ') || line.startsWith('Connection to OpenAI dropped'))
         steps.push({ guidance: line })
       if (line.startsWith('Connection to OpenAI dropped')) reconnecting = false
     }
@@ -205,7 +205,12 @@ function Guidance({ guidance }: { guidance: CodexDetails['guidance'] }) {
     <ToolSection label="Guidance">
       {guidance.map((item, index) => (
         <p className="break-words whitespace-pre-wrap text-muted-foreground" key={index}>
-          <span className="text-foreground/80">{item.from === 'user' ? 'You' : 'Operator'}:</span>{' '}
+          <span className="text-foreground/80">
+            {item.from === 'user'
+              ? 'You'
+              : (item.by?.replace(/^parent conversation /, 'Parent ') ?? 'Operator')}
+            :
+          </span>{' '}
           {item.text}
           {item.delivery === 'restarted' && (
             <span className="ml-1.5 text-[10.5px] text-warning">

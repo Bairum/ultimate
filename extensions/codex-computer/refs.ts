@@ -29,6 +29,8 @@ export type CodexDetails = {
   /** Guidance sent into the run while it worked; `restarted` when Codex refused a steer and the turn was restarted with it. */
   guidance: {
     from: 'user' | 'operator'
+    /** Who sent it, in words: "the user, via the card" or "parent conversation #16427". */
+    by: string
     text: string
     at: number
     delivery: 'steered' | 'restarted'

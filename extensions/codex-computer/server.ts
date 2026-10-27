@@ -16,6 +16,7 @@ import { State, updateState, validate, untrusted } from './state.ts'
 import { operate, spawnServer } from './app-server.ts'
 import type { Run, Spawn } from './app-server.ts'
 import { resultsDirectory, pruneEvidence } from './evidence.ts'
+import { LineageApi } from '../lineage/api.ts'
 
 export const docs = [State]
 export const userActions = ['stop', 'steer']
@@ -44,6 +45,21 @@ function liveRun(host: ExtensionHost, conversation: number) {
   const run = [...runtime(host).live].find((candidate) => candidate.conversation === conversation)
   if (!run) throw new Error(`No Codex run is active in conversation ${conversation}`)
   return run
+}
+/** Tell the operator's conversation who steered its run, so its report attributes the guidance correctly. */
+async function noteSteer(
+  host: ExtensionHost,
+  conversation: number,
+  by: string,
+  text: string,
+  delivery: 'steered' | 'restarted',
+) {
+  await host
+    .need(LineageApi)
+    .leaveNote(
+      conversation,
+      `Codex guidance from ${by} was sent into your running codex_operate${delivery === 'restarted' ? ' (Codex refused a live steer, so its turn restarted with it)' : ''}: "${text}". You did not send it; attribute it to ${by} in your report.`,
+    )
 }
 export type Dependencies = { spawn: Spawn; codesign: (path: string) => Promise<void> }
 function runtime(host: ExtensionHost) {
@@ -241,7 +257,7 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
         name: 'codex_steer',
         replay: 'unsafe',
         description:
-          "Send guidance into the active Codex turn of a codex-operator subagent you started (its conversation id), while codex_operate runs there. Codex reads it as the operator's guidance, not screen content. Refused for a conversation you do not own or one with no active turn.",
+          'Send guidance into the active Codex turn of a codex-operator subagent you started (its conversation id), while codex_operate runs there. Codex reads it as guidance from your conversation, not screen content, and the subagent gets a note saying you sent it. Refused for a conversation you do not own or one with no active turn.',
         parameters: Type.Object({
           conversation: Type.Integer({ minimum: 1 }),
           text: Type.String({ minLength: 1, maxLength: 4000 }),
@@ -254,7 +270,9 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
             throw new Error(
               `Conversation ${args.conversation} is not a subagent of this conversation; only its owner can steer it`,
             )
-          const delivery = await liveRun(host, args.conversation).steer(args.text, 'operator')
+          const by = `parent conversation #${api.conversationId}`
+          const delivery = await liveRun(host, args.conversation).steer(args.text, 'operator', by)
+          await noteSteer(host, args.conversation, by, args.text, delivery)
           return {
             output: [
               {
@@ -296,6 +314,10 @@ export const actions = {
     validate(args)
     if (typeof args.text !== 'string' || !args.text.trim() || args.text.length > 4000)
       throw new Error('text must be 1 to 4000 characters')
-    return { delivery: await liveRun(host, args.conversation).steer(args.text.trim(), 'user') }
+    const text = args.text.trim()
+    const by = 'the user, via the card'
+    const delivery = await liveRun(host, args.conversation).steer(text, 'user', by)
+    await noteSteer(host, args.conversation, by, text, delivery)
+    return { delivery }
   }),
 }

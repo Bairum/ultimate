@@ -36,13 +36,16 @@ run and cut at 8 KB; a resumed thread already has it. Keep it to standing facts 
 ```markdown
 - Work only in tenant #4 (Bridgestone Test); stop and report if the header shows another tenant.
 - Results go to `/Volumes/bridgestone/Test/b4/results/`.
-- Maximise the Citrix Viewer window before the first screenshot; a small window is captured clipped.
+- Maximise the Citrix Viewer window before the first screenshot: if "Enter Full Screen" is greyed out, use the
+  window's green zoom button or Window > Zoom. A window smaller than the screen is captured in the top-left of a
+  full-screen frame with the rest blank.
 ```
 
 ## Steering a running turn
 
-While a run works, guidance can be sent into its active turn with `turn/steer`, prefixed `Guidance from the user`
-or `Guidance from the operator` and marked as not screen content:
+While a run works, guidance can be sent into its active turn with `turn/steer`, prefixed with who sent it
+(`Guidance from the user, via the card` or `Guidance from parent conversation #N`) and marked as not screen content.
+The operator's conversation also gets a note naming the sender, so its report does not take the guidance for its own:
 
 - the user types into **Tell Codex…** on the running card (`SteerAction`, a user action: paired browser only);
 - an agent calls `codex_steer {conversation, text}` for a codex-operator conversation **it owns** (its own subagent).
@@ -76,11 +79,20 @@ pipe cannot stall Codex.
 ### Typing into remote sessions
 
 Every new thread gets fixed rules for evidence (describe only the latest screenshot, quote text exactly, no claimed
-result without a fresh capture after the action) and typing (click into the remote session canvas and check focus
+result without a fresh capture after the action, one last capture before the final answer, and up to three retries
+2 s apart when a capture comes back "Screenshot unavailable") and typing (click into the remote session canvas and check focus
 first, never the browser chrome or address bar; prefer `setValue`, then `paste`, type only short text). Computer
 Use offers `setValue`, `paste` and `typeText`; a Citrix session may refuse the clipboard and non-ASCII keystrokes,
 so Codex replaces those characters with ASCII (× becomes x) and says which. Long text into such a session is typed
 character by character and is slow; there is no other input path.
+
+### Evidence
+
+Every image Codex receives is saved, including frames from chained calls (`click(); getAXState();
+getScreenshot()`), which cua_repl returns as MCP content serialised inside a text part, nested once per wrapper.
+Captures are saved as Codex took them, never cropped: a window smaller than the screen fills only the top-left of a
+full-screen frame (Codex's capture, not ours), so maximise it. Codex asks for app approval once per new cua_repl,
+several times per run; each is accepted and recorded.
 
 ## Apps and Stop
 

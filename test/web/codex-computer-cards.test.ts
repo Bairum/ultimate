@@ -81,7 +81,7 @@ it('a running card offers Tell Codex… and shows a steer in its step stream', (
         args: { brief: 'Read the ward list' },
         status: 'running',
         output:
-          'Codex session started.\nStep 1: <untrusted_screen_content>\ncua_repl/js\n</untrusted_screen_content>\nGuidance from the user: Maximise Citrix first\n',
+          'Codex session started.\nStep 1: <untrusted_screen_content>\ncua_repl/js\n</untrusted_screen_content>\nGuidance from the user, via the card: Maximise Citrix first\n',
         images: [],
         diagnostics: [],
       } as unknown as ToolCallView,
@@ -89,6 +89,6 @@ it('a running card offers Tell Codex… and shows a steer in its step stream', (
     }),
   )
   expect(html).toContain('placeholder="Tell Codex…"')
-  expect(html).toContain('↳ Guidance from the user: Maximise Citrix first')
+  expect(html).toContain('↳ Guidance from the user, via the card: Maximise Citrix first')
   expect(html).toContain('1 step<')
 })
