@@ -50,6 +50,8 @@ export const Runs = defineDoc<{
   nextRef?: number
   /** Review durations for latency stats, newest last; kept 14 days. */
   timings?: import('./refs.ts').Timing[]
+  /** Generation task → the background rerun of its answer review that overran the hold; pruned after 24 hours. */
+  overruns?: Record<string, { task: number; at: number }>
 }>({
   kind: 'advisor.runs',
   checkpointWhen: () => false,
@@ -87,6 +89,8 @@ export function pruneRuns(
     if (!retained.has(id)) delete runs.settledAt![id]
   for (const id of Object.keys(runs.deliveries)) if (!retained.has(id)) delete runs.deliveries[id]
   if (runs.timings) runs.timings = runs.timings.filter((t) => t.at >= now - 14 * 86_400_000)
+  for (const [id, overrun] of Object.entries(runs.overruns ?? {}))
+    if (overrun.at < cutoff) delete runs.overruns![id]
   for (const [id, row] of Object.entries(runs.conversations)) {
     if (concluded.has(Number(id))) {
       for (const delivery of row.deliveries ?? []) delete runs.deliveries[delivery]

@@ -311,6 +311,20 @@ export default function advisor(host: ExtensionHost) {
       if (input.point === 'idle') row.idleReviewed = row.lastActivity
     }, context)
   }
+  /** One background rerun per overrun generation, even when the hook replays after a crash. */
+  async function overrun(api: HookApi, input: ReviewInput, context: Context) {
+    await host.harness().commit(async (tx) => {
+      const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
+      runs.overruns ??= {}
+      if (runs.overruns[api.taskId] !== undefined) return
+      const task = await tx.createTask(ReviewTask, input, {
+        ownership: { kind: 'conversation' },
+        conversationId: api.conversationId,
+        background: true,
+      })
+      runs.overruns[api.taskId] = { task, at: Date.now() }
+    }, context)
+  }
   async function activity(
     api: HookApi,
     context: Context,
@@ -478,6 +492,9 @@ export default function advisor(host: ExtensionHost) {
             if (!target) return undefined
             const kept = await api.memo<{ continue: string } | null>('advisor:yield', context)
             if (kept !== undefined) return settleYield(api, kept, context)
+            // A replay of a generation whose hold already ran out: the background rerun owns its review.
+            const latches = await api.snapshot(Runs, ROOT_CONVERSATION_ID, context)
+            if (latches?.overruns?.[api.taskId] !== undefined) return undefined
             const run = (await api.snapshot(LiveDoc, api.conversationId, context))?.run?.inputs[0]
             const latest = answer.content
               .flatMap((b) => (b.type === 'text' ? [b.text] : []))
@@ -555,9 +572,16 @@ export default function advisor(host: ExtensionHost) {
                 const result = await Promise.race([work, timeout])
                 if (deadline.aborted) {
                   // The answer leaves now; the review reruns in the background and routes what it finds upward.
-                  await background(
-                    api.conversationId,
-                    { role: target.role, point: 'answer', run, latest, deadline: true },
+                  await overrun(
+                    api,
+                    {
+                      role: target.role,
+                      point: 'answer',
+                      run,
+                      latest,
+                      deadline: true,
+                      of: api.taskId,
+                    },
                     context,
                   )
                   return undefined

@@ -17,7 +17,6 @@ import type {
   Role,
   ReviewPoint,
   AdvisorNoteEntry,
-  DeliveryReason,
   LedgerItem,
   RoleProfile,
 } from './refs.ts'
@@ -38,6 +37,8 @@ export type ReviewInput = {
   latest?: string
   /** An answer review that overran the hold: the answer left without it, so this one runs in the background. */
   deadline?: true
+  /** For a deadline rerun: the held review's task, whose review ids it keeps. */
+  of?: number
 }
 async function startOf(host: ExtensionHost, id: ConversationId, context: Context, run?: number) {
   const first = run ?? (await host.harness().snapshot(LiveDoc, id, context))?.run?.inputs[0]
@@ -211,7 +212,8 @@ export async function review(
   let continuation: string | undefined
   for (const advisor of profile.advisors ?? []) {
     if (signal.aborted) break
-    const reviewId = `${runtime.taskId}:${input.point}:${advisor}`
+    // A rerun after the hold keeps the held review's ids: advisors that settled in time are not asked again.
+    const reviewId = `${input.of ?? runtime.taskId}:${input.point}:${advisor}`
     const spec = config.advisors?.[advisor] ?? {}
     const modelName = spec.model ?? config.model
     const state =
@@ -221,7 +223,10 @@ export async function review(
       input.role === 'ultimate' ? await host.harness().snapshot(Ledger, id, context) : undefined
     const prior = await host.harness().snapshot(Runs, ROOT_CONVERSATION_ID, context)
     if (prior?.settled.includes(reviewId)) {
-      const pending = prior.deliveries[reviewId]
+      let pending = prior.deliveries[reviewId]
+      // The held review settled this advisor's continuation, but the answer left before it could continue the agent.
+      if (pending?.delivered === 'continue' && input.deadline)
+        pending = await reroute(host, id, pending, context)
       if (pending) {
         continuation = (await deliver(host, id, pending, context, input.run)) ?? continuation
         if (pending.delivered !== 'continue')
@@ -388,6 +393,14 @@ export async function review(
     await host.harness().commit(async (tx) => {
       const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
       if (runs.settled.includes(reviewId)) return
+      // The hold ran out mid-review: leave it unsettled, so the background rerun reviews it with the same id.
+      if (
+        signal.aborted &&
+        input.point === 'answer' &&
+        !input.deadline &&
+        input.role !== 'ultimate'
+      )
+        return
       if (signal.aborted) skipped = 'deadline'
       const current = await tx.doc(State, ROOT_CONVERSATION_ID)
       current.conversations[id] ??= {
@@ -462,27 +475,28 @@ export async function review(
           continuation ? 'review' : row.continued ? 'run' : undefined,
           actionable,
         )
-        if (delivered === 'continue' && (row.run !== input.run || gone)) {
+        // Finished work (or an answer that left before its review) cannot be continued: its parent can still act.
+        const finished = gone || !!input.deadline
+        const blocked = delivered === 'continue' && (row.run !== input.run || finished)
+        // Advice that reached continueOn at an answer but cannot continue the agent (already continued once, a person
+        // just spoke, or the agent is done) would leave unseen with the answer, whatever the role's delivery.
+        const missed =
+          input.point === 'answer' && (blocked || reason === 'cap' || reason === 'quiet')
+        if (blocked) {
           delivered = 'note'
-          reason = 'ended'
+          reason = input.deadline ? 'deadline' : 'ended'
         }
         if (delivered === 'continue') row.continued = true
-        // Advice that should have continued the agent but could not (already continued once, or a person just spoke)
-        // would leave with the held answer unseen; on finished work nobody else reads it. Its parent can still act.
-        const answering =
-          input.point === 'answer' &&
-          !input.deadline &&
-          (['cap', 'quiet'] as DeliveryReason[]).includes(reason)
         const parent =
-          delivered !== 'card' && delivered !== 'continue' && (answering || gone)
+          input.role !== 'ultimate' && (missed || (finished && delivered !== 'card'))
             ? await parentOf(tx, id)
             : undefined
         if (parent !== undefined) {
           recipient = parent
-          if (gone) reason = input.deadline ? 'deadline' : 'ended'
+          if (finished) reason = input.deadline ? 'deadline' : 'ended'
           // A blocker on finished work wakes the parent once per reviewed answer; the rest waits for its next turn.
           const answer = host.conversations().find((c) => c.id === id)?.answerAt ?? 0
-          if (gone && notes.some((n) => n.severity === 'blocker') && row.woke !== answer) {
+          if (finished && notes.some((n) => n.severity === 'blocker') && row.woke !== answer) {
             row.woke = answer
             delivered = 'steer'
           } else delivered = 'note'
@@ -578,4 +592,32 @@ export async function review(
 async function waiting(host: ExtensionHost, tx: Tx, id: ConversationId) {
   const agents = Object.values((await tx.doc(Subagents, id)).agents)
   return agents.some((a) => host.conversations().find((c) => c.id === a.conversationId)?.busy)
+}
+/** A settled continuation the answer outran: its notes go to the parent instead, or stay as a note without one. */
+async function reroute(
+  host: ExtensionHost,
+  id: ConversationId,
+  entry: AdvisorNoteEntry,
+  context: Context,
+) {
+  return host.harness().commit(async (tx) => {
+    const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
+    const parent = await parentOf(tx, id)
+    const moved: AdvisorNoteEntry = {
+      ...entry,
+      delivered: 'note',
+      reason: 'deadline',
+      ...(parent !== undefined ? { routedTo: parent } : {}),
+    }
+    runs.deliveries[entry.review] = moved
+    const ids = new Set(entry.notes.map((n) => n.id))
+    for (const note of (await tx.doc(State, ROOT_CONVERSATION_ID)).notes)
+      if (ids.has(note.id)) {
+        note.delivered = 'note'
+        note.reason = 'deadline'
+        delete note.readAt
+        if (parent !== undefined) note.routedTo = parent
+      }
+    return moved
+  }, context)
 }

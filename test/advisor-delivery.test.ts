@@ -326,6 +326,65 @@ it('routes advice on finished work to the parent, waking it once per answer for 
   )
   expect(kinds).toEqual(['input', 'write', 'write'])
 })
+it('lets an overrun answer leave, reruns its review once, and routes the result upward though the child runs again', async () => {
+  const f = await fixture()
+  let release!: () => void
+  f.stream.mockImplementation(
+    () =>
+      ({
+        result: () =>
+          new Promise((resolve) => {
+            release = () => resolve(f.response)
+          }),
+      }) as never,
+  )
+  // The hold's 60 s deadline, expired by hand once the review is under way.
+  const hold = new AbortController()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    if (ms === 60_000) return hold.signal
+    return new AbortController().signal
+  })
+  const api = f.api()
+  const held = f.hooks.onYield(fauxAssistantMessage('Finished'), api, context)
+  await until(() => release !== undefined)
+  hold.abort()
+  expect(await held).toBeUndefined()
+  timeout.mockRestore()
+  // A replayed hook of the same generation creates no second rerun.
+  expect(await f.hooks.onYield(fauxAssistantMessage('Finished'), api, context)).toBeUndefined()
+  const runs = (await f.harness.snapshot(Runs, ROOT_CONVERSATION_ID, context))!
+  expect(Object.keys(runs.overruns ?? {})).toEqual([String(api.taskId)])
+  release()
+  // The rerun, with the held review's id, while the child is already in its next run.
+  f.stream.mockImplementation(() => ({ result: async () => f.response }) as never)
+  await review(
+    f.host,
+    f.api(),
+    { role: 'worker', point: 'answer', run: 100, deadline: true, of: api.taskId },
+    f.config,
+    [],
+    context,
+  )
+  const state = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
+  expect(state.notes.map((n) => [n.id, n.delivered, n.reason, n.routedTo])).toEqual([
+    [`${api.taskId}:answer:verification:0`, 'steer', 'deadline', f.parent],
+  ])
+})
+it('routes a capped blocker to the parent even when the role delivers cards', async () => {
+  const f = await fixture()
+  f.config.roles!.worker!.delivery = 'card'
+  await writeFile(
+    join(f.host.userHome, '.ultimate/settings.json'),
+    JSON.stringify({ advisor: f.config }),
+  )
+  await f.hooks.onYield(fauxAssistantMessage('Finished'), f.api(), context)
+  f.response.content = [
+    fauxText(JSON.stringify({ notes: [{ ...notes[0], note: 'Another failed check' }] })),
+  ]
+  await f.hooks.onYield(f.response, f.api(), context)
+  const state = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
+  expect(state.notes.at(-1)).toMatchObject({ reason: 'cap', delivered: 'note', routedTo: f.parent })
+})
 it('ultimate schedules a background review and never holds its answer or calls a model inline', async () => {
   const f = await fixture('ultimate')
   expect(await f.hooks.onYield(f.response, f.api(), context)).toBeUndefined()

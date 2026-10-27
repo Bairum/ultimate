@@ -8,7 +8,7 @@ import { LineageApi, Roots } from '../lineage/api.ts'
 import { actingAs } from '../../lib/acting-as.ts'
 import { imagesParameter } from './images.ts'
 import { send } from './send.ts'
-import { Started } from './route.ts'
+import { Started } from './api.ts'
 
 export const branchTool = (host: ExtensionHost) =>
   defineTool({
