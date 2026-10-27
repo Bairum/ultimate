@@ -3,14 +3,14 @@ import type { ConversationId, JsonObject, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
 /**
- * One entry for @ultimate: an `input` that wakes it, or a `write` the model reads at its next step. `session` keys its
- * request id; a handoff request is keyed by its wait task instead.
+ * One entry for @ultimate: an `input` that wakes it, or a `write` the model reads at its next step. `requestId` makes
+ * a retried delivery harmless.
  */
 type Delivery = {
   to: number
   type: 'input' | 'write'
-  session: number
-  kind: 'dream.started' | 'dream.journal' | 'dream.chapter' | 'dream.settled' | 'dream.handoff'
+  requestId: string
+  kind: 'dream.requested' | 'dream.prepared' | 'dream.chapter'
   data?: JsonObject
   content: string
 }
@@ -23,9 +23,8 @@ export const deliverTask = (host: Pick<ExtensionHost, 'harness'>) =>
     initial: () => ({ phase: 'submit' }),
     phases: {
       submit: async (task, runtime, ctx) => {
-        const { to, type, session, kind, content } = task.input
-        const requestId = `${kind}:${session}`
-        const data = task.input.data ?? { session }
+        const { to, type, requestId, kind, content } = task.input
+        const data = task.input.data ?? {}
         // The host handle, unlike the task runtime's, admits passive writes.
         const target = (await host.harness().conversation(to as ConversationId, ctx))!
         if (type === 'input')

@@ -33,8 +33,6 @@ for example `{ "laptop": { "my-app": "https://laptop.tail1234.ts.net:4747" } }`:
 must be in its `tailscale.allow`). A project running on this machine answers here first unless another machine is
 named; a project listed on several machines needs a `machine`. Cloud backups' register is asked only for projects
 `remotes` does not name (`lib/remote.ts`).
-`dream.asleepAfter` (a positive integer, project over user, default 5) is how many landed or applied changes make a
-dream that @ultimate's compaction started worth falling asleep into a fresh chapter; see `extensions/dream/README.md`.
 Compaction thresholds come from Pi's settings (`~/.pi/agent/settings.json`, then `<project>/.pi/settings.json`,
 key `compaction`: `enabled`, `reserveTokens`, `keepRecentTokens`) over Pi Durable's defaults (reserve 16k, keep 20k,
 background compaction 32k below the blocking threshold), which suit a ~200k window. `server/harness.ts`
