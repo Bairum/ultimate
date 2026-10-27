@@ -673,6 +673,32 @@ it('never puts a frame Codex cut short into the result, and drops one already st
     stored.content[2],
   ])
 })
+it('flags a switch to another window in the state Codex reads, including nested state text', async () => {
+  const f = await fixture()
+  const { promise } = await running(f)
+  const step = { type: 'mcpToolCall', server: 'cua_repl', tool: 'js', status: 'completed' }
+  const state = (title: string) => ({
+    type: 'text',
+    text: `Window: "${title}", App: Google Chrome.\n0 standard window ${title}`,
+  })
+  f.fake.item({ ...step, result: { content: [state('Google Chrome')] } })
+  f.fake.item({ ...step, result: { content: [state('Google Chrome')] } })
+  // USG #76075: after a capture error the next state was Ultimate's own window, not the Citrix one.
+  f.fake.item({
+    ...step,
+    result: {
+      content: [
+        { type: 'text', text: JSON.stringify({ content: [state('~/Code/ultimate · agent')] }) },
+      ],
+    },
+  })
+  f.fake.complete()
+  const details = data(await promise)
+  expect(details.windows).toMatchObject([
+    { from: { text: 'Google Chrome' }, to: { text: '~/Code/ultimate · agent' } },
+  ])
+  expect(f.progress.join('')).toContain('Codex switched windows')
+})
 it('saves post-action frames that cua_repl nests as serialised content inside text parts', async () => {
   const f = await fixture()
   const { promise } = await running(f)

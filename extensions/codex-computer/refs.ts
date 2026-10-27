@@ -26,6 +26,8 @@ export type CodexDetails = {
   retries?: number
   /** Times the run continued its thread in a new turn after Codex gave up reconnecting. */
   resumes?: number
+  /** Each time the window Codex's state reports changed during the run: window titles, from Codex, untrusted. */
+  windows?: { from: UntrustedText; to: UntrustedText; at: number }[]
   /** Guidance sent into the run while it worked; `restarted` when Codex refused a steer and the turn was restarted with it. */
   guidance: {
     from: 'user' | 'operator'

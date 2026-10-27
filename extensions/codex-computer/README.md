@@ -106,17 +106,23 @@ menu) was still open with no window in front; cancelling the menu and raising th
 rules say so. Codex asks for app approval once per new cua_repl, several times per run; each is accepted and recorded.
 
 A remote session can map clicks wrongly on its own side even when Codex's capture and click agree (USG, 2026-10-26:
-Citrix HTML5 in Chrome; Codex clicked the breadcrumb exactly, Citrix opened the remote address bar about 47 points
-higher). The session fixed its scale at launch and the window had changed since; reconnecting the session, or
-refitting it to the window, fixes it. The fixed rules make Codex check each remote click's effect and stop with
-"remote click mapping out of sync" instead of clicking on. Keep other windows of the same browser (such as
-Ultimate's own UI) off the screen the session is on.
+Citrix HTML5 in Chrome; Codex clicked the breadcrumb exactly, Citrix opened the remote address bar about 45 points
+higher, a constant offset). The fix was the page zoom of the Chrome tab hosting the session: press Cmd+0 on the
+Citrix tab first, and relaunch the session from StoreFront only if clicks still drift. The fixed rules make Codex
+check each remote click's effect and stop with "remote click mapping out of sync" instead of clicking on. Keep other
+windows of the same browser (such as Ultimate's own UI) off the screen the session is on.
 
 `windowNotFoundAtPosition` from Codex's click means another window covers that screen point. On USG's Mac every such
 failure (screen x 52–105) fell on macOS Stage Manager's strip of recent apps along the left edge, over the OpsMate
 sidebar, while clicks further right worked. Turn Stage Manager off (Control Centre or Desktop & Dock), or turn its
 "Recent apps" off. The fixed rules tell Codex not to retry the same point but to click further inside the target or
 use Tab and Enter, then report the overlay.
+
+A capture can fail with ScreenCaptureKit error -3812 (invalid parameter: the window was recreated, moved space or the
+display slept); the next capture may then be of another window. The fixed rules make Codex check the window title of
+every capture and state before acting, re-acquire and raise the target after an error, and stop after two tries with
+"captured the wrong window". The wrapper also records each change of the window Codex's state names (`windows` in
+the result), and the card shows "switched windows n×" and a line in the live steps.
 
 ## Apps and Stop
 

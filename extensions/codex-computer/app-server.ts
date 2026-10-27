@@ -36,7 +36,8 @@ const preamble =
   'Numbers and tables: before reporting a number or table cell, read it again from a fresh capture, zoomed in if small, and say which digits you are unsure of.\n\n' +
   'Clicking a half-scale capture: a window on a non-Retina monitor of a Retina Mac can come back at double size, its content in the top-left quarter and the right and bottom halves blank (one flat colour). Only when a capture looks exactly like that, and your target lies in that top-left quarter, click at twice the pixel coordinates you read off the image (pixel [x, y] becomes [2x, 2y]). Prefer an accessibility element index over coordinates whenever one exists. After the first such click, check the next screenshot that it hit the target; if it did not, stop and report.\n\n' +
   'Remote sessions: after a click into a remote session (Citrix, a remote desktop in a browser), check the next capture shows the expected change. If it reacted somewhere else although your coordinates match the capture (for example the remote address bar opened instead of the page element), the session\'s own click mapping is out of sync: stop and report "remote click mapping out of sync; reconnect the session". Never keep clicking blindly.\n\n' +
-  'windowNotFoundAtPosition means another window covers that screen point, often macOS Stage Manager\'s strip of recent apps along the left edge. Do not retry the same point: click a point further inside the target (away from the screen edge), or reach it with Tab or Shift-Tab and Enter. If that fails too, Raise the target window and try once more, then stop and report "a system overlay (Stage Manager?) covers this point".\n\n'
+  'windowNotFoundAtPosition means another window covers that screen point, often macOS Stage Manager\'s strip of recent apps along the left edge. Do not retry the same point: click a point further inside the target (away from the screen edge), or reach it with Tab or Shift-Tab and Enter. If that fails too, Raise the target window and try once more, then stop and report "a system overlay (Stage Manager?) covers this point".\n\n' +
+  'Right window: before acting on a capture or accessibility state, check its window title is the window you are operating. After any capture error, or when a different app or window comes back (another window of the same browser counts), get the app handle again and Raise the target window by its title, then capture again. Never type or click on the strength of a capture of the wrong window. After 2 failed tries, stop and report "captured the wrong window".\n\n'
 // Every turn: a new turn starts a fresh cua_repl, and Ultimate itself records screenshots and app approvals.
 const turnNote =
   'Each turn starts a fresh cua_repl: get app handles again (cua.getApp) before using them. Ultimate saves every screenshot and returns its path, and records app approvals; do not report either.\n\n'
@@ -58,6 +59,23 @@ export function imageParts(content: unknown, depth = 0): { data: string; mimeTyp
       // Text that only looks like serialised content is Codex's prose: it carries no image.
       return []
     }
+  })
+}
+/** The window titles cua_repl names in a tool result's state text (`Window: "…", App: …`), in order, unwrapped like images. */
+export function windowTitles(content: unknown, depth = 0): string[] {
+  if (!Array.isArray(content) || depth > 4) return []
+  return content.flatMap((value) => {
+    const part = object(value)
+    const body = string(part.text)
+    if (part.type !== 'text') return []
+    if (body.startsWith('{"content":'))
+      try {
+        return windowTitles(object(JSON.parse(body)).content, depth + 1)
+      } catch {
+        // Prose that only looks like serialised content names no window.
+        return []
+      }
+    return [...body.matchAll(/\bWindow: "([^"\n]{1,300})"/g)].map((match) => match[1])
   })
 }
 /** Times one run continues its thread after Codex gives up reconnecting to OpenAI. */
@@ -138,6 +156,8 @@ export async function operate(input: {
   /** One steer at a time, from its request until its guidance is delivered or refused. */
   let steering = false
   let resumes = 0
+  /** The window Codex's last state named, to spot a switch to another window. */
+  let window: string | undefined
   /** Set while a steer that Codex refused swaps the turn: the old turn's end, however it ended, must not end the run. */
   let swapping: PromiseWithResolvers<void> | undefined
   /** A turn that ended while a steer was in flight; ends the run unless the steer starts a new turn. */
@@ -337,6 +357,16 @@ export async function operate(input: {
         : `${string(item.server)}/${string(item.tool)}`
     details.steps.push({ tool: text(tool), status: text(string(item.status)), at: Date.now() })
     output(`Step ${details.counts.items}: ${untrusted(tool)}\n`)
+    for (const title of windowTitles(object(item.result).content)) {
+      if (window !== undefined && title !== window) {
+        details.windows = [
+          ...(details.windows ?? []),
+          { from: text(window), to: text(title), at: Date.now() },
+        ]
+        output(`Codex switched windows: ${untrusted(`${window} → ${title}`)}\n`)
+      }
+      window = title
+    }
     for (const part of imageParts(object(item.result).content)) {
       const data = part.data
       imageWork = imageWork

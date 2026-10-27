@@ -82,12 +82,15 @@ function liveOf(output: string) {
     const block = blocks[index]
     if (block.startsWith(OPEN)) {
       const inner = unwrap(block).text
-      if ((blocks[index - 1] ?? '').endsWith('Codex is reconnecting to OpenAI (')) {
+      const before = blocks[index - 1] ?? ''
+      if (before.endsWith('Codex is reconnecting to OpenAI (')) {
         reconnecting = true
         continue
       }
       reconnecting = false
-      if (/Step \d+: $/.test(blocks[index - 1] ?? '')) steps.push({ tool: inner })
+      if (/Step \d+: $/.test(before)) steps.push({ tool: inner })
+      else if (before.endsWith('Codex switched windows: '))
+        steps.push({ guidance: `Codex switched windows: ${inner}` })
       else message = inner
       continue
     }
@@ -502,6 +505,14 @@ export function OperateCard({
           {!!details.resumes && (
             <span className="text-warning">
               continued after {plural(details.resumes, 'dropped turn')}
+            </span>
+          )}
+          {!!details.windows?.length && (
+            <span
+              className="text-warning"
+              title={details.windows.map((w) => `${w.from.text} → ${w.to.text}`).join('\n')}
+            >
+              switched windows {details.windows.length}×
             </span>
           )}
           <span>{details.counts.minutes < 1 ? '<1' : Math.round(details.counts.minutes)} min</span>
