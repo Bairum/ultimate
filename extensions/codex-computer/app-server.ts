@@ -38,8 +38,31 @@ const preamble =
   'Remote sessions: after a click into a remote session (Citrix, a remote desktop in a browser), check the next capture shows the expected change. If it reacted somewhere else although your coordinates match the capture (for example the remote address bar opened instead of the page element), the session\'s own click mapping is out of sync: stop and report "remote click mapping out of sync; reconnect the session". Never keep clicking blindly.\n\n' +
   'windowNotFoundAtPosition means another window covers that screen point, often macOS Stage Manager\'s strip of recent apps along the left edge. Do not retry the same point: click a point further inside the target (away from the screen edge), or reach it with Tab or Shift-Tab and Enter. If that fails too, Raise the target window and try once more, then stop and report "a system overlay (Stage Manager?) covers this point".\n\n' +
   'Right window: before acting on a capture or accessibility state, check its window title is the window you are operating. After any capture error, or when a different app or window comes back (another window of the same browser counts), get the app handle again and Raise the target window by its title, then capture again. Never type or click on the strength of a capture of the wrong window. After 2 failed tries, stop and report "captured the wrong window".\n\n'
+/**
+ * The host's local time, one line: Codex sees no clock inside a remote session, and developer instructions are not
+ * refreshed on resume, so every turn carries it (Bridgestone #26101 spent two questions on the time).
+ */
+export function now(date = new Date()) {
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+      timeZoneName: 'short',
+    })
+      .formatToParts(date)
+      .map(({ type, value }) => [type, value]),
+  )
+  return `Now: ${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} ${p.timeZoneName} (${zone})\n`
+}
 // Every turn: a new turn starts a fresh cua_repl, and Ultimate itself records screenshots and app approvals.
-const turnNote =
+const turnNote = () =>
+  now() +
   'Each turn starts a fresh cua_repl: get app handles again (cua.getApp) before using them. Ultimate saves every screenshot and returns its path, and records app approvals; do not report either. In your final answer, refer to screenshots by number: 1 is the first image a capture returned after the latest "Brief:", counting every image, including repeats.\n\n'
 /** Codex's final answer for every turn: a result the parent can read without parsing prose. Strict: every field required. */
 export const resultSchema = {
@@ -452,7 +475,7 @@ export async function operate(input: {
               await withWaiting((prefix) =>
                 request('turn/start', {
                   threadId,
-                  input: [{ ...message, text: turnNote + prefix + message.text }],
+                  input: [{ ...message, text: turnNote() + prefix + message.text }],
                   outputSchema: resultSchema,
                 }),
               ),
@@ -686,7 +709,7 @@ export async function operate(input: {
           withWaiting((prefix) =>
             request('turn/start', {
               threadId: details.session,
-              input: [{ type: 'text', text: turnNote + prefix + resumeNote, text_elements: [] }],
+              input: [{ type: 'text', text: turnNote() + prefix + resumeNote, text_elements: [] }],
               outputSchema: resultSchema,
             }),
           ).then(
@@ -754,7 +777,11 @@ export async function operate(input: {
         request('turn/start', {
           threadId: details.session,
           input: [
-            { type: 'text', text: `${turnNote}${prefix}Brief:\n${input.brief}`, text_elements: [] },
+            {
+              type: 'text',
+              text: `${turnNote()}${prefix}Brief:\n${input.brief}`,
+              text_elements: [],
+            },
           ],
           outputSchema: resultSchema,
         }),

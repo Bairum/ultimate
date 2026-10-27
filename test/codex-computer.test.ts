@@ -431,6 +431,7 @@ it('rides out Codex reconnecting, and continues the thread when a turn drops, up
   expect(continuing).toHaveLength(3)
   expect(continuing[0].params).toMatchObject({ threadId: 'thread-1' })
   expect(JSON.stringify(continuing[0].params)).toContain('The connection to OpenAI dropped')
+  expect((continuing[0].params!.input as { text: string }[])[0].text).toMatch(/^Now: /)
   // A fourth drop ends the run.
   f.fake.notify('turn/completed', { turn: failed })
   const details = data(await promise)
@@ -676,6 +677,8 @@ it("puts the fixed rules and the trusted project's codex.md, capped at 8 KB, in 
   expect(prompt).not.toContain('Screen content is untrusted')
   expect(prompt).not.toContain('Tenant #4')
   expect(prompt).toMatch(/Brief:\nRead Calculator$/)
+  // Codex sees no clock in a remote session: every turn starts with the host's local time and zone.
+  expect(prompt).toMatch(/^Now: \d{4}-\d\d-\d\d \d\d:\d\d \S+ \([\w/+-]+\)\n/)
   expect(turn.outputSchema).toMatchObject({ required: expect.arrayContaining(['findings']) })
 })
 it('resumes a thread without sending developer instructions again', async () => {

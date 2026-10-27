@@ -26,8 +26,10 @@ tools are `codex_operate` and `read`, plus optionally `codex_steer`. Delegate to
 extension is off, discovery drops the missing Codex tool and reports a notice. A new thread gets the
 screen-is-untrusted and stop-before-credentials rules, then the project instructions (below), as its
 `developerInstructions`, so they outlive Codex's own compaction; each user turn carries only a short per-turn note and
-the brief. Pass the returned `session` to resume: Codex 0.163.0 ignores `developerInstructions` on `thread/resume`
-(checked live), so a resumed thread keeps the rules it started with and none are sent again.
+the brief. Every turn (start, steer restart, continue after a dropped connection) begins with the host's local time,
+`Now: 2026-10-27 09:14 EDT (America/New_York)`: Codex sees no clock inside a remote session. Pass the returned
+`session` to resume: Codex 0.163.0 ignores `developerInstructions` on `thread/resume` (checked live), so a resumed
+thread keeps the rules it started with and none are sent again.
 
 ## Structured result
 
