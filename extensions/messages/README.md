@@ -34,40 +34,44 @@ without restating it. A replayed call finds the reply through the `board.sent` r
 `reply: false` updates and other recipients are unaffected. @ultimate's message to `user` is never refused for an
 owed answer: while a user's message it has read is open, the message answers it (marked `answered`, the new one
 names it in `re`, its delivery keeps the final answer local) and, with `questions`, stays open itself, so a
-conversation such as the onboarding walkthrough can ask one card after another. A user's message still queued is
-unread and left alone; it gets its own turn.
+conversation such as the onboarding walkthrough can ask one card after another. A message still queued is unread
+and is never treated as owed: a message to its sender then goes as a new message, and the queued one gets its own
+turn and its own answer.
 A subagent (a conversation its parent lists in `ultimate.subagents`) may message only that parent, so its work reaches
 the user through its coordinator and @ultimate; its prompt says so. Automation runs and top-level conversations may
 message any agent; only @ultimate may message the user.
 `reply: false` is one-way: it wakes the recipient without returning an answer, and its model text says the
 answer is not sent. The log records its answering assistant entry in `answer` while keeping state `delivered`;
-no reply is appended. A subagent's one-way update to its parent is instead a `board.message` write with
-`delivery: 'note'` and no `input` flag. It starts no run; the parent reads it with its next model request.
-The note's delivery decision is saved in the task input for replay.
+no reply is appended.
 
-### Triage for the primary agent
+### Waking upward: notes and reports
 
-A one-way message or a reply from a conversation to the primary agent (@ultimate)
-is triaged, so pure status updates cost no turn. The log records `triage: { verdict, reason? }` on the message:
+One rule decides whether talking upward wakes anyone, from state rather than text: **a one-way message to the
+conversation that started you is a note, and stopping with nothing under way is your report.**
 
-- **act at once, no model:** a reply-enabled message; text whose last line is a question or numbered options (a
-  numbered list after a line ending in `:` counts only when that line names a decision, option or pick, or the message
-  has lettered options; otherwise it is plan steps); text
-  longer than `TRIAGE_MAX` (24,000 characters), which is never cut for the model; a failed reply; a reply to the
-  agent's own message that ended with a question or options (read from the task input, so the log's bound never
-  drops it).
-- **otherwise:** the message is written into the conversation as context (a `board.message` or `board.reply` write
-  with the model text, no run) with verdict `assessing`. The delivery task asks `summaryModel` with
-  `TRIAGE_SYSTEM` (`triage.ts`), memoizing the model, the response and the verdict (a failed assessment too), so a
-  resumed task asks once, decides the same, and accounts the usage once. `act` (a decision,
-  question, landing or result to relay, failure, blocker or request) submits one short `board.wake` input that
-  points at the message; `fyi` (progress, queued, still waiting) starts nothing, and the agent reads it with its
-  next input. A failed or timed-out (30 s) assessment acts, so the agent wakes as without triage; without a
-  summary model nothing is gated. The verdict commits before the wake and emits `board.triaged`
-  `{ message, from, to, verdict, reason }` (`Triaged`). Notes and messages from the user are never triaged.
+- **Notes.** A one-way message from a subagent to its parent, or from a branch to its starter (the conversation that
+  called `branch`, kept in the branch's `board.started`), is a `board.message` write with `delivery: 'note'` and no
+  `input` flag. It starts no run; the recipient reads it with its next model request. The note's delivery decision is
+  saved in the task input for replay.
+- **Reports.** After each run of a branch, a background `board.route` task (one per generation, from an `onYield`
+  hook) looks at its final answer. The answer to the starter's reply-enabled message already returns as that
+  message's reply, so it is skipped, as are empty, failed and aborted answers. Otherwise, if nothing of the branch is
+  still under way (no run or queued input in it or a subagent at any depth, no subagent report or waking `notify`
+  on its way, no submission in the lander's queue or being reported, no reply-enabled message of its own still
+  waiting), the answer goes to the starter as a one-way message with
+  `report: true`, which wakes it as a follow-up. While something is still under way it goes as a note: the branch
+  will run again when that work wakes it.
+- **Everything else wakes.** Reply-enabled messages, and one-way messages from anyone who is not the recipient's
+  child or branch (another branch, the lander's deploy handoff, an automation's escalation, another project's
+  Ultimate), are inputs.
 
-The incoming row shows it after its kind: a spinner and `assessing…`, then `action` in the accent or a muted
-`FYI · no action`, with the reason on hover and in the open card. `board.wake` renders nothing.
+Routing cannot loop: it goes only from a branch to its starter, which existed before it, and a routed message is
+one-way, so the starter's answer to it goes nowhere. Request id `route:<answer entry>` deduplicates delivery in the
+branch's `board.requests`, so a restart never sends an answer twice.
+
+A branch whose latest report came after the starter's latest message to it shows as `awaiting @ultimate`
+(`conversationState` in `data.tsx`), as does one with a reply-enabled message to @ultimate still open; @ultimate
+messaging the branch, or concluding it, clears it.
 
 Sending to `user` writes a message
 shown in @ultimate's transcript; it starts no run. The message is @ultimate's answer: a direct `message` call to
@@ -106,6 +110,8 @@ advancing the task checkpoint happen in one transaction. A reopened task resumes
 placed input awaiting an answer and a recorded answer awaiting delivery survive without duplicate replies.
 One-way input deliveries also wait for the answer; recording it and completing the task commit together.
 Note deliveries complete after placement, without waiting for an answer.
+A delivery that triage, before its removal, had already written as context (`board:<id>` or `board-reply:<id>` is a
+write) resumes with one short `board-wake:<id>` input after it, so the recipient still wakes once.
 When the recipient's input hooks refuse placement, the message becomes `failed` with `error` naming the cause, and
 the task completes instead of faulting with the message stuck in `sent`. A reply-enabled message whose recipient ends
 its run without an answer gets a reply in its place: `stopped` when the run or its queued input was aborted (a person
@@ -126,18 +132,9 @@ It chooses the explicit root, otherwise the caller's tree root, otherwise the on
 produce an error listing the available ids. It forks the root's tally tip through lineage, attributes the tally's branch
 line to the caller, and sends the first input as a message with replies enabled. It returns the branch id and message id.
 The branch's answer therefore wakes its caller as a normal `board.reply`.
-The tool records the caller in the branch's `board.started` document, so later answers reach it too. A later run, woken
-by a subagent, a notify, a lander report or steering, ends with a final answer nobody receives. After each such run, a
-background `board.route` task (one per generation, from an `onYield` hook) sends that answer to the starter as a one-way
-message from the branch, with the usual outgoing and incoming cards. It skips the answer when the run answered the
-starter's reply-enabled message (board.delivery replies to it), when the run itself called `message` to the starter, when only the starter's own replies woke it (the starter already knows what it answered), and when the answer is empty, failed or aborted. An answer whose last line is a question or a
-numbered option asks for a decision and wakes the starter as a follow-up; any other answer is a note, which wakes nothing.
-An answer to the starter's one-way message is routed like any other: it gets no reply, and may carry a decision.
-This cannot loop: routing goes only from a branch to its starter, which existed before it, and a routed message is
-one-way, so the starter's answer to it goes nowhere.
-The reply assessment is not used: it arrives later, from the summary model, and only when one is configured. Request id
-`route:<answer entry>` deduplicates delivery in the branch's `board.requests`, so a restart never sends an answer twice.
-Before sending its first input, the tool rereads the `coordinator` definition (built-in, user, then trusted project override), applies its instructions and the model and thinking level it pins (thinking clamped to what the model supports), and marks `ultimate.metadata.label = 'coordinator'`. A pin whose provider has no login here is skipped; without a usable pin the branch starts on the default model (`defaultModel` in `lib/agents.ts`: Pi's default when it has a login, else the first model that has one), never on the root's stored model. Its tools stay inherited either way. Coordinators report decisions to @ultimate and send it one-way landing or failure updates with the sha and divergence.
+The tool records the caller in the branch's `board.started` document, so later answers reach it as notes or reports
+(see Waking upward).
+Before sending its first input, the tool rereads the `coordinator` definition (built-in, user, then trusted project override), applies its instructions and the model and thinking level it pins (thinking clamped to what the model supports), and marks `ultimate.metadata.label = 'coordinator'`. A pin whose provider has no login here is skipped; without a usable pin the branch starts on the default model (`defaultModel` in `lib/agents.ts`: Pi's default when it has a login, else the first model that has one), never on the root's stored model. Its tools stay inherited either way. Coordinators report results, decisions and landings to @ultimate in their final answers, which route as reports.
 The tool gives lineage its task and call ids for a task-scoped receipt, recorded atomically with the fork, so replay cannot
 create another branch even before the branch-id memo is saved. Pi retires that receipt when the originating task completes.
 It deduplicates message admission with the same task-scoped `board.sent-calls` receipt as `message`, indexed by call id
@@ -162,7 +159,7 @@ never the user's.
   call throws a sentence naming the project and machine. Telling an Ultimate whose reply-expected message to you is
   still open is refused: answer it instead.
 - **Target:** `messages.remote { key, text, reply, from: { project, machine } }` logs a message `from: 'remote'` to its
-  own primary agent, the only recipient it can reach, and delivers it like any other: as a steer, triaged, with
+  own primary agent, the only recipient it can reach, and delivers it like any other: as a steer, with
   receipts. The model reads `Message from @ultimate@<project> on <machine> (another project's Ultimate, not the
   user)`. The `board.remote` document maps each key to its message in the same commit, so a repeated post (a retry,
   a replay) returns the first id and delivers nothing new.
@@ -204,6 +201,7 @@ type Message = {
   answer?: EntryId
   error?: string
   remote?: { project: string; machine: string; key: string; id?: number } // the other Ultimate
+  report?: true // a branch's routed final answer after it stopped with nothing under way
   questions?: Question[] // what a reply-expected message to the user asks (see Questions)
 }
 ```
@@ -228,7 +226,7 @@ append no log items. `MessagesApi`, `Message` and the `Messages` document live i
 
 ## Files
 
-Server side, imported in one direction (`log`, `images`, `addresses`, `questions` → `triage` → `delivery` →
+Server side, imported in one direction (`log`, `images`, `addresses`, `questions` → `delivery` →
 `send` → `route` → `branch`; `remote` → `delivery`), each sharing only the `Messages` log and explicit helpers:
 
 - `server.ts`: wiring: the extension definition, the `message` tool, the prompt section, hooks, actions and the
@@ -236,8 +234,7 @@ Server side, imported in one direction (`log`, `images`, `addresses`, `questions
 - `send.ts`: `send()`, its validation, receipts (`Sent`, `Requests`) and the conversion of a message to a sender you
   owe an answer into that answer.
 - `delivery.ts`: the `board.delivery` task, its `deliver` and `reply` phases.
-- `triage.ts`: triage rules, the summary-model assessment and recording its verdict.
-- `route.ts`: the `board.route` task and `Started`, which return a branch's final answers to its starter.
+- `route.ts`: the `board.route` task, which returns a branch's final answers to its starter as notes or reports.
 - `remote.ts`: `tell`, the `remote` and `remoteReply` actions and `RemoteDoc`.
 - `branch.ts`: the `branch` tool.
 - `addresses.ts`: resolving `to`, sender names, a subagent's parent and the lander.

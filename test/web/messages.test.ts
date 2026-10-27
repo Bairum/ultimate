@@ -384,6 +384,17 @@ describe('conversation state', () => {
     ).toBe('done')
   })
 
+  it('awaits the primary agent after reporting to it, until the primary agent messages it', () => {
+    const branch = { id: 5, kind: 'other' as const, runState: 'answered' as const, primary: 3 }
+    const report = { from: 5, to: 3, reply: false, report: true as const }
+    expect(conversationState(branch, messagesLog(report))).toBe('awaiting')
+    // A note (no report) waits on nothing.
+    expect(conversationState(branch, messagesLog({ from: 5, to: 3, reply: false }))).toBe('idle')
+    expect(conversationState(branch, messagesLog(report, { from: 3, to: 5, reply: false }))).toBe(
+      'idle',
+    )
+  })
+
   it('says every state in a word, so a standing row or lane never falls back to idle', () => {
     // A standing agent (not the primary) asking @ultimate shows it, rather than idle.
     const standing = { id: 7, kind: 'other' as const, runState: 'answered' as const, primary: 3 }

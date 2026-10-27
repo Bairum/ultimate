@@ -31,7 +31,8 @@ export const waitingOnUser = (log: MessagesData) =>
  * - `waits`: the primary agent (@ultimate) has a question open with the user, the only
  *   state that asks the user to act;
  * - `awaiting`: a conversation that is no subagent asked the primary agent (a branch asking @ultimate) and waits for
- *   the answer; a subagent's questions go to its parent, which answers them in its own run;
+ *   the answer, or reported to it and has not heard from it since; a subagent's questions go to its parent, which
+ *   answers them in its own run;
  * - `done`: a subagent answered, and its answer went to its parent;
  * - `failed`: its latest input ended without an answer;
  * - `idle`: everything else.
@@ -63,16 +64,26 @@ export function conversationState(
   if (conversation.parked) return 'paused'
   if (conversation.busy || runState === 'working' || runState === 'queued') return 'working'
   if (kind === 'primary' && waitingOnUser(log) > 0) return 'waits'
-  if (
-    kind !== 'subagent' &&
-    log.messages.some(
-      (message) => message.from === id && message.to === conversation.primary && isOpen(message),
-    )
-  )
-    return 'awaiting'
+  if (kind !== 'subagent' && awaitsPrimary(id, conversation.primary, log)) return 'awaiting'
   if (runState === 'error') return 'failed'
   if (kind === 'subagent' && runState === 'answered') return 'done'
   return 'idle'
+}
+
+/**
+ * Whether conversation `id` waits on the primary agent: a reply-enabled message to it is open, or its latest report
+ * (a routed final answer after it stopped with nothing under way) came after the primary agent's latest message to it.
+ */
+function awaitsPrimary(id: number, primary: number | undefined, log: MessagesData) {
+  if (primary === undefined) return false
+  let reported = false
+  for (const message of log.messages) {
+    if (message.from === id && message.to === primary) {
+      if (isOpen(message)) return true
+      if (message.report) reported = true
+    } else if (message.from === primary && message.to === id) reported = false
+  }
+  return reported
 }
 
 /** A state in the sidebar's and System's lower-case words; `waiting` counts what waits on you. */
