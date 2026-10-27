@@ -3,7 +3,7 @@
  * screenshots, and what it says it saw. Everything Codex writes is screen-derived: shown as plain text with the
  * untrusted marker, never as Markdown or our own words.
  */
-import { CircleStopIcon, LoaderCircleIcon, SendIcon } from 'lucide-react'
+import { CircleStopIcon, LoaderCircleIcon, MessageCircleQuestionIcon, SendIcon } from 'lucide-react'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Shimmer } from '@/components/ai/shimmer'
@@ -17,10 +17,10 @@ import {
   ToolSection,
 } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { api, cn, errorMessage, useConversation, useToolDuration } from '@/sdk'
-import type { ToolCallView } from '@/sdk'
-import { SteerAction, StopAction } from './refs.ts'
-import type { CodexDetails } from './refs.ts'
+import { api, cn, errorMessage, useConversation, useDocOf, useToolDuration } from '@/sdk'
+import type { EntryRecord, ToolCallView } from '@/sdk'
+import { SteerAction, StateDoc, StopAction } from './refs.ts'
+import type { CodexDetails, CodexState, QuestionEntry } from './refs.ts'
 
 type Status = CodexDetails['status']
 type Tone = 'good' | 'wait' | 'bad'
@@ -69,8 +69,8 @@ function Untrusted() {
 }
 
 /**
- * Progress while a call runs, read from its streamed output: `Step n: <tool>` lines and Codex's own messages (both
- * inside the untrusted boundary), and our own `Guidance from the …:` lines, in the order they happened.
+ * Progress while a call runs, read from its streamed output: `Step n: <tool>` lines, Codex's own messages, questions
+ * and milestones (all inside the untrusted boundary), and our own guidance and answer lines, in the order they happened.
  */
 function liveOf(output: string) {
   const steps: { tool?: string; guidance?: string }[] = []
@@ -91,11 +91,17 @@ function liveOf(output: string) {
       if (/Step \d+: $/.test(before)) steps.push({ tool: inner })
       else if (before.endsWith('Codex switched windows: '))
         steps.push({ guidance: `Codex switched windows: ${inner}` })
+      else if (before.endsWith('Codex asks: ')) steps.push({ guidance: `Codex asks: ${inner}` })
+      else if (before.endsWith('Codex progress: ')) steps.push({ guidance: `Progress: ${inner}` })
       else message = inner
       continue
     }
     for (const line of block.split('\n')) {
-      if (line.startsWith('Guidance from ') || line.startsWith('Connection to OpenAI dropped'))
+      if (
+        line.startsWith('Guidance from ') ||
+        line.startsWith('Answer from ') ||
+        line.startsWith('Connection to OpenAI dropped')
+      )
         steps.push({ guidance: line })
       if (line.startsWith('Connection to OpenAI dropped')) reconnecting = false
     }
@@ -148,8 +154,14 @@ function StopButton({ conversation }: { conversation: number }) {
   )
 }
 
-/** "Tell Codex…" under a running call: sends the user's guidance into the active turn. */
-function SteerBox({ conversation }: { conversation: number }) {
+type Question = NonNullable<CodexState['question']>
+
+/**
+ * "Tell Codex…" under a running call: sends the user's guidance into the active turn. While Codex waits on an
+ * ask_operator question it shows that question, and what the user sends is the answer (the first one, from the user or
+ * the parent agent, wins).
+ */
+function SteerBox({ conversation, question }: { conversation: number; question?: Question }) {
   const [value, setValue] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -164,8 +176,21 @@ function SteerBox({ conversation }: { conversation: number }) {
       .catch((reason: unknown) => setError(errorMessage(reason)))
       .finally(() => setBusy(false))
   }
+  const label = question ? 'Answer Codex' : 'Tell Codex'
   return (
-    <div className="border-t border-border/60 px-2.5 py-1.5">
+    <div
+      className={cn('border-t border-border/60 px-2.5 py-1.5', question && 'bg-warning/5')}
+      data-codex-question={question ? question.id : undefined}
+    >
+      {question && (
+        <div className="mb-1.5 flex min-w-0 items-start gap-1.5 text-[12px]">
+          <MessageCircleQuestionIcon className="mt-0.5 size-3.5 shrink-0 text-warning" />
+          <p className="min-w-0 flex-1 break-words whitespace-pre-wrap text-foreground/90">
+            <span className="text-warning">Codex asks</span> {question.text.text}
+            <Untrusted />
+          </p>
+        </div>
+      )}
       <form
         className="flex items-center gap-1.5"
         onSubmit={(event) => {
@@ -174,17 +199,17 @@ function SteerBox({ conversation }: { conversation: number }) {
         }}
       >
         <input
-          aria-label="Tell Codex"
+          aria-label={label}
           className="min-w-0 flex-1 bg-transparent text-[12px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
           data-codex-steer
           disabled={busy}
           maxLength={4000}
           onChange={(event) => setValue(event.target.value)}
-          placeholder="Tell Codex…"
+          placeholder={`${label}…`}
           value={value}
         />
         <button
-          aria-label="Send to Codex"
+          aria-label={question ? 'Send answer to Codex' : 'Send to Codex'}
           className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-default disabled:opacity-40"
           disabled={busy || !value.trim()}
           type="submit"
@@ -196,6 +221,12 @@ function SteerBox({ conversation }: { conversation: number }) {
           )}
         </button>
       </form>
+      {question && (
+        <p className="mt-1 text-[10.5px] text-muted-foreground/70">
+          The operator's agent is asked too; the first answer goes back. Codex stops and reports
+          after 10 minutes without one.
+        </p>
+      )}
       {error && <p className="mt-1 text-[11px] text-error">{error}</p>}
     </div>
   )
@@ -218,6 +249,13 @@ function Guidance({ guidance }: { guidance: CodexDetails['guidance'] }) {
           {item.delivery === 'restarted' && (
             <span className="ml-1.5 text-[10.5px] text-warning">
               steer refused, turn restarted with it
+            </span>
+          )}
+          {(item.delivery === 'answered' || item.delivery === 'queued') && (
+            <span className="ml-1.5 text-[10.5px] text-muted-foreground/70">
+              {item.delivery === 'answered'
+                ? "answered Codex's question"
+                : 'queued for the next turn'}
             </span>
           )}
         </p>
@@ -445,18 +483,28 @@ function Footer({ children }: { children: ReactNode }) {
 export function Operate({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   const conversation = useConversation((c) => c.id)
-  return <OperateCard call={call} conversation={conversation} duration={duration} />
+  const question = useDocOf(conversation, StateDoc)?.question
+  return (
+    <OperateCard
+      call={call}
+      conversation={conversation}
+      duration={duration}
+      {...(question ? { question } : {})}
+    />
+  )
 }
 
-/** The card itself, from the call. */
+/** The card itself, from the call; `question` is Codex's open ask_operator question, while it waits. */
 export function OperateCard({
   call,
   conversation,
   duration,
+  question,
 }: {
   call: ToolCallView
   conversation?: number
   duration?: string
+  question?: Question
 }) {
   const details = detailsOf(call)
   const running = call.status === 'running'
@@ -556,7 +604,9 @@ export function OperateCard({
         {call.status === 'error' && <ToolOutput isError output={call.output} />}
         <ToolDiagnostics diagnostics={call.diagnostics} />
       </ToolContent>
-      {running && conversation !== undefined && <SteerBox conversation={conversation} />}
+      {running && conversation !== undefined && (
+        <SteerBox conversation={conversation} {...(question ? { question } : {})} />
+      )}
       {details && (details.session || details.counts.items > 0) && (
         <Footer>
           <span>steps {details.counts.items}</span>
@@ -587,6 +637,41 @@ export function OperateCard({
         </Footer>
       )}
     </Tool>
+  )
+}
+
+/**
+ * Codex's question in the conversation that owns the operator: the question while it is open, with the same answer
+ * box as the running card (the first answer, the user's or this agent's codex_steer, goes back to Codex); once settled,
+ * a quiet line.
+ */
+export function QuestionCard({ entry }: { entry: EntryRecord }) {
+  const data = entry.data as QuestionEntry
+  const open = useDocOf(data.conversation, StateDoc)?.question
+  const waiting = open?.id === data.question && open.text.text === data.text
+  return (
+    <div
+      className="my-1 overflow-hidden rounded-md border border-border/70 bg-card text-[12px]"
+      data-codex-question-card
+    >
+      <div className="flex min-w-0 items-start gap-1.5 px-2.5 py-1.5">
+        <MessageCircleQuestionIcon
+          className={cn(
+            'mt-0.5 size-3.5 shrink-0',
+            waiting ? 'text-warning' : 'text-muted-foreground',
+          )}
+        />
+        <p className="min-w-0 flex-1 break-words whitespace-pre-wrap text-foreground/90">
+          <span className={waiting ? 'text-warning' : 'text-muted-foreground'}>
+            Codex in #{data.conversation} {waiting ? 'asks' : 'asked'}
+          </span>{' '}
+          {data.text}
+          <Untrusted />
+        </p>
+        {!waiting && <span className="shrink-0 text-muted-foreground/70">settled</span>}
+      </div>
+      {waiting && <SteerBox conversation={data.conversation} question={open} />}
+    </div>
   )
 }
 

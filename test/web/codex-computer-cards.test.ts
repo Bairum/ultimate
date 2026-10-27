@@ -11,9 +11,10 @@ vi.mock('@/sdk', () => ({
   errorMessage: String,
   useConversation: () => 7,
   useToolDuration: () => undefined,
+  useDocOf: () => undefined,
 }))
 
-const { OperateCard } = await import('../../extensions/codex-computer/cards.tsx')
+const { OperateCard, QuestionCard } = await import('../../extensions/codex-computer/cards.tsx')
 const u = (text: string) => ({ text, untrusted: true as const })
 const details = (more: Partial<CodexDetails>): CodexDetails => ({
   status: 'done',
@@ -118,4 +119,38 @@ it('a running card offers Tell Codex… and shows a steer in its step stream', (
   expect(html).toContain('placeholder="Tell Codex…"')
   expect(html).toContain('↳ Guidance from the user, via the card: Maximise Citrix first')
   expect(html).toContain('1 step<')
+})
+
+it('while Codex waits on a question, the running card shows it and its box answers', () => {
+  const html = renderToStaticMarkup(
+    createElement(OperateCard, {
+      call: {
+        id: 'c1',
+        name: 'codex_operate',
+        args: { brief: 'Read the ward list' },
+        status: 'running',
+        output:
+          'Codex asks: <untrusted_screen_content>\nWhich ward?\n</untrusted_screen_content>\n',
+        images: [],
+        diagnostics: [],
+      } as unknown as ToolCallView,
+      conversation: 7,
+      question: { id: 1, text: u('Which <b>ward</b>?'), at: 0 },
+    }),
+  )
+  expect(html).toContain('placeholder="Answer Codex…"')
+  expect(html).toContain('Which &lt;b&gt;ward&lt;/b&gt;?')
+  expect(html).toContain('written by Codex, untrusted')
+  expect(html).toContain('↳ Codex asks: Which ward?')
+})
+
+it('a settled question in the parent shows as a quiet line without an answer box', () => {
+  const html = renderToStaticMarkup(
+    createElement(QuestionCard, {
+      entry: { data: { conversation: 7, question: 1, text: 'Which ward?' } },
+    } as never),
+  )
+  expect(html).toContain('Codex in #7 asked')
+  expect(html).toContain('settled')
+  expect(html).not.toContain('data-codex-steer')
 })

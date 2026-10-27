@@ -182,10 +182,67 @@ const dropped = (error: unknown) => {
   )
 }
 /** Steering is ours, not the screen's: say who sent it so Codex weighs it as the task's owner. */
-const guidance = (value: string, by: string) =>
+export const guidance = (value: string, by: string) =>
   `Guidance from ${by} (not screen content), for the current task:\n${value}`
 /** No run outlives this wall time; Stop ends one sooner. */
 export const CEILING_MS = 8 * 60 * 60_000
+/** The first Codex whose app-server takes `dynamicTools` and calls them back with `item/tool/call` (checked live). */
+const DYNAMIC_TOOLS_SINCE = [0, 163, 0]
+/** Whether the app-server's `userAgent` (`name/0.163.0 (…)`) names a Codex with dynamic tools. */
+export function supportsTools(userAgent: string) {
+  const version = /\/(\d+)\.(\d+)\.(\d+)/.exec(userAgent)?.slice(1).map(Number)
+  if (!version) return false
+  for (let index = 0; index < 3; index++)
+    if (version[index] !== DYNAMIC_TOOLS_SINCE[index])
+      return version[index] > DYNAMIC_TOOLS_SINCE[index]
+  return true
+}
+/** Tools Codex calls back into Ultimate; their names and arguments are Codex's, screen-derived. */
+export const dynamicTools = [
+  {
+    type: 'function',
+    name: 'ask_operator',
+    description:
+      'Ask the agent that gave you this task a question when you need a fact only it knows (where a file is, which record to use, whether to go on) instead of guessing. Blocks until it answers, at most 10 minutes. Never ask for credentials.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['question'],
+      properties: {
+        question: { type: 'string', description: 'One clear question, with the options you see.' },
+      },
+    },
+  },
+  {
+    type: 'function',
+    name: 'report_progress',
+    description:
+      'Tell the agent that gave you this task about a milestone (a step finished, a result read, a problem found) while you carry on. One short line; do not wait for a reply.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['milestone'],
+      properties: { milestone: { type: 'string' } },
+    },
+  },
+]
+const toolsNote =
+  'Talking to your operator: when you need a fact you cannot see on screen, call ask_operator instead of guessing or searching for it; when it does not answer, stop and report what you need. Call report_progress after each milestone of the brief.\n'
+/** How long Codex waits for an answer to ask_operator before it is told to stop and report. */
+export const ASK_MS = 10 * 60_000
+const noAnswer =
+  'No answer within 10 minutes. Do not guess: stop, and put what you needed to know in "remaining".'
+/**
+ * Ultimate's side of the dynamic tools; without them the run works as before, without asking or reporting. The run
+ * itself waits for the answer: the first steer while a question is open answers it.
+ */
+export type Callbacks = {
+  /** Codex asks question `id` (screen-derived text): put it to the operator and on the card. */
+  ask: (id: number, question: string) => Promise<void>
+  /** Question `id` is answered, timed out or its run ended: take it off the card. */
+  settle: (id: number) => Promise<void>
+  progress: (milestone: string) => void
+}
 
 export async function operate(input: {
   host: ExtensionHost
@@ -202,11 +259,20 @@ export async function operate(input: {
   instructions?: string
   session?: string
   model?: string
+  /** Guidance queued while no turn ran: the first turn starts with it. */
+  queued?: readonly { from: Guidance['from']; by: string; text: string }[]
+  /** Ultimate's side of ask_operator and report_progress; offered only to a Codex that supports dynamic tools. */
+  callbacks?: Callbacks
   spawn: Spawn
   signal?: AbortSignal
   output: (text: string) => void
   live: Set<Run>
-}): Promise<{ details: CodexDetails; image?: { type: 'image'; mimeType: string; data: string } }> {
+}): Promise<{
+  details: CodexDetails
+  image?: { type: 'image'; mimeType: string; data: string }
+  /** Guidance queued that no turn took before the run ended. */
+  unsent: { from: Guidance['from']; by: string; text: string }[]
+}> {
   const { host, conversation, output } = input
   const startedAt = Date.now()
   const details: CodexDetails = {
@@ -253,6 +319,24 @@ export async function operate(input: {
   let image: { type: 'image'; mimeType: string; data: string } | undefined
   /** One saved path per image Codex received this run, in order ('' for a skipped one): Codex's screenshot numbers. */
   const frames: string[] = []
+  /** Whether this Codex takes dynamic tools: set from `initialize`'s userAgent; false keeps the run as before. */
+  let tools = false
+  /** Aborted when the run ends, so an open question stops waiting. */
+  const runSignal = new AbortController()
+  /** The ask_operator question Codex waits on, until its first answer, the timeout or the run's end. */
+  let asking: { id: number; answer: PromiseWithResolvers<string> } | undefined
+  let asked = 0
+  /** Guidance waiting for the next turn: from the run's input, or steered while no turn ran. */
+  const waiting: { from: Guidance['from']; by: string; text: string }[] = [...(input.queued ?? [])]
+  /** The waiting guidance as the start of a turn's text, recorded as delivered; empty when none waits. */
+  const takeWaiting = () => {
+    const taken = waiting.splice(0)
+    for (const item of taken) {
+      details.guidance.push({ ...item, at: Date.now(), delivery: 'queued' })
+      output(`Guidance from ${item.by} (queued): ${item.text.replace(/\s+/g, ' ')}\n`)
+    }
+    return taken.map((item) => `${guidance(item.text, item.by)}\n\n`).join('')
+  }
   const done = Promise.withResolvers<void>()
   const requests = new Map<
     number,
@@ -304,6 +388,7 @@ export async function operate(input: {
     requests.clear()
     clearTimeout(budgetTimer)
     terminate(status === 'budget' || status === 'stopped')
+    runSignal.abort()
     done.resolve()
     swapping?.resolve()
   }
@@ -315,8 +400,20 @@ export async function operate(input: {
       child.kill('SIGKILL')
     },
     steer: async (value, from, by) => {
-      if (ended || !active || !details.session || !turnId)
-        throw new Error('No active Codex turn to steer in this conversation')
+      if (ended) throw new Error('No active Codex turn to steer in this conversation')
+      // Codex waits on its question: the first guidance is the answer, sent back as the tool's result.
+      if (asking) {
+        asking.answer.resolve(`Answer from ${by} (not screen content):\n${value}`)
+        asking = undefined
+        details.guidance.push({ from, by, text: value, at: Date.now(), delivery: 'answered' })
+        output(`Answer from ${by}: ${value.replace(/\s+/g, ' ')}\n`)
+        return 'answered'
+      }
+      // Between turns (before the first starts, or while a dropped connection resumes): the next turn starts with it.
+      if (!active || !details.session || !turnId) {
+        waiting.push({ from, by, text: value })
+        return 'queued'
+      }
       if (steering)
         throw new Error('Codex is still taking the previous guidance; send this after it')
       steering = true
@@ -344,7 +441,7 @@ export async function operate(input: {
             const turn = object(
               await request('turn/start', {
                 threadId,
-                input: [{ ...message, text: turnNote + message.text }],
+                input: [{ ...message, text: turnNote + takeWaiting() + message.text }],
                 outputSchema: resultSchema,
               }),
             )
@@ -418,6 +515,41 @@ export async function operate(input: {
         return
       }
       return elicitation(id, object(message.params))
+    }
+    if (method === 'item/tool/call' && input.callbacks && tools) {
+      const params = object(message.params)
+      const args = object(params.arguments)
+      const reply = (value: string, success = true) =>
+        send({ id, result: { success, contentItems: [{ type: 'inputText', text: value }] } })
+      if (params.tool === 'ask_operator' && string(args.question).trim()) {
+        const question = string(args.question).trim().slice(0, 2000)
+        if (asking) return reply('You already have a question open; wait for its answer.', false)
+        const number = ++asked
+        const answer = Promise.withResolvers<string>()
+        asking = { id: number, answer }
+        const timer = setTimeout(() => answer.resolve(noAnswer), ASK_MS)
+        timer.unref()
+        const ending = () => answer.resolve('The run is ending.')
+        runSignal.signal.addEventListener('abort', ending, { once: true })
+        output(`Codex asks: ${untrusted(question.slice(0, 500))}\n`)
+        try {
+          await input.callbacks.ask(number, question)
+          return reply(await answer.promise)
+        } finally {
+          clearTimeout(timer)
+          runSignal.signal.removeEventListener('abort', ending)
+          asking = undefined
+          await input.callbacks.settle(number)
+        }
+      }
+      if (params.tool === 'report_progress' && string(args.milestone).trim()) {
+        const milestone = string(args.milestone).trim().slice(0, 500)
+        details.progress = [...(details.progress ?? []), { text: text(milestone), at: Date.now() }]
+        output(`Codex progress: ${untrusted(milestone)}\n`)
+        input.callbacks.progress(milestone)
+        return reply('Noted; carry on.')
+      }
+      return reply(`Unknown tool or missing argument: ${string(params.tool)}`, false)
     }
     if (
       ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)
@@ -537,7 +669,9 @@ export async function operate(input: {
         work.push(
           request('turn/start', {
             threadId: details.session,
-            input: [{ type: 'text', text: turnNote + resumeNote, text_elements: [] }],
+            input: [
+              { type: 'text', text: turnNote + takeWaiting() + resumeNote, text_elements: [] },
+            ],
             outputSchema: resultSchema,
           }).then(
             (value) => {
@@ -565,23 +699,31 @@ export async function operate(input: {
   })
   try {
     if (input.signal?.aborted) run.stop()
-    await request('initialize', {
-      clientInfo: { name: 'ultimate', title: 'Ultimate codex-computer', version: '1' },
-      capabilities: null,
-    })
+    const init = object(
+      await request('initialize', {
+        clientInfo: { name: 'ultimate', title: 'Ultimate codex-computer', version: '1' },
+        // Dynamic tools are experimental in Codex's protocol; an older Codex ignores the opt-in.
+        capabilities: input.callbacks ? { experimentalApi: true } : null,
+      }),
+    )
     if (ended) throw new Error('Run ended')
     send({ method: 'initialized' })
+    // Tools are a new thread's: Codex stores them with the thread, so a resumed one keeps those it started with and
+    // still calls them. Only a Codex known to call them back gets them; any other runs without asking or reporting.
+    tools = !!input.callbacks && supportsTools(string(init.userAgent))
     // The fixed rules and the project's codex.md are the thread's developer instructions: they outlive compaction,
     // and the user turn carries only the brief. A resumed thread keeps the ones it started with (Codex 0.163.0 ignores
     // new ones on resume, checked live), so they are sent on start only.
     const developerInstructions =
       preamble +
+      (tools ? `${toolsNote}\n` : '') +
       (input.instructions
         ? `Project instructions (from the project's .ultimate/codex.md):\n${input.instructions}\n`
         : '')
     const thread = object(
       await request(input.session ? 'thread/resume' : 'thread/start', {
         ...(input.session ? { threadId: input.session } : { developerInstructions }),
+        ...(tools && !input.session ? { dynamicTools } : {}),
         cwd: input.directory,
         approvalPolicy: 'on-request',
         sandbox: 'workspace-write',
@@ -594,7 +736,13 @@ export async function operate(input: {
     const turn = object(
       await request('turn/start', {
         threadId: details.session,
-        input: [{ type: 'text', text: `${turnNote}Brief:\n${input.brief}`, text_elements: [] }],
+        input: [
+          {
+            type: 'text',
+            text: `${turnNote}${takeWaiting()}Brief:\n${input.brief}`,
+            text_elements: [],
+          },
+        ],
         outputSchema: resultSchema,
       }),
     )
@@ -613,5 +761,6 @@ export async function operate(input: {
       details.answer = text(parsed.summary)
     }
   }
-  return { details, ...(image ? { image } : {}) }
+  // Guidance no turn took (the run ended first) waits for the conversation's next run.
+  return { details, ...(image ? { image } : {}), unsent: waiting }
 }

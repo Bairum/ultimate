@@ -31,16 +31,22 @@ export type CodexDetails = {
   resumes?: number
   /** Each time the window Codex's state reports changed during the run: window titles, from Codex, untrusted. */
   windows?: { from: UntrustedText; to: UntrustedText; at: number }[]
-  /** Guidance sent into the run while it worked; `restarted` when Codex refused a steer and the turn was restarted with it. */
+  /**
+   * Guidance sent into the run: `steered` into the live turn; `restarted` when Codex refused a steer and the turn was
+   * restarted with it; `queued` when no turn ran when it was sent, so the next turn started with it; `answered` when it
+   * answered Codex's open ask_operator question.
+   */
   guidance: {
     from: 'user' | 'operator'
     /** Who sent it, in words: "the user, via the card" or "parent conversation #16427". */
     by: string
     text: string
     at: number
-    delivery: 'steered' | 'restarted'
+    delivery: Delivery
   }[]
   error?: string
+  /** Milestones Codex reported with report_progress, in order; from Codex, untrusted. */
+  progress?: { text: UntrustedText; at: number }[]
 }
 export type CodexResult = {
   status: 'done' | 'blocked' | 'partial'
@@ -48,7 +54,18 @@ export type CodexResult = {
   actions: UntrustedText[]
   remaining: UntrustedText[]
 }
-export type CodexState = { last?: CodexDetails }
+/** How guidance reached Codex; see `CodexDetails.guidance`. */
+export type Delivery = 'steered' | 'restarted' | 'queued' | 'answered'
+/** Guidance sent while no Codex run worked in the conversation: its next run starts with it. */
+export type QueuedGuidance = { from: 'user' | 'operator'; by: string; text: string }
+export type CodexState = {
+  last?: CodexDetails
+  /** The ask_operator question Codex waits on: its number in the run and its text, screen-derived. */
+  question?: { id: number; text: UntrustedText; at: number }
+  queued?: QueuedGuidance[]
+}
+/** Data of a `codex-computer.question` entry in the parent's transcript: Codex in `conversation` asks (untrusted `text`). */
+export type QuestionEntry = { conversation: number; question: number; text: string }
 /** A conversation's last Codex outcome. Forks start fresh. */
 export const StateDoc = docRef<CodexState>('codex-computer.state')
 /** `{conversation?}` → `{stopped}`: stop matching runs, or all runs when omitted. User-only. */
@@ -56,8 +73,11 @@ export const StopAction = actionRef<{ conversation?: number }, { stopped: number
   'codex-computer',
   'stop',
 )
-/** `{conversation, text}` → `{delivery}`: send the user's guidance into that conversation's active Codex turn. User-only. */
+/**
+ * `{conversation, text}` → `{delivery}`: the user's guidance for that conversation's Codex run. It answers Codex's open
+ * question, else steers the active turn, else waits for the next turn or run. User-only.
+ */
 export const SteerAction = actionRef<
   { conversation: number; text: string },
-  { delivery: 'steered' | 'restarted' }
+  { delivery: Delivery }
 >('codex-computer', 'steer')

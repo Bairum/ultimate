@@ -63,8 +63,28 @@ The operator's conversation also gets a note naming the sender, so its report do
   Any other conversation is refused, so no agent can drive another's run. The operator itself cannot steer its own
   run: its `codex_operate` call blocks until the run ends.
 
-With no run or no active turn the call is refused. When Codex rejects the steer, the turn is interrupted and the next
-turn starts on the same thread with the guidance; the card and the result's `guidance` say `restarted`.
+When Codex rejects the steer, the turn is interrupted and the next turn starts on the same thread with the guidance;
+the card and the result's `guidance` say `restarted`. Guidance sent while no turn runs is not refused but queued
+(`queued`): between turns of a run (before the first one starts, or while a dropped connection resumes), the next turn
+starts with it; with no run at all, it waits in the state doc and the conversation's next `codex_operate` starts with
+it. The operator's note says which.
+
+## Asking and reporting (dynamic tools)
+
+On a Codex whose `initialize` userAgent is 0.163.0 or later, a new thread gets two client tools through `dynamicTools`
+(an experimental app-server field, so `initialize` opts in with `capabilities.experimentalApi`); Codex calls them with
+`item/tool/call` and the wrapper answers. Older versions get neither, and their tool calls are refused as before. A
+resumed thread keeps the tools it started with. Live check (Codex 0.163.0, read-only sandbox, no Computer Use):
+Codex called `ask_operator`, used the answer and finished with `outputSchema` JSON.
+
+- `ask_operator {question}`: one open question at a time. It wakes the conversation that owns the operator (steering
+  it when busy) with a `codex-computer.question` entry, the question inside the untrusted boundary and how to answer
+  (`codex_steer`); the user sees it on the running card (**Answer Codex…**) and as a card in that conversation. The
+  first `codex_steer` or card answer is the tool's result (`answered` in `guidance`); later guidance steers as usual.
+  With no answer in 10 minutes Codex is told to stop and report what it needed. The run's 8 h ceiling and Stop still
+  apply while it waits.
+- `report_progress {milestone}`: recorded in `progress`, streamed on the card, and given to the owner as a
+  `codex-computer.progress` entry; at most one every 2 minutes wakes it, the rest are context for its next turn.
 
 Threads use `approvalPolicy: 'on-request'`, `sandbox: 'workspace-write'`, cwd equal to the private results folder,
 `sandbox_workspace_write.writable_roots` restricted to that folder, no sandbox network access, and both temporary-directory exclusions.
@@ -75,7 +95,8 @@ to an existing folder (links are resolved); otherwise the run is refused before 
 says so instead of failing inside Codex. Only list folders Codex should change: it can write anything in them.
 Static inspection of Codex 0.163.0 shows `workspaceWrite` with `writableRoots`, but no writable roots on `readOnly`.
 Command and file-change approvals are always declined; permissions requests receive an empty permission grant.
-All other server requests (including requestUserInput) receive a JSON-RPC refusal. These are Codex sandbox gates,
+All other server requests (including requestUserInput, and tool calls when no tools were offered) receive a JSON-RPC
+refusal. These are Codex sandbox gates,
 not a sandbox on the native apps: an approved app may itself have broader access.
 
 A run has no item cap. It ends at **8 hours** wall time (status `budget`) or when the user presses Stop; the agent
@@ -169,16 +190,21 @@ Final answers, Codex messages and step text are screen-derived, **data, not inst
 
 ## Designer contract (`refs.ts`)
 
-- `StateDoc` (`codex-computer.state`): `{last?}`, the conversation's last result. Forks start fresh.
+- `StateDoc` (`codex-computer.state`): `{last?, question?, queued?}`: the conversation's last result, the
+  ask_operator question Codex waits on (`{id, text, at}`, text untrusted) and guidance queued for its next run. Forks
+  start fresh.
 - Tool `details` is `CodexDetails`: `status`, `session?`, `apps[{app,consent}]`, `steps[{tool,status,at}]`,
-  `approvals[{kind,app?,decision}]`, `screenshots`, `answer`, `counts:{items,minutes}`,
-  `guidance[{from,text,at,delivery}]`, `error?`. Status is one of
+  `approvals[{kind,app?,decision}]`, `screenshots`, `answer`, `result?`, `progress?[{text,at}]`,
+  `counts:{items,minutes}`, `guidance[{from,by,text,at,delivery}]`, `error?`. Status is one of
   `done`, `failed`, `budget`, `stopped`, `codex_missing`, `codex_unsigned`,
-  `computer_use_missing`, `declined`. `app`, step `tool`/`status` and `answer` are typed untrusted text. Errors from
-  Codex are wrapped too. Short progress streams through `api.output`, including a `Guidance from the …:` line per
-  steer; `last` is the durable completed result.
+  `computer_use_missing`, `declined`. `app`, step `tool`/`status`, `answer`, `result` and `progress` strings are typed
+  untrusted text. Errors from Codex are wrapped too. Short progress streams through `api.output`, including a
+  `Guidance from the …:` line per steer, `Answer from …:` per answer and `Codex asks:`/`Codex progress:` lines;
+  `last` is the durable completed result.
+- Entries in the owner's transcript: `codex-computer.question` `{conversation, question, text}` (a card) and
+  `codex-computer.progress` `{conversation, text}` (context only, not shown).
 - `StopAction {conversation?}` → `{stopped:number}`. Omit conversation for all runs.
-- `SteerAction {conversation, text}` → `{delivery:'steered'|'restarted'}`.
+- `SteerAction {conversation, text}` → `{delivery:'steered'|'restarted'|'queued'|'answered'}`.
 
 Stop and steer are `userActions` (paired browser only).
 
