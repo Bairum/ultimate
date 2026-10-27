@@ -328,14 +328,24 @@ export async function operate(input: {
   let asked = 0
   /** Guidance waiting for the next turn: from the run's input, or steered while no turn ran. */
   const waiting: { from: Guidance['from']; by: string; text: string }[] = [...(input.queued ?? [])]
-  /** The waiting guidance as the start of a turn's text, recorded as delivered; empty when none waits. */
-  const takeWaiting = () => {
+  /**
+   * Start a turn whose text begins with the waiting guidance: the guidance counts as delivered only once Codex accepts
+   * the turn, and goes back to waiting when it refuses it, so a failed start loses none.
+   */
+  const withWaiting = async (start: (prefix: string) => Promise<unknown>) => {
     const taken = waiting.splice(0)
+    let value: unknown
+    try {
+      value = await start(taken.map((item) => `${guidance(item.text, item.by)}\n\n`).join(''))
+    } catch (error) {
+      waiting.unshift(...taken)
+      throw error
+    }
     for (const item of taken) {
       details.guidance.push({ ...item, at: Date.now(), delivery: 'queued' })
       output(`Guidance from ${item.by} (queued): ${item.text.replace(/\s+/g, ' ')}\n`)
     }
-    return taken.map((item) => `${guidance(item.text, item.by)}\n\n`).join('')
+    return value
   }
   const done = Promise.withResolvers<void>()
   const requests = new Map<
@@ -439,11 +449,13 @@ export async function operate(input: {
             })
           try {
             const turn = object(
-              await request('turn/start', {
-                threadId,
-                input: [{ ...message, text: turnNote + takeWaiting() + message.text }],
-                outputSchema: resultSchema,
-              }),
+              await withWaiting((prefix) =>
+                request('turn/start', {
+                  threadId,
+                  input: [{ ...message, text: turnNote + prefix + message.text }],
+                  outputSchema: resultSchema,
+                }),
+              ),
             )
             turnId = string(object(turn.turn).id) || turnId
           } catch (start) {
@@ -521,6 +533,8 @@ export async function operate(input: {
       const args = object(params.arguments)
       const reply = (value: string, success = true) =>
         send({ id, result: { success, contentItems: [{ type: 'inputText', text: value }] } })
+      // A call that arrives after Stop or the run's end must not ask anyone or wait on the timeout.
+      if (ended || runSignal.signal.aborted) return reply('The run has ended.', false)
       if (params.tool === 'ask_operator' && string(args.question).trim()) {
         const question = string(args.question).trim().slice(0, 2000)
         if (asking) return reply('You already have a question open; wait for its answer.', false)
@@ -534,6 +548,8 @@ export async function operate(input: {
         output(`Codex asks: ${untrusted(question.slice(0, 500))}\n`)
         try {
           await input.callbacks.ask(number, question)
+          // The run may have ended while the question was being posted.
+          if (runSignal.signal.aborted) ending()
           return reply(await answer.promise)
         } finally {
           clearTimeout(timer)
@@ -667,13 +683,13 @@ export async function operate(input: {
         details.resumes = ++resumes
         output(`Connection to OpenAI dropped; continuing the same thread (${resumes}/${RESUMES})\n`)
         work.push(
-          request('turn/start', {
-            threadId: details.session,
-            input: [
-              { type: 'text', text: turnNote + takeWaiting() + resumeNote, text_elements: [] },
-            ],
-            outputSchema: resultSchema,
-          }).then(
+          withWaiting((prefix) =>
+            request('turn/start', {
+              threadId: details.session,
+              input: [{ type: 'text', text: turnNote + prefix + resumeNote, text_elements: [] }],
+              outputSchema: resultSchema,
+            }),
+          ).then(
             (value) => {
               turnId = string(object(object(value).turn).id) || turnId
             },
@@ -734,17 +750,15 @@ export async function operate(input: {
     if (!details.session) throw new Error('Codex returned no thread id')
     output('Codex session started.\n')
     const turn = object(
-      await request('turn/start', {
-        threadId: details.session,
-        input: [
-          {
-            type: 'text',
-            text: `${turnNote}${takeWaiting()}Brief:\n${input.brief}`,
-            text_elements: [],
-          },
-        ],
-        outputSchema: resultSchema,
-      }),
+      await withWaiting((prefix) =>
+        request('turn/start', {
+          threadId: details.session,
+          input: [
+            { type: 'text', text: `${turnNote}${prefix}Brief:\n${input.brief}`, text_elements: [] },
+          ],
+          outputSchema: resultSchema,
+        }),
+      ),
     )
     turnId = string(object(turn.turn).id) || turnId
     if (ended) interrupt()

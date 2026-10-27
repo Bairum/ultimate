@@ -12,6 +12,7 @@ vi.mock('@/sdk', () => ({
   useConversation: () => 7,
   useToolDuration: () => undefined,
   useDocOf: () => undefined,
+  useNow: () => 0,
 }))
 
 const { OperateCard, QuestionCard } = await import('../../extensions/codex-computer/cards.tsx')
@@ -135,7 +136,7 @@ it('while Codex waits on a question, the running card shows it and its box answe
         diagnostics: [],
       } as unknown as ToolCallView,
       conversation: 7,
-      question: { id: 1, text: u('Which <b>ward</b>?'), at: 0 },
+      question: { id: 1, key: 'r:1', text: u('Which <b>ward</b>?'), at: 0, until: 1 },
     }),
   )
   expect(html).toContain('placeholder="Answer Codex…"')
@@ -147,7 +148,7 @@ it('while Codex waits on a question, the running card shows it and its box answe
 it('a settled question in the parent shows as a quiet line without an answer box', () => {
   const html = renderToStaticMarkup(
     createElement(QuestionCard, {
-      entry: { data: { conversation: 7, question: 1, text: 'Which ward?' } },
+      entry: { data: { conversation: 7, question: 1, key: 'r:1', text: 'Which ward?' } },
     } as never),
   )
   expect(html).toContain('Codex in #7 asked')

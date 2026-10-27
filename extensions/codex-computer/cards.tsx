@@ -17,7 +17,7 @@ import {
   ToolSection,
 } from '@/components/ai/tool'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { api, cn, errorMessage, useConversation, useDocOf, useToolDuration } from '@/sdk'
+import { api, cn, errorMessage, useConversation, useDocOf, useNow, useToolDuration } from '@/sdk'
 import type { EntryRecord, ToolCallView } from '@/sdk'
 import { SteerAction, StateDoc, StopAction } from './refs.ts'
 import type { CodexDetails, CodexState, QuestionEntry } from './refs.ts'
@@ -483,7 +483,9 @@ function Footer({ children }: { children: ReactNode }) {
 export function Operate({ call }: { call: ToolCallView }) {
   const duration = useToolDuration(call)
   const conversation = useConversation((c) => c.id)
-  const question = useDocOf(conversation, StateDoc)?.question
+  const stored = useDocOf(conversation, StateDoc)?.question
+  const now = useNow(30_000, !!stored)
+  const question = stored && now < stored.until ? stored : undefined
   return (
     <OperateCard
       call={call}
@@ -648,7 +650,9 @@ export function OperateCard({
 export function QuestionCard({ entry }: { entry: EntryRecord }) {
   const data = entry.data as QuestionEntry
   const open = useDocOf(data.conversation, StateDoc)?.question
-  const waiting = open?.id === data.question && open.text.text === data.text
+  const now = useNow(30_000)
+  // Past its deadline nobody waits on it, even if a crash left it in the state.
+  const waiting = open?.key === data.key && now < open.until
   return (
     <div
       className="my-1 overflow-hidden rounded-md border border-border/70 bg-card text-[12px]"

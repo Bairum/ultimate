@@ -572,6 +572,46 @@ it('report_progress records the milestone and wakes the parent at most every 2 m
     'Page 2 read',
   ])
 })
+it('refuses a tool call that arrives after Stop, without asking anyone or waiting', async () => {
+  const f = await fixture()
+  const { parent } = ownedBy999(f)
+  f.fake.ignoreTerm = true
+  const { promise } = await running(f)
+  await actions.stop({ conversation: f.root.id }, f.ctx)
+  toolCall(f, 200, 'ask_operator', { question: 'Still there?' })
+  await until(() => !!f.fake.reply(200))
+  expect(f.fake.reply(200)?.result).toMatchObject({ success: false })
+  f.fake.kill('SIGKILL')
+  expect(data(await promise).status).toBe('stopped')
+  expect(parent).toEqual([])
+})
+it('keeps queued guidance when Codex refuses the turn that would carry it', async () => {
+  const f = await fixture()
+  // No run: the guidance waits in the state doc.
+  await actions.steer({ conversation: f.root.id, text: 'Use tenant #4' }, f.ctx)
+  f.fake.refuseRestart = true
+  f.fake.turns = 1
+  const details = data(await f.invoke({ brief: 'Read it' }))
+  expect(details.status).toBe('failed')
+  expect(details.guidance).toEqual([])
+  const { State } = await import('../extensions/codex-computer/state.ts')
+  const doc = await f.harness.snapshot(State, f.root.id, context)
+  expect(doc?.queued).toMatchObject([{ text: 'Use tenant #4' }])
+})
+it('gives each milestone its own request id, even within one millisecond', async () => {
+  const f = await fixture()
+  const { parent } = ownedBy999(f)
+  vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+  const { promise } = await running(f)
+  toolCall(f, 200, 'report_progress', { milestone: 'One' })
+  toolCall(f, 201, 'report_progress', { milestone: 'Two' })
+  await until(() => parent.length === 2)
+  const ids = parent.map((input) => (input as unknown as { requestId: string }).requestId)
+  expect(new Set(ids).size).toBe(2)
+  vi.restoreAllMocks()
+  f.fake.complete()
+  await promise
+})
 it('gives a Codex older than 0.163.0 no tools, and refuses its tool calls as before', async () => {
   const f = await fixture()
   f.fake.userAgent = 'ultimate/0.162.9 (Mac OS 26.6.2; arm64)'

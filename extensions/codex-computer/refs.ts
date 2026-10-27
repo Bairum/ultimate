@@ -60,12 +60,18 @@ export type Delivery = 'steered' | 'restarted' | 'queued' | 'answered'
 export type QueuedGuidance = { from: 'user' | 'operator'; by: string; text: string }
 export type CodexState = {
   last?: CodexDetails
-  /** The ask_operator question Codex waits on: its number in the run and its text, screen-derived. */
-  question?: { id: number; text: UntrustedText; at: number }
+  /**
+   * The ask_operator question Codex waits on: its number in the run, a key unique across runs, its text, and `until`,
+   * when Codex stops waiting (after that nobody does, even if a crash left it here).
+   */
+  question?: { id: number; key: string; text: UntrustedText; at: number; until: number }
   queued?: QueuedGuidance[]
 }
-/** Data of a `codex-computer.question` entry in the parent's transcript: Codex in `conversation` asks (untrusted `text`). */
-export type QuestionEntry = { conversation: number; question: number; text: string }
+/**
+ * Data of a `codex-computer.question` entry in the parent's transcript: Codex in `conversation` asks (untrusted `text`);
+ * `key` is unique across runs and matches the open `CodexState.question`.
+ */
+export type QuestionEntry = { conversation: number; question: number; key: string; text: string }
 /** A conversation's last Codex outcome. Forks start fresh. */
 export const StateDoc = docRef<CodexState>('codex-computer.state')
 /** `{conversation?}` → `{stopped}`: stop matching runs, or all runs when omitted. User-only. */
