@@ -56,8 +56,9 @@ conversation that started you is a note, and stopping with nothing under way is 
 - **Reports.** After each run of a branch, a background `board.route` task (one per generation, from an `onYield`
   hook) looks at its final answer. The answer to the starter's reply-enabled message already returns as that
   message's reply, so it is skipped, as are empty, failed and aborted answers. Otherwise, if nothing of the branch is
-  still under way (no run or queued input, no subagent running or reporting, no submission in the lander's queue,
-  no reply-enabled message of its own still waiting), the answer goes to the starter as a one-way message with
+  still under way (no run or queued input in it or a subagent at any depth, no subagent report or waking `notify`
+  on its way, no submission in the lander's queue or being reported, no reply-enabled message of its own still
+  waiting), the answer goes to the starter as a one-way message with
   `report: true`, which wakes it as a follow-up. While something is still under way it goes as a note: the branch
   will run again when that work wakes it.
 - **Everything else wakes.** Reply-enabled messages, and one-way messages from anyone who is not the recipient's
@@ -109,6 +110,8 @@ advancing the task checkpoint happen in one transaction. A reopened task resumes
 placed input awaiting an answer and a recorded answer awaiting delivery survive without duplicate replies.
 One-way input deliveries also wait for the answer; recording it and completing the task commit together.
 Note deliveries complete after placement, without waiting for an answer.
+A delivery that triage, before its removal, had already written as context (`board:<id>` or `board-reply:<id>` is a
+write) resumes with one short `board-wake:<id>` input after it, so the recipient still wakes once.
 When the recipient's input hooks refuse placement, the message becomes `failed` with `error` naming the cause, and
 the task completes instead of faulting with the message stuck in `sent`. A reply-enabled message whose recipient ends
 its run without an answer gets a reply in its place: `stopped` when the run or its queued input was aborted (a person

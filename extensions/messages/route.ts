@@ -14,12 +14,32 @@ import { Messages } from './api.ts'
 import { terminal } from './log.ts'
 import { send } from './send.ts'
 
+/** Live tasks of `kind` in `conversationId` (any conversation when undefined), newest first. */
+async function live(tx: Tx, kind: string, conversationId?: ConversationId) {
+  const page = await tx.scanTasks(
+    { ...(conversationId === undefined ? {} : { conversationId }), kind, order: 'descending' },
+    100,
+  )
+  return page.items.filter((task) => task.state.status !== 'terminal')
+}
 /**
- * Whether branch `id` still has work under way that will wake it again: a run or queued input, a subagent running or
- * its report on the way, a submission in the lander's queue, or a reply-enabled message still waiting on its answer.
+ * Whether `id` runs or has input queued, or one of its tasks will wake it: a subagent's report until its input is
+ * admitted, or a waking `notify` on another conversation. Matched by kind, so messages needs neither extension.
+ */
+async function busy(tx: Tx, id: ConversationId) {
+  if ((await tx.doc(LiveDoc, id)).run || (await tx.doc(InboxDoc, id)).items.length) return true
+  if ((await live(tx, 'ultimate.subagent-reporter', id)).length) return true
+  return (await live(tx, 'lineage.notify', id)).some(
+    (task) => (task.input as { wake?: unknown }).wake !== false,
+  )
+}
+/**
+ * Whether branch `id` still has work under way that will wake it again: a run or queued input, a waking task, a
+ * subagent at any depth that is busy, a submission the lander has not reported yet, or a reply-enabled message still
+ * waiting on its answer.
  */
 async function underway(host: ExtensionHost, tx: Tx, id: ConversationId): Promise<boolean> {
-  if ((await tx.doc(LiveDoc, id)).run || (await tx.doc(InboxDoc, id)).items.length) return true
+  if (await busy(tx, id)) return true
   const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
   if (
     log.messages.some(
@@ -29,18 +49,18 @@ async function underway(host: ExtensionHost, tx: Tx, id: ConversationId): Promis
     return true
   const queue = (await tx.doc(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID)).queue
   if (queue.some((item) => item.conversationId === id)) return true
+  // A submission leaves the queue in the commit that moves the lander to reporting it; until the report is an input here.
+  for (const task of await live(tx, 'workspaces.lander')) {
+    const checkpoint = (task.state as { checkpoint?: { phase?: string; conversationId?: number } })
+      .checkpoint
+    if (checkpoint?.phase === 'report' && checkpoint.conversationId === id) return true
+  }
   return children(tx, id)
 }
-/** Whether a subagent of `id` (at any depth) runs or has input queued, or its report is still on the way. */
 async function children(tx: Tx, id: ConversationId): Promise<boolean> {
-  const state = await tx.doc(Subagents, id)
-  if (Object.values(state.actions).some((action) => action.status === undefined)) return true
-  for (const child of Object.values(state.agents)) {
-    const childId = child.conversationId
-    if ((await tx.doc(LiveDoc, childId)).run || (await tx.doc(InboxDoc, childId)).items.length)
+  for (const child of Object.values((await tx.doc(Subagents, id)).agents))
+    if ((await busy(tx, child.conversationId)) || (await children(tx, child.conversationId)))
       return true
-    if (await children(tx, childId)) return true
-  }
   return false
 }
 

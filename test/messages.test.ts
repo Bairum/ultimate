@@ -44,6 +44,24 @@ afterEach(async () => {
   for (const host of hosts.splice(0)) await host.close()
   for (const home of homes.splice(0)) await removeTemp(home)
 })
+/** Stands in for a subagent's report on its way to the branch: live until the test releases it. */
+const pendingReport = Promise.withResolvers<void>()
+const reporter = defineTask<null, { phase: 'deliver' }, null>({
+  name: 'ultimate.subagent-reporter',
+  version: 1,
+  initial: () => ({ phase: 'deliver' }),
+  phases: {
+    deliver: async (_task, runtime, caller) => {
+      await awaitWithContext(pendingReport.promise, caller)
+      await runtime.commit(
+        () => ({ status: 'terminal', outcome: { status: 'completed', result: null } }),
+        caller,
+      )
+    },
+  },
+  abort: (_task, runtime, caller) =>
+    runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), caller),
+})
 const anchor = defineTask<null, { phase: 'done' }, null>({
   name: 'messages-test.anchor',
   version: 1,
@@ -196,7 +214,7 @@ async function fixture(
   prepared.registry.install(
     defineExtension({
       name: 'test-hold',
-      tasks: [anchor],
+      tasks: [anchor, reporter],
       tools: [
         defineTool({
           name: 'hold',
@@ -1408,6 +1426,26 @@ it("leaves a branch's final answer as a note while its work is under way", async
     view.value.entries.filter((e) => e.id > note!.id && e.kind === 'pi.assistant'),
   ).toHaveLength(0)
   view.dispose()
+})
+it("leaves a branch's answer as a note while a subagent's report is still on its way", async () => {
+  const f = await fixture()
+  const b = await branched(f)
+  // The child answered, but its report is not yet an input of the branch (#431701's gap).
+  await f.opened.harness.commit(
+    (tx) =>
+      tx.createTask(reporter, null, {
+        conversationId: b.id as ConversationId,
+        ownership: { kind: 'conversation' },
+        background: true,
+      }),
+    context,
+  )
+  await (
+    await b.branch.submit({ type: 'input', content: 'Waiting on the scout' }, context)
+  ).wait(context)
+  await until(async () => (await b.from()).length === 2)
+  expect((await b.from())[1].report).toBeUndefined()
+  pendingReport.resolve()
 })
 it("places a branch's one-way message to its starter as a note", async () => {
   const f = await fixture()
