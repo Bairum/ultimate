@@ -7,11 +7,21 @@ import { emptyMessages, isOpen } from './data.tsx'
 import { MessagesDoc } from './refs.ts'
 import type { Message } from './refs.ts'
 
-/** A conversation's open messages: answers it waits for, answers it owes, and messages still on their way. */
+/**
+ * A conversation's open messages: answers it waits for, what it owes (an open question, or a branch's report it has not
+ * messaged the branch about since), and messages still on their way.
+ */
 export function openMessages(messages: readonly Message[], id: number) {
+  const reports = new Map<number | 'user' | 'remote', Message>()
+  for (const m of messages)
+    if (m.to === id && m.report) reports.set(m.from, m)
+    else if (m.from === id) reports.delete(m.to)
   return {
     waiting: messages.filter((m) => m.from === id && isOpen(m) && m.state === 'delivered'),
-    owed: messages.filter((m) => m.to === id && isOpen(m) && m.state === 'delivered'),
+    owed: [
+      ...messages.filter((m) => m.to === id && isOpen(m) && m.state === 'delivered'),
+      ...reports.values(),
+    ].toSorted((a, b) => a.id - b.id),
     delivering: messages.filter((m) => m.from === id && m.state === 'sent'),
   }
 }
