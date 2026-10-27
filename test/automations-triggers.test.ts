@@ -75,7 +75,12 @@ async function fixture() {
     },
   }
   host.provided.set('subagents', {
-    standing: async (name: string) => (name === 'ultimate' ? target : undefined),
+    // As the real one: the standing agent's conversation of the moment, the fixture's target before one is recorded.
+    standing: async (name: string) =>
+      name === 'ultimate'
+        ? ((await opened.harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate ??
+          target)
+        : undefined,
     createChild: (tx: Tx, options: Parameters<SubagentsService['createChild']>[1]) =>
       createChild(host, tx, options),
   })

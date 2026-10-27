@@ -4,7 +4,7 @@ import { access, appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs
 import { basename, join } from 'node:path'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { defineTask, InboxDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { Agent, ConversationId, Tx } from '@earendil-works/pi-durable'
+import type { Agent, ConversationId, Cursor, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
 import type { AgentDefinition } from '../../lib/agents.ts'
@@ -104,6 +104,10 @@ export type Prepared = {
   subscriber?: Subscriber
   /** A create's explicit subscribers, validated. */
   subscribers?: Subscriber[]
+  /** A project create's manifest: the record it takes must be the one discovery made from it. */
+  manifest?: Manifest
+  /** A project update's ask before it rewrote the manifest, which a concurrent discovery may already apply. */
+  previousAsk?: string
 }
 type Run = {
   child: GroupProcess
@@ -348,12 +352,11 @@ export function supervisor(
             : kind === 'failed'
               ? `Automation ${sub.id} "${sub.name}" failed (${sub.script!.failures ?? 1} of ${FAILURE_LIMIT} in a row; the ${FAILURE_LIMIT}rd escalates by itself): ${text}\nInvestigate, fix run, and use automation resume, or automation escalate with a clear reason when it cannot work. Ending your turn without resuming escalates it.\n${sub.scope === 'project' ? `${brief(sub)}\n` : ''}Last 50 log lines:\n${await tail(sub.id)}`
               : `Automation ${sub.id} "${sub.name}" ${kind}: ${text}`
-        // Read only when needed: an `@name` to resolve, or @ultimate to skip after its escalation message.
-        const standing =
-          kind === 'escalated' || targets.some((target) => typeof target === 'string')
-            ? ((await runtime.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)) ?? {})
-            : {}
-        const ultimate = standing.ultimate
+        // Read only for an escalation, which already messages @ultimate.
+        const ultimate =
+          kind === 'escalated'
+            ? (await runtime.snapshot(Standing, ROOT_CONVERSATION_ID, ctx))?.ultimate
+            : undefined
         if (kind === 'escalated')
           await host
             .need(MessagesApi)
@@ -364,14 +367,13 @@ export function supervisor(
               ctx,
             )
         for (const target of targets) {
-          // `@name` follows the standing agent to its conversation of the moment, across chapters.
+          // `@name` follows the standing agent to its conversation of the moment, across chapters; one not made yet
+          // is made now, as a message to it would.
           const id = (
-            typeof target === 'string' ? standing[target.slice(1)] : target
+            typeof target === 'string'
+              ? await host.need(SubagentsApi).standing(target.slice(1), ctx)
+              : target
           ) as ConversationId
-          if (id === undefined) {
-            host.notice(`Automation ${sub.id}: ${String(target)} has no conversation yet`)
-            continue
-          }
           // The escalation message already reached @ultimate.
           if (kind === 'escalated' && id === ultimate) continue
           const requestId = `automations:${sub.id}:${event}:${target}`
@@ -718,13 +720,21 @@ export function supervisor(
       if ((await tx.doc(InboxDoc, conversationId as ConversationId)).items.length) return
       // A brief or failure committed but not yet delivered is still coming: the watcher will look again.
       for (const live of ['pending', 'running'] as const) {
-        const page = await tx.scanTasks({ kind: Deliver.definition.name, status: live }, 100)
-        if (
-          page.items.some((task) =>
-            (task.input as Delivery).targets.includes(sub.script!.conversationId),
+        let cursor: Cursor | undefined
+        do {
+          const page = await tx.scanTasks(
+            { kind: Deliver.definition.name, status: live },
+            100,
+            cursor,
           )
-        )
-          return
+          if (
+            page.items.some((task) =>
+              (task.input as Delivery).targets.includes(sub.script!.conversationId),
+            )
+          )
+            return
+          cursor = page.next
+        } while (cursor)
       }
       const said = answer.trim().split('\n')[0].slice(0, 200)
       await escalate(

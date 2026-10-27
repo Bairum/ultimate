@@ -1,5 +1,5 @@
 import { constants } from 'node:fs'
-import { access, readFile } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -221,22 +221,36 @@ function backend(host: ExtensionHost) {
       )
       // An equal manifest is this create's own, published before a crash: it is adopted. A different one is another
       // automation.
+      const taken = () => new Error(`Automation ${slug} already exists; pass another slug`)
       if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(committed))
-        throw new Error(`Automation ${slug} already exists; pass another slug`)
-      if (existing === undefined) await writeJson(path, committedManifest(committed))
+        throw taken()
+      if (existing === undefined) {
+        await mkdir(projectDir(slug), { recursive: true })
+        // Exclusive: of two creates racing for one slug, only one publishes; the other compares what it finds.
+        await writeFile(path, `${JSON.stringify(committedManifest(committed), null, 2)}\n`, {
+          flag: 'wx',
+        }).catch(async (error: NodeJS.ErrnoException) => {
+          if (error.code !== 'EEXIST') throw error
+          const found = manifest(JSON.parse(await readFile(path, 'utf8')))
+          if (JSON.stringify(found) !== JSON.stringify(committed)) throw taken()
+        })
+      }
       // Discovery alone makes project records: the create then takes the record it made.
       await discover()
-      return { slug }
+      return { slug, manifest: committed }
     }
     const id = validId(args.id)
     if (!id.startsWith('A')) await discover()
     const sub = await snapshot(id)
+    const prepared: Prepared = {}
     if (
       args.action === 'update' &&
       sub.scope === 'project' &&
       [args.name, args.ask, args.once, args.secrets].some((value) => value !== undefined)
     ) {
       const script = sub.script!
+      // The record's own fields change with the update's commit; a discovery before then must not hide the old ask.
+      prepared.previousAsk = script.ask
       await writeJson(
         join(projectDir(id), MANIFEST),
         committedManifest({
@@ -249,8 +263,6 @@ function backend(host: ExtensionHost) {
           to: script.to ?? '@ultimate',
         }),
       )
-      // The record follows the manifest now, before the update's other fields commit.
-      await discover()
     }
     if ((args.action === 'resume' || args.action === 'run') && sub.script) {
       try {
@@ -266,11 +278,12 @@ function backend(host: ExtensionHost) {
       if (args.action === 'unsubscribe' && args.to !== undefined) {
         if (!/^#[1-9]\d*$/.test(args.to) && !STANDING.test(args.to))
           throw new Error('to must be #id or @name')
-        return { subscriber: args.to.startsWith('#') ? Number(args.to.slice(1)) : args.to }
+        prepared.subscriber = args.to.startsWith('#') ? Number(args.to.slice(1)) : args.to
+        return prepared
       }
-      return { subscriber: await subscriber(args.to ?? caller) }
+      prepared.subscriber = await subscriber(args.to ?? caller)
     }
-    return {}
+    return prepared
   }
   async function changeScript(
     tx: Tx,
@@ -299,7 +312,13 @@ function backend(host: ExtensionHost) {
         const sub = state.automations[prepared.slug]
         if (!sub)
           throw new Error(`Automation ${prepared.slug} was not discovered; check its manifest`)
-        if (sub.script!.state !== 'stopped' || sub.script!.startedAt || sub.fires)
+        const m = prepared.manifest!
+        const same =
+          sub.name === m.name &&
+          sub.script!.ask === m.ask &&
+          sub.script!.once === m.once &&
+          sub.script!.to === m.to
+        if (!same || sub.script!.state !== 'stopped' || sub.script!.startedAt || sub.fires)
           throw new Error(`Automation ${prepared.slug} already exists; pass another slug`)
         Object.assign(sub, runProfile, {
           enabled: true,
@@ -477,13 +496,6 @@ function backend(host: ExtensionHost) {
   async function prepare(args: Args, caller?: number): Promise<Prepared> {
     await validate(args, caller)
     if (args.action === 'create') {
-      // A repeated key is answered in the transaction with the automation it made: nothing else to prepare.
-      const keyed =
-        args.key !== undefined &&
-        Object.values(
-          (await host.harness().snapshot(Automations, BACKGROUND_CONTEXT))?.automations ?? {},
-        ).some((a) => a.key === args.key)
-      if (keyed) return {}
       const subscribers = args.subscribers?.length
         ? [...new Set(await Promise.all(args.subscribers.map(subscriber)))]
         : undefined
@@ -569,7 +581,7 @@ function backend(host: ExtensionHost) {
       throw new Error('This one-shot time has passed; update the time first')
     const abort = a.scheduler
     const oldSchedule = a.schedule && { ...a.schedule }
-    const oldAsk = a.script?.ask
+    const oldAsk = prepared.previousAsk ?? a.script?.ask
     delete a.scheduler
     if (args.action !== 'update') delete a.nextAt
     if (args.action === 'delete') {
@@ -805,10 +817,7 @@ export default function automations(host: ExtensionHost) {
           )
           if (!watched) return undefined
           const text = answer.content.flatMap((part) => (part.type === 'text' ? [part.text] : []))
-          // Not awaited: its commit would wait for this generation to finish yielding.
-          api.watcherYielded(hookApi.conversationId, text.join('\n')).catch((error: unknown) => {
-            host.notice(`Automation watcher check: ${String(error)}`)
-          })
+          await api.watcherYielded(hookApi.conversationId, text.join('\n'))
           return undefined
         },
       }),

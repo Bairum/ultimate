@@ -416,7 +416,9 @@ it('keeps listing and supervising scripts after a reload bumps the ledger versio
   const source = await readFile(file, 'utf8')
   const loaded = () => app.extensions.info().find((e) => e.name === 'automations')!.server!.loadedAt
   const previous = loaded()
-  await writeFile(file, source.replace('  version: 2,\n  scope: ', '  version: 3,\n  scope: '))
+  const bumped = source.replace('  version: 3,\n  scope: ', '  version: 4,\n  scope: ')
+  expect(bumped).not.toBe(source)
+  await writeFile(file, bumped)
   app.vite.watcher.emit('change', file)
   await until(() => loaded() !== previous)
   // A reload restarts running scripts on the new code, as a core swap does.
@@ -424,7 +426,7 @@ it('keeps listing and supervising scripts after a reload bumps the ledger versio
     const now = await get()
     return now.alive && now.script!.pid !== before.script!.pid
   })
-  // The new token migrates the ledger to version 3 on its next write; the supervisor must use it too.
+  // The new token migrates the ledger to version 4 on its next write; the supervisor must use it too.
   await call(app, 'pause', sub.id)
   await until(async () => !!(await get()).script!.exitedAt)
   expect(await get()).toMatchObject({ enabled: false, script: { state: 'stopped' } })
@@ -619,8 +621,37 @@ it('creates a project automation in the checkout with a committed manifest', asy
   expect((await list(app)).find((a) => a.id === sub.id)).toMatchObject({
     name: 'Updated',
     prompt: 'Summarize',
-    script: { ask: 'Watch merged PRs', once: true },
+    // Regression: discovery applied the new ask first, so the watcher was never sent back to writing.
+    script: { ask: 'Watch merged PRs', once: true, state: 'writing' },
   })
+  const watcherInputs = async () =>
+    (
+      await (await app.harness.conversation(
+        sub.script!.conversationId as ConversationId,
+        context,
+      ))!.context(context)
+    ).entries.filter((e) => e.kind === 'automations.writing')
+  await until(async () => (await watcherInputs()).length === 2)
+
+  // Two creates racing for one slug: exactly one publishes and takes the record; the other is refused.
+  const racing = await Promise.allSettled(
+    ['Poll A', 'Poll B'].map((ask) =>
+      app.extensions.invoke(
+        'automations',
+        'create',
+        { ask, name: 'Race', scope: 'project' },
+        new AbortController().signal,
+        caller.id,
+      ),
+    ),
+  )
+  expect(racing.map((r) => r.status).toSorted()).toEqual(['fulfilled', 'rejected'])
+  const won = (racing.find((r) => r.status === 'fulfilled') as PromiseFulfilledResult<Automation>)
+    .value
+  expect(
+    JSON.parse(await readFile(join(root, '.ultimate/automations/race/automation.json'), 'utf8'))
+      .ask,
+  ).toBe(won.script!.ask)
 
   // A discovered, unused record with the same manifest is taken by the create, with its agent: a create that crashed
   // after publishing its manifest replays to it. Inherited object keys are no slugs.
