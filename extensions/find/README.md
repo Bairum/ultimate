@@ -21,3 +21,5 @@ A port of oh-my-pi's `find` cascade.
 Each wave runs 16 requests in flight and drains before the next. The whole call stops at 20 s and returns what was verified with a `partial` line, or the lexical ranking when nothing was (ranked by file names only, and marked partial, when the cap hits during the `rg` pass; a cap during listing fails the call, since nothing can be ranked). Repository content is framed to the judge as untrusted data. There is no cache.
 
 The tool text lists hits strongest first, up to three `path:start-end  p  snippet` ranges each, and a footer with files listed and judged, requests, bytes sent, input tokens, cost ($0.042 per million input tokens) and wall time. `details` carries the same for the card in `web.tsx`.
+
+A short prompt section on when to use `find` and when grep reaches only agents offered the tool. Each call is counted in classify's usage ledger, as `find` or `find.lexical` with its latency and cost (`ultimate.action('classify', 'stats')`).

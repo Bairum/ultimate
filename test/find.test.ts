@@ -111,7 +111,7 @@ type Asked = {
 /** A judge that says yes to the lander by name and to passages that call fastForward. */
 function scripted() {
   const asked: Asked[] = []
-  const service: ClassifyService = {
+  const service: Pick<ClassifyService, 'ask'> = {
     async ask({ state, questions }) {
       const record = state as Record<string, unknown>
       const kind = 'tree' in record ? 'name' : 'files' in record ? 'sketch' : 'passage'

@@ -30,10 +30,28 @@ export type DayStats = {
   usd: number
 }
 
-/** The ledger of the last `days` UTC days (default 7), newest first, and the answer cache's rows and bytes. */
+/**
+ * One UTC day of one counted use: `ask:<caller>` for each extension's `ask` calls (`cached`: answered wholly from the
+ * cache, `failed`: threw), `find` and `find.lexical` (keyword-only fallback) per find call, `history.ranked` per ranked
+ * history search, `stop-check.continued` per continuation. Latency is the mean in ms; `usd` the total spent.
+ */
+export type UseStats = {
+  day: string
+  name: string
+  calls: number
+  cached: number
+  failed: number
+  avgMs: number
+  usd: number
+}
+
+/**
+ * The ledgers of the last `days` UTC days (default 7), newest first, and the answer cache's rows and bytes; with
+ * `project`, that project's, from its running instance.
+ */
 export const StatsAction = actionRef<
-  { days?: number } | null,
-  { days: DayStats[]; cache: { rows: number; bytes: number } }
+  { days?: number; project?: string } | null,
+  { days: DayStats[]; cache: { rows: number; bytes: number }; uses: UseStats[] }
 >('classify', 'stats')
 
 /**

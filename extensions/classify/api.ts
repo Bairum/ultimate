@@ -17,13 +17,15 @@ export type ClassifyResult = {
 
 export type ClassifyService = {
   /**
-   * Answer `questions` about `state`: cached answers locally, the rest in one request; throws without
-   * `TYPESAFE_API_KEY` (when anything is uncached) or on a malformed response.
+   * Answer `questions` about `state` for `caller` (the asking extension, counted in `stats`): cached answers locally,
+   * the rest in one request; throws without `TYPESAFE_API_KEY` (when anything is uncached) or on a malformed response.
    */
   ask(
-    request: { state: JsonValue; questions: Record<string, ClassifyQuestion> },
+    request: { caller: string; state: JsonValue; questions: Record<string, ClassifyQuestion> },
     signal: AbortSignal,
   ): Promise<ClassifyResult>
+  /** Count one use of `name` today in the `stats` ledger: a feature whose adoption is under review. */
+  count(name: string, use: { ms: number; usd?: number; failed?: boolean }): void
 }
 
 /** Typed judgments over JSON state; `want` it, since classify is optional and needs a TypeSafe key. */

@@ -43,6 +43,7 @@ import type { Read } from './projects.ts'
 import { closedChapter, id, limit, readChapter } from './chapters.ts'
 import type { HistoryRead } from './chapters.ts'
 import { ConversationsApi } from '../conversations/api.ts'
+import { ClassifyApi } from '../classify/api.ts'
 import { HistoryApi } from '../history/api.ts'
 import { MessagesApi } from '../messages/api.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
@@ -137,7 +138,8 @@ function localReads(host: ExtensionHost, context: Context) {
         throw new Error(
           'Ranked search needs the history extension, which is disabled; enable it with extensions.enable: ["history"]',
         )
-      return history.search(
+      const started = performance.now()
+      const hits = await history.search(
         text,
         {
           ...(options.limit !== undefined && { limit: options.limit }),
@@ -147,6 +149,9 @@ function localReads(host: ExtensionHost, context: Context) {
         },
         context,
       )
+      // Counted in classify's usage ledger, while it is on, for the adoption review.
+      host.want(ClassifyApi)?.count('history.ranked', { ms: performance.now() - started })
+      return hits
     }
     const count = limit(options.limit)
     const records =

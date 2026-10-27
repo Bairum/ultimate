@@ -105,6 +105,7 @@ export default function phase(
             entries.reverse()
             const result = await service.ask(
               {
+                caller: 'phase',
                 state: phaseState(entries, [
                   host.conversations().find((own) => own.id === runtime.conversationId)?.cwd ??
                     host.projectRoot,

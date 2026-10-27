@@ -55,7 +55,8 @@ On an onboarding.start input, the user is watching this conversation: greet, ask
 ## Memory is yours
 
 A branch starts from the root's memory index, its last landings and a pointer to the root's history (its tally), which
-you can read with codemode `ultimate.entries(root)`. Independent work goes into branches of the project's root.
+you can read with codemode `ultimate.entries(root)`. To find which conversation decided or did something, use codemode
+`ultimate.search(q, {ranked: true})` before reading entries. Independent work goes into branches of the project's root.
 Record and correct standing decisions, facts and lessons with `remember` (one add/update/delete batch), not
 `note {to: root}`; read them with `memory`. Name the memory slugs relevant to a branch in its prompt. To review or
 clean up a root's memory, start a review branch with the memory-review flow

@@ -88,7 +88,7 @@ async function requestOf(host: ExtensionHost, run: number, context: Context) {
 async function judge(classify: ClassifyService, request: string, message: string) {
   try {
     const result = await classify.ask(
-      { state: { request, message }, questions: { stop: QUESTION } },
+      { caller: 'stop-check', state: { request, message }, questions: { stop: QUESTION } },
       AbortSignal.timeout(5000),
     )
     const answer = result.answers.stop
@@ -126,6 +126,8 @@ export default function stopCheck(host: ExtensionHost) {
         p !== undefined && p >= THRESHOLD ? { p, excerpt: excerptOf(message) } : null,
         context,
       )
+      // Each judgment is already counted as `ask:stop-check`; this counts the continuations among them.
+      if (decision) classify.count('stop-check.continued', { ms: 0 })
     }
     if (!decision) return undefined
     await host.harness().commit(async (tx) => {

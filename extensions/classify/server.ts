@@ -5,10 +5,12 @@ import { defineExtension, UsageDoc } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { locate, postAction } from '../../lib/remote.ts'
 import { readSecret } from '../../lib/secrets.ts'
 import { ClassifyApi } from './api.ts'
-import type { ClassifyAnswer, ClassifyQuestion, ClassifyService } from './api.ts'
+import type { ClassifyAnswer, ClassifyQuestion, ClassifyResult, ClassifyService } from './api.ts'
 import { cacheKey, openCache, USD_PER_MILLION_INPUT } from './cache.ts'
+import type { Cache } from './cache.ts'
 import { BatchAction, StatsAction } from './refs.ts'
 
 export const secrets = [
@@ -68,11 +70,19 @@ function framed(questions: unknown) {
 }
 
 export const actions = {
-  stats: implementAction(StatsAction, (args, { host }) => {
+  stats: implementAction(StatsAction, async (args, { host, signal }) => {
     if (args !== null && !record(args)) throw new Error('Invalid stats arguments')
-    const days = args?.days ?? 7
+    const { days = 7, project } = args ?? {}
     if (typeof days !== 'number' || !Number.isInteger(days) || days < 1)
       throw new Error('days must be a positive integer')
+    if (project !== undefined) {
+      if (typeof project !== 'string' || !project) throw new Error('project must be nonempty')
+      const target = await locate(host, project)
+      if (!('current' in target))
+        return (await postAction(target, 'classify', 'stats', { days }, signal)) as ReturnType<
+          Cache['stats']
+        >
+    }
     return cacheOf(host).stats(days)
   }),
   batch: implementAction(BatchAction, async (args, { host, conversationId, signal }) => {
@@ -99,7 +109,7 @@ export const actions = {
         for (let next = queue.shift(); next; next = queue.shift()) {
           const [key, state] = next
           try {
-            const result = await service.ask({ state, questions }, signal)
+            const result = await service.ask({ caller: 'batch', state, questions }, signal)
             results[key] = result.answers
             inputTokens += result.usage.inputTokens
           } catch (error) {
@@ -135,77 +145,96 @@ export const actions = {
 
 export default function classify(host: ExtensionHost) {
   const service: ClassifyService = {
-    async ask(request, signal) {
+    async ask({ caller, ...request }, signal) {
       const cache = cacheOf(host)
-      const ids = Object.keys(request.questions)
-      const keys = Object.fromEntries(
-        ids.map((id) => [
-          id,
-          cacheKey({ model: MODEL, state: request.state, question: request.questions[id] }),
-        ]),
-      )
-      const answers: Record<string, ClassifyAnswer> = {}
-      const missing: Record<string, ClassifyQuestion> = {}
-      for (const id of ids) {
-        const answer = cache.get(keys[id])
-        if (answer) answers[id] = answer
-        else missing[id] = request.questions[id]
-      }
-      const sent = Object.keys(missing)
-      if (!sent.length) {
-        cache.count({ cachedQuestions: ids.length })
-        return { model: MODEL, answers, usage: { inputTokens: 0 } }
-      }
-      const key = await readSecret(host.userHome, 'TYPESAFE_API_KEY')
-      if (!key) {
-        throw new Error(
-          'Missing TYPESAFE_API_KEY. Enable secrets and add TYPESAFE_API_KEY in the Secrets panel (⌘K → Secrets).',
-        )
-      }
-      const response = await fetch('https://api.typesafe.ai/v1/systemone', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: MODEL, state: request.state, questions: missing }),
-        signal,
-      })
-      if (!response.ok) {
-        throw new Error(`TypeSafe ${response.status}: ${(await response.text()).slice(0, 1000)}`)
-      }
-      const body: unknown = await response.json()
-      if (
-        !record(body) ||
-        typeof body.model !== 'string' ||
-        !record(body.answers) ||
-        !record(body.usage) ||
-        typeof body.usage.input_tokens !== 'number'
-      ) {
-        throw new Error(
-          'Malformed TypeSafe response: expected model, answers and usage.input_tokens',
-        )
-      }
-      for (const id of sent) {
-        const answer = body.answers[id]
-        if (!record(answer) || answer.type !== missing[id].type) {
-          throw new Error(
-            `Malformed TypeSafe response: expected ${missing[id].type} answer for ${id}`,
-          )
-        }
-        answers[id] = answer as ClassifyAnswer
-      }
-      cache.put(sent.map((id) => [keys[id], answers[id]]))
-      cache.count({
-        requests: 1,
-        cachedQuestions: ids.length - sent.length,
-        sentQuestions: sent.length,
-        inputTokens: body.usage.input_tokens,
-      })
-      return {
-        model: body.model,
-        answers: Object.fromEntries(ids.map((id) => [id, answers[id]])),
-        usage: { inputTokens: body.usage.input_tokens },
+      const started = performance.now()
+      try {
+        const result = await answerAll(host, cache, request, signal)
+        cache.use(`ask:${caller}`, {
+          ms: performance.now() - started,
+          usd: (result.usage.inputTokens * USD_PER_MILLION_INPUT) / 1e6,
+          cached: result.usage.inputTokens === 0,
+        })
+        return result
+      } catch (error) {
+        cache.use(`ask:${caller}`, { ms: performance.now() - started, failed: true })
+        throw error
       }
     },
+    count: (name, use) => cacheOf(host).use(name, use),
   }
   host.implement(ClassifyApi, service)
   return defineExtension({ name: 'classify' })
+}
+
+/** Answers from `cache`, the rest from TypeSafe in one request. */
+async function answerAll(
+  host: ExtensionHost,
+  cache: Cache,
+  request: { state: JsonValue; questions: Record<string, ClassifyQuestion> },
+  signal: AbortSignal,
+): Promise<ClassifyResult> {
+  const ids = Object.keys(request.questions)
+  const keys = Object.fromEntries(
+    ids.map((id) => [
+      id,
+      cacheKey({ model: MODEL, state: request.state, question: request.questions[id] }),
+    ]),
+  )
+  const answers: Record<string, ClassifyAnswer> = {}
+  const missing: Record<string, ClassifyQuestion> = {}
+  for (const id of ids) {
+    const answer = cache.get(keys[id])
+    if (answer) answers[id] = answer
+    else missing[id] = request.questions[id]
+  }
+  const sent = Object.keys(missing)
+  if (!sent.length) {
+    cache.count({ cachedQuestions: ids.length })
+    return { model: MODEL, answers, usage: { inputTokens: 0 } }
+  }
+  const key = await readSecret(host.userHome, 'TYPESAFE_API_KEY')
+  if (!key) {
+    throw new Error(
+      'Missing TYPESAFE_API_KEY. Enable secrets and add TYPESAFE_API_KEY in the Secrets panel (⌘K → Secrets).',
+    )
+  }
+  const response = await fetch('https://api.typesafe.ai/v1/systemone', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: MODEL, state: request.state, questions: missing }),
+    signal,
+  })
+  if (!response.ok) {
+    throw new Error(`TypeSafe ${response.status}: ${(await response.text()).slice(0, 1000)}`)
+  }
+  const body: unknown = await response.json()
+  if (
+    !record(body) ||
+    typeof body.model !== 'string' ||
+    !record(body.answers) ||
+    !record(body.usage) ||
+    typeof body.usage.input_tokens !== 'number'
+  ) {
+    throw new Error('Malformed TypeSafe response: expected model, answers and usage.input_tokens')
+  }
+  for (const id of sent) {
+    const answer = body.answers[id]
+    if (!record(answer) || answer.type !== missing[id].type) {
+      throw new Error(`Malformed TypeSafe response: expected ${missing[id].type} answer for ${id}`)
+    }
+    answers[id] = answer as ClassifyAnswer
+  }
+  cache.put(sent.map((id) => [keys[id], answers[id]]))
+  cache.count({
+    requests: 1,
+    cachedQuestions: ids.length - sent.length,
+    sentQuestions: sent.length,
+    inputTokens: body.usage.input_tokens,
+  })
+  return {
+    model: body.model,
+    answers: Object.fromEntries(ids.map((id) => [id, answers[id]])),
+    usage: { inputTokens: body.usage.input_tokens },
+  }
 }

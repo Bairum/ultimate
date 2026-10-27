@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import type { ClassifyAnswer } from './api.ts'
-import type { DayStats } from './refs.ts'
+import type { DayStats, UseStats } from './refs.ts'
 
 export const USD_PER_MILLION_INPUT = 0.042
 
@@ -27,6 +27,9 @@ export function cacheKey(value: { model: string; state: unknown; question: unkno
 
 export type Counts = Partial<Omit<DayStats, 'day' | 'usd'>>
 
+/** One use of a feature or caller: its latency in ms, its USD, and whether the cache answered it whole or it failed. */
+export type Use = { ms: number; usd?: number; cached?: boolean; failed?: boolean }
+
 export type Cache = ReturnType<typeof openCache>
 
 /** Open (creating) the cache at `path`; beyond `maxRows` answers, the oldest are pruned. */
@@ -42,6 +45,16 @@ export function openCache(path: string, maxRows = 200_000) {
       cached_questions INTEGER NOT NULL,
       sent_questions INTEGER NOT NULL,
       input_tokens INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS uses (
+      day TEXT NOT NULL,
+      name TEXT NOT NULL,
+      calls INTEGER NOT NULL,
+      cached INTEGER NOT NULL,
+      failed INTEGER NOT NULL,
+      ms REAL NOT NULL,
+      usd REAL NOT NULL,
+      PRIMARY KEY (day, name)
     );
   `)
   const select = db.prepare('SELECT answer FROM answers WHERE key = ?')
@@ -62,6 +75,14 @@ export function openCache(path: string, maxRows = 200_000) {
   `)
   const days = db.prepare(
     'SELECT day, requests, cached_questions, sent_questions, input_tokens FROM days WHERE day >= ? ORDER BY day DESC',
+  )
+  const use = db.prepare(`
+    INSERT INTO uses (day, name, calls, cached, failed, ms, usd) VALUES (?, ?, 1, ?, ?, ?, ?)
+    ON CONFLICT (day, name) DO UPDATE SET calls = calls + 1, cached = cached + excluded.cached,
+      failed = failed + excluded.failed, ms = ms + excluded.ms, usd = usd + excluded.usd
+  `)
+  const uses = db.prepare(
+    'SELECT day, name, calls, cached, failed, ms, usd FROM uses WHERE day >= ? ORDER BY day DESC, name',
   )
   const size = db.prepare(
     'SELECT page_count * page_size AS bytes FROM pragma_page_count(), pragma_page_size()',
@@ -91,7 +112,11 @@ export function openCache(path: string, maxRows = 200_000) {
         counts.inputTokens ?? 0,
       )
     },
-    /** The ledger of the last `span` UTC days (today included), newest first, and the cache's rows and bytes. */
+    /** Count one use of `name` today. */
+    use(name: string, { ms, usd = 0, cached = false, failed = false }: Use, now = Date.now()) {
+      use.run(new Date(now).toISOString().slice(0, 10), name, +cached, +failed, ms, usd)
+    },
+    /** The ledgers of the last `span` UTC days (today included), newest first, and the cache's rows and bytes. */
     stats(span: number, now = Date.now()) {
       const since = new Date(now - (span - 1) * 86_400_000).toISOString().slice(0, 10)
       return {
@@ -104,6 +129,15 @@ export function openCache(path: string, maxRows = 200_000) {
           usd: (Number(row.input_tokens) * USD_PER_MILLION_INPUT) / 1e6,
         })),
         cache: { rows: Number(count.get()!.rows), bytes: Number(size.get()!.bytes) },
+        uses: uses.all(since).map((row): UseStats => ({
+          day: String(row.day),
+          name: String(row.name),
+          calls: Number(row.calls),
+          cached: Number(row.cached),
+          failed: Number(row.failed),
+          avgMs: Math.round(Number(row.ms) / Number(row.calls)),
+          usd: Number(row.usd),
+        })),
       }
     },
     close: () => db.close(),

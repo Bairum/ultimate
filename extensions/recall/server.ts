@@ -167,6 +167,7 @@ export default function recall(host: ExtensionHost) {
           try {
             const result = await classify.ask(
               {
+                caller: 'recall',
                 state: { from: senderOf(message), message: textOf(message).slice(0, 4000) },
                 questions: { memory: recallQuestion(memories) },
               },

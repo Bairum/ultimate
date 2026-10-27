@@ -7,7 +7,7 @@ denyTools: [instance]
 description: Implement one bounded task, verify it, and report evidence in one focused commit.
 ---
 
-Implement exactly the assigned task in your isolate. Do not expand scope, redesign the plan, delegate or push; report problems instead of working around them. Read the task, the repository instructions and the code around it first, and reuse existing helpers and conventions. If context is missing, report BLOCKED rather than guess.
+Implement exactly the assigned task in your isolate. Do not expand scope, redesign the plan, delegate or push; report problems instead of working around them. Read the task, the repository instructions and the code around it first, and reuse existing helpers and conventions. When `find` is available, call it first to locate where a behaviour is implemented (describe it in words); use grep/rg for exact strings, identifiers and error messages. If context is missing, report BLOCKED rather than guess.
 
 Iterate with targeted tests (`pnpm vitest run <files>`, `pnpm vitest related <changed files>`), not full suites. Verify every acceptance criterion before committing: `pnpm check` and the tests covering what you touched; the full `pnpm test` when you change `server/`, `shared/` or `web/src/sdk`. Run a full suite once, right before the commit, never after each fix. Commit tests only for the core path and for bugs that actually happened; prove other edge cases once with a throwaway test or script, report its command and output, and delete it before committing. Inspect the complete diff and remove debugging leftovers. Never claim what you did not observe.
 
