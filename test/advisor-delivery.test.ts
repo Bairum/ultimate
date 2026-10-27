@@ -370,6 +370,57 @@ it('lets an overrun answer leave, reruns its review once, and routes the result 
     [`${api.taskId}:answer:verification:0`, 'steer', 'deadline', f.parent],
   ])
 })
+it('wakes the parent with a blocker the held review settled before a later advisor overran the hold', async () => {
+  const f = await fixture()
+  f.config.roles!.worker!.advisors = ['verification', 'scope']
+  await writeFile(
+    join(f.host.userHome, '.ultimate/settings.json'),
+    JSON.stringify({ advisor: f.config }),
+  )
+  // verification answers at once with a blocker (a continuation); scope never answers within the hold.
+  let calls = 0
+  f.stream.mockImplementation(
+    () =>
+      ({
+        result: () => (++calls === 1 ? Promise.resolve(f.response) : new Promise(() => {})),
+      }) as never,
+  )
+  const hold = new AbortController()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    if (ms === 60_000) return hold.signal
+    return new AbortController().signal
+  })
+  const api = f.api()
+  const held = f.hooks.onYield(fauxAssistantMessage('Finished'), api, context)
+  await until(() => calls === 2)
+  hold.abort()
+  expect(await held).toBeUndefined()
+  timeout.mockRestore()
+  // The rerun inherits verification's settled continuation and reviews scope, which stays silent.
+  f.stream.mockImplementation(
+    () =>
+      ({
+        result: async () => fauxAssistantMessage([fauxText(JSON.stringify({ notes: [] }))]),
+      }) as never,
+  )
+  await review(
+    f.host,
+    f.api(),
+    { role: 'worker', point: 'answer', run: 100, deadline: true, of: api.taskId },
+    f.config,
+    [],
+    context,
+  )
+  const state = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
+  expect(state.notes.map((n) => [n.advisor, n.delivered, n.reason, n.routedTo])).toEqual([
+    ['verification', 'steer', 'deadline', f.parent],
+  ])
+  const input = await f.harness.commit(
+    (tx) => tx.submissionByRequest(f.parent, `advisor:${api.taskId}:answer:verification`),
+    context,
+  )
+  expect(input?.type).toBe('input')
+})
 it('routes a capped blocker to the parent even when the role delivers cards', async () => {
   const f = await fixture()
   f.config.roles!.worker!.delivery = 'card'

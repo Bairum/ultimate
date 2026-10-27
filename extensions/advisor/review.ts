@@ -494,12 +494,7 @@ export async function review(
         if (parent !== undefined) {
           recipient = parent
           if (finished) reason = input.deadline ? 'deadline' : 'ended'
-          // A blocker on finished work wakes the parent once per reviewed answer; the rest waits for its next turn.
-          const answer = host.conversations().find((c) => c.id === id)?.answerAt ?? 0
-          if (finished && notes.some((n) => n.severity === 'blocker') && row.woke !== answer) {
-            row.woke = answer
-            delivered = 'steer'
-          } else delivered = 'note'
+          delivered = finished && wakes(host, runs, id, notes) ? 'steer' : 'note'
         }
         entry = {
           review: reviewId,
@@ -593,7 +588,23 @@ async function waiting(host: ExtensionHost, tx: Tx, id: ConversationId) {
   const agents = Object.values((await tx.doc(Subagents, id)).agents)
   return agents.some((a) => host.conversations().find((c) => c.id === a.conversationId)?.busy)
 }
-/** A settled continuation the answer outran: its notes go to the parent instead, or stay as a note without one. */
+/**
+ * Whether a blocker on finished work wakes the parent: once per reviewed answer (its `answerAt`), recorded in `runs`.
+ * Concerns and nits, and later blockers on the same answer, wait for the parent's next turn.
+ */
+function wakes(
+  host: ExtensionHost,
+  runs: ReturnType<typeof Runs.definition.initial>,
+  id: ConversationId,
+  notes: readonly { severity: string }[],
+) {
+  const answer = host.conversations().find((c) => c.id === id)?.answerAt ?? 0
+  const row = (runs.conversations[id] ??= { rounds: 0, signals: [] })
+  if (!notes.some((n) => n.severity === 'blocker') || row.woke === answer) return false
+  row.woke = answer
+  return true
+}
+/** A settled continuation the answer outran: like any deadline result, it goes to the parent (or stays as a note). */
 async function reroute(
   host: ExtensionHost,
   id: ConversationId,
@@ -603,9 +614,10 @@ async function reroute(
   return host.harness().commit(async (tx) => {
     const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
     const parent = await parentOf(tx, id)
+    const delivered = parent !== undefined && wakes(host, runs, id, entry.notes) ? 'steer' : 'note'
     const moved: AdvisorNoteEntry = {
       ...entry,
-      delivered: 'note',
+      delivered,
       reason: 'deadline',
       ...(parent !== undefined ? { routedTo: parent } : {}),
     }
@@ -613,7 +625,7 @@ async function reroute(
     const ids = new Set(entry.notes.map((n) => n.id))
     for (const note of (await tx.doc(State, ROOT_CONVERSATION_ID)).notes)
       if (ids.has(note.id)) {
-        note.delivered = 'note'
+        note.delivered = delivered
         note.reason = 'deadline'
         delete note.readAt
         if (parent !== undefined) note.routedTo = parent
