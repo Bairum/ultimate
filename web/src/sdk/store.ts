@@ -139,6 +139,12 @@ export function createStore(options: StoreOptions = {}) {
    */
   const recent = new Map<number, { view: StreamedView; raw?: string }>()
   const keep = 6
+  /**
+   * The last text of each whole-state event. Every (re)connect resends them, mostly unchanged: skipping an identical one
+   * spares the parse and a re-render of everything that reads it (the conversation list is megabytes in a long history).
+   */
+  const lastRaw: Partial<Record<keyof ServerEvents, string>> = {}
+  const snapshots = new Set<keyof ServerEvents>(['system', 'conversations', 'tasks'])
   function remember(view: StreamedView, raw?: string) {
     const id = view.conversation.id
     recent.delete(id)
@@ -254,7 +260,11 @@ export function createStore(options: StoreOptions = {}) {
         if (source !== current) return
         const raw = (event as MessageEvent<string>).data
         if (name === 'view') receiveView(raw)
-        else handle(name, JSON.parse(raw))
+        else if (snapshots.has(name)) {
+          if (lastRaw[name] === raw) return
+          lastRaw[name] = raw
+          handle(name, JSON.parse(raw))
+        } else handle(name, JSON.parse(raw))
       })
   }
   function scheduleReconnect() {
