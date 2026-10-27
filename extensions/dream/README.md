@@ -151,6 +151,13 @@ local-only cloud records why it was skipped; a configured backup failure aborts.
 the real destination, the switch journal requested, and the host restarted. A restart failure removes the pending
 journal and records `failed`; the seed remains available to retry. No action performs a real switch in its caller.
 
+Once the new chapter has applied its seed, its open starts the chapter's first cloud backup in the background, when
+`CloudApi` reports backups on (not off, satellite or local-only) and the chapter has no backup yet: none recorded in
+its `cloud-backup.json`, none in the Worker's register (a backup registered just before a restart). Every open of a
+seeded chapter checks again, so a backup a restart cut short runs on the next open, and one
+@ultimate already took stands in for it; cloud's one-at-a-time lock refuses a second concurrent upload. The status
+line's "backed up …" shows it; failures arrive as cloud's own notice. The gate's preview never backs up.
+
 `chapters` returns `{ active, number, newest, chapters: [{ name, number, createdAt? }] }`. User-only `switch { chapter }`
 refuses active or unknown names, busy conversations here, and targets with work in flight (`requestChapter`). It
 journals and restarts without building a seed or backing up. A failed restart removes its pending journal and throws.
