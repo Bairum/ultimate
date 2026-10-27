@@ -25,6 +25,7 @@ import {
   ConcludeAction,
   hiddenConversationIds,
   ResumeAction,
+  useConcludedSince,
   useOverview,
 } from '../conversations/ui.tsx'
 import type { WorkspaceConversation as ConversationSummary } from '../workspaces/ui.tsx'
@@ -158,6 +159,7 @@ function Tree({
   const shownId = useShownId()
   const now = useNow(60_000)
   const [concludedIds] = useSidebarState<number[]>('concluded', [])
+  const concludedSince = useConcludedSince()
   const [seen] = useSidebarState<Record<string, number>>('seen', {})
   const shownTop = topOf(shownId, conversations)
   const hiddenIds = hiddenConversationIds(conversations, concludedIds)
@@ -345,6 +347,7 @@ function Tree({
         busy: conversation.busy,
         parked: parked.has(conversation.id),
         primary: ultimateId,
+        concludedSince: concludedSince(conversation.id),
       },
       log,
     )
