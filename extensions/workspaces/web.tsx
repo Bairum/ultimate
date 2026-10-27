@@ -3,7 +3,7 @@ import { MentionText } from '@/components/ai/message'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { defineWebExtension, useTranscript } from '@/sdk'
 import { CommitCount, LandingCard, useGithubRepo } from './landing.tsx'
-import { LanderAskEntry, LanderLogEntry, LanderReport, WorkspaceCall } from './log.tsx'
+import { LanderLogEntry, LanderReport, WorkspaceCall } from './log.tsx'
 import { compareUrl } from '../../lib/compare.ts'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 
@@ -116,7 +116,6 @@ export default defineWebExtension({
         core
       ),
     'ultimate.lander': LanderLogEntry,
-    'ultimate.lander-ask': LanderAskEntry,
     'workspaces.lander-report': LanderReport,
   },
 })

@@ -4,7 +4,6 @@ import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
-import { isolatable } from '../../lib/git.ts'
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import type { Remote } from './refs.ts'
 
@@ -35,12 +34,6 @@ export async function parentOf(host: ExtensionHost, id: number, ctx: Context) {
     ? owner
     : undefined
 }
-export async function lander(host: ExtensionHost, ctx: Context) {
-  const checkout = await isolatable(host.projectRoot)
-  if ('reason' in checkout) return undefined
-  return (await host.harness().snapshot(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID, ctx))
-    ?.landerConversations[checkout.source]
-}
 export async function senderName(host: ExtensionHost, id: number | 'user', ctx: Context) {
   if (id === 'user') return 'user'
   if (typeof id !== 'number') return 'another Ultimate'
@@ -62,8 +55,7 @@ export async function resolve(
 ) {
   if (to === 'user') return to
   let id: number | undefined
-  if (to === '@lander') id = await lander(host, ctx)
-  else if (to.startsWith('@')) {
+  if (to.startsWith('@')) {
     const service = host.need(SubagentsApi)
     const valid = await service.residents(ctx)
     if (!valid.some((item) => `@${item.name}` === to))
