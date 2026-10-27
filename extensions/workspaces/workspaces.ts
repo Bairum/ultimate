@@ -657,6 +657,7 @@ export function workspaces(host: Host) {
       if (error.code === 'ENOENT') return []
       throw error
     })
+    if (!names.length) return []
     const known = new Set(
       Object.values(
         (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))?.items ?? {},
