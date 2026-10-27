@@ -32,7 +32,9 @@ function useScroller(root: RefObject<HTMLDivElement | null>) {
     if (!element) return undefined
     const update = () => {
       const height = Math.max(1, element.scrollHeight)
-      setView({ top: element.scrollTop / height, size: element.clientHeight / height })
+      const top = element.scrollTop / height
+      const size = element.clientHeight / height
+      setView((view) => (view.top === top && view.size === size ? view : { top, size }))
     }
     update()
     element.addEventListener('scroll', update, { passive: true })
