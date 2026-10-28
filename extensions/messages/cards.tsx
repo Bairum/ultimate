@@ -347,7 +347,7 @@ function backgroundWord(
 export function BackgroundSummary({ rows, steps, working, between }: CompactSummaryProps) {
   const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const transcript = useTranscript()
-  if (between) return <StretchSummary rows={rows} working={working} />
+  if (between) return <StretchSummary rows={rows} steps={steps} working={working} />
   const shown = rows.filter((row) => backgroundRow(row, log) === true)
   const who = [...new Set(shown.flatMap((row) => counterparts(row, log)))]
   const count = shown.length
@@ -380,7 +380,7 @@ export function BackgroundSummary({ rows, steps, working, between }: CompactSumm
  * A whole stretch between @ultimate's messages in one line: how many updates, who with, what landed and whether the
  * app reloaded, so the reader knows whether to open it.
  */
-function StretchSummary({ rows, working }: Pick<CompactSummaryProps, 'rows' | 'working'>) {
+function StretchSummary({ rows, steps, working }: CompactSummaryProps) {
   const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const counted = rows.filter(
     (row) => backgroundRow(row, log) !== 'hidden' && row.entry.kind !== 'pi.system',
@@ -395,10 +395,11 @@ function StretchSummary({ rows, working }: Pick<CompactSummaryProps, 'rows' | 'w
     ),
   ].filter((id) => id !== 'lander')
   const count = counted.length
+  const stepped = steps > 0 && `${steps} step${steps === 1 ? '' : 's'}`
   return (
     <span className="flex min-w-0 items-center gap-1.5" data-compact-stretch>
       <span className="shrink-0">
-        {count} update{count === 1 ? '' : 's'}
+        {count > 0 ? `${count} update${count === 1 ? '' : 's'}` : stepped}
       </span>
       {who.slice(0, 2).map((id) => (
         <span className="flex min-w-0" key={id}>
@@ -406,6 +407,7 @@ function StretchSummary({ rows, working }: Pick<CompactSummaryProps, 'rows' | 'w
         </span>
       ))}
       {who.length > 2 && <span className="shrink-0">+{who.length - 2}</span>}
+      {count > 0 && stepped && <span className="shrink-0 max-sm:hidden">· {stepped}</span>}
       {shas.map((sha) => (
         <span className="flex shrink-0 items-center gap-1" key={sha}>
           · <CheckIcon className="size-3 text-success" />

@@ -712,8 +712,13 @@ function TranscriptEntries() {
         const key = `between:${partKey(itemParts(item.between[0])[0])}`
         // The stretch the agent works in now stays in view while it works.
         const shown = recede === 'fade' || (busy && last) || readBetween(id, item)
-        const faded = item.between.map((inner, inside) =>
-          renderItem(inner, last && inside === item.between.length - 1, recedeRow),
+        // Opened from its line, a stretch shows its background groups' rows: their lines would repeat the stretch's.
+        const between =
+          recede === 'line'
+            ? item.between.flatMap((row) => ('quiet' in row ? row.quiet : [row]))
+            : item.between
+        const faded = between.map((inner, inside) =>
+          renderItem(inner, last && inside === between.length - 1, recedeRow),
         )
         return (
           <Fragment key={key}>
@@ -857,8 +862,11 @@ function BetweenLine({
     | undefined
 }) {
   if (!onOpen) return <BetweenRule />
-  const parts = group.between.flatMap(itemParts)
-  const rows = parts.map((part) => ({ entry: part.entry, calls: shownCalls(part) }))
+  // Rows outside runs of work, which count as steps instead.
+  const rows = group.between
+    .flatMap((row) => ('aside' in row ? row.aside : [row]))
+    .flatMap((row) => ('quiet' in row ? row.quiet : [row]))
+    .flatMap((row) => ('work' in row ? [] : [{ entry: row.entry, calls: shownCalls(row) }]))
   const steps = group.between.reduce(
     (sum, row) => sum + ('work' in row ? row.steps : 'quiet' in row ? row.steps : 0),
     0,
