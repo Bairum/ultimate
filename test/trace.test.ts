@@ -89,9 +89,12 @@ async function start() {
   const root = await temp('ultimate-trace-')
   await linkDependencies(root)
   await mkdir(join(root, 'web'))
+  // On macOS chokidar shares one FSEvents stream per tree across a process's servers; a server joining it receives
+  // the late events of its own fresh files and restarts Vite mid-test. Without usePolling: false chokidar falls back to
+  // polling on macOS instead of fs.watch.
   await writeFile(
     join(root, 'vite.config.ts'),
-    "export default { root: 'web', optimizeDeps: { noDiscovery: true } }",
+    "export default { root: 'web', optimizeDeps: { noDiscovery: true }, server: { watch: { useFsEvents: false, usePolling: false } } }",
   )
   await mkdir(join(root, 'extensions'))
   await symlink(resolve('extensions/secrets'), join(root, 'extensions/secrets'))
