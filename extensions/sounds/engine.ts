@@ -132,10 +132,10 @@ export type Band = {
 export function band(variant: Variant): Band {
   const part = parts[variant]()
   const queue: Happening[] = []
-  let level: Level = { busy: {}, streaming: 0 }
   let step = 0
   const transport = Tone.getTransport()
-  transport.bpm.value = part.bpm(level)
+  let bpm = part.bpm({ busy: {}, streaming: 0 })
+  transport.bpm.value = bpm
   const loop = new Tone.Loop((time) => {
     const bar = Math.floor(step / 16)
     for (const happening of queue.splice(0, part.cap)) part.play(happening, time, bar)
@@ -147,9 +147,12 @@ export function band(variant: Variant): Band {
   transport.start('+0.05')
   return {
     hit: (happening) => void queue.push(happening),
+    // Ramp only when the tempo changes: every ramp adds automation events to the transport's timeline, which Tone
+    // never prunes and walks on every tick, and the live project reports its level on every render.
     level: (next) => {
-      level = next
-      transport.bpm.rampTo(part.bpm(next), 2)
+      if (part.bpm(next) === bpm) return
+      bpm = part.bpm(next)
+      transport.bpm.rampTo(bpm, 2)
     },
     dispose: () => {
       loop.dispose()
