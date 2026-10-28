@@ -39,16 +39,16 @@ drops what it holds.
 
 Three variants, all in D major over a I–vi–IV–V progression and quantized to a sixteenth, with a cap on happenings per
 step. Each role has a motif, a short contour over the current chord that its tool calls walk one step at a time, so a
-role's calls form a phrase rather than random notes; a landing resolves (V–I), a failure leaves tension unresolved.
+role's calls form a phrase rather than random notes; a failure leaves tension unresolved. Every variant lands with the
+notifications' kalimba: Finished with the octave under its last note.
 
 - **Chiptune:** NES style, two pulse channels, a triangle bass and a noise drum, one note each at a time, at 150 bpm. Edits a small coin, commands a drum tick on the bass, reads a quiet blip; a commit the coin "ba-ding", a
-  start a 1-up, a landing a power-up arpeggio up I–IV–V to a held tonic, a failure a bump sliding to a tritone.
+  start a 1-up, a failure a bump sliding to a tritone.
 - **Orchestra:** at 96 bpm, each role an instrument (@ultimate strings, coordinators cello, workers plucks, scouts flute,
   reviewers marimba, the lander brass); tools are articulations, a start an upward chord and a stop its answer down,
-  a commit a small leading-tone close, a landing a V7–I cadence, a failure a diminished seventh.
+  a commit a small leading-tone close, a failure a diminished seventh.
 - **Crazy:** a driving 128 bpm; bash a snare, edits walk an acid riff on the bar's root, reads
-  hats, browser calls zaps; every call bites a bitcrusher harder; a landing a snare fill then the drop, a failure
-  crunches.
+  hats, browser calls zaps; every call bites a bitcrusher harder; a failure crunches.
 
 **Start demo** (in the popover, or ⌘K "Play the sound of agents demo") plays about 40 seconds of a scripted feature
 through the same mapping: a coordinator, a scout, two workers, a commit, a failed check, reviewers, the lander and a
@@ -57,6 +57,7 @@ landing. Real activity plays along.
 ## Engine
 
 Everything is synthesized with Tone.js in `engine.ts`, loaded on first sound (Tone opens an AudioContext when it
-loads): FM bells over a soft pad chord for the notifications, a shared light reverb and a limiter, and the three
-bands. A page plays only after a click or key press; with the sound of agents on after a reload, the popover says
+loads): a kalimba for the notifications and landings, in a short room so nothing lingers, a limiter, and the three
+bands. The notifications share one motif in G: Needs input rises a fourth (D–G), Finished falls home from the fifth
+(D–B–G), Failed falls to B♭; each lasts at most about 0.6 s. Other extensions' `playNotes` play soft FM bells. A page plays only after a click or key press; with the sound of agents on after a reload, the popover says
 "Click anywhere to start audio" and the first click starts it. `ui.tsx` exports `playNotes` for other extensions.
