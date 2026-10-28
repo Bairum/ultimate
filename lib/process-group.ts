@@ -25,7 +25,7 @@ export type Group = { child: GroupProcess; ended: Promise<boolean>; closed: Prom
  */
 
 /** Who process `pid` is, the same on every read while it lives (its start time), or undefined once it is gone. */
-function identify(pid: number): string | undefined {
+export function identify(pid: number): string | undefined {
   if (process.platform === 'darwin') {
     try {
       return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim()
