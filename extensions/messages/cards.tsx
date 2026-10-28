@@ -49,6 +49,8 @@ import {
   backgroundRow,
   counterparts,
   emptyMessages,
+  landed,
+  landedSha,
   messageStatus,
   outgoingState,
   remoteLabel,
@@ -342,9 +344,10 @@ function backgroundWord(
 }
 
 /** A background group's line: who it was with, how many updates, and the work between them. */
-export function BackgroundSummary({ rows, steps, working }: CompactSummaryProps) {
+export function BackgroundSummary({ rows, steps, working, between }: CompactSummaryProps) {
   const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const transcript = useTranscript()
+  if (between) return <StretchSummary rows={rows} steps={steps} working={working} />
   const shown = rows.filter((row) => backgroundRow(row, log) === true)
   const who = [...new Set(shown.flatMap((row) => counterparts(row, log)))]
   const count = shown.length
@@ -368,6 +371,50 @@ export function BackgroundSummary({ rows, steps, working }: CompactSummaryProps)
           · {steps} step{steps === 1 ? '' : 's'}
         </span>
       )}
+      {working && <span className="shrink-0 text-brand">· working</span>}
+    </span>
+  )
+}
+
+/**
+ * A whole stretch between @ultimate's messages in one line: how many updates, who with, what landed and whether the
+ * app reloaded, so the reader knows whether to open it.
+ */
+function StretchSummary({ rows, steps, working }: CompactSummaryProps) {
+  const log = useDocOf(1, MessagesDoc) ?? emptyMessages
+  const counted = rows.filter(
+    (row) => backgroundRow(row, log) !== 'hidden' && row.entry.kind !== 'pi.system',
+  )
+  const shas = [
+    ...new Set(counted.flatMap((row) => (landed(row.entry) ? [landedSha(row.entry)] : []))),
+  ]
+  const reloaded = counted.some((row) => row.entry.kind === 'prompt.build')
+  const who = [
+    ...new Set(
+      counted.flatMap((row) => (backgroundRow(row, log) === true ? counterparts(row, log) : [])),
+    ),
+  ].filter((id) => id !== 'lander')
+  const count = counted.length
+  const stepped = steps > 0 && `${steps} step${steps === 1 ? '' : 's'}`
+  return (
+    <span className="flex min-w-0 items-center gap-1.5" data-compact-stretch>
+      <span className="shrink-0">
+        {count > 0 ? `${count} update${count === 1 ? '' : 's'}` : stepped}
+      </span>
+      {who.slice(0, 2).map((id) => (
+        <span className="flex min-w-0" key={id}>
+          <Address id={id} />
+        </span>
+      ))}
+      {who.length > 2 && <span className="shrink-0">+{who.length - 2}</span>}
+      {count > 0 && stepped && <span className="shrink-0 max-sm:hidden">· {stepped}</span>}
+      {shas.map((sha) => (
+        <span className="flex shrink-0 items-center gap-1" key={sha}>
+          · <CheckIcon className="size-3 text-success" />
+          landed {sha}
+        </span>
+      ))}
+      {reloaded && <span className="shrink-0 max-sm:hidden">· reloaded</span>}
       {working && <span className="shrink-0 text-brand">· working</span>}
     </span>
   )
