@@ -135,12 +135,12 @@ async function fixture(
           ? { doc: Workspaces, git: async () => '' }
           : name === 'conversations'
             ? { concludedIn }
-          : name === 'lineage'
-            ? {
-                rootOf: (id: number, ctx: Context) => rootOf(host, id, ctx),
-                branch: (input: BranchInput, ctx: Context) => startBranch(host, input, ctx),
-              }
-            : undefined
+            : name === 'lineage'
+              ? {
+                  rootOf: (id: number, ctx: Context) => rootOf(host, id, ctx),
+                  branch: (input: BranchInput, ctx: Context) => startBranch(host, input, ctx),
+                }
+              : undefined
   const host = {
     ...prepared,
     metadata: Metadata,
@@ -1403,7 +1403,7 @@ it("leaves a branch's final answer as a note while its work is under way", async
   ).toHaveLength(0)
   view.dispose()
 })
-it("leaves the final answer of a branch its landing concluded as a note, since the landing woke the starter", async () => {
+it('leaves the final answer of a branch its landing concluded as a note, since the landing woke the starter', async () => {
   const f = await fixture()
   const b = await branched(f)
   await f.opened.harness.commit(async (tx) => {
