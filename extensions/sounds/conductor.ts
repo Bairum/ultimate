@@ -70,7 +70,10 @@ export async function conduct(variant: Variant | undefined) {
   band = playing
 }
 
-export const hit = (happening: Happening) => band?.hit(happening)
+/** Hands `happening` to the band; a hidden tab plays nothing, so nothing waits to play on its return. */
+export const hit = (happening: Happening) => {
+  if (!document.hidden) band?.hit(happening)
+}
 
 // A hot reload replaces this module: the old band would keep playing on the shared transport beside the new one.
 import.meta.hot?.dispose(() => {

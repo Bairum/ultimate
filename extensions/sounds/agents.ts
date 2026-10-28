@@ -29,7 +29,11 @@ export const mix = (...levels: Level[]): Level => {
 }
 
 export const variants = [
-  { id: 'ambient', label: 'Ambient', detail: 'Soft chords for each action, in a long reverb' },
+  {
+    id: 'chiptune',
+    label: 'Chiptune',
+    detail: '8-bit: coins for wins, a power-up when work lands',
+  },
   { id: 'orchestra', label: 'Orchestra', detail: 'Each role an instrument, one key and tempo' },
   { id: 'crazy', label: 'Crazy', detail: 'Drums and glitches for every call; faster under load' },
 ] as const
@@ -73,13 +77,15 @@ export type Snapshot = {
 
 /**
  * Follows the project and says what newly happened and how busy it is. Whatever the first snapshot shows was heard
- * already: a tab that opens mid-landing does not play it.
+ * already: a tab that opens mid-landing does not play it. A `quiet` snapshot (the tab is hidden or its stream catching
+ * up after a reconnect) is heard the same way, so nothing that happened while the tab was away plays on its return.
  */
 export function tracker() {
   let first = true
   let busy = new Set<number>()
   const heard = new Set<string>()
-  return (snapshot: Snapshot): { happenings: Happening[]; level: Level } => {
+  return (snapshot: Snapshot, quiet = false): { happenings: Happening[]; level: Level } => {
+    const silent = first || quiet
     const roles = new Map(
       snapshot.conversations.map((c) => [c.id, roleOf(c.label, snapshot.standing.has(c.id))]),
     )
@@ -88,10 +94,10 @@ export function tracker() {
     const fresh = (key: string) => {
       if (heard.has(key)) return false
       heard.add(key)
-      return !first
+      return !silent
     }
     const nowBusy = new Set(snapshot.conversations.filter((c) => c.busy).map((c) => c.id))
-    if (!first) {
+    if (!silent) {
       for (const id of nowBusy)
         if (!busy.has(id)) happenings.push({ kind: 'start', role: role(id) })
       for (const id of busy) if (!nowBusy.has(id)) happenings.push({ kind: 'stop', role: role(id) })

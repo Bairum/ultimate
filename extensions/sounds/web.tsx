@@ -1,5 +1,5 @@
 import { AudioLinesIcon, PlayIcon, SquareIcon, Volume2Icon, VolumeOffIcon } from 'lucide-react'
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
@@ -8,6 +8,7 @@ import {
   defineWebExtension,
   ConversationScope,
   useConversation,
+  useConnection,
   useConversations,
   useDocOf,
   useEvents,
@@ -34,9 +35,10 @@ function useSettings() {
   const [volume, setVolume] = useExtensionUiState('volume', 0.8)
   // The sound of agents: off, or the variant that plays.
   const [stored, setAgents] = useExtensionUiState<string>('agents', 'off')
-  // A variant from another build plays as off.
-  const agents: Variant | 'off' = variants.some((variant) => variant.id === stored)
-    ? (stored as Variant)
+  // Ambient became Chiptune; a variant from another build plays as off.
+  const id = stored === 'ambient' ? 'chiptune' : stored
+  const agents: Variant | 'off' = variants.some((variant) => variant.id === id)
+    ? (id as Variant)
     : 'off'
   return { muted, setMuted, off, setOff, volume, setVolume, agents, setAgents }
 }
@@ -89,6 +91,29 @@ function Player() {
 
 const watched = [SubmissionLanded, Committed, CheckRan] as const
 
+/** How long after the tab opens, shows again or reconnects its stream what arrives is taken as heard. */
+const settleMs = 3000
+
+/**
+ * Whether what arrives now was heard already: while the tab is hidden or its stream is down, and for a moment after it
+ * opens, shows again or reconnects, while the documents and the event feed catch up with what happened meanwhile.
+ */
+function useCatchingUp() {
+  const connection = useConnection()
+  const shown = useRef(Date.now())
+  useEffect(() => {
+    const update = () => {
+      if (!document.hidden) shown.current = Date.now()
+    }
+    document.addEventListener('visibilitychange', update)
+    return () => document.removeEventListener('visibilitychange', update)
+  }, [])
+  return () =>
+    connection.status !== 'open' ||
+    document.hidden ||
+    Date.now() < Math.max(shown.current, connection.since) + settleMs
+}
+
 /** While the sound of agents plays: follows every conversation, tool call and landing, and hands them to the band. */
 function Listener() {
   const conversations = useConversations()
@@ -96,24 +121,29 @@ function Listener() {
   const standing = useDocOf(1, StandingDoc)
   const events = useEvents({ events: watched, limit: 20 })
   const [follow] = useState(tracker)
+  const catchingUp = useCatchingUp()
   // Each busy conversation's live round, reported by a `Round` in its scope: its tool calls by name, and whether its
   // model streams. A fast call passes through `pi.live` but often not through the coalesced task graph.
   const [rounds, setRounds] = useState<Record<number, Round>>({})
   const busy = conversations.filter((conversation) => conversation.busy).map(({ id }) => id)
   useEffect(() => {
-    if (!overview) return
+    // Until every source has arrived, a later one would bring its whole history as news.
+    if (!overview || !standing || !events) return
     const live = busy.map((id) => rounds[id]).filter((round) => round !== undefined)
-    const { happenings, level } = follow({
-      conversations,
-      standing: new Set(Object.values(standing ?? {})),
-      tools: Object.fromEntries(live.flatMap((round) => round.tools)),
-      streaming: live.filter((round) => round.streaming).length,
-      runs: overview.conversations,
-      events: events ?? [],
-    })
+    const { happenings, level } = follow(
+      {
+        conversations,
+        standing: new Set(Object.values(standing)),
+        tools: Object.fromEntries(live.flatMap((round) => round.tools)),
+        streaming: live.filter((round) => round.streaming).length,
+        runs: overview.conversations,
+        events,
+      },
+      catchingUp(),
+    )
     for (const happening of happenings) conductor.hit(happening)
     conductor.level('live', level)
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- `busy` follows `conversations`.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- `busy` follows `conversations`; `catchingUp` reads the time.
   }, [follow, conversations, standing, rounds, overview, events])
   useEffect(() => () => conductor.level('live', silence), [])
   return busy.map((id) => (
@@ -210,7 +240,7 @@ function Control() {
             <Switch
               checked={agents !== 'off'}
               disabled={muted}
-              onCheckedChange={(on) => setAgents(on ? 'ambient' : 'off')}
+              onCheckedChange={(on) => setAgents(on ? 'chiptune' : 'off')}
             />
           </label>
           {agents !== 'off' && (

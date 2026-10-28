@@ -56,6 +56,33 @@ it('turns project changes into happenings and a level, taking the first snapshot
   expect(next.level).toEqual({ busy: { coordinator: 1, worker: 1 }, streaming: 1 })
 })
 
+it('takes what a tab catches up on after a reconnect as heard', () => {
+  const follow = tracker()
+  follow(snapshot({ conversations: [{ id: 10, label: 'coordinator', busy: true }] }))
+  // Back from hidden or a dropped stream: the snapshot and the event feed bring everything that happened meanwhile.
+  const away = snapshot({
+    conversations: [
+      { id: 10, label: 'coordinator', busy: false },
+      { id: 11, label: 'worker', busy: true },
+    ],
+    tools: { '11:a': { name: 'edit', conversationId: 11 } },
+    runs: { '11': { runState: 'error', inputId: 1 } },
+    events: [
+      { id: 4, kind: 'event.workspaces.landed', data: {} },
+      { id: 5, kind: 'event.coding-tools.committed', data: {} },
+    ],
+  })
+  expect(follow(away, true).happenings).toEqual([])
+  // Replayed again once caught up, it stays heard; only what is new from then on sounds.
+  expect(follow(away).happenings).toEqual([])
+  expect(
+    follow({
+      ...away,
+      events: [...away.events, { id: 6, kind: 'event.coding-tools.committed', data: {} }],
+    }).happenings,
+  ).toEqual([{ kind: 'commit' }])
+})
+
 it('plays the demo from first message to a quiet project', () => {
   const step = demoPlayer()
   const played = demo.map(step)
