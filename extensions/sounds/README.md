@@ -28,17 +28,27 @@ Off by default. Turned on, every tab plays the project: `agents.ts` follows the 
 each one's role from its label), each busy conversation's `pi.live` (its tool calls by name and whether its model
 streams; a fast call passes through there but often not through the coalesced task graph) and the event feed (`coding-tools.committed`, `workspaces.landed`, failed `workspaces.check`), plus
 failed runs from the overview. It turns them into happenings (a conversation starts or stops, a tool call by timbre,
-a commit, a landing, a failure) and a level (busy conversations by role, streaming models). Only happenings sound: there is no background drone, pad or beat, so idle is silence. The level sets the tempo.
+a commit, a landing, a failure). Only happenings sound: there is no background drone, pad or beat, so idle is silence.
+Each variant keeps one tempo, set once when it starts: busier work plays more notes, never a faster beat (Tone keeps
+every tempo change on a timeline it never prunes).
 
-Three variants, all in D major and quantized to a sixteenth, with a cap on happenings per step:
+Only what happens while the tab is shown sounds. Until every source has arrived, while the tab is hidden or its
+stream is down, and for three seconds after it opens, shows again or reconnects, what arrives is taken as heard: a tab
+coming back never plays what happened while it was away. A beat the throttled clock of a hidden tab catches up on
+drops what it holds.
 
-- **Ambient:** each tool call a soft two-note chord in its role's register, echoing into a long reverb; a landing a
-  wide major chord, a failure a dark cluster.
-- **Orchestra:** each role an instrument (@ultimate strings, coordinators cello, workers plucks, scouts flute,
-  reviewers marimba, the lander brass) over a I–vi–IV–V progression; tools are articulations, a start an upward
-  chord, a landing a V–I cadence, a failure a dissonant cluster.
-- **Crazy:** faster as load grows (104 to 178 bpm); bash a snare, edits an acid note, reads hats, browser calls zaps;
-  every call bites a bitcrusher harder; a landing drops, a failure crunches.
+Three variants, all in D major over a I–vi–IV–V progression and quantized to a sixteenth, with a cap on happenings per
+step. Each role has a motif, a short contour over the current chord that its tool calls walk one step at a time, so a
+role's calls form a phrase rather than random notes; a landing resolves (V–I), a failure leaves tension unresolved.
+
+- **Chiptune:** NES style, two pulse channels, a triangle bass and a noise drum, one note each at a time, at 150 bpm. Edits a small coin, commands a drum tick on the bass, reads a quiet blip; a commit the coin "ba-ding", a
+  start a 1-up, a landing a power-up arpeggio up I–IV–V to a held tonic, a failure a bump sliding to a tritone.
+- **Orchestra:** at 96 bpm, each role an instrument (@ultimate strings, coordinators cello, workers plucks, scouts flute,
+  reviewers marimba, the lander brass); tools are articulations, a start an upward chord and a stop its answer down,
+  a commit a small leading-tone close, a landing a V7–I cadence, a failure a diminished seventh.
+- **Crazy:** a driving 128 bpm; bash a snare, edits walk an acid riff on the bar's root, reads
+  hats, browser calls zaps; every call bites a bitcrusher harder; a landing a snare fill then the drop, a failure
+  crunches.
 
 **Start demo** (in the popover, or ⌘K "Play the sound of agents demo") plays about 40 seconds of a scripted feature
 through the same mapping: a coordinator, a scout, two workers, a commit, a failed check, reviewers, the lander and a
