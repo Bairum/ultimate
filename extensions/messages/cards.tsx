@@ -38,7 +38,7 @@ import {
   UserView,
 } from '@/sdk'
 import type { CompactSummaryProps, ToolCallView } from '@/sdk'
-import { AgentMark, ConversationRef } from '../conversations/ui.tsx'
+import { AgentMark, agentTitle, ConversationRef } from '../conversations/ui.tsx'
 import { openAgentSource, StandingDoc } from '../subagents/ui.tsx'
 import { useWorkspaceIndex } from '../workspaces/ui.tsx'
 import { accentOf } from './accent.tsx'
@@ -197,24 +197,20 @@ export function Bubble({
     status === 'failed' ||
     status === 'stopped' ||
     status === 'dismissed'
+  // Prose on the page under a name line; what mounts beneath the text shares one quiet card.
   return (
     <section
       data-message-outgoing={message?.id}
       data-compact-bubble
-      className={cn(
-        'group/bubble w-full min-w-0 rounded-md border border-l-2 border-border',
-        accent.left,
-        accent.fill,
-      )}
+      className="group/bubble mt-2 w-full min-w-0"
     >
-      <header className="flex min-h-8 flex-wrap items-center gap-2 px-3 pt-2.5 font-mono text-[11px] text-muted-foreground">
-        <span className={cn('flex min-w-0 font-semibold', accent.name)}>
-          <Address id={from} mark />
-        </span>
+      <header className="flex h-6 min-w-0 items-center gap-2 font-mono text-[11px] text-muted-foreground">
+        <Sender id={from} tone={accent.name} />
         {entry ? (
+          // One line: on a narrow column the details clip on the left instead of wrapping into an empty second row.
           <MessageActions
             bubble
-            className="ml-auto"
+            className="ml-auto min-w-0 flex-nowrap justify-end overflow-hidden whitespace-nowrap"
             entry={entry}
             text={text ?? ''}
             timestamp={at ?? (stored && 'timestamp' in stored ? stored.timestamp : 0)}
@@ -222,7 +218,7 @@ export function Bubble({
         ) : (
           at !== undefined && (
             <time
-              className="ml-auto"
+              className="ml-auto shrink-0"
               dateTime={new Date(at).toISOString()}
               title={new Date(at).toLocaleString()}
             >
@@ -231,26 +227,53 @@ export function Bubble({
           )
         )}
       </header>
-      {lead}
-      {text !== undefined && (
-        <Body pending={writing ? 'Writing you a message…' : undefined} text={text} />
-      )}
-      {message?.images && <MessageImages conversation={from} entry={message.images.entry} />}
-      {children}
-      {answer && <AttachedAnswer answer={answer} question={message!} />}
-      {(shown || message?.error) && (
-        <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
-          {shown && message ? (
-            <Status message={message} perspective="user" />
-          ) : (
-            shown && <span>{status}</span>
-          )}
-          {message?.error && (
-            <span className="min-w-0 break-words text-destructive">{message.error}</span>
-          )}
-        </footer>
-      )}
+      <div className="[&>div]:px-0 [&>div]:pt-1.5 [&>div]:pb-0">
+        {lead}
+        {text !== undefined && (
+          <Body pending={writing ? 'Writing you a message…' : undefined} text={text} />
+        )}
+      </div>
+      <div className="mt-3 overflow-hidden rounded-lg border border-border/70 bg-card/60 empty:hidden [&>:first-child]:border-t-0">
+        {message?.images && <MessageImages conversation={from} entry={message.images.entry} />}
+        {children}
+        {answer && <AttachedAnswer answer={answer} question={message!} />}
+        {(shown || message?.error) && (
+          <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+            {shown && message ? (
+              <Status message={message} perspective="user" />
+            ) : (
+              shown && <span>{status}</span>
+            )}
+            {message?.error && (
+              <span className="min-w-0 break-words text-destructive">{message.error}</span>
+            )}
+          </footer>
+        )}
+      </div>
     </section>
+  )
+}
+
+/**
+ * Who wrote a bubble, as its header names it: a standing agent by its mark and title in the sans face, anything else
+ * as its address.
+ */
+function Sender({ id, tone }: { id: number; tone: string }) {
+  const standing = useDocOf(1, StandingDoc)
+  const name = Object.entries(standing ?? {}).find(([, value]) => value === id)?.[0]
+  if (!name)
+    return (
+      <span className={cn('flex min-w-0 font-semibold', tone)}>
+        <Address id={id} mark />
+      </span>
+    )
+  return (
+    <span className="flex shrink-0 items-center gap-2" title={`@${name}`}>
+      <AgentMark name={name} size="sm" />
+      <span className={cn('font-sans text-[13px] font-semibold tracking-[-0.005em]', tone)}>
+        {agentTitle(name)}
+      </span>
+    </span>
   )
 }
 
@@ -597,11 +620,7 @@ export function MessageInput({ entry }: { entry: EntryRecord }) {
     >
       <section
         data-message-input={origin.id}
-        className={cn(
-          'group/bubble min-w-0 rounded-md border border-l-2 border-border',
-          accent.left,
-          accent.fill,
-        )}
+        className={cn('group/bubble min-w-0 rounded-lg border', accent.edge, accent.fill)}
       >
         <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
           <MailIcon className={cn('size-3.5 shrink-0', accent.name)} />
