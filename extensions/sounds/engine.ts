@@ -148,12 +148,6 @@ type Part = {
   nodes: Tone.ToneAudioNode[]
 }
 
-/** The part of Tone's internal automation timeline the tempo pruning uses. */
-type TempoEvents = {
-  get: (time: number) => { time: number } | null
-  cancelBefore: (time: number) => void
-}
-
 /** A playing band: hand it what happens and how busy the project is; it quantizes both to its beat. */
 export type Band = {
   hit: (happening: Happening) => void
@@ -166,10 +160,21 @@ export function band(variant: Variant): Band {
   const queue: Happening[] = []
   let step = 0
   const transport = Tone.getTransport()
-  let bpm = part.bpm({ busy: {}, streaming: 0 })
+  // In steps of 12 bpm, so the tempo changes only when the load crosses a step, not with every agent.
+  const tempo = (level: Level) => Math.round(part.bpm(level) / 12) * 12
+  let bpm = tempo({ busy: {}, streaming: 0 })
+  let wanted = bpm
   transport.bpm.value = bpm
   const loop = new Tone.Loop((time) => {
     const bar = Math.floor(step / 16)
+    // The tempo moves on a phrase's downbeat, over a bar, and only when it changed: every ramp adds automation events
+    // to the transport's tempo timeline, which Tone never prunes (it counts ticks from the transport's start) and
+    // searches on every tick, while the live project reports its level on every render. At most one linear ramp, two
+    // events, per four bars keeps it small; ramping on every change grew it twenty times faster and hung a renderer.
+    if (step % 64 === 0 && wanted !== bpm) {
+      bpm = wanted
+      transport.bpm.linearRampTo(bpm, '1m', time)
+    }
     // A hidden tab throttles the clock, which then catches up in one go with steps already past: drop what they hold
     // instead of playing it all at once.
     if (time < Tone.now() - 0.1) queue.length = 0
@@ -182,18 +187,7 @@ export function band(variant: Variant): Band {
   transport.start('+0.05')
   return {
     hit: (happening) => void queue.push(happening),
-    // Ramp only when the tempo changes, and linearly: every ramp adds automation events to the transport's tempo
-    // timeline (an exponential one about twenty), which Tone never prunes and searches on every tick, and the live
-    // project reports its level on every render. What came before the event in force a second ago goes.
-    level: (next) => {
-      if (part.bpm(next) === bpm) return
-      bpm = part.bpm(next)
-      transport.bpm.linearRampTo(bpm, 2)
-      const events = (transport.bpm as unknown as { _param: { _events: TempoEvents } })._param
-        ._events
-      const settled = events.get(Tone.now() - 1)
-      if (settled) events.cancelBefore(settled.time - 1e-6)
-    },
+    level: (next) => void (wanted = tempo(next)),
     dispose: () => {
       loop.dispose()
       transport.stop()
