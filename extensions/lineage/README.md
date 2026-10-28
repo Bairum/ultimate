@@ -200,8 +200,9 @@ A branch is the conversation; the coordinator is the agent that runs it, so the 
 There is no manual creation page or message-hover branch action. Coordinator branches keep their composers for steering.
 
 A root is the project's read-only History page. Through the SDK's `composer` renderer, every listed root replaces
-its composer with one banner, "You're reading the project's history", with **Open code** (the repository on GitHub,
-shown only when `origin` is there) and **Back to @ultimate** (`talkToUltimate`, like mod+0). The sidebar's project
+its composer with one banner, "You're reading the project's history", with **Open in Zed** (lineage `openEditor`, user-only: the
+project folder in `zeditor` or `zed` on the machine Ultimate runs on; hidden on touch devices) and a small GitHub link
+when `origin` is there, and **Back to @ultimate** (`talkToUltimate`, like mod+0). The sidebar's project
 path opens it. There is no text input, memory list or compact button on the page: memory lives in the sidebar's Memory
 row and the Memory panel, and the palette's Compact on a root runs lineage `compact` while its composer-focus command
 is hidden. A new project starts in @ultimate's conversation instead, from onboarding's Start here card.

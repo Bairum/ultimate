@@ -4,6 +4,7 @@ import {
   ChevronRightIcon,
   CircleCheckIcon,
   CodeIcon,
+  ExternalLinkIcon,
   GitBranchIcon,
   GitForkIcon,
   ScrollTextIcon,
@@ -43,7 +44,7 @@ import { store } from '@/sdk/client'
 import { ConversationRef, Unsummarized } from '../conversations/ui.tsx'
 import { talkToUltimate } from '../subagents/ui.tsx'
 import { Open, useGithubRepo } from '../workspaces/ui.tsx'
-import { ForgetAction, MemoryDoc } from './refs.ts'
+import { ForgetAction, MemoryDoc, OpenEditorAction } from './refs.ts'
 import type { MemoryItem } from './refs.ts'
 import { column, MEMORY_FOCUS, MEMORY_PANEL, MemoryHeader, useRoots } from './ui.tsx'
 import { MemoryCall, NotifyCall, RememberCall } from './calls.tsx'
@@ -420,16 +421,32 @@ function HistoryBanner({ id, dock }: { id: number; dock?: boolean }) {
           </p>
         </div>
         <div className="ml-auto flex items-center gap-1">
+          {/* Zed opens on the machine Ultimate runs on, so a phone gets only the GitHub link. */}
+          <Button
+            className="pointer-coarse:hidden"
+            onClick={() =>
+              void api
+                .action(OpenEditorAction)
+                .catch((error: unknown) =>
+                  store.notify({ level: 'error', message: errorMessage(error) }),
+                )
+            }
+            title="Open the project folder in Zed, on the machine Ultimate runs on"
+            variant="ghost"
+          >
+            <CodeIcon />
+            Open in Zed
+          </Button>
           {github && (
-            <Button asChild variant="ghost">
+            <Button asChild size="icon" variant="ghost">
               <a
+                aria-label="Open on GitHub"
                 href={`https://${github}`}
                 rel="noreferrer"
                 target="_blank"
                 title={`The code as it landed, on ${github}`}
               >
-                <CodeIcon />
-                Open code
+                <ExternalLinkIcon />
               </a>
             </Button>
           )}
