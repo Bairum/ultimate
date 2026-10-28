@@ -446,6 +446,51 @@ it('does not pause again for the rate limit that ends its run: the failure reach
   expect((await f.action('state')).paused).toBe(false)
 })
 
+it('tells a held parent which subagent hit the limit, once across re-pauses, and nothing after Play', async () => {
+  const f = await fixture()
+  const limitedResponse = () =>
+    fauxAssistantMessage('', { stopReason: 'error', errorMessage: limit })
+  f.prepared.faux!.setResponses([
+    // The parent calls a tool; while it runs, its subagent's first request hits the limit, twice across a Play.
+    () => fauxAssistantMessage([fauxToolCall('work', {})], { stopReason: 'toolUse' }),
+    limitedResponse,
+    limitedResponse,
+    () => fauxAssistantMessage([fauxText('child done')]),
+    () => fauxAssistantMessage([fauxText('parent done')]),
+  ])
+  const { root: parent, harness } = await f.open()
+  const parentRun = await parent.submit({ type: 'input', content: 'go' }, context)
+  await until(() => f.finish !== undefined)
+  const [tool] = (await harness.inspect(context)).tasks.filter(
+    ({ record }) => record.kind === 'pi.tool',
+  )
+  const child = await harness.commit(
+    (tx) => tx.createConversation({ ownership: { kind: 'task', taskId: tool.record.id } }),
+    context,
+  )
+  const childRun = await (await harness.conversation(child.id, context))!.submit(
+    { type: 'input', content: 'research' },
+    context,
+  )
+  const held = async () =>
+    (await parent.context(context)).entries.filter((entry) => entry.kind === 'pause.held')
+  await until(async () => (await held()).length === 1)
+  expect((await held())[0].data).toMatchObject({ child: child.id, provider: 'faux' })
+  // Play retries into the limit and pauses again: the same run, so no second note.
+  const { since } = await f.action('state')
+  await f.action('play')
+  await until(
+    async () =>
+      (await f.action('state')).since !== undefined && (await f.action('state')).since !== since,
+  )
+  expect(await held()).toHaveLength(1)
+  await f.action('play')
+  expect((await childRun.wait(context)).status).toBe('done')
+  f.finish!()
+  expect((await parentRun.wait(context)).status).toBe('done')
+  expect(await held()).toHaveLength(1)
+})
+
 it('leaves ordinary provider errors to Pi’s retry without pausing', async () => {
   const f = await fixture()
   f.prepared.faux!.setResponses([

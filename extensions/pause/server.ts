@@ -10,6 +10,7 @@ import { lasted } from './lasted.ts'
 import { AutoPlayAction, PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
 import type {
   AutoPlayed,
+  HeldNote,
   PauseDocState,
   PauseNote,
   PauseState,
@@ -272,6 +273,36 @@ async function limited(host: Host, limit: RateLimit) {
     throw error
   }
   await card(host, await read(host))
+  await held(host, limit)
+}
+
+/**
+ * The parent of a subagent that hit the limit, mid-turn, sits held with nothing in its transcript saying why: leave it
+ * one `pause.held` entry naming the child. Only kind and data, so it shows at once while the parent is held and wakes
+ * nobody; the parent's model learns of the pause from its Play note. Keyed by the child's run, so Plays that pause
+ * again into the same limit add none.
+ */
+async function held(host: Host, limit: RateLimit) {
+  const harness = host.harness()
+  const child = limit.conversationId as ConversationId
+  const parent = await harness.commit(
+    async (tx) => (await tx.conversation(child))?.owner?.conversationId,
+    context,
+  )
+  const input = (await harness.snapshot(LiveDoc, child, context))?.run?.inputs[0]
+  if (parent === undefined || input === undefined) return
+  if (!(await harness.snapshot(LiveDoc, parent, context))?.run) return
+  const data: HeldNote = { child, provider: limit.provider, model: limit.model, at: limit.at }
+  await (
+    await harness.conversation(parent, context)
+  )?.submit(
+    {
+      type: 'write',
+      requestId: `pause.held:${child}:${input}`,
+      entry: { kind: 'pause.held', data },
+    },
+    context,
+  )
 }
 
 /** The `pause.limit` card for the limit that paused the host, once per pause (its request ID is the pause's start). */
