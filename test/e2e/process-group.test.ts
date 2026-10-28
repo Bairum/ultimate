@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
@@ -45,6 +46,43 @@ it('records the pid and start time before the program runs, and the program keep
   } finally {
     await removeTemp(directory)
   }
+})
+
+it('recognizes a zombie-only group without mistaking Darwin EPERM for a live survivor', async () => {
+  // Block the holder's event loop so libuv cannot reap its exited child until this test releases it.
+  const holder = spawn(
+    process.execPath,
+    [
+      '-e',
+      `const {spawn} = require('node:child_process');
+       const {writeSync,readSync} = require('node:fs');
+       const child = spawn(process.execPath, ['-e','process.exit(0)'], {detached:true,stdio:'ignore'});
+       writeSync(1, String(child.pid)+'\\n');
+       readSync(0, Buffer.alloc(1), 0, 1, null);`,
+    ],
+    { stdio: ['pipe', 'pipe', 'inherit'] },
+  )
+  const exited = once(holder, 'exit')
+  let pid: number | undefined
+  try {
+    const [data] = await once(holder.stdout, 'data')
+    pid = Number(String(data).trim())
+    let fields: string[] = []
+    await until(() => {
+      fields = execFileSync('ps', ['-o', 'pid=,ppid=,pgid=,stat=', '-p', String(pid)], {
+        encoding: 'utf8',
+      })
+        .trim()
+        .split(/\s+/)
+      return fields[3]?.startsWith('Z')
+    })
+    expect(fields.slice(0, 3).map(Number)).toEqual([pid, holder.pid, pid])
+    expect(groupAlive(pid)).toBe(process.platform !== 'darwin')
+  } finally {
+    holder.stdin.end('\n')
+    await exited
+  }
+  expect(groupAlive(pid)).toBe(false)
 })
 
 it('stops a TERM-ignoring group with KILL, background children included, and removes its pid file', async () => {
