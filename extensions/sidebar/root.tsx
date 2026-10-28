@@ -1,4 +1,4 @@
-import { ScrollTextIcon } from 'lucide-react'
+import { BrainIcon, ScrollTextIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -369,10 +369,13 @@ export function MemoryRow({
   conversation,
   shown,
   working,
+  variant = 'a',
 }: {
   conversation: ConversationSummary
   shown: boolean
   working?: 'self' | 'subagents'
+  /** Preview only: which project-block layout to render. */
+  variant?: 'a' | 'b' | 'c'
 }) {
   const actions = useUltimate()
   const id = conversation.id
@@ -388,6 +391,50 @@ export function MemoryRow({
     actions.showSurface('agent')
     actions.switchConversation(id)
   }
+  const countLine = counts.length
+    ? counts
+        .map(([count, plural]) => `${count} ${count === 1 ? plural.slice(0, -1) : plural}`)
+        .join(' · ')
+    : 'none yet'
+  if (variant === 'c')
+    return (
+      <div
+        className="flex h-7 min-w-0 items-center gap-1 px-2.5 font-mono text-[10.5px] text-muted-foreground"
+        data-conversation={id}
+        data-root-row={id}
+      >
+        <button
+          aria-label={`Project memory of #${id}`}
+          className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-0.5 outline-none hover:bg-sidebar-accent/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          onClick={() => actions.openPanel(MEMORY_PANEL)}
+          title={`${countLine} · what every new branch starts from · open Memory`}
+          type="button"
+        >
+          <BrainIcon
+            className={cn('size-3 shrink-0', working === 'self' && 'animate-pulse text-brand')}
+          />
+          <span>Memory</span>
+          {tokens !== undefined && (
+            <span className="text-muted-foreground/60">{formatTokens(tokens)}</span>
+          )}
+        </button>
+        <span className="text-muted-foreground/40">·</span>
+        <button
+          aria-current={shown ? 'true' : undefined}
+          className={cn(
+            'flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-0.5 outline-none hover:bg-sidebar-accent/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
+            shown && 'bg-sidebar-accent text-foreground',
+          )}
+          data-root-context={id}
+          onClick={openContext}
+          title="Every branch, abstract and landing, with breadcrumbs"
+          type="button"
+        >
+          <ScrollTextIcon className="size-3 shrink-0" />
+          <span>History</span>
+        </button>
+      </div>
+    )
   return (
     <div data-conversation={id} data-root-row={id}>
       <button
@@ -413,13 +460,7 @@ export function MemoryRow({
             )}
           </span>
           <span className="truncate font-mono text-[10px] leading-4 text-muted-foreground">
-            {counts.length
-              ? counts
-                  .map(
-                    ([count, plural]) => `${count} ${count === 1 ? plural.slice(0, -1) : plural}`,
-                  )
-                  .join(' · ')
-              : 'none yet'}
+            {countLine}
           </span>
         </span>
       </button>

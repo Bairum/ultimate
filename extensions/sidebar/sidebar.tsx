@@ -55,15 +55,71 @@ import { topLevelRows } from './listed.ts'
 import { UnderUltimate, Unlisted } from './ui.tsx'
 
 /** What the conversations below start in: the project's path from home, or `<project> #<worktree>`; the full path on hover. */
-function ProjectPath() {
+function ProjectPath({ variant, children }: { variant: Variant; children?: ReactNode }) {
   const system = useSystem()
-  return (
+  const path = (
     <div
-      className="mb-1 flex h-10 shrink-0 items-center gap-2 border-b border-border/70 px-4 text-[13px] font-medium text-foreground/90"
+      className={cn(
+        'flex h-10 shrink-0 items-center gap-2 px-4 text-[13px] font-medium text-foreground/90',
+        variant === 'b' && 'h-9 px-3',
+        variant === 'c' && 'h-9',
+      )}
       title={system?.project.root}
     >
       <FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="truncate">{projectTitle(system)}</span>
+    </div>
+  )
+  return (
+    <>
+      <VariantToggle variant={variant} />
+      {variant === 'b' ? (
+        <div
+          aria-label="Project"
+          className="mx-2 mt-2 mb-2 rounded-lg border border-border/70 bg-sidebar-accent/25 pb-1.5"
+          role="group"
+        >
+          {path}
+          <div className="-mx-2 flex flex-col gap-px">{children}</div>
+        </div>
+      ) : (
+        <div
+          aria-label="Project"
+          className={cn('mb-1 border-b border-border/70', variant === 'c' ? 'pb-1.5' : 'pb-1')}
+          role="group"
+        >
+          {path}
+          <div className={cn('flex flex-col gap-px', variant === 'c' && '-mt-1.5 pl-2')}>
+            {children}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+type Variant = 'a' | 'b' | 'c'
+
+/** Preview only: switches between the project-block layouts under comparison. */
+function VariantToggle({ variant }: { variant: Variant }) {
+  const [, setVariant] = useSidebarState<Variant>('preview-project-variant', 'a')
+  return (
+    <div className="flex items-center gap-1 border-b border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-1 font-mono text-[10px] text-amber-700 dark:text-amber-300">
+      <span className="mr-auto">preview</span>
+      {(['a', 'b', 'c'] as const).map((key) => (
+        <button
+          className={cn(
+            'cursor-pointer rounded px-1.5 uppercase hover:bg-amber-500/15',
+            key === variant && 'bg-amber-500/20 text-foreground',
+          )}
+          data-variant={key}
+          key={key}
+          onClick={() => setVariant(key)}
+          type="button"
+        >
+          {key}
+        </button>
+      ))}
     </div>
   )
 }
@@ -169,6 +225,7 @@ function Tree({
       ? overview[shownTop.id]
       : undefined
   const [expanded, setExpanded] = useSidebarState<number[]>('expanded', [])
+  const [variant] = useSidebarState<Variant>('preview-project-variant', 'a')
   const working = workingByTop(conversations)
   const topLevel = topLevelRows(conversations, new Set(unlisted.flatMap((set) => [...set])))
   // @ultimate first, then the lander and other standing agents: pinned above the rest and never concluded.
@@ -335,6 +392,7 @@ function Tree({
           conversation={conversation}
           key={conversation.id}
           shown={shown}
+          variant={variant}
           working={working.get(conversation.id)}
         />
       )
@@ -523,7 +581,7 @@ function Tree({
           </div>
         </DialogContent>
       </Dialog>
-      <ProjectPath />
+      <ProjectPath variant={variant}>{rootRows.map((root) => tree(root))}</ProjectPath>
       <nav aria-label="Conversations" className="flex flex-col gap-px">
         <div className="mb-1 border-b border-border/60 pb-1">
           {ultimate ? tree(ultimate) : standingRow(undefined)}
@@ -547,15 +605,6 @@ function Tree({
                 tree(conversation)
               ),
             )}
-          </div>
-        )}
-        {rootRows.length > 0 && (
-          <div
-            aria-label="Memory"
-            className="mb-1 flex flex-col gap-px border-b border-border/60 pb-1"
-            role="group"
-          >
-            {rootRows.map((root) => tree(root))}
           </div>
         )}
         {/* What watches or runs in the background, from optional extensions; each section brings its own rule. */}
