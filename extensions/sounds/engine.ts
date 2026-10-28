@@ -4,6 +4,7 @@
  */
 import * as Tone from 'tone'
 import type { Sound } from './cues.ts'
+import type { SoundSet } from './sets.ts'
 import type { Happening, Role, Tool, Variant } from './agents.ts'
 
 /** A note as [start in seconds, frequency in Hz, length in seconds]. */
@@ -24,7 +25,7 @@ export function setVolume(volume: number) {
 export const unlock = () => Tone.start()
 export const running = () => Tone.getContext().state === 'running'
 
-// Soft bells for the cues and other extensions' notes: FM with a gentle bell ratio, through the reverb.
+// Soft bells for other extensions' notes: FM with a gentle bell ratio, through the reverb.
 const bells = new Tone.PolySynth(Tone.FMSynth, {
   harmonicity: 3.01,
   modulationIndex: 1.6,
@@ -34,52 +35,143 @@ const bells = new Tone.PolySynth(Tone.FMSynth, {
   modulationEnvelope: { attack: 0.002, decay: 0.4, sustain: 0, release: 0.4 },
 }).connect(reverb)
 bells.maxPolyphony = 24
-// A warm pad under each cue: the chord the bells sit in.
-const cuePad = new Tone.PolySynth(Tone.Synth, {
-  oscillator: { type: 'fatsine', count: 3, spread: 18 },
-  envelope: { attack: 0.08, decay: 0.6, sustain: 0.3, release: 1.4 },
-}).connect(reverb)
 
 const hz = (midi: number) => Tone.mtof(midi as Tone.Unit.MidiNote)
 
-/** Each cue keeps its old melody, now as bells over a chord. */
-const cues: Record<Sound, { bells: [number, number, number][]; chord: number[] }> = {
-  // A fifth up, asking, over an open D: D5, A5.
-  input: {
-    bells: [
-      [0, 74, 0.5],
-      [0.16, 81, 0.9],
-    ],
-    chord: [50, 57, 64],
+/** A notification sound, or the landing the sound of agents plays: the same motif as Finished, one notch fuller. */
+export type Tune = Sound | 'landed'
+/** A tune as [start in seconds, MIDI notes struck together, velocity]. */
+type Strike = readonly [number, readonly number[], number]
+
+// The cues ring in a small room: a short tail, so nothing lingers past the sound itself.
+const room = new Tone.Reverb({ decay: 0.7, wet: 0.14 }).connect(master)
+
+/**
+ * The sets: one instrument and one motif each, varied per event. Needs input rises and stays open, Finished comes home
+ * to the tonic, the landing is Finished with the octave under its last note, and Failed falls to a minor third.
+ */
+const sets: Record<SoundSet, { voice: () => Tone.PolySynth; tunes: Record<Tune, Strike[]> }> = {
+  // (A) A kalimba in G: bright, woody, quick, the motif falling home from the fifth.
+  kalimba: {
+    voice: () => {
+      const synth = new Tone.PolySynth(Tone.FMSynth, {
+        harmonicity: 7.02,
+        modulationIndex: 2.2,
+        oscillator: { type: 'sine' },
+        envelope: { attack: 0.001, decay: 0.42, sustain: 0, release: 0.25 },
+        modulation: { type: 'sine' },
+        modulationEnvelope: { attack: 0.001, decay: 0.05, sustain: 0, release: 0.05 },
+      }).connect(room)
+      synth.volume.value = -4
+      return synth
+    },
+    tunes: {
+      input: [
+        [0, [74], 0.6],
+        [0.11, [79], 0.7],
+      ],
+      finished: [
+        [0, [86], 0.55],
+        [0.09, [83], 0.55],
+        [0.18, [79], 0.7],
+      ],
+      landed: [
+        [0, [86], 0.55],
+        [0.09, [83], 0.55],
+        [0.18, [79], 0.7],
+        [0.18, [67], 0.5],
+        [0.36, [91], 0.3],
+      ],
+      failed: [
+        [0, [74], 0.5],
+        [0.15, [70], 0.55],
+      ],
+    },
   },
-  // A rising C major, resolved, over C and G below.
-  finished: {
-    bells: [
-      [0, 72, 0.45],
-      [0.09, 76, 0.45],
-      [0.18, 79, 1],
-      [0.3, 84, 1.2],
-    ],
-    chord: [48, 55, 64],
+  // (B) A glass chime in C: pure sine with a faint upper partial, airy, the motif rising to the octave.
+  glass: {
+    voice: () => {
+      const synth = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: 'custom', partials: [1, 0, 0.08, 0, 0, 0.03] },
+        envelope: { attack: 0.003, decay: 0.5, sustain: 0, release: 0.2 },
+      }).connect(room)
+      synth.volume.value = -6
+      return synth
+    },
+    tunes: {
+      input: [
+        [0, [76], 0.55],
+        [0.13, [81], 0.6],
+      ],
+      finished: [
+        [0, [76], 0.5],
+        [0.1, [79], 0.5],
+        [0.2, [84], 0.6],
+      ],
+      landed: [
+        [0, [76], 0.5],
+        [0.1, [79], 0.5],
+        [0.2, [72, 84], 0.6],
+        [0.32, [88], 0.25],
+      ],
+      failed: [
+        [0, [79], 0.45],
+        [0.16, [75], 0.5],
+      ],
+    },
   },
-  // A low minor third down over a dark A minor.
-  failed: {
-    bells: [
-      [0, 64, 0.5],
-      [0.2, 61, 1],
-    ],
-    chord: [45, 48, 52],
+  // (C) A felt piano in F: a muted, warm pluck in the middle register, unhurried.
+  felt: {
+    voice: () => {
+      const synth = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: 'fattriangle', count: 2, spread: 8 },
+        envelope: { attack: 0.004, decay: 0.55, sustain: 0, release: 0.25 },
+      })
+      synth.chain(new Tone.Filter(1600, 'lowpass'), room)
+      synth.volume.value = 2
+      return synth
+    },
+    tunes: {
+      input: [
+        [0, [69], 0.55],
+        [0.15, [74], 0.65],
+      ],
+      finished: [
+        [0, [69], 0.5],
+        [0.12, [72], 0.5],
+        [0.24, [77], 0.65],
+      ],
+      landed: [
+        [0, [69], 0.5],
+        [0.12, [72], 0.5],
+        [0.24, [65, 77], 0.65],
+        [0.24, [53], 0.45],
+      ],
+      failed: [
+        [0, [72], 0.5],
+        [0.18, [68], 0.5],
+      ],
+    },
   },
 }
+const voices = Object.fromEntries(
+  Object.entries(sets).map(([id, set]) => [id, set.voice()]),
+) as Record<SoundSet, Tone.PolySynth>
 
-/** Plays notification sound `sound`. */
-export async function play(sound: Sound) {
+let chosen: SoundSet = 'glass'
+/** Picks the set every tune plays from. */
+export const setSet = (set: SoundSet) => void (chosen = set)
+
+/** Strikes `tune` of the chosen set, starting at `time` (seconds on Tone's clock). */
+function strike(tune: Tune, time: number) {
+  for (const [start, notes, velocity] of sets[chosen].tunes[tune])
+    voices[chosen].triggerAttackRelease(notes.map(hz), 0.12, time + start, velocity)
+}
+
+/** Plays notification sound `sound`, or the landing. */
+export async function play(sound: Tune) {
   await Tone.start()
-  const now = Tone.now() + 0.03
-  const cue = cues[sound]
-  cuePad.triggerAttackRelease(cue.chord.map(hz), 0.9, now, 0.18)
-  for (const [start, midi, length] of cue.bells)
-    bells.triggerAttackRelease(hz(midi), length, now + start, 0.5)
+  strike(sound, Tone.now() + 0.03)
 }
 
 /** Plays `notes` as bells at `volume` (the notification cues use 0.18). */
@@ -327,37 +419,8 @@ function chiptune(): Part {
           true,
         )
       else if (h.kind === 'landed') {
-        // A power-up: arpeggios of I, IV and V climbing in 32nds, then a held tonic over the bass: V–I, resolved.
-        const climb = [
-          [62, 66, 69, 74],
-          [67, 71, 74, 79],
-          [69, 73, 76, 81],
-        ]
-        ch.lead(
-          [...climb.flat().map((midi, i) => [i * 0.5, midi, 0.5, 0.55] as const), [6, 86, 6, 0.6]],
-          time,
-          true,
-        )
-        ch.second([[6, 78, 6, 0.4]], time, true)
-        ch.triangle(
-          [
-            [0, 50, 2],
-            [2, 55, 2],
-            [4, 57, 2],
-            [6, 50, 6],
-          ],
-          time,
-          true,
-        )
-        ch.noise(
-          [
-            [4, 70, 0.5, 0.4],
-            [5, 70, 0.5, 0.5],
-            [6, 30, 2, 0.7],
-          ],
-          time,
-          true,
-        )
+        // Every band lands with the notification set's landing.
+        strike('landed', time)
       } else {
         // A bump: a thud, then the lead sliding down by half steps to G♯, a tritone over the bass's D, unresolved.
         ch.noise([[0, 30, 2, 0.9]], time, true)
@@ -491,19 +554,8 @@ function orchestra(): Part {
         timpani.triggerAttackRelease(hz(38), '8n', t.timpani(time), 0.7)
         marimba.triggerAttackRelease(hz(85), '16n', time, 0.5)
         marimba.triggerAttackRelease([74, 78, 81].map(hz), '8n', time + sixteenth, 0.6)
-      } else if (h.kind === 'landed') {
-        // A full cadence: V7 then I, its seventh falling and its leading tone rising, with a timpani roll.
-        brass.triggerAttackRelease([57, 61, 64, 67].map(hz), '4n', time, 0.8)
-        brass.triggerAttackRelease([62, 62, 66, 69].map(hz), '1m', time + sixteenth * 4, 0.9)
-        strings.triggerAttackRelease([50, 57, 62, 66].map(hz), '1m', time + sixteenth * 4, 0.7)
-        for (let i = 0; i < 6; i++)
-          timpani.triggerAttackRelease(
-            hz(i < 5 ? 45 : 38),
-            '16n',
-            t.timpani(time + (i * sixteenth) / 2),
-            0.5 + i * 0.08,
-          )
-      } else {
+      } else if (h.kind === 'landed') strike('landed', time)
+      else {
         // Suspense: a diminished seventh, the brass cut short; it leans toward D and waits for a landing to resolve it.
         brass.triggerAttackRelease([55, 58, 61, 64].map(hz), '8n', time, 0.8)
         timpani.triggerAttackRelease(hz(36), '4n', t.timpani(time), 0.9)
@@ -519,7 +571,6 @@ function crazy(): Part {
   const bus = new Tone.Volume(-4)
   bus.chain(crush, echo, reverb)
   crush.wet.value = 0.35
-  const kick = new Tone.MembraneSynth({ pitchDecay: 0.04, octaves: 6 }).connect(bus)
   const snare = new Tone.NoiseSynth({
     noise: { type: 'white' },
     envelope: { attack: 0.001, decay: 0.15, sustain: 0 },
@@ -568,7 +619,6 @@ function crazy(): Part {
   riser.chain(sweep, bus)
   riser.volume.value = -18
   const t = {
-    kick: later(),
     snare: later(),
     hat: later(),
     crash: later(),
@@ -584,9 +634,8 @@ function crazy(): Part {
   return {
     bpm: 128,
     cap: 4,
-    nodes: [kick, snare, hat, crash, acid, zap, stab, riser, sweep, crush, echo, bus],
+    nodes: [snare, hat, crash, acid, zap, stab, riser, sweep, crush, echo, bus],
     play: (h, time, bar) => {
-      const sixteenth = Tone.Time('16n').toSeconds()
       if (h.kind === 'tool') {
         if (h.tool === 'bash') snare.triggerAttackRelease('16n', t.snare(time), 0.6)
         else if (h.tool === 'edit')
@@ -608,15 +657,8 @@ function crazy(): Part {
       else if (h.kind === 'commit') {
         crash.triggerAttackRelease(hz(300), '8n', t.crash(time), 0.6)
         stab.triggerAttackRelease([62, 66, 69].map(hz), '16n', time, 0.6)
-      } else if (h.kind === 'landed') {
-        // A fill builds the tension for a beat, then the drop releases it.
-        for (let i = 0; i < 4; i++)
-          snare.triggerAttackRelease('32n', t.snare(time + i * sixteenth), 0.4 + i * 0.15)
-        const drop = time + sixteenth * 4
-        crash.triggerAttackRelease(hz(250), '2n', t.crash(drop), 0.9)
-        kick.triggerAttackRelease(hz(36), '8n', t.kick(drop), 1)
-        stab.triggerAttackRelease([50, 57, 62, 66, 69, 74].map(hz), '4n', drop, 0.8)
-      } else {
+      } else if (h.kind === 'landed') strike('landed', time)
+      else {
         // A failure crunches: crusher all the way down, a detuned cluster, a stutter.
         crush.bits.setValueAtTime(3, time)
         crush.bits.linearRampToValueAtTime(8, time + 1.2)

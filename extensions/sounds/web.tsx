@@ -26,6 +26,9 @@ import { tracker, variants } from './agents.ts'
 import type { Variant } from './agents.ts'
 import * as conductor from './conductor.ts'
 import * as tones from './tones.ts'
+import type { Tune } from './tones.ts'
+import { soundSets } from './sets.ts'
+import type { SoundSet } from './sets.ts'
 
 const playedKey = 'ultimate.sounds.played'
 
@@ -35,12 +38,27 @@ function useSettings() {
   const [volume, setVolume] = useExtensionUiState('volume', 0.8)
   // The sound of agents: off, or the variant that plays.
   const [stored, setAgents] = useExtensionUiState<string>('agents', 'off')
+  const [storedSet, setSoundSet] = useExtensionUiState<string>('set', 'glass')
+  const soundSet: SoundSet = soundSets.some((set) => set.id === storedSet)
+    ? (storedSet as SoundSet)
+    : 'glass'
   // Ambient became Chiptune; a variant from another build plays as off.
   const id = stored === 'ambient' ? 'chiptune' : stored
   const agents: Variant | 'off' = variants.some((variant) => variant.id === id)
     ? (id as Variant)
     : 'off'
-  return { muted, setMuted, off, setOff, volume, setVolume, agents, setAgents }
+  return {
+    muted,
+    setMuted,
+    off,
+    setOff,
+    volume,
+    setVolume,
+    agents,
+    setAgents,
+    soundSet,
+    setSoundSet,
+  }
 }
 
 /**
@@ -66,9 +84,10 @@ function Player() {
   const overview = useDocOf(1, OverviewDoc)
   const log = useDocOf(1, MessagesDoc)
   const agent = useDocOf(1, StandingDoc)?.ultimate
-  const { muted, off, volume, agents } = useSettings()
+  const { muted, off, volume, agents, soundSet } = useSettings()
   const [hear] = useState(listener)
   useEffect(() => tones.setVolume(muted ? 0 : volume), [muted, volume])
+  useEffect(() => tones.setSet(soundSet), [soundSet])
   useEffect(() => {
     // oxlint-disable-next-line typescript/no-floating-promises -- conduct catches nothing worth reporting beyond a warning.
     conductor
@@ -173,7 +192,7 @@ function RoundOf({
   return null
 }
 
-const preview = (sound: Sound) =>
+const preview = (sound: Tune) =>
   tones.play(sound).catch((error: unknown) => console.warn('Sound failed', error))
 
 const row = 'flex h-8 items-center justify-between gap-2 px-2 text-[12px]'
@@ -181,7 +200,18 @@ const section = 'border-t border-border/70 pt-1'
 
 /** The status-bar entry: sounds on or off, volume, the sound of agents, and each notification cue. */
 function Control() {
-  const { muted, setMuted, off, setOff, volume, setVolume, agents, setAgents } = useSettings()
+  const {
+    muted,
+    setMuted,
+    off,
+    setOff,
+    volume,
+    setVolume,
+    agents,
+    setAgents,
+    soundSet,
+    setSoundSet,
+  } = useSettings()
   const stage = useSyncExternalStore(conductor.subscribe, conductor.current)
   const now = useNow(1000, stage.demoUntil !== undefined)
   const playing = agents !== 'off' && !muted
@@ -298,6 +328,36 @@ function Control() {
           )}
         </div>
         <div className={section}>
+          <div
+            aria-label="Sound set"
+            className="mx-2 my-1 grid grid-cols-3 rounded-md border border-border/70 p-px"
+            role="radiogroup"
+          >
+            {soundSets.map((set) => (
+              <button
+                aria-checked={soundSet === set.id}
+                className={cn(
+                  'h-6 cursor-pointer rounded-[5px] text-[11px] text-muted-foreground transition-colors hover:text-foreground',
+                  soundSet === set.id && 'bg-accent text-foreground',
+                )}
+                key={set.id}
+                onClick={() => {
+                  setSoundSet(set.id)
+                  tones.setSet(set.id)
+                  // oxlint-disable-next-line typescript/no-floating-promises -- preview catches and logs playback failures.
+                  void preview('finished')
+                }}
+                role="radio"
+                title={set.detail}
+                type="button"
+              >
+                {set.label}
+              </button>
+            ))}
+          </div>
+          <div className="px-2 pb-1 text-[11px] leading-4 text-muted-foreground">
+            {soundSets.find((set) => set.id === soundSet)?.detail}
+          </div>
           {sounds.map(({ sound, label }) => (
             <div
               className={cn('flex h-7 items-center gap-2 px-2 text-[12px]', muted && 'opacity-50')}
@@ -327,6 +387,19 @@ function Control() {
               </button>
             </div>
           ))}
+          <div
+            className={cn('flex h-7 items-center gap-2 px-2 text-[12px]', muted && 'opacity-50')}
+          >
+            <span className="flex-1 pl-6 text-muted-foreground">Landed</span>
+            <button
+              aria-label="Play Landed"
+              className="grid size-5 place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onClick={() => void preview('landed')}
+              type="button"
+            >
+              <PlayIcon className="size-3" />
+            </button>
+          </div>
           <div className="px-2 pt-0.5 pb-1 text-[11px] text-muted-foreground">
             Notifications from @ultimate only
           </div>
