@@ -148,6 +148,12 @@ type Part = {
   nodes: Tone.ToneAudioNode[]
 }
 
+/** The part of Tone's internal automation timeline the tempo pruning uses. */
+type TempoEvents = {
+  get: (time: number) => { time: number } | null
+  cancelBefore: (time: number) => void
+}
+
 /** A playing band: hand it what happens and how busy the project is; it quantizes both to its beat. */
 export type Band = {
   hit: (happening: Happening) => void
@@ -176,12 +182,16 @@ export function band(variant: Variant): Band {
   transport.start('+0.05')
   return {
     hit: (happening) => void queue.push(happening),
-    // Ramp only when the tempo changes: every ramp adds automation events to the transport's timeline, which Tone
-    // never prunes and walks on every tick, and the live project reports its level on every render.
+    // Ramp only when the tempo changes, and linearly: every ramp adds automation events to the transport's tempo
+    // timeline (an exponential one about twenty), which Tone never prunes and searches on every tick, and the live
+    // project reports its level on every render. What came before the event in force a second ago goes.
     level: (next) => {
       if (part.bpm(next) === bpm) return
       bpm = part.bpm(next)
-      transport.bpm.rampTo(bpm, 2)
+      transport.bpm.linearRampTo(bpm, 2)
+      const events = (transport.bpm as unknown as { _param: { _events: TempoEvents } })._param._events
+      const settled = events.get(Tone.now() - 1)
+      if (settled) events.cancelBefore(settled.time - 1e-6)
     },
     dispose: () => {
       loop.dispose()
