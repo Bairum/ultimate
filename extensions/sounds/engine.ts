@@ -102,7 +102,6 @@ const pentatonic = [0, 2, 4, 7, 9]
 /** The `degree`th note of D major pentatonic from `base`. */
 const scale = (degree: number, base = 62) =>
   base + Math.floor(degree / 5) * 12 + pentatonic[((degree % 5) + 5) % 5]
-const pick = <T>(items: readonly T[]) => items[Math.floor(Math.random() * items.length)]
 
 /**
  * A monophonic voice refuses a start at or before its last one; two happenings on one 16th would. Each call gets a
@@ -118,7 +117,8 @@ type Part = {
   /** Happenings a 16th may play; the rest wait for the next. */
   cap: number
   play: (happening: Happening, time: number, bar: number) => void
-  tick: (step: number, time: number, level: Level, bar: number) => void
+  /** Each sixteenth, for effects that change between happenings; nothing sounds without one. */
+  tick?: (time: number) => void
   nodes: Tone.ToneAudioNode[]
 }
 
@@ -141,7 +141,7 @@ export function band(variant: Variant): Band {
     for (const happening of queue.splice(0, part.cap)) part.play(happening, time, bar)
     // A burst bigger than a few beats' worth is noise: keep the newest.
     queue.splice(0, Math.max(0, queue.length - part.cap * 8))
-    part.tick(step % 16, time, level, bar)
+    part.tick?.(time)
     step++
   }, '16n').start(0)
   transport.start('+0.05')
@@ -170,15 +170,10 @@ const parts: Record<Variant, () => Part> = {
   crazy,
 }
 
-/** (A) A calm generative drone: more agents, more voices; streaming shimmers; tools are soft single notes. */
+/** (A) Calm and spacious: each tool call a soft short chord in its role's register, echoing into a long reverb. */
 function ambient(): Part {
   const space = new Tone.Reverb({ decay: 9, wet: 0.6 }).connect(master)
   const echo = new Tone.FeedbackDelay({ delayTime: '4n.', feedback: 0.35, wet: 0.3 }).connect(space)
-  const drone = new Tone.PolySynth(Tone.Synth, {
-    oscillator: { type: 'fatsine', count: 3, spread: 24 },
-    envelope: { attack: 4, decay: 1, sustain: 0.8, release: 6 },
-  }).connect(space)
-  drone.volume.value = -14
   const pad = new Tone.PolySynth(Tone.AMSynth, {
     harmonicity: 2,
     envelope: { attack: 1.5, decay: 1, sustain: 0.5, release: 4 },
@@ -206,21 +201,26 @@ function ambient(): Part {
     lander: 62,
     other: 69,
   }
-  let droning = false
   return {
     bpm: () => 60,
     cap: 2,
-    nodes: [drone, pad, glass, echo, space],
+    nodes: [pad, glass, echo, space],
     play: (h, time, bar) => {
       const chord = progression[Math.floor(bar / 2) % 4]
-      if (h.kind === 'tool')
+      if (h.kind === 'tool') {
+        // Two notes of the current chord, voiced in the role's register: a small chord, not a lone ping.
+        const root = register[h.role] + (h.tool === 'read' ? 12 : 0)
+        const first = Math.floor(Math.random() * 3)
+        const notes = [chord[first], chord[(first + 1) % 3]].map(
+          (n) => n + 12 * Math.round((root - n) / 12),
+        )
         timbre[h.tool].triggerAttackRelease(
-          hz(scale(Math.floor(Math.random() * 5), register[h.role] + (h.tool === 'read' ? 12 : 0))),
+          notes.map(hz),
           h.tool === 'edit' ? 2 : 1,
           time,
           h.tool === 'read' ? 0.25 : 0.45,
         )
-      else if (h.kind === 'start')
+      } else if (h.kind === 'start')
         glass.triggerAttackRelease(hz(register[h.role] + 7), 2, time, 0.4)
       else if (h.kind === 'stop') glass.triggerAttackRelease(hz(register[h.role] - 5), 2, time, 0.3)
       else if (h.kind === 'commit')
@@ -233,19 +233,6 @@ function ambient(): Part {
       else if (h.kind === 'landed')
         pad.triggerAttackRelease([62, 66, 69, 73, 76].map(hz), 6, time, 0.8)
       else pad.triggerAttackRelease([50, 51, 56].map(hz), 4, time, 0.7)
-    },
-    tick: (step, time, level, bar) => {
-      const busy = total(level)
-      if (busy > 0 && !droning) drone.triggerAttack([38, 45].map(hz), time, 0.6)
-      if (busy === 0 && droning) drone.releaseAll(time)
-      droning = busy > 0
-      if (!droning) return
-      const chord = progression[Math.floor(bar / 2) % 4]
-      // Density follows activity: up to four pad voices a bar, one more for each conversation at work.
-      if (step % 4 === 0 && Math.random() < Math.min(0.9, busy * 0.2))
-        pad.triggerAttackRelease(hz(pick(chord) + 12), '1m', time, 0.35)
-      if (step % 2 === 0 && Math.random() < Math.min(0.5, level.streaming * 0.12))
-        glass.triggerAttackRelease(hz(scale(Math.floor(Math.random() * 8), 74)), 0.8, time, 0.2)
     },
   }
 }
@@ -374,28 +361,6 @@ function orchestra(): Part {
         timpani.triggerAttackRelease(hz(36), '4n', t.timpani(time), 0.9)
       }
     },
-    tick: (step, time, level, bar) => {
-      const chord = progression[bar % 4]
-      const busy = level.busy
-      if (step === 0 && busy.ultimate)
-        strings.triggerAttackRelease(
-          chord.map((n) => hz(n + 12)),
-          '1m',
-          time,
-          0.4,
-        )
-      if (busy.coordinator && step % 4 === 0)
-        cello.triggerAttackRelease(hz(chord[step === 8 ? 2 : 0] - 12), '8n', t.cello(time), 0.6)
-      // Streaming models: a quiet arpeggio, one voice per stream, up to three.
-      if (level.streaming > 0 && step % 2 === 0) {
-        const voices = Math.min(3, level.streaming)
-        const index = step / 2
-        for (let v = 0; v < voices; v++)
-          pluck.triggerAttackRelease(hz(chord[(index + v) % 3] + 24 + v * 12), '16n', time, 0.18)
-      }
-      if (busy.lander && step % 8 === 0)
-        brass.triggerAttackRelease(hz(chord[0] + 12), '8n', time, 0.4)
-    },
   }
 }
 
@@ -463,7 +428,6 @@ function crazy(): Part {
     zap: later(),
     riser: later(),
   }
-  const bass = [38, 38, 50, 38, 41, 38, 45, 48]
   let glitch = 0
   return {
     bpm: (level) => Math.min(178, 104 + total(level) * 9 + level.streaming * 3),
@@ -509,20 +473,10 @@ function crazy(): Part {
         for (let i = 0; i < 4; i++) snare.triggerAttackRelease('64n', t.snare(time + i * 0.06), 0.9)
       }
     },
-    tick: (step, time, level) => {
-      const busy = total(level)
+    // Nothing plays on its own; the glitch only fades between calls.
+    tick: (time) => {
       glitch *= 0.97
       crush.wet.setValueAtTime(0.25 + glitch * 0.6, time)
-      if (busy === 0) return
-      // The kit fills in as load grows: kick, then offbeat hats, a backbeat, sixteenth hats, a double kick.
-      if (step % 4 === 0) kick.triggerAttackRelease(hz(38), '8n', t.kick(time), 0.9)
-      if (busy >= 4 && step === 14) kick.triggerAttackRelease(hz(38), '16n', t.kick(time), 0.6)
-      if (busy >= 2 && step % 4 === 2) hat.triggerAttackRelease(hz(400), '32n', t.hat(time), 0.6)
-      if (busy >= 5 && step % 2 === 1) hat.triggerAttackRelease(hz(400), '32n', t.hat(time), 0.25)
-      if (busy >= 3 && step % 8 === 4) snare.triggerAttackRelease('16n', t.snare(time), 0.45)
-      // Streaming models drive the acid line.
-      if (level.streaming > 0 && (step % 2 === 0 || level.streaming > 2))
-        acid.triggerAttackRelease(hz(bass[(step >> 1) % 8]), '16n', t.acid(time), 0.5)
     },
   }
 }

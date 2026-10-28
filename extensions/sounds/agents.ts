@@ -29,9 +29,9 @@ export const mix = (...levels: Level[]): Level => {
 }
 
 export const variants = [
-  { id: 'ambient', label: 'Ambient', detail: 'A calm drone; denser as more agents work' },
+  { id: 'ambient', label: 'Ambient', detail: 'Soft chords for each action, in a long reverb' },
   { id: 'orchestra', label: 'Orchestra', detail: 'Each role an instrument, one key and tempo' },
-  { id: 'crazy', label: 'Crazy', detail: 'A beat that speeds up with load; every call audible' },
+  { id: 'crazy', label: 'Crazy', detail: 'Drums and glitches for every call; faster under load' },
 ] as const
 export type Variant = (typeof variants)[number]['id']
 

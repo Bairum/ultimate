@@ -28,17 +28,17 @@ Off by default. Turned on, every tab plays the project: `agents.ts` follows the 
 each one's role from its label), each busy conversation's `pi.live` (its tool calls by name and whether its model
 streams; a fast call passes through there but often not through the coalesced task graph) and the event feed (`coding-tools.committed`, `workspaces.landed`, failed `workspaces.check`), plus
 failed runs from the overview. It turns them into happenings (a conversation starts or stops, a tool call by timbre,
-a commit, a landing, a failure) and a level (busy conversations by role, streaming models). Idle is silence.
+a commit, a landing, a failure) and a level (busy conversations by role, streaming models). Only happenings sound: there is no background drone, pad or beat, so idle is silence. The level sets the tempo.
 
 Three variants, all in D major and quantized to a sixteenth, with a cap on happenings per step:
 
-- **Ambient:** a slow drone whose pad density follows the number of busy conversations; streaming shimmers; tool
-  calls are single soft notes in each role's register.
+- **Ambient:** each tool call a soft two-note chord in its role's register, echoing into a long reverb; a landing a
+  wide major chord, a failure a dark cluster.
 - **Orchestra:** each role an instrument (@ultimate strings, coordinators cello, workers plucks, scouts flute,
-  reviewers marimba, the lander brass) over a I–vi–IV–V progression; tools are articulations, streaming an arpeggio,
-  a landing a V–I cadence, a failure a dissonant cluster.
-- **Crazy:** a beat that fills in and speeds up (104 to 178 bpm) with load; bash a snare, edits an acid line, reads
-  hats, browser calls zaps; every call bites a bitcrusher harder; a landing drops, a failure crunches.
+  reviewers marimba, the lander brass) over a I–vi–IV–V progression; tools are articulations, a start an upward
+  chord, a landing a V–I cadence, a failure a dissonant cluster.
+- **Crazy:** faster as load grows (104 to 178 bpm); bash a snare, edits an acid note, reads hats, browser calls zaps;
+  every call bites a bitcrusher harder; a landing drops, a failure crunches.
 
 **Start demo** (in the popover, or ⌘K "Play the sound of agents demo") plays about 40 seconds of a scripted feature
 through the same mapping: a coordinator, a scout, two workers, a commit, a failed check, reviewers, the lander and a
