@@ -4,7 +4,6 @@
  */
 import * as Tone from 'tone'
 import type { Sound } from './cues.ts'
-import type { SoundSet } from './sets.ts'
 import type { Happening, Role, Tool, Variant } from './agents.ts'
 
 /** A note as [start in seconds, frequency in Hz, length in seconds]. */
@@ -39,137 +38,60 @@ bells.maxPolyphony = 24
 const hz = (midi: number) => Tone.mtof(midi as Tone.Unit.MidiNote)
 
 /** A notification sound, or the landing the sound of agents plays: the same motif as Finished, one notch fuller. */
-export type Tune = Sound | 'landed'
+type Tune = Sound | 'landed'
 /** A tune as [start in seconds, MIDI notes struck together, velocity]. */
 type Strike = readonly [number, readonly number[], number]
 
 // The cues ring in a small room: a short tail, so nothing lingers past the sound itself.
 const room = new Tone.Reverb({ decay: 0.7, wet: 0.14 }).connect(master)
 
+// A kalimba: an FM tine, bright, woody and quick.
+const kalimba = new Tone.PolySynth(Tone.FMSynth, {
+  harmonicity: 7.02,
+  modulationIndex: 2.2,
+  oscillator: { type: 'sine' },
+  envelope: { attack: 0.001, decay: 0.42, sustain: 0, release: 0.25 },
+  modulation: { type: 'sine' },
+  modulationEnvelope: { attack: 0.001, decay: 0.05, sustain: 0, release: 0.05 },
+}).connect(room)
+kalimba.volume.value = -4
+
 /**
- * The sets: one instrument and one motif each, varied per event. Needs input rises and stays open, Finished comes home
- * to the tonic, the landing is Finished with the octave under its last note, and Failed falls to a minor third.
+ * One motif in G, varied per event: Needs input rises a fourth and stays open, Finished falls home from the fifth
+ * (D–B–G), the landing is Finished with the octave under its last note and a faint sparkle above, and Failed falls a
+ * major third to B♭, a gentle minor colour.
  */
-const sets: Record<SoundSet, { voice: () => Tone.PolySynth; tunes: Record<Tune, Strike[]> }> = {
-  // (A) A kalimba in G: bright, woody, quick, the motif falling home from the fifth.
-  kalimba: {
-    voice: () => {
-      const synth = new Tone.PolySynth(Tone.FMSynth, {
-        harmonicity: 7.02,
-        modulationIndex: 2.2,
-        oscillator: { type: 'sine' },
-        envelope: { attack: 0.001, decay: 0.42, sustain: 0, release: 0.25 },
-        modulation: { type: 'sine' },
-        modulationEnvelope: { attack: 0.001, decay: 0.05, sustain: 0, release: 0.05 },
-      }).connect(room)
-      synth.volume.value = -4
-      return synth
-    },
-    tunes: {
-      input: [
-        [0, [74], 0.6],
-        [0.11, [79], 0.7],
-      ],
-      finished: [
-        [0, [86], 0.55],
-        [0.09, [83], 0.55],
-        [0.18, [79], 0.7],
-      ],
-      landed: [
-        [0, [86], 0.55],
-        [0.09, [83], 0.55],
-        [0.18, [79], 0.7],
-        [0.18, [67], 0.5],
-        [0.36, [91], 0.3],
-      ],
-      failed: [
-        [0, [74], 0.5],
-        [0.15, [70], 0.55],
-      ],
-    },
-  },
-  // (B) A glass chime in C: pure sine with a faint upper partial, airy, the motif rising to the octave.
-  glass: {
-    voice: () => {
-      const synth = new Tone.PolySynth(Tone.Synth, {
-        oscillator: { type: 'custom', partials: [1, 0, 0.08, 0, 0, 0.03] },
-        envelope: { attack: 0.003, decay: 0.5, sustain: 0, release: 0.2 },
-      }).connect(room)
-      synth.volume.value = -6
-      return synth
-    },
-    tunes: {
-      input: [
-        [0, [76], 0.55],
-        [0.13, [81], 0.6],
-      ],
-      finished: [
-        [0, [76], 0.5],
-        [0.1, [79], 0.5],
-        [0.2, [84], 0.6],
-      ],
-      landed: [
-        [0, [76], 0.5],
-        [0.1, [79], 0.5],
-        [0.2, [72, 84], 0.6],
-        [0.32, [88], 0.25],
-      ],
-      failed: [
-        [0, [79], 0.45],
-        [0.16, [75], 0.5],
-      ],
-    },
-  },
-  // (C) A felt piano in F: a muted, warm pluck in the middle register, unhurried.
-  felt: {
-    voice: () => {
-      const synth = new Tone.PolySynth(Tone.Synth, {
-        oscillator: { type: 'fattriangle', count: 2, spread: 8 },
-        envelope: { attack: 0.004, decay: 0.55, sustain: 0, release: 0.25 },
-      })
-      synth.chain(new Tone.Filter(1600, 'lowpass'), room)
-      synth.volume.value = 2
-      return synth
-    },
-    tunes: {
-      input: [
-        [0, [69], 0.55],
-        [0.15, [74], 0.65],
-      ],
-      finished: [
-        [0, [69], 0.5],
-        [0.12, [72], 0.5],
-        [0.24, [77], 0.65],
-      ],
-      landed: [
-        [0, [69], 0.5],
-        [0.12, [72], 0.5],
-        [0.24, [65, 77], 0.65],
-        [0.24, [53], 0.45],
-      ],
-      failed: [
-        [0, [72], 0.5],
-        [0.18, [68], 0.5],
-      ],
-    },
-  },
+const tunes: Record<Tune, Strike[]> = {
+  input: [
+    [0, [74], 0.6],
+    [0.11, [79], 0.7],
+  ],
+  finished: [
+    [0, [86], 0.55],
+    [0.09, [83], 0.55],
+    [0.18, [79], 0.7],
+  ],
+  landed: [
+    [0, [86], 0.55],
+    [0.09, [83], 0.55],
+    [0.18, [79], 0.7],
+    [0.18, [67], 0.5],
+    [0.36, [91], 0.3],
+  ],
+  failed: [
+    [0, [74], 0.5],
+    [0.15, [70], 0.55],
+  ],
 }
-const voices = Object.fromEntries(
-  Object.entries(sets).map(([id, set]) => [id, set.voice()]),
-) as Record<SoundSet, Tone.PolySynth>
 
-let chosen: SoundSet = 'glass'
-/** Picks the set every tune plays from. */
-export const setSet = (set: SoundSet) => void (chosen = set)
-
-/** Strikes `tune` of the chosen set, starting at `time` (seconds on Tone's clock). */
+/** Strikes `tune`, starting at `time` (seconds on Tone's clock). */
 function strike(tune: Tune, time: number) {
-  for (const [start, notes, velocity] of sets[chosen].tunes[tune])
-    voices[chosen].triggerAttackRelease(notes.map(hz), 0.12, time + start, velocity)
+  for (const [start, notes, velocity] of tunes[tune])
+    kalimba.triggerAttackRelease(notes.map(hz), 0.12, time + start, velocity)
 }
 
-/** Plays notification sound `sound`, or the landing. */
-export async function play(sound: Tune) {
+/** Plays notification sound `sound`. */
+export async function play(sound: Sound) {
   await Tone.start()
   strike(sound, Tone.now() + 0.03)
 }
@@ -419,7 +341,7 @@ function chiptune(): Part {
           true,
         )
       else if (h.kind === 'landed') {
-        // Every band lands with the notification set's landing.
+        // Every band lands with the notifications' kalimba landing.
         strike('landed', time)
       } else {
         // A bump: a thud, then the lead sliding down by half steps to G♯, a tritone over the bass's D, unresolved.
