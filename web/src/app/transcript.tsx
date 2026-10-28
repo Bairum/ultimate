@@ -531,9 +531,8 @@ function TranscriptEntries() {
   // What a go-back set aside folds into one quiet row; the rows themselves render as usual inside it.
   const aside = useMemo(() => setAsideIds(entries), [entries])
   const grouped = groupAside(quiet, aside)
-  // What lies between two rows of the thread the reader follows recedes: faded rows, or one line that opens them.
-  const recede = useRecede()
-  const thread = recede !== 'off' ? background?.thread : undefined
+  // What lies between two rows of the thread the reader follows folds into one line that opens it.
+  const thread = background?.thread
   const threaded = thread
     ? groupBetween(
         grouped,
@@ -579,7 +578,7 @@ function TranscriptEntries() {
         'between' in row &&
         row.between.some((inner) => itemParts(inner).some((part) => part.entry.id === reveal)),
     )
-    if (recede === 'line' && between && !readBetween(id, between)) {
+    if (between && !readBetween(id, between)) {
       writeBetween(id, between, true)
       setShownBetween((count) => count + 1)
       return
@@ -711,14 +710,11 @@ function TranscriptEntries() {
         if (!('between' in item)) return renderItem(item, last)
         const key = `between:${partKey(itemParts(item.between[0])[0])}`
         // The stretch the agent works in now stays in view while it works.
-        const shown = recede === 'fade' || (busy && last) || readBetween(id, item)
-        // Opened from its line, a stretch shows its background groups' rows: their lines would repeat the stretch's.
-        const between: readonly (CompactPart | WorkRun | QuietGroup | AsideGroup)[] =
-          recede === 'line'
-            ? item.between.flatMap<CompactPart | WorkRun | AsideGroup>((row) =>
-                'quiet' in row ? row.quiet : [row],
-              )
-            : item.between
+        const shown = (busy && last) || readBetween(id, item)
+        // Open, a stretch shows its background groups' rows: their lines would repeat the stretch's.
+        const between = item.between.flatMap<CompactPart | WorkRun | AsideGroup>((row) =>
+          'quiet' in row ? row.quiet : [row],
+        )
         const faded = between.map((inner, inside) =>
           renderItem(inner, last && inside === between.length - 1, recedeRow),
         )
@@ -726,14 +722,10 @@ function TranscriptEntries() {
           <Fragment key={key}>
             <BetweenLine
               group={item}
-              onOpen={
-                recede === 'line'
-                  ? () => {
-                      writeBetween(id, item, !shown)
-                      setShownBetween((count) => count + 1)
-                    }
-                  : undefined
-              }
+              onOpen={() => {
+                writeBetween(id, item, !shown)
+                setShownBetween((count) => count + 1)
+              }}
               open={shown}
               summary={background?.summary}
               working={busy && last}
@@ -788,29 +780,13 @@ function TranscriptEntries() {
   }
 }
 
+/** Opened rows between thread rows stay faded and tighter, back to full on hover or focus. */
+const recedeRow =
+  '-mt-1.5 opacity-45 transition-opacity duration-200 hover:opacity-100 focus-within:opacity-100'
+
 /** All parts of a top-level row, set-aside groups included. */
 const itemParts = (item: CompactPart | WorkRun | QuietGroup | AsideGroup) =>
   'aside' in item ? item.aside.flatMap(partsOf) : partsOf(item)
-
-/**
- * Temporary, for the preview: how the rows between thread rows recede, picked with the switcher in the messages extension
- * (`ultimate.recede` in localStorage): `fade` keeps each row, faded; `line` folds the stretch to one line; `off` as before.
- */
-type Recede = 'fade' | 'line' | 'off'
-const RECEDE = 'ultimate.recede'
-const readRecede = (): Recede => {
-  const value = new URLSearchParams(location.search).get('recede') ?? localStorage.getItem(RECEDE)
-  return value === 'line' || value === 'off' ? value : 'fade'
-}
-function useRecede() {
-  const [value, setValue] = useState(readRecede)
-  useEvent(RECEDE, () => setValue(readRecede()))
-  return value
-}
-
-/** Faded and tighter, back to full on hover or focus. */
-const recedeRow =
-  '-mt-1.5 opacity-45 transition-opacity duration-200 hover:opacity-100 focus-within:opacity-100'
 
 /**
  * Whether the reader opened a stretch: kept in this browser per conversation, under its first and its last part, so it
@@ -841,8 +817,7 @@ function BetweenRule() {
 }
 
 /**
- * A stretch between thread rows as a hairline divider: with `onOpen`, it carries the stretch's summary and opens or closes
- * it; without, it is a bare rule above the faded rows.
+ * A stretch between thread rows as a hairline divider carrying its summary, which opens or closes it.
  */
 function BetweenLine({
   group,
@@ -853,7 +828,7 @@ function BetweenLine({
 }: {
   group: BetweenGroup<CompactPart | WorkRun | QuietGroup | AsideGroup>
   open: boolean
-  onOpen: (() => void) | undefined
+  onOpen: () => void
   working: boolean
   summary:
     | {
@@ -863,7 +838,6 @@ function BetweenLine({
       }
     | undefined
 }) {
-  if (!onOpen) return <BetweenRule />
   // Rows outside runs of work, which count as steps instead.
   const rows = group.between
     .flatMap((row) => ('aside' in row ? row.aside : [row]))

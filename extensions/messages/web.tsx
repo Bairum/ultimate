@@ -27,7 +27,6 @@ import {
   threadRow,
   ultimateCompact,
 } from './data.tsx'
-import { RecedeSwitcher } from './recede.tsx'
 import { callerOf } from './caller.ts'
 import { OpenMessages } from './open.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
@@ -83,7 +82,7 @@ function MessageNavigation() {
 }
 
 export default defineWebExtension({
-  slots: { overlay: [MessageNavigation, RecedeSwitcher], 'composer.status': [OpenMessages] },
+  slots: { overlay: [MessageNavigation], 'composer.status': [OpenMessages] },
   entries: {
     'board.message': MessageInput,
     'board.reply': MessageInput,

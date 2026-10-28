@@ -16,6 +16,7 @@ import {
   scriptMessaged,
   sentBy,
   sentStatus,
+  threadRow,
   ultimateCompact,
   waitingOnUser,
 } from '../../extensions/messages/data.tsx'
@@ -245,6 +246,25 @@ describe("background in @ultimate's compact transcript", () => {
     expect(
       backgroundRow(row('pi.assistant', undefined, said('stop')), { messages: [], next: 1 }),
     ).toBe(false)
+  })
+
+  it('reads as the thread only what you and @ultimate say to each other', () => {
+    const toUser = { id: 'ask', name: 'message', arguments: { to: 'user' } }
+    const toAgent = { id: 'tell', name: 'message', arguments: { to: '#5' } }
+    const empty = { messages: [], next: 1 }
+    expect(threadRow(row('pi.user'), messagesLog)).toBe(true)
+    expect(threadRow(row('board.message', { from: 'user' }), messagesLog)).toBe(true)
+    expect(threadRow(row('pi.assistant', undefined, said('toolUse'), [toUser]), messagesLog)).toBe(
+      true,
+    )
+    expect(threadRow(row('pi.assistant', undefined, said('stop')), empty)).toBe(true)
+    // An answer that went back to the agent that asked, a message to an agent, a landing, a reload.
+    expect(threadRow(row('pi.assistant', undefined, said('stop')), messagesLog)).toBe(false)
+    expect(threadRow(row('pi.assistant', undefined, said('toolUse'), [toAgent]), messagesLog)).toBe(
+      false,
+    )
+    expect(threadRow(row('lineage.note', { source: 'lander' }), messagesLog)).toBe(false)
+    expect(threadRow(row('prompt.build'), messagesLog)).toBe(false)
   })
 
   it('names who each row was with', () => {
