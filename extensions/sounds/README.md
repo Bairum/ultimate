@@ -1,7 +1,7 @@
 # Sounds
 
 Short, soft notification sounds when @ultimate talks to you: a question (needs input), a
-finished answer, or a failed run, and an opt-in **sound of agents** that plays the whole project's activity as music.
+finished answer, or a failed run, and when work lands; and an opt-in **sound of agents** that plays the whole project's activity as music.
 "sounds" in the status bar opens a switch for all of them, a volume slider, the sound of agents with its variants and
 demo, and a checkbox and a play button for each notification; the choices live in `ext.sounds.muted`,
 `ext.sounds.volume`, `ext.sounds.agents` and `ext.sounds.off`.
@@ -13,9 +13,12 @@ Only the primary standing agent sounds, read from the root's documents:
 - **Needs input:** its reply-expected `message` to the user (`messages`); every question goes that way.
 - **Finished:** its one-way `message` to the user, or its answer to your typed input.
 - **Failed:** its run ended in an error (`ultimate.conversation-overview`); a stop or a reset does not.
+- **Landed:** a submission landed on the project's target branch (the `workspaces.landed` event), from any branch.
 
-Nothing else notifies: branches, workers, the lander, other standing agents, messages to you from anyone else,
-landings, and @ultimate's answers to other agents' messages (`internalInput`).
+Nothing else notifies: branches, workers, the lander, other standing agents, messages to you from anyone else, and
+@ultimate's answers to other agents' messages (`internalInput`). A landing that arrives while the tab is hidden, its
+stream is down, or within three seconds of it showing again or reconnecting is taken as heard, as in the sound of
+agents.
 
 Each event sounds once. Whatever the documents show when a tab opens has been heard already, and of several open tabs
 the first that may play claims the event under a Web Lock in local storage. Browsers let a page play only after
@@ -40,7 +43,8 @@ drops what it holds.
 Three variants, all in D major over a I–vi–IV–V progression and quantized to a sixteenth, with a cap on happenings per
 step. Each role has a motif, a short contour over the current chord that its tool calls walk one step at a time, so a
 role's calls form a phrase rather than random notes; a failure leaves tension unresolved. Every variant lands with the
-notifications' kalimba: Finished with the octave under its last note.
+notifications' kalimba: Finished with the octave under its last note. While the Landed notification is on, it plays
+the landing and the band leaves it out, so a landing sounds once.
 
 - **Chiptune:** NES style, two pulse channels, a triangle bass and a noise drum, one note each at a time, at 150 bpm. Edits a small coin, commands a drum tick on the bass, reads a quiet blip; a commit the coin "ba-ding", a
   start a 1-up, a failure a bump sliding to a tritone.
@@ -59,5 +63,5 @@ landing. Real activity plays along.
 Everything is synthesized with Tone.js in `engine.ts`, loaded on first sound (Tone opens an AudioContext when it
 loads): a kalimba for the notifications and landings, in a short room so nothing lingers, a limiter, and the three
 bands. The notifications share one motif in G: Needs input rises a fourth (D–G), Finished falls home from the fifth
-(D–B–G), Failed falls to B♭; each lasts at most about 0.6 s. Other extensions' `playNotes` play soft FM bells. A page plays only after a click or key press; with the sound of agents on after a reload, the popover says
+(D–B–G), Landed is Finished with the octave under its last note and a faint sparkle above, Failed falls to B♭; each lasts at most about 0.6 s. Other extensions' `playNotes` play soft FM bells. A page plays only after a click or key press; with the sound of agents on after a reload, the popover says
 "Click anywhere to start audio" and the first click starts it. `ui.tsx` exports `playNotes` for other extensions.

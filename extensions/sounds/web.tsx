@@ -60,14 +60,16 @@ async function announce(cue: Cue) {
 
 /**
  * Watches @ultimate and sounds what it newly tells the user: a question, a finished answer,
- * a failed run. Whatever it shows when this tab opens has been heard already.
+ * a failed run, and each landing. Whatever it shows when this tab opens has been heard already.
  */
 function Player() {
   const overview = useDocOf(1, OverviewDoc)
   const log = useDocOf(1, MessagesDoc)
   const agent = useDocOf(1, StandingDoc)?.ultimate
+  const landings = useEvents({ events: [SubmissionLanded], limit: 20 })
   const { muted, off, volume, agents } = useSettings()
   const [hear] = useState(listener)
+  const catchingUp = useCatchingUp()
   useEffect(() => tones.setVolume(muted ? 0 : volume), [muted, volume])
   useEffect(() => {
     // oxlint-disable-next-line typescript/no-floating-promises -- conduct catches nothing worth reporting beyond a warning.
@@ -76,17 +78,24 @@ function Player() {
       .catch((error: unknown) => console.warn('Sound of agents failed', error))
   }, [muted, agents])
   useEffect(() => {
-    if (!overview || agent === undefined) return
-    const due = hear({
-      agent,
-      row: overview.conversations[agent],
-      messages: (log ?? emptyMessages).messages,
-    })
+    // Until the event feed has arrived, its whole history would come as news.
+    if (!overview || agent === undefined || !landings) return
+    const due = hear(
+      {
+        agent,
+        row: overview.conversations[agent],
+        messages: (log ?? emptyMessages).messages,
+        landings,
+      },
+      catchingUp(),
+    )
     for (const cue of due)
       if (!muted && !off.includes(cue.sound))
         announce(cue).catch((error: unknown) => console.warn('Sound failed', error))
-  }, [hear, overview, log, agent, muted, off])
-  return agents !== 'off' && !muted ? <Listener /> : null
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- `catchingUp` reads the time.
+  }, [hear, overview, log, agent, landings, muted, off])
+  // The Landed notification plays each landing once; the band lands with it only when that notification is off.
+  return agents !== 'off' && !muted ? <Listener landings={off.includes('landed')} /> : null
 }
 
 const watched = [SubmissionLanded, Committed, CheckRan] as const
@@ -115,7 +124,7 @@ function useCatchingUp() {
 }
 
 /** While the sound of agents plays: follows every conversation, tool call and landing, and hands them to the band. */
-function Listener() {
+function Listener({ landings }: { landings: boolean }) {
   const conversations = useConversations()
   const overview = useDocOf(1, OverviewDoc)
   const standing = useDocOf(1, StandingDoc)
@@ -140,9 +149,10 @@ function Listener() {
       },
       catchingUp(),
     )
-    for (const happening of happenings) conductor.hit(happening)
+    for (const happening of happenings)
+      if (landings || happening.kind !== 'landed') conductor.hit(happening)
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- `busy` follows `conversations`; `catchingUp` reads the time.
-  }, [follow, conversations, standing, rounds, overview, events])
+  }, [follow, conversations, standing, rounds, overview, events, landings])
   return busy.map((id) => (
     <ConversationScope id={id} key={id}>
       <RoundOf id={id} report={setRounds} />
@@ -328,7 +338,7 @@ function Control() {
             </div>
           ))}
           <div className="px-2 pt-0.5 pb-1 text-[11px] text-muted-foreground">
-            Notifications from @ultimate only
+            Landings from any branch; the rest from @ultimate only
           </div>
         </div>
       </PopoverContent>

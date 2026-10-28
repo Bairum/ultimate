@@ -37,8 +37,6 @@ bells.maxPolyphony = 24
 
 const hz = (midi: number) => Tone.mtof(midi as Tone.Unit.MidiNote)
 
-/** A notification sound, or the landing the sound of agents plays: the same motif as Finished, one notch fuller. */
-type Tune = Sound | 'landed'
 /** A tune as [start in seconds, MIDI notes struck together, velocity]. */
 type Strike = readonly [number, readonly number[], number]
 
@@ -61,7 +59,7 @@ kalimba.volume.value = -4
  * (D–B–G), the landing is Finished with the octave under its last note and a faint sparkle above, and Failed falls a
  * major third to B♭, a gentle minor colour.
  */
-const tunes: Record<Tune, Strike[]> = {
+const tunes: Record<Sound, Strike[]> = {
   input: [
     [0, [74], 0.6],
     [0.11, [79], 0.7],
@@ -85,7 +83,7 @@ const tunes: Record<Tune, Strike[]> = {
 }
 
 /** Strikes `tune`, starting at `time` (seconds on Tone's clock). */
-function strike(tune: Tune, time: number) {
+function strike(tune: Sound, time: number) {
   for (const [start, notes, velocity] of tunes[tune])
     kalimba.triggerAttackRelease(notes.map(hz), 0.12, time + start, velocity)
 }
