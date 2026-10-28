@@ -135,8 +135,8 @@ describe('sender accents', () => {
   })
   it('gives the user the brand colour and conversations a palette colour, the same one every time', () => {
     expect(accentOf('user')).toEqual({
-      left: 'border-l-brand/60',
       fill: 'bg-brand/5',
+      edge: 'border-brand/20',
       name: 'text-brand',
     })
     expect(accentOf(97078)).toBe(accentOf(97078))
@@ -146,7 +146,7 @@ describe('sender accents', () => {
   })
   it('gives @ultimate a fixed purple apart from the palette and the remote violet', () => {
     const ultimate = accentOf('ultimate')
-    expect(ultimate.left).toBe('border-l-purple-500/70')
+    expect(ultimate.name).toBe('text-purple-700 dark:text-purple-300')
     expect([2, 3, 4, 5, 6, 7].map(accentOf)).not.toContain(ultimate)
     expect(accentOf('remote')).not.toBe(ultimate)
   })

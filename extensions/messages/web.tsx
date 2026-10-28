@@ -28,6 +28,7 @@ import {
 } from './data.tsx'
 import { callerOf } from './caller.ts'
 import { OpenMessages } from './open.tsx'
+import { MessageStyleSwitcher } from './style.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { MessagesDoc, CallerAction } from './refs.ts'
 import type { MessagesData } from './refs.ts'
@@ -81,7 +82,10 @@ function MessageNavigation() {
 }
 
 export default defineWebExtension({
-  slots: { overlay: [MessageNavigation], 'composer.status': [OpenMessages] },
+  slots: {
+    overlay: [MessageNavigation, MessageStyleSwitcher],
+    'composer.status': [OpenMessages],
+  },
   entries: {
     'board.message': MessageInput,
     'board.reply': MessageInput,

@@ -38,7 +38,7 @@ import {
   UserView,
 } from '@/sdk'
 import type { CompactSummaryProps, ToolCallView } from '@/sdk'
-import { AgentMark, ConversationRef } from '../conversations/ui.tsx'
+import { AgentMark, agentTitle, ConversationRef } from '../conversations/ui.tsx'
 import { openAgentSource, StandingDoc } from '../subagents/ui.tsx'
 import { useWorkspaceIndex } from '../workspaces/ui.tsx'
 import { accentOf } from './accent.tsx'
@@ -60,6 +60,7 @@ import { callerOf } from './caller.ts'
 import { MessagesDoc } from './refs.ts'
 import type { Message, Remote } from './refs.ts'
 import { MessageAnswers } from './points.tsx'
+import { useMessageStyle } from './style.tsx'
 
 /** What an optional extension shows under a message to the user: questions' answer card. */
 const Answers = ({ message }: { message: Message }) => (
@@ -197,44 +198,49 @@ export function Bubble({
     status === 'failed' ||
     status === 'stopped' ||
     status === 'dismissed'
-  return (
-    <section
-      data-message-outgoing={message?.id}
-      data-compact-bubble
+  const shape = useMessageStyle()
+  const look = shapes[shape]
+  const header = (
+    <header
       className={cn(
-        'group/bubble w-full min-w-0 rounded-md border border-l-2 border-border',
-        accent.left,
-        accent.fill,
+        'flex min-w-0 items-center gap-2 font-mono text-[11px] text-muted-foreground',
+        look.header,
       )}
     >
-      <header className="flex min-h-8 flex-wrap items-center gap-2 px-3 pt-2.5 font-mono text-[11px] text-muted-foreground">
-        <span className={cn('flex min-w-0 font-semibold', accent.name)}>
-          <Address id={from} mark />
-        </span>
-        {entry ? (
-          <MessageActions
-            bubble
-            className="ml-auto"
-            entry={entry}
-            text={text ?? ''}
-            timestamp={at ?? (stored && 'timestamp' in stored ? stored.timestamp : 0)}
-          />
-        ) : (
-          at !== undefined && (
-            <time
-              className="ml-auto"
-              dateTime={new Date(at).toISOString()}
-              title={new Date(at).toLocaleString()}
-            >
-              {formatAgo(at, now)}
-            </time>
-          )
-        )}
-      </header>
+      {/* The bubble's mark sits in the margin; on a phone, where the margin is gone, it joins the name. */}
+      <Sender id={from} mark={shape === 'bubble' ? 'sm:hidden' : ''} tone={accent.name} />
+      {entry ? (
+        // One line: on a narrow column the details clip on the left instead of wrapping into an empty second row.
+        <MessageActions
+          bubble
+          className="ml-auto min-w-0 flex-nowrap justify-end overflow-hidden whitespace-nowrap"
+          entry={entry}
+          text={text ?? ''}
+          timestamp={at ?? (stored && 'timestamp' in stored ? stored.timestamp : 0)}
+        />
+      ) : (
+        at !== undefined && (
+          <time
+            className="ml-auto shrink-0"
+            dateTime={new Date(at).toISOString()}
+            title={new Date(at).toLocaleString()}
+          >
+            {formatAgo(at, now)}
+          </time>
+        )
+      )}
+    </header>
+  )
+  const body = (
+    <>
       {lead}
       {text !== undefined && (
         <Body pending={writing ? 'Writing you a message…' : undefined} text={text} />
       )}
+    </>
+  )
+  const beneath = (
+    <>
       {message?.images && <MessageImages conversation={from} entry={message.images.entry} />}
       {children}
       {answer && <AttachedAnswer answer={answer} question={message!} />}
@@ -250,7 +256,97 @@ export function Bubble({
           )}
         </footer>
       )}
+    </>
+  )
+  if (shape === 'bubble')
+    return (
+      <section
+        data-message-outgoing={message?.id}
+        data-compact-bubble
+        data-message-style={shape}
+        className="group/bubble flex w-full min-w-0 gap-2.5"
+      >
+        <span className="pt-px max-sm:hidden">
+          <SenderMark id={from} />
+        </span>
+        <div className="min-w-0 flex-1">
+          {header}
+          <div className={cn('mt-1.5 min-w-0 overflow-hidden rounded-xl', accent.fill)}>
+            {body}
+            {beneath}
+          </div>
+        </div>
+      </section>
+    )
+  return (
+    <section
+      data-message-outgoing={message?.id}
+      data-compact-bubble
+      data-message-style={shape}
+      className={cn('group/bubble w-full min-w-0', look.section, shape === 'card' && accent.edge)}
+    >
+      {shape === 'card' ? (
+        <div className={cn('border-b', accent.fill, accent.edge)}>{header}</div>
+      ) : (
+        header
+      )}
+      <div className={look.body}>{body}</div>
+      <div className={look.beneath}>{beneath}</div>
     </section>
+  )
+}
+
+/** The three message shapes on trial; see style.tsx. */
+const shapes = {
+  bubble: { section: '', header: 'h-6', body: '', beneath: '' },
+  // Prose on the page: the body loses its inset; what mounts beneath it shares one quiet card.
+  prose: {
+    section: 'mt-2',
+    header: 'h-6',
+    body: '[&>div]:px-0 [&>div]:pt-1.5 [&>div]:pb-0',
+    beneath:
+      'mt-3 overflow-hidden rounded-lg border border-border/70 bg-card/60 empty:hidden [&>:first-child]:border-t-0',
+  },
+  card: {
+    section: 'overflow-hidden rounded-lg border bg-card/40',
+    header: 'h-9 px-3',
+    body: '',
+    beneath: '',
+  },
+} as const
+
+/** The standing agent's name of conversation `id`, if it is one. */
+function useStandingName(id: number) {
+  const standing = useDocOf(1, StandingDoc)
+  return Object.entries(standing ?? {}).find(([, value]) => value === id)?.[0]
+}
+
+/** The sender's avatar beside a bubble: a standing agent's mark, a generic one for a conversation. */
+function SenderMark({ id }: { id: number }) {
+  return <AgentMark name={useStandingName(id) ?? 'conversation'} />
+}
+
+/**
+ * Who wrote a bubble, as its header names it: a standing agent by its title in the sans face (with its mark when
+ * `mark`), anything else as its address.
+ */
+function Sender({ id, mark, tone }: { id: number; mark: string; tone: string }) {
+  const name = useStandingName(id)
+  if (!name)
+    return (
+      <span className={cn('flex min-w-0 font-semibold', tone)}>
+        <Address id={id} mark />
+      </span>
+    )
+  return (
+    <span className="flex shrink-0 items-center gap-2" title={`@${name}`}>
+      <span className={cn('flex', mark)}>
+        <AgentMark name={name} size="sm" />
+      </span>
+      <span className={cn('font-sans text-[13px] font-semibold tracking-[-0.005em]', tone)}>
+        {agentTitle(name)}
+      </span>
+    </span>
   )
 }
 
@@ -597,11 +693,7 @@ export function MessageInput({ entry }: { entry: EntryRecord }) {
     >
       <section
         data-message-input={origin.id}
-        className={cn(
-          'group/bubble min-w-0 rounded-md border border-l-2 border-border',
-          accent.left,
-          accent.fill,
-        )}
+        className={cn('group/bubble min-w-0 rounded-lg border', accent.edge, accent.fill)}
       >
         <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
           <MailIcon className={cn('size-3.5 shrink-0', accent.name)} />
