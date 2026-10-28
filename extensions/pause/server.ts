@@ -394,12 +394,24 @@ export default function pauseExtension(host: Host) {
     })
     // Every model answer Pi records lands in a commit; the first rate-limited one pauses.
     unsubscribe = host.harness().subscribeCommits((publication) => {
+      // Pi commits a retried answer with its generation sleeping until the retry. The answer that spent the last retry
+      // ends the run in the same commit instead: holding then continues nothing and only delays the failure's report.
+      const retrying = new Set(
+        publication.changes.flatMap((change) =>
+          change.type === 'task' &&
+          change.value.kind === 'pi.generation' &&
+          change.value.state.status === 'sleeping'
+            ? [change.value.conversationId]
+            : [],
+        ),
+      )
       for (const change of publication.changes) {
         const message = change.type === 'entry' ? change.value.model?.[0] : undefined
         // A host already paused stays paused: requests in flight that hit the limit park the same way, and only the
         // first limit is recorded, into a pause the user started too.
         if (
           change.type !== 'entry' ||
+          !retrying.has(change.value.conversationId) ||
           message?.role !== 'assistant' ||
           message.stopReason !== 'error' ||
           !rateLimited(message.errorMessage ?? '')
