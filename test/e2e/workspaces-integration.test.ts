@@ -2430,7 +2430,13 @@ it.concurrent('release never removes a registered checkout whose .git file is br
   const workspace = (await f.service.get(id, context))!
   await writeFile(join(workspace.path, 'precious.txt'), 'keep me')
   await writeFile(join(workspace.path, '.git'), 'gitdir: /nowhere\n')
-  await expect(f.service.release([id], context)).rejects.toThrow('not a git repository')
+  await expect(f.service.release([id], context)).rejects.toThrow(
+    /not a git repository|gitfile does not point to a valid repository/,
+  )
+  expect((await f.service.get(id, context))!).toMatchObject({
+    state: 'ready',
+    path: workspace.path,
+  })
   expect(await readFile(join(workspace.path, 'precious.txt'), 'utf8')).toBe('keep me')
 })
 it.concurrent('release leaves a folder that a failed preparation found at the path', async () => {
