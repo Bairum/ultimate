@@ -677,11 +677,11 @@ it('creates a project automation in the checkout with a committed manifest', asy
   // A manifest naming another standing agent wakes it instead, and the record follows an edit.
   await writeFile(
     join(root, '.ultimate/automations/ship-prs-2/automation.json'),
-    JSON.stringify({ name: 'Ship PRs', ask: 'Poll ship/* PRs', once: false, to: '@lander' }),
+    JSON.stringify({ name: 'Ship PRs', ask: 'Poll ship/* PRs', once: false, to: '@reviewer' }),
   )
   expect((await list(app)).find((s) => s.id === 'ship-prs-2')).toMatchObject({
-    subscribers: [caller.id, '@lander'],
-    script: { to: '@lander' },
+    subscribers: [caller.id, '@reviewer'],
+    script: { to: '@reviewer' },
   })
   await expect(
     app.extensions.invoke(

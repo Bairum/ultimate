@@ -787,7 +787,7 @@ it.concurrent('emits one landed event and notes the root once, across a replayed
   f.prepared.registry.install(lineage(f.host))
   const task = createLander(f.host, Workspaces, (_source, operation) => operation(), {
     starter: async () => undefined,
-    underway: async () => false,
+    working: async () => false,
     conclude: async () => {},
     release: async () => [],
   })

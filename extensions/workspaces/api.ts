@@ -36,8 +36,8 @@ export type { LandedData } from './refs.ts'
 export type BranchesService = {
   /** The conversation that started branch `id`, which hears that its submission landed. */
   starter(id: ConversationId, ctx: Context): Promise<number | undefined>
-  /** Inside `tx`: whether branch `id` still has work under way that will wake it again, so a landing leaves it open. */
-  underway(tx: Tx, id: ConversationId): Promise<boolean>
+  /** Inside `tx`: whether branch `id` has work of its own that will wake it again, so a landing leaves it open. */
+  working(tx: Tx, id: ConversationId): Promise<boolean>
 }
 /** What a landing asks about the branch it landed; messages provides it. `want` it. */
 export const Branches = defineApi<BranchesService>()('workspaces.branches')

@@ -638,34 +638,6 @@ it('refuses messages to the user from anyone but @ultimate', async () => {
     text: 'Relayed update',
   })
 })
-it('names the lander in both message and reply model text', async () => {
-  const f = await fixture()
-  await f.opened.harness.commit(async (tx) => {
-    ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).landerConversations.test = f.recipient.id
-  }, context)
-  await f.send(`#${f.recipient.id}`)
-  await until(() =>
-    f.observed.some((text) => text.startsWith(`Reply from #${f.recipient.id} (@lander)`)),
-  )
-  await (
-    await f.recipient.submit(
-      {
-        type: 'input',
-        content: 'SEND ' + JSON.stringify({ to: '#1', text: 'Lander update', reply: false }),
-      },
-      context,
-    )
-  ).wait(context)
-  await until(() =>
-    f.observed.some((text) => text.startsWith(`Message from #${f.recipient.id} (@lander)`)),
-  )
-  expect(f.observed).toEqual(
-    expect.arrayContaining([
-      expect.stringContaining(`Reply from #${f.recipient.id} (@lander) to your message`),
-      expect.stringContaining(`Message from #${f.recipient.id} (@lander):`),
-    ]),
-  )
-})
 it('resolves a standing address and returns unanswered inputs as failure replies', async () => {
   const f = await fixture()
   await f.send('@scout', 'NOANSWER')

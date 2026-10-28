@@ -30,6 +30,7 @@ import { writeJson } from '../../lib/json-file.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { MessagesApi } from '../messages/api.ts'
 import { LineageApi } from '../lineage/api.ts'
+import { WorkspacesApi } from '../workspaces/api.ts'
 import { AutomationsApi } from './api.ts'
 import {
   CreateAction,
@@ -159,6 +160,13 @@ function backend(host: ExtensionHost) {
         !(await host.harness().conversation(id as ConversationId, BACKGROUND_CONTEXT))
       )
         throw new Error(`Unknown subscriber #${id}`)
+      const landers = (
+        await host
+          .harness()
+          .snapshot(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
+      )?.landerConversations
+      if (Object.values(landers ?? {}).includes(id))
+        throw new Error(`#${id} is the lander's log and takes no input`)
       return id
     }
     if (typeof value === 'string' && STANDING.test(value)) {
@@ -801,6 +809,7 @@ export const pollActions = ['list', 'log', 'script']
 export default function automations(host: ExtensionHost) {
   host.need(SubagentsApi)
   host.need(MessagesApi)
+  host.need(WorkspacesApi)
   const api = backend(host)
   host.implement(AutomationsApi, {
     create: async (args) => (await api.operate({ ...args, action: 'create' })) as Automation,

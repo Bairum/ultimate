@@ -382,19 +382,25 @@ export function supervisor(
           const conversation = await runtime.conversation(id, ctx)
           if (!conversation) throw new Error(`Automation ${sub.id}: conversation #${id} is missing`)
           // Pi admits requestId in the submission transaction, including queued follow-ups.
-          await conversation.submit(
-            {
-              type: 'input',
-              content,
-              whenBusy: 'followUp',
-              requestId,
-              entry: {
-                kind: `automations.${kind}`,
-                data: { id: sub.id, name: sub.name, text },
+          await conversation
+            .submit(
+              {
+                type: 'input',
+                content,
+                whenBusy: 'followUp',
+                requestId,
+                entry: {
+                  kind: `automations.${kind}`,
+                  data: { id: sub.id, name: sub.name, text },
+                },
               },
-            },
-            ctx,
-          )
+              ctx,
+            )
+            .catch((error: unknown) => {
+              ctx.abortSignal?.throwIfAborted()
+              // A recipient's input hook refused it (a log-only conversation such as a lander): the others still get it.
+              host.notice(`Automation ${sub.id}: #${id} refused its wake-up: ${String(error)}`)
+            })
         }
         await runtime.commit(() => terminal, ctx)
       },

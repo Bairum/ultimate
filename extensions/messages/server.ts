@@ -25,7 +25,7 @@ import { imagesParameter, SCAN_PAGE } from './images.ts'
 import { parentOf, Started, starterOf } from './addresses.ts'
 import { delivery } from './delivery.ts'
 import { send } from './send.ts'
-import { route, underway } from './route.ts'
+import { route, working } from './route.ts'
 import { remoteAction, remoteReplyAction, tell } from './remote.ts'
 import { branchTool } from './branch.ts'
 export { gist, openQuestionsNote } from './questions.ts'
@@ -83,7 +83,7 @@ export default function messages(host: ExtensionHost) {
   // What a landing asks about its branch, through workspaces' extension point, so workspaces does not depend on messages.
   host.implement(Branches, {
     starter: (id, ctx) => starterOf(host, id, ctx),
-    underway: (tx, id) => underway(host, tx, id),
+    working: (tx, id) => working(tx, id),
   })
   host.implement(MessagesApi, {
     answer: async (messageId, text, ctx, device) => {

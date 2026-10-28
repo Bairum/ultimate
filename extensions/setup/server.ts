@@ -115,7 +115,7 @@ async function agentsArea(host: CheckHost): Promise<SetupIssue[]> {
       area: 'Agent models',
       status: 'warn',
       summary: `${names.join(', ')} → ${provider}: no login here`,
-      impact: `They fail at their first model call${names.includes('lander') ? ', so landings fail' : ''}.`,
+      impact: 'They fail at their first model call.',
       fix: LOGIN,
     })
   if (errors.length)

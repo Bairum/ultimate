@@ -3,7 +3,6 @@ import type { Context } from '@earendil-works/chord'
 import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { WorkspacesApi } from '../workspaces/api.ts'
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import type { Remote } from './refs.ts'
 
@@ -39,13 +38,7 @@ export async function senderName(host: ExtensionHost, id: number | 'user', ctx: 
   if (typeof id !== 'number') return 'another Ultimate'
   const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
   const name = Object.keys(index ?? {}).find((candidate) => index?.[candidate] === id)
-  const workspace = await host
-    .harness()
-    .snapshot(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID, ctx)
-  const label =
-    name ??
-    (Object.values(workspace?.landerConversations ?? {}).includes(id) ? 'lander' : undefined)
-  return `#${id}${label ? ` (@${label})` : ''}`
+  return `#${id}${name ? ` (@${name})` : ''}`
 }
 export async function resolve(
   host: ExtensionHost,

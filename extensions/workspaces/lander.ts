@@ -304,6 +304,16 @@ type State =
       text: string
       outcome: WorkspaceIndex['results'][string]
     }
+  /** The landing's decision, made once: tell `starter` (waking it only when the branch `concluded`), then release it. */
+  | {
+      phase: 'deliver'
+      id: string
+      conversationId: number
+      text: string
+      outcome: WorkspaceIndex['results'][string]
+      concluded: boolean
+      starter?: number
+    }
   /** A landed branch concluded in the report's last commit: free its checkout. */
   | { phase: 'release'; conversationId: number }
 
@@ -315,7 +325,7 @@ export function createLander(
   /** What a landing needs from the rest of Ultimate: who started a branch, whether it has work under way, conclude, release. */
   after: {
     starter: (id: ConversationId, context: Context) => Promise<number | undefined>
-    underway: (tx: Tx, id: ConversationId) => Promise<boolean>
+    working: (tx: Tx, id: ConversationId) => Promise<boolean>
     conclude: (tx: Tx, id: ConversationId) => Promise<void>
     release: (id: ConversationId, context: Context) => Promise<unknown>
   },
@@ -799,27 +809,43 @@ export function createLander(
           },
           context,
         )
-        // Decided with the conversation's state in one commit: input admitted after it resumes the branch.
-        let concluded = false
-        await runtime.commit(async (tx) => {
-          concluded = false
-          if (await after.underway(tx, branch)) return undefined
-          try {
-            await after.conclude(tx, branch)
-            concluded = true
-          } catch (error) {
-            // Roots and standing agents refuse before any write; they stay open by design.
-            host.notice(`Not concluding #${branch} after landing: ${String(error)}`)
-          }
-          return undefined
-        }, context)
-        // The starter wakes once when the branch's work ends: here when the landing concluded it, else with the
-        // branch's own report when it stops, so the card goes as a note.
         const starter = await after.starter(branch, context)
-        const content = `${text}\nDiverged: ${outcome.divergence}\n${concluded ? `#${branch} is concluded.` : `#${branch} still has work under way; it reports when it stops.`}`
-        if (starter !== undefined && starter !== branch)
+        // Decided once, with the conversation's state, in the commit that leaves this phase: input admitted after it
+        // resumes the branch, and a replay delivers what was decided. While this phase lasts, the branch's own report
+        // waits as a note (messages counts this phase as under way); once decided, a branch left open reports when it stops.
+        await runtime.commit(async (tx) => {
+          let concluded = false
+          if (!(await after.working(tx, branch)))
+            try {
+              await after.conclude(tx, branch)
+              concluded = true
+            } catch (error) {
+              // Roots and standing agents refuse before any write; they stay open by design.
+              host.notice(`Not concluding #${branch} after landing: ${String(error)}`)
+            }
+          return {
+            status: 'running',
+            checkpoint: {
+              phase: 'deliver',
+              id,
+              conversationId,
+              text,
+              outcome,
+              concluded,
+              ...(starter !== undefined && starter !== branch ? { starter } : {}),
+            },
+          }
+        }, context)
+      },
+      // The starter wakes once when the branch's work ends: here when the landing concluded it, else with the branch's
+      // own report when it stops, so the card goes as a note.
+      deliver: async (task, runtime, context) => {
+        const { id, conversationId, text, outcome, concluded, starter } = task.state.checkpoint
+        const entry = { kind: LanderReportEntry, data: { id, outcome } }
+        const content = `${text}\nDiverged: ${outcome.divergence}\n${concluded ? `#${conversationId} is concluded.` : `#${conversationId} still has work under way; it reports when it stops.`}`
+        if (starter !== undefined)
           await (
-            await runtime.conversation(starter as ConversationId, context)
+            await host.harness().conversation(starter as ConversationId, context)
           )?.submit(
             concluded
               ? { type: 'input', content, entry, whenBusy: 'followUp', requestId: `lander:${id}` }
@@ -834,10 +860,10 @@ export function createLander(
             context,
           )
         await runtime.commit(
-          () =>
-            concluded
-              ? { status: 'running', checkpoint: { phase: 'release', conversationId } }
-              : next,
+          () => ({
+            status: 'running',
+            checkpoint: concluded ? { phase: 'release', conversationId } : { phase: 'next' },
+          }),
           context,
         )
       },

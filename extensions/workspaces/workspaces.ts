@@ -198,7 +198,7 @@ export function workspaces(host: Host) {
   )
   const Lander = createLander(host, Workspaces, serial, {
     starter: async (id, context) => host.want(Branches)?.starter(id, context),
-    underway: async (tx, id) => (await host.want(Branches)?.underway(tx, id)) ?? false,
+    working: async (tx, id) => (await host.want(Branches)?.working(tx, id)) ?? false,
     conclude: (tx, id) => host.need(ConversationsApi).concludeIn(tx, [id]),
     release: (id, context) => release([id], context),
   })
@@ -658,14 +658,19 @@ export function workspaces(host: Host) {
       throw error
     })
     if (!names.length) return []
-    const known = new Set(
-      Object.values(
-        (await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context))?.items ?? {},
-      ).map((workspace) => workspace.path),
-    )
     const checkout = await isolatable(host.projectRoot)
     if ('reason' in checkout) return []
     const { source, target } = checkout
+    const index = await host.harness().snapshot(Workspaces, ROOT_CONVERSATION_ID, context)
+    // Recorded checkouts and every source's lander checkout, which a configured layout may put in this folder.
+    const known = new Set([
+      ...Object.values(index?.items ?? {}).map((workspace) => workspace.path),
+      ...(await Promise.all(
+        [...new Set([source, ...Object.keys(index?.landerConversations ?? {})])].map(
+          async (lander) => landerPath(host.home, lander, await host.projectSettings()),
+        ),
+      )),
+    ])
     const root = await realpath(directory)
     const kept: string[] = []
     for (const name of names) {

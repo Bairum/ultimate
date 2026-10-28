@@ -47,9 +47,25 @@ async function busy(tx: Tx, id: ConversationId) {
 /**
  * Whether branch `id` still has work under way that will wake it again: a run or queued input, a waking task, a
  * subagent at any depth that is busy, a submission the lander has not reported yet, or a reply-enabled message still
- * waiting on its answer. A landing ends the branch's work: only a failed report wakes it.
+ * waiting on its answer. While the lander reports a landing it decides, once, whether the branch is done: it
+ * concludes it and wakes the starter, or leaves it open to report when it stops. Until then a report waits as a note.
  */
-export async function underway(host: ExtensionHost, tx: Tx, id: ConversationId): Promise<boolean> {
+async function underway(host: ExtensionHost, tx: Tx, id: ConversationId): Promise<boolean> {
+  const queue = (await tx.doc(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID)).queue
+  if (queue.some((item) => item.conversationId === id)) return true
+  // A submission leaves the queue in the commit that moves the lander to reporting it.
+  for (const task of await live(tx, 'workspaces.lander')) {
+    const checkpoint = (task.state as { checkpoint?: { phase?: string; conversationId?: number } })
+      .checkpoint
+    if (checkpoint?.phase === 'report' && checkpoint.conversationId === id) return true
+  }
+  return working(tx, id)
+}
+/**
+ * Whether `id` has work of its own that will wake it: a run or queued input, a waking task, a busy subagent at any
+ * depth, or a reply-enabled message it sent still waiting on its answer. The lander asks it before concluding.
+ */
+export async function working(tx: Tx, id: ConversationId): Promise<boolean> {
   if (await busy(tx, id)) return true
   const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
   if (
@@ -58,23 +74,6 @@ export async function underway(host: ExtensionHost, tx: Tx, id: ConversationId):
     )
   )
     return true
-  const queue = (await tx.doc(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID)).queue
-  if (queue.some((item) => item.conversationId === id)) return true
-  // A submission leaves the queue in the commit that moves the lander to reporting it; until a failure's report is an
-  // input here.
-  for (const task of await live(tx, 'workspaces.lander')) {
-    const checkpoint = (
-      task.state as {
-        checkpoint?: { phase?: string; conversationId?: number; outcome?: { outcome?: string } }
-      }
-    ).checkpoint
-    if (
-      checkpoint?.phase === 'report' &&
-      checkpoint.conversationId === id &&
-      checkpoint.outcome?.outcome === 'failed'
-    )
-      return true
-  }
   return children(tx, id)
 }
 async function children(tx: Tx, id: ConversationId): Promise<boolean> {
