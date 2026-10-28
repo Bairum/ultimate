@@ -4,8 +4,7 @@
  */
 import * as Tone from 'tone'
 import type { Sound } from './cues.ts'
-import type { Happening, Level, Role, Tool, Variant } from './agents.ts'
-import { total } from './agents.ts'
+import type { Happening, Role, Tool, Variant } from './agents.ts'
 
 /** A note as [start in seconds, frequency in Hz, length in seconds]. */
 export type Note = readonly [number, number, number]
@@ -139,7 +138,8 @@ function later() {
 }
 
 type Part = {
-  bpm: (level: Level) => number
+  /** The one tempo: busier work plays more notes, never a faster beat. */
+  bpm: number
   /** Happenings a 16th may play; the rest wait for the next. */
   cap: number
   play: (happening: Happening, time: number, bar: number) => void
@@ -148,10 +148,9 @@ type Part = {
   nodes: Tone.ToneAudioNode[]
 }
 
-/** A playing band: hand it what happens and how busy the project is; it quantizes both to its beat. */
+/** A playing band: hand it what happens; it quantizes it to its beat. */
 export type Band = {
   hit: (happening: Happening) => void
-  level: (level: Level) => void
   dispose: () => void
 }
 
@@ -160,21 +159,11 @@ export function band(variant: Variant): Band {
   const queue: Happening[] = []
   let step = 0
   const transport = Tone.getTransport()
-  // In steps of 12 bpm, so the tempo changes only when the load crosses a step, not with every agent.
-  const tempo = (level: Level) => Math.round(part.bpm(level) / 12) * 12
-  let bpm = tempo({ busy: {}, streaming: 0 })
-  let wanted = bpm
-  transport.bpm.value = bpm
+  // Set once, before the transport starts: Tone keeps every tempo change on a timeline it never prunes and searches
+  // on every tick, and ramping it at runtime once hung a renderer.
+  transport.bpm.value = part.bpm
   const loop = new Tone.Loop((time) => {
     const bar = Math.floor(step / 16)
-    // The tempo moves on a phrase's downbeat, over a bar, and only when it changed: every ramp adds automation events
-    // to the transport's tempo timeline, which Tone never prunes (it counts ticks from the transport's start) and
-    // searches on every tick, while the live project reports its level on every render. At most one linear ramp, two
-    // events, per four bars keeps it small; ramping on every change grew it twenty times faster and hung a renderer.
-    if (step % 64 === 0 && wanted !== bpm) {
-      bpm = wanted
-      transport.bpm.linearRampTo(bpm, '1m', time)
-    }
     // A hidden tab throttles the clock, which then catches up in one go with steps already past: drop what they hold
     // instead of playing it all at once.
     if (time < Tone.now() - 0.1) queue.length = 0
@@ -187,7 +176,6 @@ export function band(variant: Variant): Band {
   transport.start('+0.05')
   return {
     hit: (happening) => void queue.push(happening),
-    level: (next) => void (wanted = tempo(next)),
     dispose: () => {
       loop.dispose()
       transport.stop()
@@ -279,7 +267,7 @@ function chiptune(): Part {
   }
   const step = walker()
   return {
-    bpm: (level) => 140 + Math.min(28, total(level) * 4),
+    bpm: 150,
     cap: 2,
     nodes: [lead, second, triangle, noise, bus],
     play: (h, time, bar) => {
@@ -468,7 +456,7 @@ function orchestra(): Part {
     else (synth as Tone.PolySynth).triggerAttackRelease(hz(midi), length, time, velocity)
   }
   return {
-    bpm: (level) => 92 + Math.min(16, total(level) * 2),
+    bpm: 96,
     cap: 3,
     nodes: [strings, cello, pluck, flute, marimba, brass, timpani, hall],
     play: (h, time, bar) => {
@@ -524,7 +512,7 @@ function orchestra(): Part {
   }
 }
 
-/** (C) A beat that speeds up with load; every tool call a drum hit or a glitch; landings drop, failures crunch. */
+/** (C) Every tool call a drum hit or a glitch at a driving 128 bpm; landings drop, failures crunch. */
 function crazy(): Part {
   const crush = new Tone.BitCrusher(8)
   const echo = new Tone.FeedbackDelay({ delayTime: '8n', feedback: 0.3, wet: 0.18 })
@@ -594,7 +582,7 @@ function crazy(): Part {
   let edits = 0
   const step = walker()
   return {
-    bpm: (level) => Math.min(178, 104 + total(level) * 9 + level.streaming * 3),
+    bpm: 128,
     cap: 4,
     nodes: [kick, snare, hat, crash, acid, zap, stab, riser, sweep, crush, echo, bus],
     play: (h, time, bar) => {

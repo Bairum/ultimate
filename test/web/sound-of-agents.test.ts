@@ -6,13 +6,12 @@ const snapshot = (extra: Partial<Snapshot> = {}): Snapshot => ({
   conversations: [],
   standing: new Set([2]),
   tools: {},
-  streaming: 0,
   runs: {},
   events: [],
   ...extra,
 })
 
-it('turns project changes into happenings and a level, taking the first snapshot as heard', () => {
+it('turns project changes into happenings, taking the first snapshot as heard', () => {
   const follow = tracker()
   const busy = snapshot({
     conversations: [
@@ -22,10 +21,7 @@ it('turns project changes into happenings and a level, taking the first snapshot
     tools: { '10:a': { name: 'bash', conversationId: 10 } },
     events: [{ id: 1, kind: 'event.workspaces.landed', data: {} }],
   })
-  expect(follow(busy)).toEqual({
-    happenings: [],
-    level: { busy: { ultimate: 1, coordinator: 1 }, streaming: 0 },
-  })
+  expect(follow(busy)).toEqual([])
   const next = follow(
     snapshot({
       conversations: [
@@ -33,7 +29,6 @@ it('turns project changes into happenings and a level, taking the first snapshot
         { id: 10, label: 'coordinator', busy: true },
         { id: 11, label: 'worker', busy: true },
       ],
-      streaming: 1,
       tools: {
         '10:a': { name: 'bash', conversationId: 10 },
         '11:b': { name: 'edit', conversationId: 11 },
@@ -46,14 +41,13 @@ it('turns project changes into happenings and a level, taking the first snapshot
       ],
     }),
   )
-  expect(next.happenings).toEqual([
+  expect(next).toEqual([
     { kind: 'start', role: 'worker' },
     { kind: 'stop', role: 'ultimate' },
     { kind: 'tool', role: 'worker', tool: 'edit' },
     { kind: 'commit' },
     { kind: 'failed' },
   ])
-  expect(next.level).toEqual({ busy: { coordinator: 1, worker: 1 }, streaming: 1 })
 })
 
 it('takes what a tab catches up on after a reconnect as heard', () => {
@@ -72,23 +66,20 @@ it('takes what a tab catches up on after a reconnect as heard', () => {
       { id: 5, kind: 'event.coding-tools.committed', data: {} },
     ],
   })
-  expect(follow(away, true).happenings).toEqual([])
+  expect(follow(away, true)).toEqual([])
   // Replayed again once caught up, it stays heard; only what is new from then on sounds.
-  expect(follow(away).happenings).toEqual([])
+  expect(follow(away)).toEqual([])
   expect(
     follow({
       ...away,
       events: [...away.events, { id: 6, kind: 'event.coding-tools.committed', data: {} }],
-    }).happenings,
+    }),
   ).toEqual([{ kind: 'commit' }])
 })
 
-it('plays the demo from first message to a quiet project', () => {
-  const step = demoPlayer()
-  const played = demo.map(step)
-  const kinds = new Set(played.map((p) => p.happening?.kind))
+it('plays the demo from first message to landing', () => {
+  const kinds = new Set(demo.map(demoPlayer()).map((happening) => happening?.kind))
   expect([...kinds]).toEqual(
     expect.arrayContaining(['start', 'tool', 'commit', 'failed', 'landed', 'stop']),
   )
-  expect(played.at(-1)!.level).toEqual({ busy: {}, streaming: 0 })
 })

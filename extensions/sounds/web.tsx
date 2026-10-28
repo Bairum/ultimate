@@ -22,7 +22,7 @@ import { Committed } from '../coding-tools/ui.tsx'
 import { CheckRan, SubmissionLanded } from '../workspaces/ui.tsx'
 import { listener, sounds } from './cues.ts'
 import type { Cue, Sound } from './cues.ts'
-import { silence, tracker, variants } from './agents.ts'
+import { tracker, variants } from './agents.ts'
 import type { Variant } from './agents.ts'
 import * as conductor from './conductor.ts'
 import * as tones from './tones.ts'
@@ -122,30 +122,27 @@ function Listener() {
   const events = useEvents({ events: watched, limit: 20 })
   const [follow] = useState(tracker)
   const catchingUp = useCatchingUp()
-  // Each busy conversation's live round, reported by a `Round` in its scope: its tool calls by name, and whether its
-  // model streams. A fast call passes through `pi.live` but often not through the coalesced task graph.
+  // Each busy conversation's live round, reported by a `Round` in its scope: its tool calls by name. A fast call
+  // passes through `pi.live` but often not through the coalesced task graph.
   const [rounds, setRounds] = useState<Record<number, Round>>({})
   const busy = conversations.filter((conversation) => conversation.busy).map(({ id }) => id)
   useEffect(() => {
     // Until every source has arrived, a later one would bring its whole history as news.
     if (!overview || !standing || !events) return
     const live = busy.map((id) => rounds[id]).filter((round) => round !== undefined)
-    const { happenings, level } = follow(
+    const happenings = follow(
       {
         conversations,
         standing: new Set(Object.values(standing)),
         tools: Object.fromEntries(live.flatMap((round) => round.tools)),
-        streaming: live.filter((round) => round.streaming).length,
         runs: overview.conversations,
         events,
       },
       catchingUp(),
     )
     for (const happening of happenings) conductor.hit(happening)
-    conductor.level('live', level)
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- `busy` follows `conversations`; `catchingUp` reads the time.
   }, [follow, conversations, standing, rounds, overview, events])
-  useEffect(() => () => conductor.level('live', silence), [])
   return busy.map((id) => (
     <ConversationScope id={id} key={id}>
       <RoundOf id={id} report={setRounds} />
@@ -153,7 +150,7 @@ function Listener() {
   ))
 }
 
-type Round = { tools: [string, { name: string; conversationId: number }][]; streaming: boolean }
+type Round = { tools: [string, { name: string; conversationId: number }][] }
 
 /** Reports conversation `id`'s current round from its `pi.live`. */
 function RoundOf({
@@ -170,7 +167,6 @@ function RoundOf({
         `${id}:${slot.callId}`,
         { name: slot.name, conversationId: id },
       ]),
-      streaming: live.generation?.message !== undefined && !live.tools,
     }
     report((previous) => ({ ...previous, [id]: round }))
   }, [id, live, report])
