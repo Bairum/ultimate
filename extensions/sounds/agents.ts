@@ -61,10 +61,10 @@ export type Snapshot = {
   conversations: readonly { id: number; label?: string; busy: boolean }[]
   /** The standing agents' conversation ids. */
   standing: ReadonlySet<number>
-  /** Live tasks: tool calls and model generations. */
-  tasks: readonly { id: number; kind: string; conversationId: number; status: string }[]
-  /** Tool calls by task id, once their names are known; a call may have ended by then. */
-  tools: Readonly<Record<number, { name: string; conversationId: number }>>
+  /** Tool calls of the current rounds by a key unique to each call. */
+  tools: Readonly<Record<string, { name: string; conversationId: number }>>
+  /** How many models are streaming an answer. */
+  streaming: number
   /** Run state and latest input of each conversation, for failures. */
   runs: Readonly<Record<string, { runState: string; inputId?: number }>>
   /** Recent durable events, any order. */
@@ -116,11 +116,7 @@ export function tracker() {
       if (run.runState === 'error' && fresh(`failed:${id}:${run.inputId}`))
         happenings.push({ kind: 'failed' })
     first = false
-    const level: Level = {
-      busy: {},
-      streaming: snapshot.tasks.filter((t) => t.kind === 'pi.generation' && t.status === 'running')
-        .length,
-    }
+    const level: Level = { busy: {}, streaming: snapshot.streaming }
     for (const id of nowBusy) level.busy[role(id)] = (level.busy[role(id)] ?? 0) + 1
     return { happenings, level }
   }

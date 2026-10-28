@@ -71,6 +71,12 @@ export async function conduct(variant: Variant | undefined) {
 }
 
 export const hit = (happening: Happening) => band?.hit(happening)
+
+// A hot reload replaces this module: the old band would keep playing on the shared transport beside the new one.
+import.meta.hot?.dispose(() => {
+  band?.dispose()
+  stopDemo()
+})
 export function level(source: 'live' | 'demo', next: Level) {
   levels = { ...levels, [source]: next }
   band?.level(mix(levels.live, levels.demo))

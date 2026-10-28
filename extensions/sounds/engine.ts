@@ -155,10 +155,11 @@ export function band(variant: Variant): Band {
       loop.dispose()
       transport.stop()
       transport.cancel()
-      // Let reverb tails ring out before the voices go.
+      // Let held notes release and reverb tails ring out before the voices go: a release scheduled on a disposed
+      // synth throws inside Tone.
       setTimeout(() => {
         for (const node of part.nodes) node.dispose()
-      }, 4000)
+      }, 12_000)
     },
   }
 }

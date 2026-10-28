@@ -5,8 +5,8 @@ import type { Snapshot } from '../../extensions/sounds/agents.ts'
 const snapshot = (extra: Partial<Snapshot> = {}): Snapshot => ({
   conversations: [],
   standing: new Set([2]),
-  tasks: [],
   tools: {},
+  streaming: 0,
   runs: {},
   events: [],
   ...extra,
@@ -19,7 +19,7 @@ it('turns project changes into happenings and a level, taking the first snapshot
       { id: 2, label: 'agent', busy: true },
       { id: 10, label: 'coordinator', busy: true },
     ],
-    tools: { 5: { name: 'bash', conversationId: 10 } },
+    tools: { '10:a': { name: 'bash', conversationId: 10 } },
     events: [{ id: 1, kind: 'event.workspaces.landed', data: {} }],
   })
   expect(follow(busy)).toEqual({
@@ -33,10 +33,10 @@ it('turns project changes into happenings and a level, taking the first snapshot
         { id: 10, label: 'coordinator', busy: true },
         { id: 11, label: 'worker', busy: true },
       ],
-      tasks: [{ id: 7, kind: 'pi.generation', conversationId: 11, status: 'running' }],
+      streaming: 1,
       tools: {
-        5: { name: 'bash', conversationId: 10 },
-        6: { name: 'edit', conversationId: 11 },
+        '10:a': { name: 'bash', conversationId: 10 },
+        '11:b': { name: 'edit', conversationId: 11 },
       },
       runs: { '11': { runState: 'error', inputId: 3 } },
       events: [

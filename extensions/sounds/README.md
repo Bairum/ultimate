@@ -25,8 +25,8 @@ sounds.
 ## Sound of agents
 
 Off by default. Turned on, every tab plays the project: `agents.ts` follows the conversation list (busy states and
-each one's role from its label), the task graph (model generations; tool calls, named once per call with the `tasks`
-`describe` action) and the event feed (`coding-tools.committed`, `workspaces.landed`, failed `workspaces.check`), plus
+each one's role from its label), each busy conversation's `pi.live` (its tool calls by name and whether its model
+streams; a fast call passes through there but often not through the coalesced task graph) and the event feed (`coding-tools.committed`, `workspaces.landed`, failed `workspaces.check`), plus
 failed runs from the overview. It turns them into happenings (a conversation starts or stops, a tool call by timbre,
 a commit, a landing, a failure) and a level (busy conversations by role, streaming models). Idle is silence.
 

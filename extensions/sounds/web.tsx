@@ -1,28 +1,27 @@
 import { AudioLinesIcon, PlayIcon, SquareIcon, Volume2Icon, VolumeOffIcon } from 'lucide-react'
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import {
   cn,
   defineWebExtension,
-  useAction,
+  ConversationScope,
+  useConversation,
   useConversations,
   useDocOf,
   useEvents,
   useExtensionUiState,
   useNow,
-  useTasks,
 } from '@/sdk'
 import { MessagesDoc, emptyMessages } from '../messages/ui.tsx'
 import { OverviewDoc } from '../conversations/ui.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
-import { DescribeAction } from '../tasks/ui.tsx'
 import { Committed } from '../coding-tools/ui.tsx'
 import { CheckRan, SubmissionLanded } from '../workspaces/ui.tsx'
 import { listener, sounds } from './cues.ts'
 import type { Cue, Sound } from './cues.ts'
-import { tracker, variants } from './agents.ts'
+import { silence, tracker, variants } from './agents.ts'
 import type { Variant } from './agents.ts'
 import * as conductor from './conductor.ts'
 import * as tones from './tones.ts'
@@ -93,54 +92,58 @@ const watched = [SubmissionLanded, Committed, CheckRan] as const
 /** While the sound of agents plays: follows every conversation, tool call and landing, and hands them to the band. */
 function Listener() {
   const conversations = useConversations()
-  const graph = useTasks()
   const overview = useDocOf(1, OverviewDoc)
   const standing = useDocOf(1, StandingDoc)
   const events = useEvents({ events: watched, limit: 20 })
   const [follow] = useState(tracker)
-  // Tool names come from each call's input, asked once per call; a call ends before its name arrives sometimes.
-  const [tools, setTools] = useState<Record<number, { name: string; conversationId: number }>>({})
-  const [asked, setAsked] = useState<Set<number>>(() => new Set())
-  const calls = Object.values(graph?.tasks ?? {}).filter((task) => task.kind === 'pi.tool')
-  const missing = calls.map((task) => Number(task.id)).filter((id) => !asked.has(id))
-  const { data } = useAction(DescribeAction, { ids: missing }, { enabled: missing.length > 0 })
-  useEffect(() => {
-    if (missing.length > 0) setAsked((previous) => new Set([...previous, ...missing]))
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- ask each id once; `missing` is new every render.
-  }, [missing.join(',')])
-  const owners = useMemo(
-    () => new Map(calls.map((task) => [Number(task.id), Number(task.conversationId)])),
-    [calls],
-  )
-  useEffect(() => {
-    if (!data) return
-    setTools((previous) => {
-      const next = { ...previous }
-      for (const [id, facts] of Object.entries(data))
-        if (facts.tool && owners.has(Number(id)))
-          next[Number(id)] = { name: facts.tool, conversationId: owners.get(Number(id))! }
-      return next
-    })
-  }, [data, owners])
+  // Each busy conversation's live round, reported by a `Round` in its scope: its tool calls by name, and whether its
+  // model streams. A fast call passes through `pi.live` but often not through the coalesced task graph.
+  const [rounds, setRounds] = useState<Record<number, Round>>({})
+  const busy = conversations.filter((conversation) => conversation.busy).map(({ id }) => id)
   useEffect(() => {
     if (!overview) return
+    const live = busy.map((id) => rounds[id]).filter((round) => round !== undefined)
     const { happenings, level } = follow({
       conversations,
       standing: new Set(Object.values(standing ?? {})),
-      tasks: Object.values(graph?.tasks ?? {}).map((task) => ({
-        id: Number(task.id),
-        kind: task.kind,
-        conversationId: Number(task.conversationId),
-        status: task.state.status,
-      })),
-      tools,
+      tools: Object.fromEntries(live.flatMap((round) => round.tools)),
+      streaming: live.filter((round) => round.streaming).length,
       runs: overview.conversations,
       events: events ?? [],
     })
     for (const happening of happenings) conductor.hit(happening)
     conductor.level('live', level)
-  }, [follow, conversations, standing, graph, tools, overview, events])
-  useEffect(() => () => conductor.level('live', { busy: {}, streaming: 0 }), [])
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- `busy` follows `conversations`.
+  }, [follow, conversations, standing, rounds, overview, events])
+  useEffect(() => () => conductor.level('live', silence), [])
+  return busy.map((id) => (
+    <ConversationScope id={id} key={id}>
+      <RoundOf id={id} report={setRounds} />
+    </ConversationScope>
+  ))
+}
+
+type Round = { tools: [string, { name: string; conversationId: number }][]; streaming: boolean }
+
+/** Reports conversation `id`'s current round from its `pi.live`. */
+function RoundOf({
+  id,
+  report,
+}: {
+  id: number
+  report: (update: (previous: Record<number, Round>) => Record<number, Round>) => void
+}) {
+  const live = useConversation((conversation) => conversation.live)
+  useEffect(() => {
+    const round: Round = {
+      tools: [...(live.tools ?? []), ...(live.nestedTools ?? [])].map((slot) => [
+        `${id}:${slot.callId}`,
+        { name: slot.name, conversationId: id },
+      ]),
+      streaming: live.generation?.message !== undefined && !live.tools,
+    }
+    report((previous) => ({ ...previous, [id]: round }))
+  }, [id, live, report])
   return null
 }
 
@@ -241,7 +244,7 @@ function Control() {
               <button
                 className={cn(
                   row,
-                  'w-full cursor-pointer rounded-sm hover:bg-accent',
+                  'w-full cursor-pointer rounded-sm whitespace-nowrap hover:bg-accent',
                   left !== undefined && 'text-brand',
                 )}
                 disabled={muted}
@@ -257,7 +260,7 @@ function Control() {
                   {left === undefined ? 'Start demo' : 'Stop demo'}
                 </span>
                 <span className="text-[11px] text-muted-foreground">
-                  {left === undefined ? 'a feature, start to landing' : `${left}s`}
+                  {left === undefined ? '40s' : `${left}s`}
                 </span>
               </button>
               {stage.blocked && (
