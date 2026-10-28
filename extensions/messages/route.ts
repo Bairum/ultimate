@@ -8,6 +8,7 @@ import type {
   Tx,
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { ConversationsApi } from '../conversations/api.ts'
 import { Subagents } from '../subagents/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { Messages } from './api.ts'
@@ -51,6 +52,9 @@ async function busy(tx: Tx, id: ConversationId) {
  * concludes it and wakes the starter, or leaves it open to report when it stops. Until then a report waits as a note.
  */
 async function underway(host: ExtensionHost, tx: Tx, id: ConversationId): Promise<boolean> {
+  // A landing concludes the branch in the commit that ends its report and wakes the starter itself; an answer routed
+  // after that, or for a branch concluded by hand, is not a report. Any input that runs the branch resumes it first.
+  if ((await host.need(ConversationsApi).concludedIn(tx)).has(id)) return true
   const queue = (await tx.doc(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID)).queue
   if (queue.some((item) => item.conversationId === id)) return true
   // A submission leaves the queue in the commit that moves the lander to reporting it.
