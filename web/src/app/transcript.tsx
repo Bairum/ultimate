@@ -713,9 +713,11 @@ function TranscriptEntries() {
         // The stretch the agent works in now stays in view while it works.
         const shown = recede === 'fade' || (busy && last) || readBetween(id, item)
         // Opened from its line, a stretch shows its background groups' rows: their lines would repeat the stretch's.
-        const between =
+        const between: readonly (CompactPart | WorkRun | QuietGroup | AsideGroup)[] =
           recede === 'line'
-            ? item.between.flatMap((row) => ('quiet' in row ? row.quiet : [row]))
+            ? item.between.flatMap<CompactPart | WorkRun | AsideGroup>((row) =>
+                'quiet' in row ? row.quiet : [row],
+              )
             : item.between
         const faded = between.map((inner, inside) =>
           renderItem(inner, last && inside === between.length - 1, recedeRow),
