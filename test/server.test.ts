@@ -551,7 +551,7 @@ export default host => { host.resource('cleanup.process',()=>{
     const { server, options } = await fixture()
     const created = await post(server, '/api/conversations')
     const first = await attach(server)
-    const second = await attach(server, `?conversation=${created.data.id as number}`)
+    const second = await attach(server, { conversation: created.data.id as number })
     expect(
       await post(server, '/api/ui', { set: { 'shell.panel': 'tasks', 'app.count': 2 } }),
     ).toEqual({ status: 200, data: { ok: true, rev: 1 } })
@@ -634,9 +634,12 @@ export default host => { host.resource('cleanup.process',()=>{
   it('streams a SQLite tool turn as ops that exactly replicate the committed view', async () => {
     const { server } = await fixture()
     const stream = await attach(server)
-    expect(stream.events.slice(0, 3).map((event) => event.name)).toEqual([
+    expect(stream.events.slice(0, 6).map((event) => event.name)).toEqual([
+      'stream',
       'system',
       'conversations',
+      'ui',
+      'tasks',
       'view',
     ])
     expect(await (await fetch(server.url)).text()).toContain('Ultimate server is running')
@@ -818,7 +821,7 @@ export default host => { host.resource('cleanup.process',()=>{
       cwd: server.host.projectRoot,
     })
     expect(created.status).toBe(201)
-    const stream = await attach(server, '?conversation=' + created.data.id)
+    const stream = await attach(server, { conversation: created.data.id as number })
     const summaries = stream.events.find((event) => event.name === 'conversations')!.data
     expect(summaries).toEqual(
       expect.arrayContaining([
@@ -879,7 +882,7 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
   })
   it('streams extension document snapshots and deltas, with a notice for unknown kinds', async () => {
     const { server } = await fixture(true)
-    const stream = await attach(server, '?docs=test.counter,missing')
+    const stream = await attach(server, { docs: ['test.counter', 'missing'] })
     await until(() => stream.events.some((event) => event.name === 'doc'))
     expect(stream.events.find((event) => event.name === 'doc')!.data).toEqual({
       kind: 'test.counter',
@@ -901,6 +904,45 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     expect(value).toEqual({ count: 1 })
     await stream.close()
   })
+  it('carries subscriptions opened and closed on one stream, each event tagged with its id', async () => {
+    const { server } = await fixture(true)
+    const stream = await attach(server, { docs: ['test.counter'] })
+    const { id } = stream.events.find((event) => event.name === 'stream')!.data as { id: string }
+    const call = (method: string, sub: number, data?: unknown) =>
+      fetch(`${server.url}/api/events/${id}/${sub}`, {
+        method,
+        headers: { Origin: server.url },
+        ...(data !== undefined && { body: JSON.stringify(data) }),
+      }).then((response) => response.status)
+    const docs = { docs: ['test.counter'], view: false }
+    expect(await call('POST', 5, docs)).toBe(200)
+    expect(await call('POST', 6, docs)).toBe(200)
+    expect(await call('DELETE', 6)).toBe(200)
+    // A close that overtakes its open wins.
+    expect(await call('DELETE', 7)).toBe(200)
+    expect(await call('POST', 7, docs)).toBe(200)
+    expect(await call('POST', 8, { conversation: 999 })).toBe(404)
+    expect(
+      (await fetch(`${server.url}/api/events/${crypto.randomUUID()}/1`, { method: 'DELETE' }))
+        .status,
+    ).toBe(410)
+    const of = (name: string) =>
+      stream.events.filter((event) => event.name === name).map((event) => event.sub)
+    await until(() => of('doc').length === 3)
+    expect(of('doc')).toEqual([0, 5, 6])
+    expect(of('view')).toEqual([0])
+    server.host.faux!.setResponses([
+      fauxAssistantMessage([fauxToolCall('increment', {})], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('Incremented'),
+    ])
+    await post(server, '/api/conversations/1/submit', { text: 'increment' })
+    await server.harness.waitForIdle(context)
+    await until(() => of('docOps').length === 2)
+    expect(of('docOps')).toEqual([0, 5])
+    // Closing the stream ends it with all its subscriptions.
+    await stream.close()
+    await until(async () => (await call('DELETE', 5)) === 410)
+  })
   it('runs logins in the models extension: prompt, answer, cancel, no credential leak, dead flows cancelled', async () => {
     const { server, options } = await fixture(false, {
       models: `export { default, actions, docs, userActions } from ${JSON.stringify(resolvePath('extensions/models/server.ts'))}`,
@@ -919,7 +961,7 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
         return { type: 'api_key', key: answered }
       },
     )
-    const stream = await attach(server, '?docs=models.login')
+    const stream = await attach(server, { docs: ['models.login'] })
     const action = (name: string, args: unknown, conversationId = 1) =>
       post(server, `/api/extensions/models/actions/${name}`, { args, conversationId })
     const flows = async (id = 1) =>
