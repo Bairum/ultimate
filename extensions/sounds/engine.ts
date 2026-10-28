@@ -189,7 +189,8 @@ export function band(variant: Variant): Band {
       if (part.bpm(next) === bpm) return
       bpm = part.bpm(next)
       transport.bpm.linearRampTo(bpm, 2)
-      const events = (transport.bpm as unknown as { _param: { _events: TempoEvents } })._param._events
+      const events = (transport.bpm as unknown as { _param: { _events: TempoEvents } })._param
+        ._events
       const settled = events.get(Tone.now() - 1)
       if (settled) events.cancelBefore(settled.time - 1e-6)
     },
