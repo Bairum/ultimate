@@ -1,4 +1,3 @@
-import { BrainIcon, ScrollTextIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -362,20 +361,15 @@ const kinds = [
 
 /**
  * A root's project memory as one row: what every new branch starts from, counted by kind, with the brief's size; a
- * click opens the Memory panel. Its tally, the browsable history behind it, is a quiet History link under it, whose
- * footer compacts it. A root without memories yet shows its context's size, and the panel says it has none yet.
+ * click opens the Memory panel. Its tally, the browsable history behind it, opens from the project header above it.
+ * A root without memories yet shows its context's size, and the panel says it has none yet.
  */
 export function MemoryRow({
   conversation,
-  shown,
   working,
-  variant = 'a',
 }: {
   conversation: ConversationSummary
-  shown: boolean
   working?: 'self' | 'subagents'
-  /** Preview only: which project-block layout to render. */
-  variant?: 'a' | 'b' | 'c'
 }) {
   const actions = useUltimate()
   const id = conversation.id
@@ -387,54 +381,6 @@ export function MemoryRow({
     )
     .filter(([count]) => count > 0)
   const tokens = tally?.since === undefined ? undefined : (tally.briefTokens ?? tally.tokens)
-  const openContext = () => {
-    actions.showSurface('agent')
-    actions.switchConversation(id)
-  }
-  const countLine = counts.length
-    ? counts
-        .map(([count, plural]) => `${count} ${count === 1 ? plural.slice(0, -1) : plural}`)
-        .join(' · ')
-    : 'none yet'
-  if (variant === 'c')
-    return (
-      <div
-        className="flex h-7 min-w-0 items-center gap-1 px-2.5 font-mono text-[10.5px] text-muted-foreground"
-        data-conversation={id}
-        data-root-row={id}
-      >
-        <button
-          aria-label={`Project memory of #${id}`}
-          className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-0.5 outline-none hover:bg-sidebar-accent/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-          onClick={() => actions.openPanel(MEMORY_PANEL)}
-          title={`${countLine} · what every new branch starts from · open Memory`}
-          type="button"
-        >
-          <BrainIcon
-            className={cn('size-3 shrink-0', working === 'self' && 'animate-pulse text-brand')}
-          />
-          <span>Memory</span>
-          {tokens !== undefined && (
-            <span className="text-muted-foreground/60">{formatTokens(tokens)}</span>
-          )}
-        </button>
-        <span className="text-muted-foreground/40">·</span>
-        <button
-          aria-current={shown ? 'true' : undefined}
-          className={cn(
-            'flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-0.5 outline-none hover:bg-sidebar-accent/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
-            shown && 'bg-sidebar-accent text-foreground',
-          )}
-          data-root-context={id}
-          onClick={openContext}
-          title="Every branch, abstract and landing, with breadcrumbs"
-          type="button"
-        >
-          <ScrollTextIcon className="size-3 shrink-0" />
-          <span>History</span>
-        </button>
-      </div>
-    )
   return (
     <div data-conversation={id} data-root-row={id}>
       <button
@@ -460,24 +406,15 @@ export function MemoryRow({
             )}
           </span>
           <span className="truncate font-mono text-[10px] leading-4 text-muted-foreground">
-            {countLine}
+            {counts.length
+              ? counts
+                  .map(
+                    ([count, plural]) => `${count} ${count === 1 ? plural.slice(0, -1) : plural}`,
+                  )
+                  .join(' · ')
+              : 'none yet'}
           </span>
         </span>
-      </button>
-      <button
-        aria-current={shown ? 'true' : undefined}
-        className={cn(
-          'mx-2 flex h-6 w-[calc(100%-1rem)] min-w-0 cursor-pointer items-center gap-1.5 rounded-md pr-2 pl-[42px] text-left font-mono text-[10px] text-muted-foreground/70 outline-none hover:bg-sidebar-accent/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset',
-          shown && 'bg-sidebar-accent text-foreground',
-        )}
-        data-root-context={id}
-        onClick={openContext}
-        title="Every branch, abstract and landing, with breadcrumbs"
-        type="button"
-      >
-        <ScrollTextIcon className="size-3 shrink-0" />
-        <span className="truncate">History</span>
-        <span className="shrink-0 text-muted-foreground/50">#{id}</span>
       </button>
     </div>
   )

@@ -3,6 +3,7 @@ import {
   BrainIcon,
   ChevronRightIcon,
   CircleCheckIcon,
+  CodeIcon,
   GitBranchIcon,
   GitForkIcon,
   ScrollTextIcon,
@@ -41,7 +42,7 @@ import type { EntryRecord, ToolCallView } from '@/sdk'
 import { store } from '@/sdk/client'
 import { ConversationRef, Unsummarized } from '../conversations/ui.tsx'
 import { talkToUltimate } from '../subagents/ui.tsx'
-import { Open } from '../workspaces/ui.tsx'
+import { Open, useGithubRepo } from '../workspaces/ui.tsx'
 import { ForgetAction, MemoryDoc } from './refs.ts'
 import type { MemoryItem } from './refs.ts'
 import { column, MEMORY_FOCUS, MEMORY_PANEL, MemoryHeader, useRoots } from './ui.tsx'
@@ -401,6 +402,7 @@ function RootComposer({ core, dock }: { core: ReactNode; dock?: boolean }) {
 
 function HistoryBanner({ id, dock }: { id: number; dock?: boolean }) {
   const actions = useUltimate()
+  const github = useGithubRepo()
   return (
     <div className={cn(column(dock), 'pb-3')}>
       <div
@@ -408,7 +410,7 @@ function HistoryBanner({ id, dock }: { id: number; dock?: boolean }) {
         data-lineage-history={id}
       >
         <ScrollTextIcon className="size-4 shrink-0 text-brand" />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-56 flex-1">
           <p className="text-[13.5px] font-medium text-foreground">
             You're reading the project's history
           </p>
@@ -417,15 +419,30 @@ function HistoryBanner({ id, dock }: { id: number; dock?: boolean }) {
             @ultimate.
           </p>
         </div>
-        <Button className="ml-auto" onClick={() => void talkToUltimate(actions)}>
-          <ArrowLeftIcon />
-          Back to @ultimate
-          <KbdGroup className="hidden sm:inline-flex pointer-coarse:hidden">
-            {formatKeys('mod+0')[0].map((key) => (
-              <Kbd key={key}>{key}</Kbd>
-            ))}
-          </KbdGroup>
-        </Button>
+        <div className="ml-auto flex items-center gap-1">
+          {github && (
+            <Button asChild variant="ghost">
+              <a
+                href={`https://${github}`}
+                rel="noreferrer"
+                target="_blank"
+                title={`The code as it landed, on ${github}`}
+              >
+                <CodeIcon />
+                Open code
+              </a>
+            </Button>
+          )}
+          <Button onClick={() => void talkToUltimate(actions)}>
+            <ArrowLeftIcon />
+            Back to @ultimate
+            <KbdGroup className="hidden sm:inline-flex pointer-coarse:hidden">
+              {formatKeys('mod+0')[0].map((key) => (
+                <Kbd key={key}>{key}</Kbd>
+              ))}
+            </KbdGroup>
+          </Button>
+        </div>
       </div>
     </div>
   )
