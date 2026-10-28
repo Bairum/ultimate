@@ -1,9 +1,14 @@
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { crc32, deflateSync } from 'node:zlib'
 import { createBashTool } from '@earendil-works/pi-durable/tools'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
+import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { afterEach, expect, it, vi } from 'vitest'
 import codingTools, { prepareBash } from '../extensions/coding-tools/server.ts'
 import { context } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
+import { temp } from './helpers.ts'
 
 afterEach(() => vi.unstubAllEnvs())
 
@@ -53,4 +58,42 @@ it('uses a 600-second default tripwire and leaves explicit timeouts unchanged', 
     'the 42 s default limit',
   )
   expect(execute.mock.calls[2][0]).toEqual({ command: 'sleep', timeout: 42 })
+})
+
+it('shrinks an image larger than the model takes and says from what size', async () => {
+  const width = 2400,
+    height = 1200
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type), data])
+    const length = Buffer.alloc(4)
+    length.writeUInt32BE(data.length)
+    const crc = Buffer.alloc(4)
+    crc.writeUInt32BE(crc32(body))
+    return Buffer.concat([length, body, crc])
+  }
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(width, 0)
+  header.writeUInt32BE(height, 4)
+  header.set([8, 0], 8) // 8-bit greyscale
+  const directory = await temp('coding-tools-image-')
+  await writeFile(
+    join(directory, 'wide.png'),
+    Buffer.concat([
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+      chunk('IHDR', header),
+      chunk('IDAT', deflateSync(Buffer.alloc((width + 1) * height))),
+      chunk('IEND', Buffer.alloc(0)),
+    ]),
+  )
+  const read = codingTools({
+    emit: vi.fn<ExtensionHost['emit']>() as ExtensionHost['emit'],
+  }).tools!.find((tool) => tool.name === 'read')!
+  const api = {
+    env: new NodeExecutionEnv({ cwd: directory }),
+    agent: async () => ({ model: undefined }),
+  } as unknown as ToolExecutionApi
+  const result = await read.execute({ path: 'wide.png' }, api, context)
+  expect(result.isError).toBeFalsy()
+  expect(result.output).toMatchObject([{ type: 'image', mimeType: 'image/png' }])
+  expect(result.diagnostics?.[0]?.message).toContain('Resized from 2400x1200 to 2000x1000.')
 })

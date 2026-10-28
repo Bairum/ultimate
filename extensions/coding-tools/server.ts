@@ -23,7 +23,9 @@ import {
   createEditTool,
   createReadTool,
   createWriteTool,
+  type ImageProcessor,
 } from '@earendil-works/pi-durable/tools'
+import { createNodePhotonImages } from '@earendil-works/pi-durable/images/node'
 import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
@@ -36,6 +38,16 @@ function editTool() {
     ...edit,
     description: `${edit.description} After "Could not find", read the region again before retrying; after "Found N occurrences", widen oldText with surrounding lines.`,
   }
+}
+
+/**
+ * Pi's Photon image processor, loaded on the first image: `read` then converts and shrinks images to the model's
+ * limits instead of refusing them. It works in a worker thread that exits when idle.
+ */
+let photon: Promise<ImageProcessor> | undefined
+const images: ImageProcessor = {
+  prepare: async (bytes, mimeType, limits) =>
+    (await (photon ??= createNodePhotonImages())).prepare(bytes, mimeType, limits),
 }
 
 function defaultBashTimeout() {
@@ -356,7 +368,12 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
   return defineExtension({
     name: 'coding-tools',
     // Each tool keeps its own parameters; the list is only read through the base registration.
-    tools: [createReadTool(), createWriteTool(), editTool(), bashTool] as ToolRegistration[],
+    tools: [
+      createReadTool({ images }),
+      createWriteTool(),
+      editTool(),
+      bashTool,
+    ] as ToolRegistration[],
     wraps: [
       wrapTool(createBashTool(), (bash) => ({
         ...bash,
