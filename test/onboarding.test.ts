@@ -3,14 +3,15 @@ import { join, resolve } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
-import { fauxServer, post, temp, removeTemp } from './helpers.ts'
+import { fauxServer, post, temp, removeTemp, sourceCopy } from './helpers.ts'
 import { context } from '../server/harness.ts'
 import { git } from '../lib/git.ts'
 import { projectDecision } from '../server/project-setup.ts'
 import { updateSettings } from '../lib/settings.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
-it.concurrent('gates project resources, remembers choices, and applies onboarding settings actions live', async () => {
+/** Each case owns its project, settings and server, and reopens the same source tree. */
+async function onboardingFixture() {
   const home = await temp('ultimate-onboarding-')
   const project = join(home, 'project')
   const config = join(project, '.ultimate')
@@ -46,26 +47,52 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     }),
   )
   const options = {
-    ultimateRoot: resolve('.'),
+    // Reopens share the same source, as a real server restart does.
+    ultimateRoot: await sourceCopy(home),
     projectRoot: project,
     userHome: home,
     home: join(home, 'state'),
     localSetup: false,
     firstRun: true,
   }
-  let server: Awaited<ReturnType<typeof fauxServer>> | undefined
+  let server = await fauxServer(options)
+  const action = async (name: string, args: unknown = {}) => {
+    const response = await post(server, `/api/extensions/onboarding/actions/${name}`, { args })
+    expect(response.status).toBe(200)
+    return response.data.result
+  }
+  const enabled = (name: string) =>
+    server.extensions.info().find((entry) => entry.name === name)?.enabled
+  const web = async () =>
+    Object.keys((await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders)
+  const tools = async () => (await server.root.agent(context)).tools.map((tool) => tool.name)
+  return {
+    home,
+    project,
+    projectFile,
+    userFile,
+    get server() {
+      return server
+    },
+    action,
+    enabled,
+    web,
+    tools,
+    reopen: async () => {
+      await server.close()
+      server = await fauxServer(options)
+    },
+    close: async () => {
+      await server.close()
+      await removeTemp(home)
+    },
+  }
+}
+
+it.concurrent('gates project resources and remembers the trust choice across reopen', async () => {
+  const f = await onboardingFixture()
+  const { server, home, project, action, enabled, web, tools } = f
   try {
-    server = await fauxServer(options)
-    const action = async (name: string, args: unknown = {}) => {
-      const response = await post(server!, `/api/extensions/onboarding/actions/${name}`, { args })
-      expect(response.status).toBe(200)
-      return response.data.result
-    }
-    const enabled = (name: string) =>
-      server!.extensions.info().find((entry) => entry.name === name)?.enabled
-    const web = async () =>
-      Object.keys((await server!.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders)
-    const tools = async () => (await server!.root.agent(context)).tools.map((tool) => tool.name)
     for (const args of [
       {},
       { extensions: { plan: 'yes' } },
@@ -115,8 +142,11 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
       server.extensions.info().find((entry) => entry.name === 'messages')?.server?.tools,
     ).toContainEqual({ name: 'message', description: expect.stringMatching(/\S/) })
     expect(
-      (await post(server, '/api/extensions/onboarding/actions/details', { args: { name: 'nope' } }))
-        .data.error,
+      (
+        await post(server, '/api/extensions/onboarding/actions/details', {
+          args: { name: 'nope' },
+        })
+      ).data.error,
     ).toContain('Unknown extension "nope"')
     const denied = await post(server, '/api/extensions/onboarding/actions/setExtension', {
       args: { name: 'splash', enabled: false, scope: 'project' },
@@ -130,10 +160,19 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     expect((await web()).some((path) => path.endsWith('/x/web.tsx'))).toBe(true)
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(true)
     expect(projectDecision(project, home)).toBe(true)
-    await server.close()
-    server = await fauxServer(options)
-    expect(server.system.current().project.decision).toBe(true)
+    await f.reopen()
+    expect(f.server.system.current().project.decision).toBe(true)
     expect(enabled('x')).toBe(true)
+  } finally {
+    await f.close()
+  }
+})
+
+it.concurrent('applies onboarding extension settings and first-run choices live', async () => {
+  const f = await onboardingFixture()
+  const { server, projectFile, userFile, action, enabled, web, tools } = f
+  try {
+    await action('decide', { local: true })
     await action('setExtension', { name: 'splash', enabled: false, scope: 'project' })
     expect(enabled('splash')).toBe(false)
     expect((await web()).some((path) => path.endsWith('/splash/web.tsx'))).toBe(false)
@@ -208,14 +247,12 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     expect(await action('status')).toMatchObject({ firstRun: true, off: false })
     await action('firstRunDone')
     expect((await action('status')).firstRun).toBe(false)
-    await server.close()
-    server = await fauxServer(options)
-    expect(server.system.current().project.decision).toBe(false)
+    await f.reopen()
+    expect(f.server.system.current().project.decision).toBe(false)
     expect(enabled('x')).toBe(false)
     expect((await action('status')).firstRun).toBe(false)
   } finally {
-    await server?.close()
-    await removeTemp(home)
+    await f.close()
   }
 })
 
