@@ -380,7 +380,13 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
           autoFocus={!touchKeyboard()}
           readOnly={loading || sending}
           onPaste={(event) => void paste(event)}
-          id={scoped === undefined ? 'composer-input' : `composer-input-${scoped}`}
+          id={
+            thread !== undefined
+              ? `composer-input-thread-${thread}`
+              : scoped === undefined
+                ? 'composer-input'
+                : `composer-input-${scoped}`
+          }
           data-conversation={id}
           onChange={(event) => update(event.target.value)}
           onKeyDown={onKeyDown}
