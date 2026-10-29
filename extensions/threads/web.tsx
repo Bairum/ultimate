@@ -1,10 +1,10 @@
-import type { EntryRecord } from '@earendil-works/pi-durable'
 import { cn } from 'cn'
 import { GitBranchIcon, ListTreeIcon, RotateCcwIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { MessageResponse } from '@/components/ai/message'
 import {
   defineWebExtension,
+  provide,
   useAction,
   useConversation,
   useConversations,
@@ -19,6 +19,7 @@ import { AbstractAction } from '../lineage/ui.tsx'
 import { MessagesDoc } from '../messages/ui.tsx'
 import type { Message } from '../messages/refs.ts'
 import { StandingDoc } from '../subagents/ui.tsx'
+import { LandingAfter } from '../workspaces/ui.tsx'
 import { threadsOf } from './threads.tsx'
 import type { Thread } from './threads.tsx'
 
@@ -198,57 +199,65 @@ function ThreadBar({ core }: { core: ReactNode; dock?: boolean }) {
  * Under a landing in @ultimate's conversation: the feature's catch-up, its abstract frozen at landing, so the reader
  * gets where it ended without opening the branch; and the way back to the whole conversation when it is focused.
  */
-function CatchUp({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
+function useCatchUp({ from: branch }: { from: number; card: number }): ReactNode {
   const id = useConversation((conversation) => conversation.id)
   const standing = useDocOf(1, StandingDoc)
-  const outcome = (entry.data as { outcome?: { outcome?: string; conversationId?: number } })
-    ?.outcome
-  const branch = outcome?.outcome === 'landed' ? outcome.conversationId : undefined
-  const show = isUltimate(id, standing) && branch !== undefined && branch !== id
+  const show = isUltimate(id, standing) && branch !== id
   const abstract = useAction(
     AbstractAction,
-    { id: branch ?? 0 },
+    { id: branch },
+    // The landing card says what landed either way; the catch-up only adds to it.
     { enabled: show, onError: () => undefined },
   )
   const [focus, setFocus] = useThreadFocus(id)
-  if (!show) return core
   const text = abstract.data?.text
+  if (!show || !text) return null
   return (
-    <div className="flex flex-col gap-1.5">
-      {core}
-      {text && (
-        <section
-          className="rounded-md border border-border/60 bg-muted/10 px-3 py-2"
-          data-thread-catchup={branch}
-        >
-          <header className="mb-1 flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
-            <GitBranchIcon className="size-3 text-success" />
-            catch-up
-            {abstract.data?.feature && <FeatureTag feature={abstract.data.feature} />}
-            <span className="min-w-0 truncate">{abstract.data?.title}</span>
-            {focus === branch && (
-              <button
-                className="ml-auto flex shrink-0 cursor-pointer items-center gap-1 hover:text-foreground"
-                onClick={() => setFocus(null)}
-                type="button"
-              >
-                <RotateCcwIcon className="size-3" />
-                back to all
-              </button>
-            )}
-          </header>
-          <div className="text-[13px] leading-relaxed text-foreground/85 [&_li]:my-0 [&_ul]:my-1">
-            <MessageResponse>{text}</MessageResponse>
-          </div>
-        </section>
-      )}
-    </div>
+    <section
+      className="mt-1.5 rounded-md border border-border/60 bg-muted/10 px-3 py-2"
+      data-thread-catchup={branch}
+    >
+      <header className="mb-1 flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+        <GitBranchIcon className="size-3 text-success" />
+        catch-up
+        {abstract.data?.feature && <FeatureTag feature={abstract.data.feature} />}
+        <span className="min-w-0 truncate">{abstract.data?.title}</span>
+        {focus === branch && (
+          <button
+            className="ml-auto flex shrink-0 cursor-pointer items-center gap-1 hover:text-foreground"
+            onClick={() => setFocus(null)}
+            type="button"
+          >
+            <RotateCcwIcon className="size-3" />
+            back to all
+          </button>
+        )}
+      </header>
+      {/* An abstract is a few `Label: text` lines (Ask, Diverged, State, Areas, Open): one row each. */}
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[13px] leading-relaxed">
+        {text
+          .split('\n')
+          .filter((line) => line.trim())
+          .map((line, index) => {
+            const [, label, rest] = /^-?\s*([A-Z][\w ]{0,15}):\s*(.*)$/.exec(line) ?? []
+            return (
+              // oxlint-disable-next-line react/no-array-index-key -- the lines of one stored text keep their order.
+              <div className="contents" key={index}>
+                <dt className="pt-px font-mono text-[11px] text-muted-foreground">{label ?? ''}</dt>
+                <dd className="min-w-0 text-foreground/85 [&_p]:my-0">
+                  <MessageResponse>{rest ?? line}</MessageResponse>
+                </dd>
+              </div>
+            )
+          })}
+      </dl>
+    </section>
   )
 }
 
 export default defineWebExtension({
   composer: ThreadBar,
-  entries: { 'workspaces.lander-report': CatchUp },
+  provides: [provide(LandingAfter, useCatchUp)],
   compact: {
     when: (conversation, docs) => isUltimate(conversation.id, docs[StandingDoc.kind]),
     docs: ['board', StandingDoc.kind],
