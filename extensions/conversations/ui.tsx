@@ -22,7 +22,13 @@ export const ConversationTask = definePoint<
   { chip: ReactNode; title: string } | undefined
 >('conversations.task')
 
-export { ConversationRef, FeatureTag, useOverview, useStandingName } from './feature.tsx'
+export {
+  ConversationRef,
+  FeatureTag,
+  featureHue,
+  useOverview,
+  useStandingName,
+} from './feature.tsx'
 export { AgentMark, agentTitle } from './marks.tsx'
 export type { Presence } from './marks.tsx'
 export { hiddenConversationIds } from './visible.tsx'

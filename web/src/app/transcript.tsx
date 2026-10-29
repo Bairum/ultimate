@@ -48,6 +48,8 @@ import {
   useNow,
   useStore,
   useSystem,
+  useThreadFocus,
+  useThreadLanes,
   useUltimate,
 } from '../sdk/hooks.ts'
 import { entryRenderers, messageItems, toolLine } from '../sdk/registry.ts'
@@ -64,6 +66,8 @@ import {
   groupBetween,
   groupQuiet,
   isOpenIn,
+  laneAt,
+  laneColumns,
   openIn,
   partKey,
   partsOf,
@@ -523,8 +527,22 @@ function TranscriptEntries() {
     : visible.map((entry) => ({ entry }))
   // Background rows, such as traffic between agents, fold into one line per stretch.
   const background = useCompactQuiet()
+  // The threads each entry belongs to; with one focused, its rows show whole and other threads recede.
+  const bucket = background?.threads
+  const threads = useMemo(
+    () => (bucket && id !== undefined ? bucket.of(visible, id) : undefined),
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- `visible` is derived from `entries` each render.
+    [bucket, entries, id],
+  )
+  const [focus] = useThreadFocus(id)
+  const focused = threads && focus !== null ? focus : undefined
+  const inFocus = (part: CompactPart) => !!threads?.get(part.entry.id)?.includes(focused!)
   const quiet = background
-    ? groupQuiet(rows, (part) => background.quiet({ entry: part.entry, calls: shownCalls(part) }))
+    ? groupQuiet(rows, (part) =>
+        focused !== undefined && inFocus(part)
+          ? false
+          : background.quiet({ entry: part.entry, calls: shownCalls(part) }),
+      )
     : rows
   // Background groups the reader or a reveal opened, by the keys of all their parts, as folded runs are.
   const [shownQuiet, setShownQuiet] = useState<ReadonlySet<string>>(new Set())
@@ -533,14 +551,52 @@ function TranscriptEntries() {
   const grouped = groupAside(quiet, aside)
   // What lies between two rows of the thread the reader follows folds into one line that opens it.
   const thread = background?.thread
-  const threaded = thread
-    ? groupBetween(
-        grouped,
-        (row) =>
-          !('quiet' in row || 'work' in row || 'aside' in row) &&
-          thread({ entry: row.entry, calls: shownCalls(row) }),
-      )
-    : grouped.map((row) => row)
+  // Focused, the thread's rows and its runs of work are what the reader follows, with the rows of no thread that are the
+  // conversation itself (the user's own prompts and the answers to them); other threads recede between them.
+  const followed = (row: (typeof grouped)[number]) => {
+    if ('quiet' in row || 'aside' in row) return false
+    if (focused !== undefined && partsOf(row).every(inFocus)) return true
+    if ('work' in row) return false
+    if (focused !== undefined && threads?.get(row.entry.id)?.length) return false
+    return !!thread?.({ entry: row.entry, calls: shownCalls(row) })
+  }
+  const threaded = thread ? groupBetween(grouped, followed) : grouped.map((row) => row)
+  const [lanesOn] = useThreadLanes()
+  const lanes = useMemo(
+    () => (lanesOn && threads && bucket?.lane ? laneColumns(threads) : undefined),
+    [lanesOn, threads, bucket],
+  )
+  /**
+   * The lanes beside a top-level row, one 12 px column per thread, drawn by the facet that buckets threads; every row
+   * gets them while lanes are on, so the rows stay aligned.
+   */
+  const laneOf = (parts: readonly CompactPart[]) => {
+    if (!lanes || !bucket?.lane || !parts.length) return undefined
+    const Lane = bucket.lane
+    return (
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute -top-1.5 -bottom-1.5 left-0 flex"
+        data-lane
+      >
+        {laneAt(lanes, parts, threads!).map((lane, index) => (
+          // oxlint-disable-next-line react/no-array-index-key -- a lane's column is its position.
+          <div className="relative w-3 shrink-0" key={index}>
+            {lane && (
+              <ExtensionBoundary
+                extension={bucket.extension}
+                variant="inline"
+                version={bucket.version}
+              >
+                <Lane {...lane} />
+              </ExtensionBoundary>
+            )}
+          </div>
+        ))}
+      </div>
+    )
+  }
+  const lanePad = lanes ? { paddingLeft: lanes.width * 12 + 8 } : undefined
   const [shownBetween, setShownBetween] = useState(0)
   const [shownAside, setShownAside] = useState<ReadonlySet<number>>(new Set())
   // Folded runs the reader or a reveal opened, by the keys of all their parts: a run that gains earlier entries from a
@@ -623,16 +679,23 @@ function TranscriptEntries() {
       shownBetween,
     ],
   )
-  const render = (row: CompactPart | WorkRun | QuietGroup, last: boolean, faded = ''): ReactNode =>
+  const render = (
+    row: CompactPart | WorkRun | QuietGroup,
+    last: boolean,
+    faded = '',
+    lane?: ReactNode,
+  ): ReactNode =>
     'quiet' in row ? (
       // Found like a folded run: by its first entry, or its last when a page reaches into it.
       <div
-        className={faded}
+        className={cn(faded, lane && 'relative')}
+        style={lane ? lanePad : undefined}
         data-conversation-id={id}
         data-entry-id={partsOf(row)[0].entry.id}
         data-run-last={partsOf(row).at(-1)!.entry.id}
         key={`quiet:${quietKey(row)}`}
       >
+        {lane}
         <QuietRow
           busy={busy && last}
           group={row}
@@ -645,12 +708,14 @@ function TranscriptEntries() {
       </div>
     ) : 'work' in row ? (
       <div
-        className={cn('empty:hidden', faded)}
+        className={cn('empty:hidden', faded, lane && 'relative')}
+        style={lane ? lanePad : undefined}
         data-conversation-id={id}
         data-entry-id={row.work[0].entry.id}
         data-run-last={row.work.at(-1)!.entry.id}
         key={partKey(row.work[0])}
       >
+        {lane}
         <WorkRow
           busy={busy}
           onOpenChange={(value) => open(row, value)}
@@ -663,11 +728,13 @@ function TranscriptEntries() {
       </div>
     ) : (
       <div
-        className={cn('empty:hidden', faded)}
+        className={cn('empty:hidden', faded, lane && 'relative')}
+        style={lane ? lanePad : undefined}
         data-conversation-id={id}
         data-entry-id={row.entry.id}
         key={partKey(row)}
       >
+        {lane}
         <EntryView
           blocks={row.blocks}
           busy={busy}
@@ -707,7 +774,7 @@ function TranscriptEntries() {
       {!loading && visible.length > 0 && cursor === undefined && <Slot name="transcript.start" />}
       {threaded.map((item, index) => {
         const last = index === threaded.length - 1
-        if (!('between' in item)) return renderItem(item, last)
+        if (!('between' in item)) return renderItem(item, last, '', laneOf(itemParts(item)))
         const key = `between:${partKey(itemParts(item.between[0])[0])}`
         // The stretch the agent works in now stays in view while it works.
         const shown = (busy && last) || readBetween(id, item)
@@ -716,20 +783,36 @@ function TranscriptEntries() {
           'quiet' in row ? row.quiet : [row],
         )
         const faded = between.map((inner, inside) =>
-          renderItem(inner, last && inside === between.length - 1, recedeRow),
+          renderItem(
+            inner,
+            last && inside === between.length - 1,
+            recedeRow,
+            laneOf(itemParts(inner)),
+          ),
+        )
+        const lane = laneOf(item.between.flatMap(itemParts))
+        const line = (
+          <BetweenLine
+            group={item}
+            onOpen={() => {
+              writeBetween(id, item, !shown)
+              setShownBetween((count) => count + 1)
+            }}
+            open={shown}
+            summary={background?.summary}
+            working={busy && last}
+          />
         )
         return (
           <Fragment key={key}>
-            <BetweenLine
-              group={item}
-              onOpen={() => {
-                writeBetween(id, item, !shown)
-                setShownBetween((count) => count + 1)
-              }}
-              open={shown}
-              summary={background?.summary}
-              working={busy && last}
-            />
+            {lane ? (
+              <div className="relative" style={lanePad}>
+                {lane}
+                {line}
+              </div>
+            ) : (
+              line
+            )}
             {shown && faded}
             {shown && index < threaded.length - 1 && <BetweenRule />}
           </Fragment>
@@ -749,8 +832,9 @@ function TranscriptEntries() {
     item: CompactPart | WorkRun | QuietGroup | AsideGroup,
     last: boolean,
     faded = '',
+    lane?: ReactNode,
   ): ReactNode {
-    if (!('aside' in item)) return render(item, last, faded)
+    if (!('aside' in item)) return render(item, last, faded, lane)
     const key = asideKey(item)
     const shown = shownAside.has(key)
     return (

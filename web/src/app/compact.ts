@@ -1,5 +1,6 @@
 import type { AssistantMessage, ToolCall } from '@earendil-works/pi-ai'
 import type { EntryRecord } from '@earendil-works/pi-durable'
+import type { LaneProps } from '../sdk/types.ts'
 
 /** A transcript row: an entry, or only some content blocks of an assistant message. */
 export interface CompactPart {
@@ -293,6 +294,57 @@ export function groupBetween<Row extends object>(
   }
   if (stretch.length) grouped.push({ between: stretch })
   return grouped
+}
+
+/** Each thread's span over the entries, and the column its lane takes: a column frees up once its thread ended. */
+export type Lanes = {
+  span: ReadonlyMap<number, [number, number]>
+  column: ReadonlyMap<number, number>
+  width: number
+}
+
+/** Lay out the lanes of `threads` (the threads of each entry, by entry id) side by side, oldest thread leftmost. */
+export function laneColumns(threads: ReadonlyMap<number, readonly number[]>): Lanes {
+  const span = new Map<number, [number, number]>()
+  for (const [entry, ids] of threads)
+    for (const id of ids) {
+      const range = span.get(id)
+      if (range) {
+        range[0] = Math.min(range[0], entry)
+        range[1] = Math.max(range[1], entry)
+      } else span.set(id, [entry, entry])
+    }
+  const column = new Map<number, number>()
+  const ends: number[] = []
+  for (const [id, [first, last]] of [...span].toSorted((a, b) => a[1][0] - b[1][0])) {
+    let free = ends.findIndex((end) => end < first)
+    if (free < 0) free = ends.length
+    ends[free] = last
+    column.set(id, free)
+  }
+  return { span, column, width: ends.length }
+}
+
+/** The lane beside a row of `parts`: each column's thread while one runs past the row, null where none does. */
+export function laneAt(
+  lanes: Lanes,
+  parts: readonly CompactPart[],
+  threads: ReadonlyMap<number, readonly number[]>,
+) {
+  const first = parts[0].entry.id
+  const last = parts.at(-1)!.entry.id
+  const here = new Set(parts.flatMap((part) => threads.get(part.entry.id) ?? []))
+  const columns: (LaneProps | null)[] = Array.from({ length: lanes.width }, () => null)
+  for (const [id, [start, end]] of lanes.span) {
+    if (end < first || start > last) continue
+    columns[lanes.column.get(id)!] = {
+      thread: id,
+      here: here.has(id),
+      up: start < first,
+      down: end > last,
+    }
+  }
+  return columns
 }
 
 /** The folded run where `entry` first shows, if it starts in one: revealing the entry opens it. */

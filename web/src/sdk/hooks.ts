@@ -323,10 +323,23 @@ export function useCompactQuiet() {
         quiet: (row: CompactRow) => compact.quiet(row, docs),
         summary: compact.summary,
         thread: compact.thread && ((row: CompactRow) => compact.thread!(row, docs)),
+        threads: compact.threads && {
+          ...compact.threads,
+          of: (entries: readonly EntryRecord[], conversation: number) =>
+            compact.threads!.of(entries, docs, conversation),
+        },
       },
     [compact, docs],
   )
 }
+/**
+ * The thread conversation `id`'s transcript is focused on (a `threads` contribution's id, such as a branch), or null for
+ * the whole conversation; durable UI state, so every tab and a reload keep it.
+ */
+export const useThreadFocus = (id: number | undefined) =>
+  useUiState<number | null>(`shell.thread.${id ?? 0}`, null)
+/** Whether the transcript draws its threads' lanes beside the rows. */
+export const useThreadLanes = () => useUiState<boolean>('shell.threadLanes', false)
 function useCompactConfig() {
   const records = useExtensions()
   const id = useConversation((conversation) => conversation.id)

@@ -210,6 +210,27 @@ export interface CompactContribution {
    * them recedes into one faded stretch.
    */
   thread?: (row: CompactRow, docs: CompactDocs) => boolean
+  /**
+   * The threads each loaded entry belongs to, by entry id, such as the branch each of @ultimate's entries is about. With
+   * one focused (`useThreadFocus`), the transcript reads as that thread and everything else recedes between its rows.
+   */
+  threads?: (
+    entries: readonly EntryRecord[],
+    docs: CompactDocs,
+    conversation: number,
+  ) => ReadonlyMap<number, readonly number[]>
+  /**
+   * One thread's lane beside a row while lanes are on (`useThreadLanes`): the transcript gives each thread running past
+   * the row a full-height column of its own, 12 px wide, and draws this in it.
+   */
+  lane?: ComponentType<LaneProps>
+}
+/** One thread's lane beside a row: whether the row is in it, and whether the thread runs on above and below. */
+export interface LaneProps {
+  thread: number
+  here: boolean
+  up: boolean
+  down: boolean
 }
 /** A compact transcript row: an entry, and the visible tool calls it shows when it shows only some of its blocks. */
 export interface CompactRow {

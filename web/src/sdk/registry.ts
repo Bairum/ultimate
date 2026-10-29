@@ -5,6 +5,7 @@ import { errorMessage } from './format.ts'
 import type {
   CodeBlockRenderer,
   CompactCallTest,
+  CompactContribution,
   CompactDocs,
   CompactQuietTest,
   CompactRow,
@@ -16,6 +17,7 @@ import type {
   EntryRenderer,
   InboxRenderer,
   IntroContribution,
+  LaneProps,
   LinkRenderer,
   PanelContribution,
   SlotName,
@@ -146,8 +148,10 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
       quiet: optional(isFunction),
       summary: optional(isComponent),
       thread: optional(isFunction),
+      threads: optional(isFunction),
+      lane: optional(isComponent),
     }),
-    'a { when, tools?, docs?, quiet?, summary?, thread? } object',
+    'a { when, tools?, docs?, quiet?, summary?, thread?, threads?, lane? } object',
   ],
   intro: [
     fields({
@@ -603,6 +607,12 @@ export function compactTools(
       keeps: CompactCallTest
       quiet: CompactQuietTest
       thread?: (row: CompactRow, docs: CompactDocs) => boolean
+      threads?: {
+        extension: string
+        version: number
+        of: NonNullable<CompactContribution['threads']>
+        lane?: ComponentType<LaneProps>
+      }
       summary?: {
         extension: string
         version: number
@@ -667,5 +677,19 @@ export function compactTools(
     summary: matching.flatMap(({ name, version, compact }) =>
       compact.summary ? [{ extension: name, version, component: compact.summary }] : [],
     )[0],
+    // The first facet that buckets entries into threads draws their lanes too.
+    threads: matching.flatMap(({ name, version, compact }) => {
+      const { threads, lane } = compact
+      if (!threads) return []
+      const of: NonNullable<CompactContribution['threads']> = (entries, docs, shown) => {
+        try {
+          return threads(entries, docs, shown)
+        } catch (error) {
+          report(name, error)
+          return new Map()
+        }
+      }
+      return [{ extension: name, version, of, ...(lane ? { lane } : {}) }]
+    })[0],
   }
 }
