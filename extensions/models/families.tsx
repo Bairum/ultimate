@@ -57,7 +57,24 @@ export function useFamilies() {
 /** The model a family runs: its own, or Pi's default for a default family without one. */
 export const runsOn = (family: FamilyView) => family.model ?? family.follows
 
-const modelIdOf = (ref: string) => ref.slice(ref.indexOf('/') + 1)
+/** The thinking level a family runs at: its own, or Pi's default one for a default family that follows Pi's model. */
+export const thinkingOf = (family: FamilyView) =>
+  family.thinking ?? (family.model ? undefined : family.followsThinking)
+
+/** The family a conversation runs as: only one whose model and thinking level are both the conversation's. */
+export function familyOf(
+  families: FamiliesView | undefined,
+  ref: { provider: string; modelId: string } | undefined,
+  thinking: string | undefined,
+) {
+  if (!ref) return undefined
+  const name = `${ref.provider}/${ref.modelId}`
+  return families?.families.find(
+    (family) => runsOn(family) === name && (thinkingOf(family) ?? thinking) === thinking,
+  )
+}
+
+export const modelIdOf = (ref: string) => ref.slice(ref.indexOf('/') + 1)
 
 /** A family's color dot. */
 export function FamilyDot({ color, className }: { color: string | undefined; className?: string }) {

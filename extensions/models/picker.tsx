@@ -17,8 +17,18 @@ import {
 } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
-import { cn, errorMessage, useDialog, useUltimate } from '@/sdk'
-import { agentsPanel } from './families.tsx'
+import { api, cn, errorMessage, useDialog, useUltimate } from '@/sdk'
+import { familyTitle } from '../../lib/families.ts'
+import {
+  agentsPanel,
+  FamilyDot,
+  familyOf,
+  modelIdOf,
+  runsOn,
+  thinkingOf,
+  useFamilies,
+} from './families.tsx'
+import type { FamilyView } from './refs.ts'
 import {
   authLabel,
   dialogs,
@@ -91,7 +101,8 @@ export function ModelRow({
 export function ModelPicker() {
   const [open, setOpen] = useDialog(dialogs.picker)
   const actions = useUltimate()
-  const { id, ref, models, loading } = useCurrentModel(usePickerTarget())
+  const { id, ref, thinking, models, loading } = useCurrentModel(usePickerTarget())
+  const families = useFamilies()
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string>()
   const providers = useMemo(
@@ -115,6 +126,12 @@ export function ModelPicker() {
       .slice(0, LIMIT)
     return [...Map.groupBy(found, (model) => model.provider)]
   }, [models, query])
+  const current = familyOf(families, ref, thinking)
+  const shownFamilies = (families?.families ?? []).filter((family) => {
+    const haystack = `${family.name} ${runsOn(family) ?? ''} ${thinkingOf(family) ?? ''}`
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+    return runsOn(family) && terms.every((term) => haystack.toLowerCase().includes(term))
+  })
   const total = models?.models.length ?? 0
 
   function choose(model: ModelInfo) {
@@ -133,6 +150,23 @@ export function ModelPicker() {
       () => setOpen(false),
       (failure: unknown) => setError(errorMessage(failure)),
     )
+  }
+
+  /** A family's model and thinking level for this conversation; a model without a login opens its login first. */
+  function chooseFamily(family: FamilyView) {
+    const name = runsOn(family)!
+    const [provider, modelId] = [name.slice(0, name.indexOf('/')), modelIdOf(name)]
+    const model = models?.models.find((m) => m.provider === provider && m.id === modelId)
+    if (loading) return
+    if (model && !model.available) return choose(model)
+    setError(undefined)
+    const level = thinkingOf(family)
+    api
+      .configure({ model: { provider, modelId }, ...(level ? { thinkingLevel: level } : {}) }, id)
+      .then(
+        () => setOpen(false),
+        (failure: unknown) => setError(errorMessage(failure)),
+      )
   }
 
   return (
@@ -170,6 +204,29 @@ export function ModelPicker() {
             <CommandEmpty className="py-6 text-center text-[12px] text-muted-foreground">
               No model matches. Log in to a provider to see its models.
             </CommandEmpty>
+            {shownFamilies.length > 0 && (
+              <CommandGroup heading="Families">
+                {shownFamilies.map((family) => (
+                  <CommandItem
+                    className="gap-2 py-1 font-mono text-[12px]"
+                    key={family.name}
+                    onSelect={() => chooseFamily(family)}
+                    value={`family/${family.name}`}
+                  >
+                    <CheckIcon
+                      className={cn('size-3.5', current === family ? 'text-brand' : 'opacity-0')}
+                    />
+                    <FamilyDot color={family.color} />
+                    <span className="shrink-0 font-sans text-foreground">
+                      {familyTitle(family.name)}
+                    </span>
+                    <span className="ml-auto truncate pl-3 text-[11px] text-muted-foreground">
+                      {[modelIdOf(runsOn(family)!), thinkingOf(family)].filter(Boolean).join(' · ')}
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
             {groups.map(([provider, items]) => (
               <Fragment key={provider}>
                 <CommandGroup
