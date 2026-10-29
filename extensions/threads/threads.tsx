@@ -207,8 +207,22 @@ export function threading(entries: readonly EntryRecord[], { of, threads }: Thre
       answers.find((entry) => entry.id >= thread.first)?.id ?? thread.first,
     ]),
   )
+  // What the user typed in the main stream stays there, in their own words, even when it is about one thread.
+  const typed = new Set<number>(
+    entries
+      .filter((entry) => {
+        if (entry.kind !== 'pi.user') return false
+        const content = entry.model?.[0]?.content
+        const text =
+          typeof content === 'string'
+            ? content
+            : (content?.find((block) => block.type === 'text')?.text ?? '')
+        return !REPLY.test(text)
+      })
+      .map((entry) => entry.id),
+  )
   const hidden = new Set<number>()
   for (const [entry, ids] of of)
-    if (ids.length === 1 && entry > roots.get(ids[0])!) hidden.add(entry)
+    if (ids.length === 1 && entry > roots.get(ids[0])! && !typed.has(entry)) hidden.add(entry)
   return { of, hidden, roots }
 }

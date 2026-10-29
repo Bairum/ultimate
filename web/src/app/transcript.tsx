@@ -586,7 +586,9 @@ function TranscriptEntries() {
         grouped,
         (row) =>
           !('quiet' in row || 'work' in row || 'aside' in row) &&
-          follows({ entry: row.entry, calls: shownCalls(row) }),
+          // A thread's root is what the reader follows of it.
+          (row.entry.kind === 'threads.root' ||
+            follows({ entry: row.entry, calls: shownCalls(row) })),
       )
     : grouped.map((row) => row)
   const [shownBetween, setShownBetween] = useState(0)
