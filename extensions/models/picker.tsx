@@ -18,8 +18,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
 import { cn, errorMessage, useDialog, useUltimate } from '@/sdk'
-import { familyColor, familyTitle } from '../../lib/families.ts'
-import { agentsPanel, FamilyDot, runsOn, useFamilies } from './families.tsx'
+import { agentsPanel } from './families.tsx'
 import {
   authLabel,
   dialogs,
@@ -60,7 +59,6 @@ export function ModelRow({
     >
       <CheckIcon className={cn('size-3.5', current ? 'text-brand' : 'opacity-0')} />
       <span className={cn('shrink-0', current ? 'text-brand' : 'text-foreground')}>{model.id}</span>
-      <Families model={`${model.provider}/${model.id}`} />
       {model.name !== model.id && (
         <span className="min-w-0 truncate font-sans text-[12px] text-muted-foreground/80">
           {model.name}
@@ -87,23 +85,6 @@ export function ModelRow({
       </span>
     </CommandItem>
   )
-}
-
-/** The families that run `model`, each as its colored name. */
-function Families({ model }: { model: string }) {
-  const families = useFamilies()
-  const own = families?.families.filter((family) => runsOn(family) === model) ?? []
-  return own.map((family) => (
-    <span
-      className="flex shrink-0 items-center gap-1 font-sans text-[11px]"
-      key={family.name}
-      style={{ color: familyColor(family.color) }}
-      title={`The ${family.name} family's model${family.thinking ? ` · thinking ${family.thinking}` : ''}`}
-    >
-      <FamilyDot color={family.color} />
-      {familyTitle(family.name)}
-    </span>
-  ))
 }
 
 /** Searchable models of every provider, grouped; picking one configures the conversation that opened it. */

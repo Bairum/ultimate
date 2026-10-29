@@ -35,9 +35,6 @@ import {
 } from '@/sdk'
 import { clock, full, until, words } from './parts.tsx'
 import { DefinitionsAction } from '../subagents/ui.tsx'
-import { modelLabel, useFamilies } from '../models/ui.tsx'
-import type { FamiliesView } from '../models/ui.tsx'
-import { familyTitle } from '../../lib/families.ts'
 import { CreateAction, DescribeAction, EventsAction, UpdateAction } from './refs.ts'
 import type { Automation } from './refs.ts'
 
@@ -327,23 +324,8 @@ function Preview({ schedule }: { schedule: string | undefined }) {
   )
 }
 
-/** "Fast (gpt-6-luna) · low": a definition by its family, a pin or the main agent by its model. */
-const model = (
-  families: FamiliesView | undefined,
-  agent:
-    | (Model & { runs?: { family?: string; model?: Model['model']; thinking?: string } })
-    | undefined,
-  fallback: string,
-) => {
-  const thinking = agent?.runs ? agent.runs.thinking : agent?.thinking
-  const level = thinking ? ` · ${thinking}` : ''
-  if (agent?.runs?.family) {
-    const family = families?.families.find((item) => item.name === agent.runs?.family)
-    const id = family?.model?.slice(family.model.indexOf('/') + 1)
-    return `${familyTitle(agent.runs.family)}${id ? ` (${id})` : ''}${level}`
-  }
-  return agent?.model ? `${modelLabel(families, agent.model, thinking)}${level}` : fallback
-}
+const model = (agent: Model | undefined, fallback: string) =>
+  agent?.model ? `${agent.model.modelId}${agent.thinking ? ` · ${agent.thinking}` : ''}` : fallback
 
 /** Which agent runs the prompt: a copy of the main agent, or a shared agent definition with its own model. */
 function AgentPicker({ value, onChange }: { value: string; onChange: (agent: string) => void }) {
@@ -363,9 +345,8 @@ function AgentPicker({ value, onChange }: { value: string; onChange: (agent: str
   })
   const definitions = data?.definitions ?? []
   const chosen = definitions.find((definition) => definition.name === value)
-  const families = useFamilies()
-  const main = model(families, data?.main, "the main conversation's model")
-  const inherits = `inherits · ${data?.main?.model ? modelLabel(families, data.main.model) : 'main'}`
+  const main = model(data?.main, "the main conversation's model")
+  const inherits = `inherits · ${data?.main?.model?.modelId ?? 'main'}`
   return (
     <div className="flex gap-2">
       <DropdownMenu modal={false}>
@@ -381,7 +362,7 @@ function AgentPicker({ value, onChange }: { value: string; onChange: (agent: str
             <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
               {value
                 ? chosen
-                  ? model(families, chosen, inherits)
+                  ? model(chosen, inherits)
                   : 'not found'
                 : `a copy of main · ${main}`}
             </span>
@@ -416,7 +397,7 @@ function AgentPicker({ value, onChange }: { value: string; onChange: (agent: str
                   <span className="flex items-baseline gap-2">
                     <span className="font-mono">{definition.name}</span>
                     <span className="ml-auto truncate font-mono text-[10.5px] text-muted-foreground">
-                      {model(families, definition, inherits)}
+                      {model(definition, inherits)}
                     </span>
                   </span>
                   <span className="line-clamp-2 text-[11.5px] text-muted-foreground">

@@ -7,7 +7,6 @@ import { ChevronsUpDownIcon, PlusIcon } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Command,
   CommandEmpty,
@@ -45,9 +44,9 @@ const specOf = (family: FamilyView): Spec => ({
 /** Save the families as `view` has them with `change` applied; feature assignments only, agents keep theirs in files. */
 async function save(
   view: FamiliesView,
-  change: Partial<Pick<SaveFamilies, 'families' | 'assign' | 'unpin' | 'switchRunning'>>,
+  change: Partial<Pick<SaveFamilies, 'families' | 'assign' | 'unpin'>>,
 ) {
-  const result = await api.action(SaveFamiliesAction, {
+  await api.action(SaveFamiliesAction, {
     families: Object.fromEntries(view.families.map((family) => [family.name, specOf(family)])),
     assign: Object.fromEntries(
       Object.entries(view.assign).filter(([id]) => Object.hasOwn(FEATURES, id)),
@@ -56,7 +55,6 @@ async function save(
     ...change,
   })
   await refreshFamilies()
-  return result
 }
 
 /** Run feature `id` (Summaries, Previews) on `family`; a pin in the user's settings gives way to it. */
@@ -74,8 +72,8 @@ export function moveFeature(view: FamiliesView, id: string, family: string) {
 }
 
 /**
- * A family's settings in a popover over `children`: model, thinking and color as a draft, saved together.
- * When the change moves open conversations, a ticked box moves those still on the family's old model along.
+ * A family's settings in a popover over `children`: model, thinking and color as a draft, saved together. New
+ * conversations take the change; open ones keep their model.
  */
 export function FamilyPopover({
   family,
@@ -109,7 +107,6 @@ function FamilyForm({
   const models = useModels()
   const initial = specOf(family)
   const [draft, setDraft] = useState(initial)
-  const [switching, setSwitching] = useState(true)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string>()
   const model = draft.model ?? family.follows
@@ -119,13 +116,6 @@ function FamilyForm({
   const inherit = !BUILTIN_FAMILIES[family.name]?.thinking
   const builtin = Object.hasOwn(BUILTIN_FAMILIES, family.name)
   const changed = JSON.stringify(draft) !== JSON.stringify(initial)
-  const runs = draft.model !== initial.model || draft.thinking !== initial.thinking
-  const affected = runs
-    ? view.users.reduce(
-        (sum, user) => (user.family === family.name ? sum + (view.open[user.id] ?? 0) : sum),
-        family.name === DEFAULT_FAMILY ? (view.open[DEFAULT_FAMILY] ?? 0) : 0,
-      )
-    : 0
   const set = (change: Partial<Spec>) => {
     setDraft((previous) => ({ ...previous, ...change }))
     setError(undefined)
@@ -221,12 +211,6 @@ function FamilyForm({
           ))}
         </select>
       </div>
-      {changed && affected > 0 && (
-        <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
-          <Checkbox checked={switching} onCheckedChange={(value) => setSwitching(value === true)} />
-          also switch {affected} open conversation{affected === 1 ? '' : 's'}
-        </label>
-      )}
       {error && <p className="font-mono text-[11px] break-words text-error">{error}</p>}
       <div className="flex items-center gap-1 border-t border-border/70 pt-2.5">
         {!builtin && (
@@ -247,12 +231,8 @@ function FamilyForm({
         <Button
           className="h-7 px-3 text-[12px]"
           disabled={!changed || pending}
-          onClick={() =>
-            void apply({
-              families: families(draft),
-              switchRunning: switching && affected > 0,
-            })
-          }
+          onClick={() => void apply({ families: families(draft) })}
+          title="New conversations take it; open ones keep their model"
           size="sm"
         >
           {pending ? 'Saving…' : 'Save'}

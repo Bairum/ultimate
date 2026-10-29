@@ -18,12 +18,10 @@ import {
 } from '@/sdk'
 import { agentsPanel, FamilyLabel, refreshFamilies, useFamilies } from '../models/ui.tsx'
 import {
-  FamilyField,
   Field,
   InstructionsEditor,
   inputClass,
   ModelField,
-  PIN,
   Segmented,
   ToolsField,
   StandingField,
@@ -407,11 +405,22 @@ function Form({
           <Field
             hint={
               pinning ? (
-                'Runs on this model, whatever its family runs.'
+                <>
+                  Runs on this model, whatever its family runs.{' '}
+                  <button
+                    className="cursor-pointer text-foreground hover:underline"
+                    onClick={() => {
+                      setPinning(false)
+                      set({ model: null, family: draft.family ?? 'default' })
+                    }}
+                    type="button"
+                  >
+                    Use its family
+                  </button>
+                </>
               ) : (
                 <>
-                  Runs on <FamilyLabel family={draft.family ?? 'default'} />. A family's model is
-                  set in the{' '}
+                  Families and who runs on each are set in the{' '}
                   <button
                     className="cursor-pointer text-foreground hover:underline"
                     onClick={() => openPanel(agentsPanel)}
@@ -419,23 +428,25 @@ function Form({
                   >
                     Agents panel
                   </button>
-                  .
+                  .{' '}
+                  <button
+                    className="cursor-pointer text-foreground hover:underline"
+                    onClick={() => setPinning(true)}
+                    type="button"
+                  >
+                    Pin a model
+                  </button>{' '}
+                  instead.
                 </>
               )
             }
             label="Model"
           >
-            <FamilyField
-              onChange={(value) => {
-                if (value === PIN) {
-                  setPinning(true)
-                  return
-                }
-                setPinning(false)
-                set({ family: value, model: null })
-              }}
-              value={pinning ? PIN : (draft.family ?? 'default')}
-            />
+            {!pinning && (
+              <div className={cn(inputClass, 'flex items-center font-mono text-[12px]')}>
+                <FamilyLabel family={draft.family ?? 'default'} />
+              </div>
+            )}
             {pinning && (
               <ModelField
                 inherited={familyModel}

@@ -20,7 +20,6 @@ import {
 import type { AssistantMessage, EntryRecord, Usage } from '@/sdk'
 import { useWorkspaceConversations as useConversations } from '../workspaces/ui.tsx'
 import { ContextDoc } from '../conversations/ui.tsx'
-import { ModelLabel } from '../models/ui.tsx'
 import { lastAssistant, promptTokens as prompt } from '../../lib/context-usage.ts'
 import { usageTotals } from './context.ts'
 import { RatesAction } from './refs.ts'
@@ -323,10 +322,7 @@ function MessageUsage({ entry }: { entry: EntryRecord }) {
           <span>{contextTip}</span>
           <span>Model</span>
           <span>
-            <ModelLabel
-              model={`${message.provider}/${message.model}`}
-              thinking={message.thinkingLevel ?? message.providerThinkingLevel}
-            />
+            {message.provider}/{message.model}
             {(message.thinkingLevel ?? message.providerThinkingLevel) &&
               ` · ${message.thinkingLevel ?? message.providerThinkingLevel}`}
           </span>

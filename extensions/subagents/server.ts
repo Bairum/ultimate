@@ -30,7 +30,6 @@ import type {
   TaskId,
   ToolExecutionApi,
   SubmissionRecord,
-  Tx,
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import type { Source } from '../../server/project.ts'
@@ -572,13 +571,9 @@ export default function subagents(
   }
   // The definition a conversation runs as: children and standing agents record it, branches and the lander carry it
   // as a label. Its pin, read fresh, is what a conversation whose model lost its login switches to first.
-  const definitionOf = async (tx: Tx, id: ConversationId) =>
-    (await tx.doc(Profile, id)).definition ?? (await tx.doc(host.metadata, id)).label
   host.implement(Pin, {
-    definitionOf,
-    concludedIn: (tx) => conversations.concludedIn(tx),
     async pin(tx, id) {
-      const name = await definitionOf(tx, id)
+      const name = (await tx.doc(Profile, id)).definition ?? (await tx.doc(host.metadata, id)).label
       if (!name) return undefined
       const { definitions } = await discoverAgents(
         host.ultimateRoot,

@@ -84,11 +84,6 @@ export type FamiliesView = {
   users: FamilyUser[]
   /** The saved feature assignments; the project's team settings may add more. */
   assign: Record<string, string>
-  /**
-   * Open conversations on their family's model, by user id; `default` counts those of no definition. A switch moves
-   * them when their family's model changes.
-   */
-  open: Record<string, number>
   /** Whose families these are: this project's own, the most recently saved ones, or the built-in ones. */
   from: 'project' | 'recent' | 'builtin'
   /** Settings problems: a `modelFamilies` layer that fails to parse counts as empty. */
@@ -104,14 +99,9 @@ export type SaveFamilies = {
   assign: Record<string, string>
   /** Features whose user-settings pin (`summaryModel`, `instance.model`) a family replaces. */
   unpin: string[]
-  /** Also move conversations that run on a family's old model to its new one. */
-  switchRunning?: boolean
 }
 /**
- * Save this project's families, also as the most recent ones new projects start from → how many conversations
- * switched.
+ * Save this project's families, also as the most recent ones new projects start from. Conversations started after it
+ * use them; open ones keep their model.
  */
-export const SaveFamiliesAction = actionRef<SaveFamilies, { switched: number }>(
-  'models',
-  'saveFamilies',
-)
+export const SaveFamiliesAction = actionRef<SaveFamilies, null>('models', 'saveFamilies')

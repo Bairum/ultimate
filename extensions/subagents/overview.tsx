@@ -279,7 +279,6 @@ function AgentRow({
 }) {
   const thinking = definition.runs?.thinking ?? definition.thinking
   const familyThinking = family?.thinking ?? family?.followsThinking
-  const open = view.open[`agent/${definition.name}`] ?? 0
   return (
     <Row
       description={definition.description}
@@ -297,14 +296,6 @@ function AgentRow({
         <>
           {definition.source !== 'builtin' && <Tag>{definition.source}</Tag>}
           {definition.isolate === 'worktree' && <Tag>worktree</Tag>}
-          {open > 0 && (
-            <span
-              className="shrink-0 text-[10.5px] text-success"
-              title={`${open} open conversation${open === 1 ? '' : 's'}`}
-            >
-              ● {open}
-            </span>
-          )}
         </>
       }
       title={[
