@@ -56,6 +56,9 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
     env: {
       PATH: process.env.PATH,
       TMPDIR: process.env.TMPDIR,
+      PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+      PI_CLAUDE_CODE_COMMAND: process.env.PI_CLAUDE_CODE_COMMAND,
+      TAILSCALE_COMMAND: process.env.TAILSCALE_COMMAND,
       HOME: home,
       ULTIMATE_HOME: home,
       ULTIMATE_PORT: '12345',
