@@ -1,4 +1,11 @@
-import { BrainIcon, CheckIcon, KeyRoundIcon, LogInIcon, TerminalIcon } from 'lucide-react'
+import {
+  BrainIcon,
+  CheckIcon,
+  KeyRoundIcon,
+  LayersIcon,
+  LogInIcon,
+  TerminalIcon,
+} from 'lucide-react'
 import { Fragment, useMemo, useState } from 'react'
 import {
   Command,
@@ -11,6 +18,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
 import { cn, errorMessage, useDialog, useUltimate } from '@/sdk'
+import { agentsPanel } from './families.tsx'
 import {
   authLabel,
   dialogs,
@@ -179,6 +187,20 @@ export function ModelPicker() {
               </Fragment>
             ))}
             <CommandGroup heading="Accounts">
+              <CommandItem
+                className="gap-2 py-1 font-mono text-[12px]"
+                onSelect={() => {
+                  setOpen(false)
+                  actions.openPanel(agentsPanel)
+                }}
+                value="families"
+              >
+                <LayersIcon className="size-3.5" />
+                Model families…
+                <span className="ml-auto text-[11px] text-muted-foreground">
+                  each agent's family and model
+                </span>
+              </CommandItem>
               <CommandItem
                 className="gap-2 py-1 font-mono text-[12px]"
                 onSelect={() => openLogin({ ...actions, conversationId: id })}

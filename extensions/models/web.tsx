@@ -16,6 +16,7 @@ import {
 } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { LoginDialog } from './login.tsx'
+import { agentsPanel } from './families.tsx'
 import { ModelPicker } from './picker.tsx'
 import { nextThinking, openLogin, openPicker, thinkingDialog, useCurrentModel } from './state.tsx'
 import type { ThinkingLevel } from './state.tsx'
@@ -220,6 +221,11 @@ export default defineWebExtension({
   entries: { 'pi.assistant': Switched, 'models.fallback': FellBack },
   slots: { 'composer.toolbar': [ModelButton, ThinkingButton], overlay: [ModelPicker, LoginDialog] },
   commands: [
+    {
+      id: 'model.families',
+      title: 'Model families…',
+      run: (context) => context.openPanel(agentsPanel),
+    },
     {
       id: 'model.pick',
       title: 'Pick a model',
