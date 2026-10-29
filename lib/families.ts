@@ -1,5 +1,5 @@
 /**
- * Model families: named roles (default, slow, fast, tiny, design, and any the user adds) that each pick one model and
+ * Model families: named roles (default, review, fast, tiny, design, and any the user adds) that each pick one model and
  * thinking level. Agents and features that call a model run on a family rather than a model, so changing a family's
  * model moves everything assigned to it. Pure and browser-safe: types, built-in defaults, parsing and merging of the
  * `modelFamilies` setting, and labels. Reading the settings files is `families-settings.ts`.
@@ -40,7 +40,7 @@ export type FamilyColor = keyof typeof FAMILY_COLORS
 /** The built-in families, in display order. */
 export const BUILTIN_FAMILIES: Record<string, FamilySpec & { color: FamilyColor }> = {
   default: { color: 'sky' },
-  slow: { model: 'openai-codex/gpt-6.1-sol', thinking: 'xhigh', color: 'violet' },
+  review: { model: 'openai-codex/gpt-6-astra', thinking: 'high', color: 'violet' },
   fast: { model: 'openai-codex/gpt-6.1-sol', color: 'amber' },
   tiny: { model: 'openai-codex/gpt-6-luna', thinking: 'low', color: 'emerald' },
   design: { model: 'claude-code/claude-opus-5-5', color: 'pink' },
@@ -135,9 +135,11 @@ export const refOf = (value: string | undefined): ModelRef | undefined => {
 }
 export const refName = (ref: ModelRef) => `${ref.provider}/${ref.modelId}`
 
-/** "fast" → "Fast", "my-local" → "My local". */
+/** "fast" → "Fast", "my-local" → "My local"; the default family is shown as "Ultimate". */
 export const familyTitle = (name: string) =>
-  name.charAt(0).toUpperCase() + name.slice(1).replaceAll('-', ' ')
+  name === DEFAULT_FAMILY
+    ? 'Ultimate'
+    : name.charAt(0).toUpperCase() + name.slice(1).replaceAll('-', ' ')
 
 /** The CSS color of a family color name; an unknown name is slate. */
 export const familyColor = (color: string | undefined) =>

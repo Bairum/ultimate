@@ -107,7 +107,7 @@ export function FamilyLabel({
 }) {
   const families = useFamilies()
   const family = families?.families.find((item) => item.name === (name ?? DEFAULT_FAMILY))
-  if (!family) return <span className={className}>{name ? familyTitle(name) : 'Default'}</span>
+  if (!family) return <span className={className}>{familyTitle(name ?? DEFAULT_FAMILY)}</span>
   return (
     <span className={cn('inline-flex min-w-0 items-center gap-1.5', className)}>
       <FamilyDot color={family.color} />

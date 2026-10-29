@@ -6,7 +6,6 @@
     "families": {
       "lead": { "model": "claude-code/claude-opus-5-5", "thinking": "high", "color": "orange" },
       "review": { "model": "openai-codex/gpt-6-astra", "thinking": "high" },
-      "slow": { "model": "openai-codex/gpt-6.1-sol", "thinking": "xhigh" },
       "fast": { "model": "openai-codex/gpt-6.1-sol" }
     },
     "assign": {
