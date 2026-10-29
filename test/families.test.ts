@@ -8,31 +8,28 @@ import { temp } from './helpers.ts'
 const families = (value: unknown, project?: unknown) =>
   mergeFamilies(parseFamilies(value), parseFamilies(project))
 
-it('runs a definition on its assignment, else its pin, else its family, else the default family', () => {
+it('runs a definition on its pin, else its family, else the default family', () => {
   const config = families({
     families: { fast: { model: 'acme/quick' }, local: { model: 'vllm/current', thinking: 'low' } },
-    assign: { 'agent/pinned-assigned': 'local' },
+    // An agent's family lives in its definition: an old settings assignment no longer moves it.
+    assign: { 'agent/worker': 'local' },
   })
   const pin = { provider: 'acme', modelId: 'big' }
-  expect(definitionRuns({ name: 'worker', family: 'fast' }, config)).toEqual({
+  expect(definitionRuns({ family: 'fast' }, config)).toEqual({
     family: 'fast',
     model: { provider: 'acme', modelId: 'quick' },
     via: 'family',
   })
-  expect(definitionRuns({ name: 'pinned', model: pin, family: 'fast' }, config)).toEqual({
+  expect(definitionRuns({ model: pin, family: 'fast' }, config)).toEqual({
     model: pin,
     via: 'pin',
   })
-  // The families dialog's assignment beats a pin, and its family's thinking beats the definition's.
-  expect(definitionRuns({ name: 'pinned-assigned', model: pin, thinking: 'max' }, config)).toEqual({
-    family: 'local',
-    model: { provider: 'vllm', modelId: 'current' },
-    thinking: 'low',
-    via: 'assigned',
-  })
+  // The family's thinking applies unless the definition sets its own.
+  expect(definitionRuns({ family: 'local' }, config).thinking).toBe('low')
+  expect(definitionRuns({ family: 'local', thinking: 'max' }, config).thinking).toBe('max')
   // The default family runs the parent's model; an unknown family falls back to it.
-  expect(definitionRuns({ name: 'plain' }, config)).toEqual({ family: 'default', via: 'family' })
-  expect(definitionRuns({ name: 'odd', family: 'gone' }, config)).toEqual({
+  expect(definitionRuns({}, config)).toEqual({ family: 'default', via: 'family' })
+  expect(definitionRuns({ family: 'gone' }, config)).toEqual({
     family: 'default',
     via: 'family',
   })

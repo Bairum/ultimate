@@ -1,8 +1,9 @@
 /**
- * The families dialog's server side: what the families are, who runs on which, and saving them. Saving writes this
- * project's families and makes them the most recent ones, which projects without their own start from
+ * The families' server side: what the families are, who runs on which, and saving them. Saving writes this project's
+ * families and makes them the most recent ones, which projects without their own start from
  * (lib/families-settings.ts). A default family without a model of its own follows Pi's default model and thinking.
- * Saving can also move running conversations: each one on its family's old model moves to the family's new one.
+ * Saving can also move running conversations: each one on its family's old model moves to the family's new one. An
+ * agent's family is its definition's; settings assign only features.
  */
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { clampThinkingLevel } from '@earendil-works/pi-ai'
@@ -113,7 +114,6 @@ export async function familiesView(host: ExtensionHost): Promise<FamiliesView> {
             pinnedIn: definition.overlays?.at(-1) ?? definition.path,
           }
         : {}),
-      ...(Object.hasOwn(layers.project.assign, id) ? { project: true as const } : {}),
       source: definition.source,
     }
   })
@@ -198,6 +198,11 @@ export async function saveFamilies(host: ExtensionHost, args: SaveFamilies) {
   }
   // Throws on an invalid name, model or limit before anything is written.
   parseFamilies(value)
+  for (const user of Object.keys(args.assign))
+    if (!Object.hasOwn(FEATURES, user))
+      throw new Error(
+        `${user}: only features are assigned here; an agent's family is its definition's`,
+      )
   for (const name of Object.values(args.assign))
     if (!Object.hasOwn(args.families, name) && !Object.hasOwn(BUILTIN_FAMILIES, name))
       throw new Error(`Unknown family ${name}`)

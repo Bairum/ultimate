@@ -416,7 +416,7 @@ export const actions = {
   }),
   /** `{name, scope, frontmatter, instructions}`: write `<scope>/agents/<name>.md`; invalid input writes nothing. */
   saveDefinition: implementAction(SaveDefinitionAction, async (args, { host }) => {
-    const { name, scope, frontmatter, instructions, create } = (args ?? {}) as Record<
+    const { name, scope, frontmatter, instructions, create, overlay } = (args ?? {}) as Record<
       string,
       JsonValue
     >
@@ -481,8 +481,9 @@ export const actions = {
       ...(!summaries ? { summaries } : {}),
     }
     // The form shows the merged definition; a whole copy would freeze the overlays' additions and the base's
-    // instructions, so the save becomes an overlay holding only what differs from the base.
-    if (existing?.overlays?.length) {
+    // instructions, so the save becomes an overlay holding only what differs from the base. `overlay` asks for one
+    // too over a definition from another scope (a built-in moved to another family).
+    if (existing?.overlays?.length || (overlay === true && existing && existing.source !== scope)) {
       await saveOverlay(host, host.modelRuntime, scope, name, fields, instructions)
       const { definitions: saved } = await discoverAgents(
         host.ultimateRoot,

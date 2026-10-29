@@ -1,13 +1,4 @@
-import {
-  BotIcon,
-  CopyIcon,
-  LayersIcon,
-  PinIcon,
-  PlusIcon,
-  Trash2Icon,
-  TriangleAlertIcon,
-  XIcon,
-} from 'lucide-react'
+import { BotIcon, CopyIcon, Trash2Icon, TriangleAlertIcon, XIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -25,7 +16,7 @@ import {
   useSystem,
   useUltimate,
 } from '@/sdk'
-import { familiesDialog, FamilyLabel, useFamilies } from '../models/ui.tsx'
+import { agentsPanel, FamilyLabel, refreshFamilies, useFamilies } from '../models/ui.tsx'
 import {
   FamilyField,
   Field,
@@ -39,21 +30,21 @@ import {
   SummariesField,
   thinkingLevels,
 } from './fields.tsx'
-import { Heading, Tag, useRefresh } from './parts.tsx'
+import { Tag } from './parts.tsx'
 import {
   DefinitionAction,
   DefinitionsAction,
   DeleteDefinitionAction,
   SaveDefinitionAction,
 } from './refs.ts'
-import type { Discovery, ModelRef, Scope, Shown, Source } from './refs.ts'
+import type { DefinitionFields, Discovery, ModelRef, Scope, Shown, Source } from './refs.ts'
 
 /**
  * The config dialog's id, and the UI state naming the definition it shows ('' for a new one); both are this extension's
  * own. Another extension opens a definition over the bus: `subagents:open-definition { name }`, answered by
  * `subagents:definition-closed { name }` once the dialog closes.
  */
-const definitionDialog = 'subagents.definition'
+export const definitionDialog = 'subagents.definition'
 const shownKey = 'definition'
 
 export const sourceLabel: Record<Source, string> = {
@@ -61,9 +52,9 @@ export const sourceLabel: Record<Source, string> = {
   user: 'user',
   project: 'project',
 }
-const parseError = (error: string) => error.replace(/^Error: /, '')
+export const parseError = (error: string) => error.replace(/^Error: /, '')
 /** Opens the config dialog on a definition, or on a new one with `''`. */
-function useOpenDefinition() {
+export function useOpenDefinition() {
   const { open } = useUltimate()
   const [, setShown] = useExtensionUiState(shownKey, '')
   return (name: string) => {
@@ -72,115 +63,50 @@ function useOpenDefinition() {
   }
 }
 
-/** Definitions are reread at every start; the list refetches on focus, as after an edit, and when the dialog closes. */
-export function Definitions() {
-  const { data, refetch } = useAction(DefinitionsAction)
-  const [editing] = useDialog(definitionDialog)
-  useRefresh(refetch, String(editing))
-  const show = useOpenDefinition()
-  const { open } = useUltimate()
-  if (!data) return null
-  const { definitions, errors } = data
-  return (
-    <div className="py-2">
-      <Heading
-        meta={
-          <>
-            <span>
-              {definitions.length}
-              {errors.length > 0 && <span className="text-error"> · {errors.length} invalid</span>}
-            </span>
-            <Button
-              className="h-5 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
-              onClick={() => open(familiesDialog)}
-              size="xs"
-              title="Pick a model per family and put agents in families"
-              variant="ghost"
-            >
-              <LayersIcon className="size-3" />
-              Families
-            </Button>
-            <Button
-              className="h-5 gap-1 px-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground"
-              onClick={() => show('')}
-              size="xs"
-              title="New agent definition"
-              variant="ghost"
-            >
-              <PlusIcon className="size-3" />
-              New
-            </Button>
-          </>
-        }
-      >
-        Definitions
-      </Heading>
-      {definitions.map((definition) => (
-        <button
-          className="block w-full px-3 py-1 text-left transition-colors hover:bg-accent/50"
-          key={definition.path}
-          onClick={() => show(definition.name)}
-          title={[
-            definition.path,
-            definition.runs?.family
-              ? `family: ${definition.runs.family}${definition.runs.via === 'assigned' ? ' (families dialog)' : ''}`
-              : definition.model &&
-                `model: ${definition.model.provider}/${definition.model.modelId}`,
-            `tools: ${definition.tools?.join(', ') ?? 'inherited'}`,
-          ]
-            .filter(Boolean)
-            .join('\n')}
-          type="button"
-        >
-          <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11.5px]">
-            <BotIcon className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="shrink-0 text-foreground/85">{definition.name}</span>
-            {definition.source !== 'builtin' && <Tag>{definition.source}</Tag>}
-            {definition.isolate === 'worktree' && <Tag>worktree</Tag>}
-            <span className="ml-auto flex min-w-0 items-center gap-1 truncate pl-2 text-[10.5px] text-muted-foreground/70">
-              {definition.runs?.family || !definition.model ? (
-                <FamilyLabel family={definition.runs?.family} />
-              ) : (
-                <>
-                  <PinIcon className="size-2.5 shrink-0" />
-                  <span className="truncate">{definition.model.modelId}</span>
-                </>
-              )}
-              {(definition.runs?.thinking ?? definition.thinking) &&
-                ` · ${definition.runs?.thinking ?? definition.thinking}`}
-            </span>
-          </div>
-          <p className="line-clamp-2 pl-5 font-sans text-[12px] leading-snug text-muted-foreground">
-            {definition.description}
-          </p>
-        </button>
-      ))}
-      {errors.map((error) => (
-        <button
-          className="block w-full px-3 py-1 text-left transition-colors hover:bg-accent/50"
-          key={error.path}
-          onClick={() => show(error.name)}
-          title={error.path}
-          type="button"
-        >
-          <div className="flex min-w-0 items-center gap-1.5 font-mono text-[11.5px] text-error">
-            <BotIcon className="size-3.5 shrink-0" />
-            <span className="shrink-0">{error.name}</span>
-            <Tag>{error.source}</Tag>
-          </div>
-          <p className="line-clamp-3 pl-5 font-mono text-[11px] leading-snug break-words whitespace-pre-wrap text-error/80">
-            {parseError(error.error)}
-          </p>
-        </button>
-      ))}
-      {definitions.length === 0 && errors.length === 0 && (
-        <p className="px-3 font-sans text-[12px] leading-relaxed text-muted-foreground/70">
-          No definitions yet: add one with New, or Markdown files in{' '}
-          <code className="font-mono">.ultimate/agents/</code>
-        </p>
-      )}
-    </div>
-  )
+/** The frontmatter a save writes for a definition as `draft` has it. */
+const fieldsOf = (draft: Draft): DefinitionFields => ({
+  description: draft.description,
+  ...(draft.model ? { model: `${draft.model.provider}/${draft.model.modelId}` } : {}),
+  ...(draft.thinking ? { thinking: draft.thinking } : {}),
+  ...(!draft.model && draft.family ? { family: draft.family } : {}),
+  ...(draft.tools ? { tools: draft.tools } : {}),
+  ...(draft.denyTools.length ? { denyTools: draft.denyTools } : {}),
+  resident: draft.resident,
+  ...(draft.isolate === 'worktree' ? { isolate: 'worktree' as const } : {}),
+  ...(draft.fast ? { fast: true } : {}),
+  ...(draft.summaries ? {} : { summaries: false }),
+})
+
+/**
+ * Move definition `name` to `family`, as the dialog would save it: a definition of the user's or the project's is
+ * rewritten in place; a built-in gets an overlay holding only the family, in the project when its setup is trusted.
+ * A pinned model gives way to the family. Returns the file written.
+ */
+export async function moveDefinition(name: string, family: string, discovery: Discovery) {
+  const shown = await api.action(DefinitionAction, { name })
+  if (!shown.definition) throw new Error(`${name} fails to parse: open it to fix it`)
+  const overlayScope = shown.definition.overlays?.at(-1)?.startsWith(`${discovery.scopes.project}/`)
+    ? 'project'
+    : shown.definition.overlays?.length
+      ? 'user'
+      : undefined
+  const scope: Scope =
+    overlayScope ??
+    (shown.source === 'builtin'
+      ? discovery.projectSetup === 'trusted'
+        ? 'project'
+        : 'user'
+      : shown.source)
+  const draft = { ...draftOf(shown.definition), family, model: null }
+  await api.action(SaveDefinitionAction, {
+    name,
+    scope,
+    frontmatter: fieldsOf(draft),
+    instructions: draft.instructions,
+    overlay: true,
+  })
+  await refreshFamilies()
+  return `${discovery.scopes[scope]}/${name}.md`
 }
 
 /** The config dialog, mounted in the overlay so other extensions can open it too. */
@@ -316,11 +242,9 @@ function Form({
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState<string>()
   const models = useModels()
-  const { open } = useUltimate()
+  const { openPanel } = useUltimate()
   const families = useFamilies()
   const [pinning, setPinning] = useState(!!draft.model)
-  const runs = shown?.definition?.runs
-  const assigned = runs?.via === 'assigned' ? runs.family : undefined
   const familyOf = (name: string | null) =>
     families?.families.find((family) => family.name === (name ?? 'default'))
   const familyRef = (name: string | null) => {
@@ -328,7 +252,7 @@ function Form({
     const slash = model?.indexOf('/') ?? -1
     return model ? { provider: model.slice(0, slash), modelId: model.slice(slash + 1) } : undefined
   }
-  const familyModel = familyRef(assigned ?? draft.family) ?? discovery.main.model
+  const familyModel = familyRef(draft.family) ?? discovery.main.model
   const levelsOf = (model: ModelRef | undefined) => thinkingLevels(models, model)
   const levels = levelsOf(draft.model ?? familyModel)
   const set = (change: Partial<Draft>) => {
@@ -372,20 +296,10 @@ function Form({
         name: draft.name,
         scope,
         ...(creating ? { create: true } : {}),
-        frontmatter: {
-          description: draft.description,
-          ...(draft.model ? { model: `${draft.model.provider}/${draft.model.modelId}` } : {}),
-          ...(draft.thinking ? { thinking: draft.thinking } : {}),
-          ...(!draft.model && draft.family ? { family: draft.family } : {}),
-          ...(draft.tools ? { tools: draft.tools } : {}),
-          ...(draft.denyTools.length ? { denyTools: draft.denyTools } : {}),
-          resident: draft.resident,
-          ...(draft.isolate === 'worktree' ? { isolate: 'worktree' } : {}),
-          ...(draft.fast ? { fast: true } : {}),
-          ...(draft.summaries ? {} : { summaries: false }),
-        },
+        frontmatter: fieldsOf(draft),
         instructions: draft.instructions,
       })
+      await refreshFamilies()
       await onChanged(draft.name)
     } catch (failure) {
       setError(errorMessage(failure))
@@ -493,35 +407,23 @@ function Form({
           <Field
             hint={
               pinning ? (
-                'Runs on this model whatever the families say, unless the families dialog assigns it a family.'
-              ) : assigned ? (
-                <>
-                  The families dialog assigns it to <FamilyLabel family={assigned} />, which wins
-                  over this file.{' '}
-                  <button
-                    className="cursor-pointer text-foreground hover:underline"
-                    onClick={() => open(familiesDialog)}
-                    type="button"
-                  >
-                    Open families
-                  </button>
-                </>
+                'Runs on this model, whatever its family runs.'
               ) : (
                 <>
-                  Runs on <FamilyLabel family={draft.family ?? 'default'} />; change a family's
-                  model in{' '}
+                  Runs on <FamilyLabel family={draft.family ?? 'default'} />. A family's model is
+                  set in the{' '}
                   <button
                     className="cursor-pointer text-foreground hover:underline"
-                    onClick={() => open(familiesDialog)}
+                    onClick={() => openPanel(agentsPanel)}
                     type="button"
                   >
-                    Model families
+                    Agents panel
                   </button>
                   .
                 </>
               )
             }
-            label="Model family"
+            label="Model"
           >
             <FamilyField
               onChange={(value) => {
@@ -551,8 +453,8 @@ function Form({
             hint={
               draft.thinking
                 ? undefined
-                : !pinning && familyOf(assigned ?? draft.family)?.thinking
-                  ? `Inherits its family's (${familyOf(assigned ?? draft.family)?.thinking}), within what the model supports.`
+                : !pinning && familyOf(draft.family)?.thinking
+                  ? `Inherits its family's (${familyOf(draft.family)?.thinking}), within what the model supports.`
                   : `Inherits the main conversation's${discovery.main.thinking ? ` (${discovery.main.thinking})` : ''}, within what the model supports.`
             }
             label="Thinking"

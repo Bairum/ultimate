@@ -16,10 +16,9 @@ import {
 } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { LoginDialog } from './login.tsx'
-import { FamiliesDialog } from './families-dialog.tsx'
 import {
+  agentsPanel,
   FamilyDot,
-  familiesDialog,
   familyOf,
   ModelLabel,
   modelLabel,
@@ -163,7 +162,7 @@ function ModelButton() {
                 className="ml-auto shrink-0 hover:text-foreground"
                 onClick={() => {
                   setOpen(false)
-                  actions.open(familiesDialog)
+                  actions.openPanel(agentsPanel)
                 }}
                 type="button"
               >
@@ -351,13 +350,13 @@ export default defineWebExtension({
   entries: { 'pi.assistant': Switched, 'models.fallback': FellBack },
   slots: {
     'composer.toolbar': [ModelButton, ThinkingButton],
-    overlay: [ModelPicker, LoginDialog, FamiliesDialog],
+    overlay: [ModelPicker, LoginDialog],
   },
   commands: [
     {
       id: 'model.families',
       title: 'Model families…',
-      run: (context) => context.open(familiesDialog),
+      run: (context) => context.openPanel(agentsPanel),
     },
     {
       id: 'model.pick',

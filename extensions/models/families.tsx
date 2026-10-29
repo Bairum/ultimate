@@ -8,7 +8,8 @@ import { DEFAULT_FAMILY, familyColor, familyTitle } from '../../lib/families.ts'
 import { FamiliesAction } from './refs.ts'
 import type { FamiliesView, FamilyView } from './refs.ts'
 
-export const familiesDialog = 'models.families'
+/** The Agents panel (subagents' own), where the families are edited beside who runs on each. */
+export const agentsPanel = 'agents'
 
 let view: FamiliesView | undefined
 let loading: Promise<void> | undefined

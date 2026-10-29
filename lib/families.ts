@@ -17,7 +17,7 @@ export type Limits = { global?: number; models: Record<string, number> }
 /** The `modelFamilies` setting, merged over the built-in defaults. */
 export type Families = {
   families: Record<string, FamilySpec & { color: string }>
-  /** Who runs on which family, by user id (`agent/<definition>`, `summaries`, `preview`). */
+  /** Which family each feature runs on (`summaries`, `preview`); an agent's family is in its definition. */
   assign: Record<string, string>
   limits: Limits
 }
@@ -50,7 +50,7 @@ export const BUILTIN_FAMILIES: Record<string, FamilySpec & { color: FamilyColor 
   design: { model: 'claude-code/claude-opus-5-5', color: 'pink' },
 }
 
-/** Feature users: what each runs when no setting pins a model, and how the families dialog names it. */
+/** Feature users: what each runs when no setting pins a model, and how the Agents panel names it. */
 export const FEATURES = {
   summaries: {
     family: 'tiny',
@@ -175,33 +175,19 @@ export const familyColor = (color: string | undefined) =>
     : FAMILY_COLORS.slate
 
 /**
- * What a definition runs on given the families: an assignment in settings wins, then the definition's own model pin,
- * then its `family`, then the default family. `model` undefined means the default family: the parent's model.
+ * What a definition runs on given the families: its own model pin, else its `family`, else the default family; its own
+ * thinking level wins over its family's. `model` undefined means the default family: the parent's model.
  */
 export function definitionRuns(
-  definition: { name: string; model?: ModelRef; thinking?: ModelThinkingLevel; family?: string },
+  definition: { model?: ModelRef; thinking?: ModelThinkingLevel; family?: string },
   config: Families,
-): {
-  family?: string
-  model?: ModelRef
-  thinking?: ModelThinkingLevel
-  via: 'assigned' | 'pin' | 'family'
-} {
-  const assigned = config.assign[agentUser(definition.name)]
-  if (!assigned && definition.model)
+): { family?: string; model?: ModelRef; thinking?: ModelThinkingLevel; via: 'pin' | 'family' } {
+  if (definition.model)
     return { model: definition.model, thinking: definition.thinking, via: 'pin' }
-  const wanted = assigned ?? definition.family ?? DEFAULT_FAMILY
+  const wanted = definition.family ?? DEFAULT_FAMILY
   const family = Object.hasOwn(config.families, wanted) ? wanted : DEFAULT_FAMILY
   const spec = config.families[family]
   const model = family === DEFAULT_FAMILY ? undefined : refOf(spec.model)
-  // An assignment from the families dialog takes the family's thinking; a definition's own level wins over its family.
-  const thinking = assigned
-    ? (spec.thinking ?? definition.thinking)
-    : (definition.thinking ?? spec.thinking)
-  return {
-    family,
-    ...(model ? { model } : {}),
-    ...(thinking ? { thinking } : {}),
-    via: assigned ? 'assigned' : 'family',
-  }
+  const thinking = definition.thinking ?? spec.thinking
+  return { family, ...(model ? { model } : {}), ...(thinking ? { thinking } : {}), via: 'family' }
 }

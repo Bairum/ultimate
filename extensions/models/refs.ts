@@ -45,7 +45,7 @@ export type Fallback = { from: string; to?: string; reason: 'same' | 'pin' | 'de
  */
 export const LoginChanged = defineEvent<{ provider: string }>('models.login-changed')
 
-/** One model family as the families dialog shows it. */
+/** One model family as the Agents panel shows it. */
 export type FamilyView = {
   name: string
   color: string
@@ -68,12 +68,12 @@ export type FamilyUser = {
   description: string
   /** The family it runs on; undefined while a model is pinned (`pinned`). */
   family?: string
-  /** Its family without an assignment in settings: the definition's `family`, or the feature's default. */
+  /** The family its definition names, or the feature's default. */
   natural: string
   /** A model it pins (`provider/id`, or `off`), and where: a definition file or a settings key. */
   pinned?: string
   pinnedIn?: string
-  /** The project's settings assign or pin it, so the user's choice does not apply. */
+  /** A feature the project's settings assign or pin, so the user's choice does not apply. */
   project?: true
   source?: 'builtin' | 'user' | 'project'
 }
@@ -85,7 +85,7 @@ export type FamiliesView = {
   /** In display order: built-ins, then the user's. */
   families: FamilyView[]
   users: FamilyUser[]
-  /** The saved assignments, which the dialog edits; the project's team settings may add more. */
+  /** The saved feature assignments; the project's team settings may add more. */
   assign: Record<string, string>
   limits: FamilyLimits
   /**
@@ -104,9 +104,10 @@ export const FamiliesAction = actionRef<null, FamiliesView>('models', 'families'
 
 export type SaveFamilies = {
   families: Record<string, { model?: string; thinking?: ModelThinkingLevel; color: string }>
+  /** Which family each feature (`summaries`, `preview`) runs on; agents keep theirs in their definitions. */
   assign: Record<string, string>
   limits: FamilyLimits
-  /** Features whose user-settings pin (`summaryModel`, `instance.model`) the dialog replaced with a family. */
+  /** Features whose user-settings pin (`summaryModel`, `instance.model`) a family replaces. */
   unpin: string[]
   /** Also move conversations that run on a family's old model to its new one. */
   switchRunning?: boolean

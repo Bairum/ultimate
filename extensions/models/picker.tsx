@@ -19,7 +19,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { Kbd } from '@/components/ui/kbd'
 import { cn, errorMessage, useDialog, useUltimate } from '@/sdk'
 import { familyColor, familyTitle } from '../../lib/families.ts'
-import { FamilyDot, familiesDialog, runsOn, useFamilies } from './families.tsx'
+import { agentsPanel, FamilyDot, runsOn, useFamilies } from './families.tsx'
 import {
   authLabel,
   dialogs,
@@ -210,14 +210,14 @@ export function ModelPicker() {
                 className="gap-2 py-1 font-mono text-[12px]"
                 onSelect={() => {
                   setOpen(false)
-                  actions.open(familiesDialog)
+                  actions.openPanel(agentsPanel)
                 }}
                 value="families"
               >
                 <LayersIcon className="size-3.5" />
                 Model families…
                 <span className="ml-auto text-[11px] text-muted-foreground">
-                  a model per family, agents in families
+                  each agent's family and model
                 </span>
               </CommandItem>
               <CommandItem
