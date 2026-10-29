@@ -19,12 +19,17 @@ fires and messages from other projects. A turn woken by several branches at once
 `threading(entries, threads)` decides the main stream: the turn a thread began in stays, its root row follows that turn's
 answer, and every later entry of exactly one thread leaves the stream for that thread.
 
-## UI (`web.tsx`)
+## UI
 
-- **Root row** (`threads.root`): the feature, where it stands (working, waiting on you, landed), the newest reply's first
-  line, the reply count and when it last moved, with an unread dot. A click opens the thread.
-- **Thread pane** beside the conversation (`conversation.overlay`): the thread's entries (the core's `ThreadView`,
-  cards open) and a composer whose words go to @ultimate as `Re #<branch>: …`.
+- **Root** (`threads.root`, `roots.tsx`): a card with where the thread stands (dot, word, left edge), the feature, its title,
+  the newest reply's first line and who said it, the reply count, when it last moved and how many replies are new. A
+  new reply washes it briefly (Web Animations; none with reduced motion).
+- **Layout** (`pane.tsx`), set by `ext.threads.variant`, switched from a thread's or the rail's header:
+  - `pane`: the open thread is a column on the right; main's column moves left beside it.
+  - `rail`: every thread is a compact row in a column left of main, newest activity first. A click opens that thread in
+    place, and the rail widens. Main then keeps a one-line pointer where each thread started.
+  - On a phone, either way: roots inline, and a thread opens as a full sheet with **← @ultimate** back.
+- The thread's composer sends to @ultimate as `Re #<branch>: …`. What arrives while a thread is open counts as seen.
 - **Catch-up**: under a landing card, the branch's abstract frozen at landing (lineage's `abstract` action).
 
 The core transcript does the splitting: this extension contributes `compact.threads`.
