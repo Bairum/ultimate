@@ -219,7 +219,7 @@ function FamilyForm({
             disabled={pending}
             onClick={() => void apply({ families: families() })}
             size="sm"
-            title="What runs on it goes back to the default family"
+            title="What runs on it goes back to the Ultimate family"
             variant="ghost"
           >
             Remove
