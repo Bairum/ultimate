@@ -1,9 +1,10 @@
 /**
- * Model families in the browser: one shared copy of the families (fetched once, again on window focus and after a
- * save), and a family's dot and "Family (model)" label for the Agents panel and the definition form.
+ * Model families in the browser: one shared copy of the families (fetched once, again on window focus, after a save
+ * and when the system info shows new project settings or a new commit), and a family's dot and "Family (model)" label
+ * for the Agents panel and the definition form.
  */
 import { useEffect, useSyncExternalStore } from 'react'
-import { api, cn } from '@/sdk'
+import { api, cn, useSystem } from '@/sdk'
 import { DEFAULT_FAMILY, familyColor, familyTitle } from '../../lib/families.ts'
 import { FamiliesAction } from './refs.ts'
 import type { FamiliesView, FamilyView } from './refs.ts'
@@ -12,6 +13,8 @@ import type { FamiliesView, FamilyView } from './refs.ts'
 export const agentsPanel = 'agents'
 
 let view: FamiliesView | undefined
+/** The project settings and commit `view` was last fetched for. */
+let fetchedFor: string | undefined
 let loading: Promise<void> | undefined
 const listeners = new Set<() => void>()
 
@@ -42,9 +45,16 @@ export function useFamilies() {
     },
     () => view,
   )
+  const system = useSystem()
+  // The settings file and landings both reach the open tab as a system broadcast.
+  const source = `${system?.code.sha} ${JSON.stringify(system?.project.settings)}`
   useEffect(() => {
+    if (fetchedFor === source) return
+    fetchedFor = source
     // oxlint-disable-next-line typescript/no-floating-promises -- refreshFamilies catches its failure; the next focus asks again.
-    if (!view) void refreshFamilies()
+    void refreshFamilies()
+  }, [source])
+  useEffect(() => {
     // oxlint-disable-next-line typescript/no-floating-promises -- as above.
     const refresh = () => void refreshFamilies()
     // A test renders without a window.

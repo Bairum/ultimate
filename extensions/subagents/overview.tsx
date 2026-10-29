@@ -38,9 +38,10 @@ export function AgentsOverview() {
   const { data, refetch } = useAction(DefinitionsAction)
   const families = useFamilies()
   const [editing] = useDialog(definitionDialog)
-  useRefresh(refetch, String(editing))
-  const show = useOpenDefinition()
   const system = useSystem()
+  // A landing or a settings change broadcasts new system info: definitions may have changed with it.
+  useRefresh(refetch, `${editing} ${system?.code.sha} ${JSON.stringify(system?.project.settings)}`)
+  const show = useOpenDefinition()
   // What the last move wrote, until the next one.
   const [wrote, setWrote] = useState<string>()
   if (!data || !families) return null
