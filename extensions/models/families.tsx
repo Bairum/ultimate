@@ -72,7 +72,8 @@ export function familyOf(
   return (
     matching.find((family) => family.name === hint) ??
     (thinking ? matching.find((family) => family.thinking === thinking) : undefined) ??
-    matching[0]
+    // A family with a thinking level of its own runs at that level: at another one, it is not this family.
+    matching.find((family) => !family.thinking || !thinking)
   )
 }
 
