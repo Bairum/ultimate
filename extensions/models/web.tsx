@@ -16,6 +16,18 @@ import {
 } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { LoginDialog } from './login.tsx'
+import { FamiliesDialog } from './families-dialog.tsx'
+import {
+  FamilyDot,
+  familiesDialog,
+  familyOf,
+  ModelLabel,
+  modelLabel,
+  runsOn,
+  useFamilies,
+} from './families.tsx'
+import type { FamilyView } from './refs.ts'
+import { familyColor, familyTitle } from '../../lib/families.ts'
 import { ModelPicker } from './picker.tsx'
 import { nextThinking, openLogin, openPicker, thinkingDialog, useCurrentModel } from './state.tsx'
 import type { ThinkingLevel } from './state.tsx'
@@ -25,35 +37,143 @@ import type { Fallback } from './refs.ts'
 const toolbarButton =
   'flex h-7 max-w-56 shrink-0 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground'
 
+/**
+ * The composer's model button: a menu of the families first (which one this conversation runs on, who else does, a
+ * cap), then a specific model through the picker, and the families editor.
+ */
 function ModelButton() {
-  const { ref, loading } = useCurrentModel()
+  const { id, ref, thinking, loading, models } = useCurrentModel()
   const actions = useUltimate()
+  const families = useFamilies()
+  const [open, setOpen] = useState(false)
+  const [error, setError] = useState<string>()
+  const current = familyOf(families, ref, thinking)
+  const choose = (family: FamilyView) => {
+    const model = runsOn(family)
+    const slash = model?.indexOf('/') ?? -1
+    if (!model) return
+    setError(undefined)
+    api
+      .configure(
+        {
+          model: { provider: model.slice(0, slash), modelId: model.slice(slash + 1) },
+          ...((family.thinking ?? family.followsThinking)
+            ? { thinkingLevel: family.thinking ?? family.followsThinking }
+            : {}),
+        },
+        id,
+      )
+      .then(
+        () => setOpen(false),
+        (failure: unknown) => setError(errorMessage(failure)),
+      )
+  }
   return (
-    <button
-      className={cn(toolbarButton, 'min-w-0 shrink')}
-      disabled={loading}
-      aria-label={loading ? 'Loading model' : undefined}
-      onClick={() => openPicker(actions)}
-      title={
-        loading
-          ? 'Loading model'
-          : ref
-            ? `${ref.modelId} · ${ref.provider} — pick a model`
-            : 'Pick a model'
-      }
-      type="button"
-    >
-      <CpuIcon className="size-3.5 shrink-0" />
-      <span
-        className={cn(
-          'truncate',
-          loading ? undefined : ref ? 'text-foreground/85' : 'text-warning',
-        )}
-      >
-        {loading ? 'model…' : (ref?.modelId ?? 'no model')}
-      </span>
-      <ChevronDownIcon className="size-3 shrink-0 opacity-60 @max-md:hidden" />
-    </button>
+    <Popover onOpenChange={setOpen} open={open}>
+      <PopoverTrigger asChild>
+        <button
+          className={cn(toolbarButton, 'min-w-0 shrink')}
+          disabled={loading}
+          aria-label={loading ? 'Loading model' : undefined}
+          title={
+            loading
+              ? 'Loading model'
+              : ref
+                ? `${modelLabel(families, ref, thinking)} · ${ref.provider} — pick a family or model`
+                : 'Pick a model'
+          }
+          type="button"
+        >
+          <CpuIcon className="size-3.5 shrink-0" />
+          {loading || !ref ? (
+            <span className={cn('truncate', loading ? undefined : 'text-warning')}>
+              {loading ? 'model…' : 'no model'}
+            </span>
+          ) : (
+            <ModelLabel className="text-foreground/85" model={ref} thinking={thinking} />
+          )}
+          <ChevronDownIcon className="size-3 shrink-0 opacity-60 @max-md:hidden" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[26rem] p-0 font-mono" side="top">
+        <div className="px-3 pt-2.5 pb-1 text-[10.5px] tracking-wider text-muted-foreground uppercase">
+          This conversation runs on
+        </div>
+        <div className="px-1 pb-1">
+          {(families?.families ?? []).map((family) => {
+            const model = runsOn(family)
+            const info = models?.models.find((item) => `${item.provider}/${item.id}` === model)
+            const members = families?.users.filter((user) => user.family === family.name) ?? []
+            const cap = model ? families?.limits.models[model] : undefined
+            const usable = !!info?.available
+            return (
+              <button
+                className="grid w-full grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-x-2 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-accent disabled:opacity-50 disabled:hover:bg-transparent"
+                disabled={!usable}
+                key={family.name}
+                onClick={() => choose(family)}
+                title={usable ? model : `${model ?? 'No model'}: no login here`}
+                type="button"
+              >
+                <CheckIcon
+                  className={cn(
+                    'size-3.5',
+                    current?.name === family.name ? 'text-brand' : 'opacity-0',
+                  )}
+                />
+                <span className="flex min-w-0 items-center gap-1.5 text-[12px]">
+                  <FamilyDot color={family.color} />
+                  <span style={{ color: familyColor(family.color) }}>
+                    {familyTitle(family.name)}
+                  </span>
+                  <span className="truncate text-muted-foreground">
+                    {model ? model.slice(model.indexOf('/') + 1) : 'no model'}
+                    {(family.thinking ?? family.followsThinking) &&
+                      ` · ${family.thinking ?? family.followsThinking}`}
+                  </span>
+                </span>
+                <span className="text-[10.5px] text-muted-foreground/70">
+                  {!usable ? 'no login' : cap ? `≤${cap}` : ''}
+                </span>
+                <span className="col-start-2 truncate text-[10.5px] text-muted-foreground/60">
+                  {members.map((user) => user.label).join(' · ') || '—'}
+                </span>
+              </button>
+            )
+          })}
+          <button
+            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            key="pick"
+            onClick={() => {
+              setOpen(false)
+              openPicker(actions)
+            }}
+            type="button"
+          >
+            <span className="w-3.5" />A specific model…
+          </button>
+        </div>
+        <div className="flex items-center gap-3 border-t border-border/70 px-3 py-1.5 text-[11px] text-muted-foreground">
+          {error ? (
+            <span className="truncate text-error">{error}</span>
+          ) : (
+            <>
+              <span className="truncate">Switches this conversation only</span>
+              <button
+                className="ml-auto shrink-0 hover:text-foreground"
+                onClick={() => {
+                  setOpen(false)
+                  actions.open(familiesDialog)
+                }}
+                type="button"
+              >
+                Edit families…
+              </button>
+            </>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -126,9 +246,16 @@ function ThinkingButton() {
   )
 }
 
+/** "Fast (gpt-6-luna)" for a model a family runs, else the model as the divider names it. */
+const named = (families: ReturnType<typeof useFamilies>, ref: string, shown: string) => {
+  const label = modelLabel(families, ref)
+  return label === ref.slice(ref.indexOf('/') + 1) ? shown : label
+}
+
 /** A response that ran on another model or thinking level than the one before it, marked above it. */
 function Switched({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
   const change = switchAt(useTranscript(), entry)
+  const families = useFamilies()
   if (!change) return core
   const Icon = change.model ? CpuIcon : BrainIcon
   return (
@@ -142,7 +269,8 @@ function Switched({ entry, core }: { entry: EntryRecord; core: ReactNode }) {
           <Icon className="size-3 shrink-0" />
           <span className="truncate">
             {[
-              change.model && `${change.model.from} → ${change.model.to}`,
+              change.model &&
+                `${named(families, change.model.fromRef, change.model.from)} → ${named(families, change.model.toRef, change.model.to)}`,
               change.thinking && `thinking ${change.thinking.from} → ${change.thinking.to}`,
             ]
               .filter(Boolean)
@@ -168,6 +296,7 @@ const switchedTo: Record<Exclude<Fallback['reason'], 'none'>, string> = {
 function FellBack({ entry }: { entry: EntryRecord }) {
   const { from, to, reason } = entry.data as Fallback
   const actions = useUltimate()
+  const families = useFamilies()
   const provider = from.split('/')[0]
   return (
     <section
@@ -182,12 +311,14 @@ function FellBack({ entry }: { entry: EntryRecord }) {
         <p className="font-mono text-[12px]">
           {to ? (
             <>
-              <span className="text-muted-foreground line-through">{from}</span>
+              <span className="text-muted-foreground line-through">
+                {named(families, from, from)}
+              </span>
               {' → '}
-              <span className="text-foreground">{to}</span>
+              <span className="text-foreground">{named(families, to, to)}</span>
             </>
           ) : (
-            <span className="text-foreground">{from}</span>
+            <span className="text-foreground">{named(families, from, from)}</span>
           )}
         </p>
         <p className="text-muted-foreground">
@@ -218,8 +349,16 @@ function FellBack({ entry }: { entry: EntryRecord }) {
 
 export default defineWebExtension({
   entries: { 'pi.assistant': Switched, 'models.fallback': FellBack },
-  slots: { 'composer.toolbar': [ModelButton, ThinkingButton], overlay: [ModelPicker, LoginDialog] },
+  slots: {
+    'composer.toolbar': [ModelButton, ThinkingButton],
+    overlay: [ModelPicker, LoginDialog, FamiliesDialog],
+  },
   commands: [
+    {
+      id: 'model.families',
+      title: 'Model families…',
+      run: (context) => context.open(familiesDialog),
+    },
     {
       id: 'model.pick',
       title: 'Pick a model',
