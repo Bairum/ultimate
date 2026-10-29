@@ -1,6 +1,6 @@
 /**
- * The Agents panel: one overview of what runs on which model. Each model family heads a group (its model, thinking and
- * cap; a click edits them in place), and every agent definition and feature on it sits under it. An agent row opens
+ * The Agents panel: one overview of what runs on which model. Each model family heads a group (its model and thinking;
+ * a click edits them in place), and every agent definition and feature on it sits under it. An agent row opens
  * its definition; its dot moves it to another family, which writes the definition (an overlay for a built-in). A
  * feature's dot moves it in the project's families. Agents and features that pin a model of their own come last.
  */
@@ -225,7 +225,6 @@ function FamilyGroup({
 }) {
   const model = runsOn(family)
   const thinking = family.thinking ?? family.followsThinking
-  const cap = model ? view.limits.models[model] : undefined
   const empty = Array.isArray(children) && children.every((list) => !list || !list.length)
   return (
     <section className="pt-3 first-of-type:pt-1">
@@ -243,11 +242,8 @@ function FamilyGroup({
             {model ? short(model) : 'no model'}
             {thinking && <span className="text-muted-foreground/70"> · {thinking}</span>}
           </span>
-          <span className="ml-auto shrink-0 pl-2 text-[10.5px] text-muted-foreground/60 tabular-nums">
-            {cap ? `≤${cap} at once` : ''}
-            <span className="opacity-0 transition-opacity group-hover/family:opacity-100">
-              {cap ? ' · ' : ''}edit
-            </span>
+          <span className="ml-auto shrink-0 pl-2 text-[10.5px] text-muted-foreground/60 opacity-0 transition-opacity group-hover/family:opacity-100">
+            edit
           </span>
         </button>
       </FamilyPopover>

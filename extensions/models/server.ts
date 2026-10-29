@@ -107,9 +107,9 @@ const loginChanged = async (host: ActionContext['host'], provider: string) =>
     })
 
 export const actions = {
-  /** The families, who runs on which, and the concurrency caps, for the Agents panel. */
+  /** The families, and who runs on which, for the Agents panel. */
   families: implementAction(FamiliesAction, (_args, { host }) => familiesView(host)),
-  /** Save the families: their models, the features' assignments, caps; optionally move open conversations along. */
+  /** Save the families: their models, the features' assignments; optionally move open conversations along. */
   saveFamilies: implementAction(SaveFamiliesAction, (args, { host }) => {
     if (!args || typeof args !== 'object' || Array.isArray(args))
       throw new Error('Expected families')

@@ -11,15 +11,11 @@ export type ModelRef = { provider: string; modelId: string }
 /** One family as settings hold it: `model` is `provider/id`; the default family's model is Pi's default model. */
 export type FamilySpec = { model?: string; thinking?: ModelThinkingLevel; color?: string }
 
-/** Request concurrency caps; a missing or zero value is unlimited. `models` is keyed by `provider/id`. */
-export type Limits = { global?: number; models: Record<string, number> }
-
 /** The `modelFamilies` setting, merged over the built-in defaults. */
 export type Families = {
   families: Record<string, FamilySpec & { color: string }>
   /** Which family each feature runs on (`summaries`, `preview`); an agent's family is in its definition. */
   assign: Record<string, string>
-  limits: Limits
 }
 
 /** The family a conversation, definition or feature falls back to. Its model is Pi's default model. */
@@ -73,20 +69,16 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 export const isFamilyName = (name: string) => /^[a-z][a-z0-9-]{0,23}$/.test(name)
 const isRef = (value: string) => /^[^/\s]+\/\S+$/.test(value)
-const isLimit = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isInteger(value) && value >= 0
 
 /** One settings layer's `modelFamilies`, checked; throws naming the first invalid field. */
 export function parseFamilies(value: unknown): {
   families: Record<string, FamilySpec>
   assign: Record<string, string>
-  limits: Partial<Limits>
 } {
-  if (value === undefined) return { families: {}, assign: {}, limits: {} }
+  if (value === undefined) return { families: {}, assign: {} }
   if (!isObject(value)) throw new Error('modelFamilies must be an object')
   const families: Record<string, FamilySpec> = {}
   const assign: Record<string, string> = {}
-  const limits: Partial<Limits> = {}
   if (value.families !== undefined && !isObject(value.families))
     throw new Error('modelFamilies.families must be an object')
   for (const [name, spec] of Object.entries(value.families ?? {})) {
@@ -117,32 +109,13 @@ export function parseFamilies(value: unknown): {
       throw new Error(`modelFamilies.assign.${user} must be a family name`)
     assign[user] = family
   }
-  if (value.limits !== undefined) {
-    if (!isObject(value.limits)) throw new Error('modelFamilies.limits must be an object')
-    const { global, models } = value.limits
-    if (global !== undefined) {
-      if (!isLimit(global)) throw new Error('modelFamilies.limits.global must be a whole number')
-      limits.global = global
-    }
-    if (models !== undefined) {
-      if (!isObject(models)) throw new Error('modelFamilies.limits.models must be an object')
-      limits.models = {}
-      for (const [ref, limit] of Object.entries(models)) {
-        if (!isRef(ref)) throw new Error(`modelFamilies.limits.models: ${ref} is not "provider/id"`)
-        if (!isLimit(limit))
-          throw new Error(`modelFamilies.limits.models.${ref} must be a whole number`)
-        limits.models[ref] = limit
-      }
-    }
-  }
-  return { families, assign, limits }
+  return { families, assign }
 }
 
 /** The built-in families, then each layer's (user, then project), field by field; later layers win. */
 export function mergeFamilies(...layers: ReturnType<typeof parseFamilies>[]): Families {
   const families: Families['families'] = structuredClone(BUILTIN_FAMILIES)
   const assign: Record<string, string> = {}
-  const limits: Limits = { models: {} }
   const palette = Object.keys(FAMILY_COLORS)
   for (const layer of layers) {
     for (const [name, spec] of Object.entries(layer.families)) {
@@ -150,10 +123,8 @@ export function mergeFamilies(...layers: ReturnType<typeof parseFamilies>[]): Fa
       families[name] = { ...families[name], ...spec, color: spec.color ?? color }
     }
     Object.assign(assign, layer.assign)
-    if (layer.limits.global !== undefined) limits.global = layer.limits.global
-    Object.assign(limits.models, layer.limits.models)
   }
-  return { families, assign, limits }
+  return { families, assign }
 }
 
 export const refOf = (value: string | undefined): ModelRef | undefined => {

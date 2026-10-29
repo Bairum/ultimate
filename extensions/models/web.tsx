@@ -37,8 +37,8 @@ const toolbarButton =
   'flex h-7 max-w-56 shrink-0 items-center gap-1.5 rounded-md px-2 font-mono text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground'
 
 /**
- * The composer's model button: a menu of the families first (which one this conversation runs on, who else does, a
- * cap), then a specific model through the picker, and the families editor.
+ * The composer's model button: a menu of the families first (which one this conversation runs on, who else does),
+ * then a specific model through the picker, and the families editor.
  */
 function ModelButton() {
   const { id, ref, thinking, loading, models } = useCurrentModel()
@@ -103,7 +103,6 @@ function ModelButton() {
             const model = runsOn(family)
             const info = models?.models.find((item) => `${item.provider}/${item.id}` === model)
             const members = families?.users.filter((user) => user.family === family.name) ?? []
-            const cap = model ? families?.limits.models[model] : undefined
             const usable = !!info?.available
             return (
               <button
@@ -132,7 +131,7 @@ function ModelButton() {
                   </span>
                 </span>
                 <span className="text-[10.5px] text-muted-foreground/70">
-                  {!usable ? 'no login' : cap ? `≤${cap}` : ''}
+                  {usable ? '' : 'no login'}
                 </span>
                 <span className="col-start-2 truncate text-[10.5px] text-muted-foreground/60">
                   {members.map((user) => user.label).join(' · ') || '—'}

@@ -37,20 +37,13 @@ it('runs a definition on its pin, else its family, else the default family', () 
 
 it('merges the project over the user over the built-ins, field by field', () => {
   const config = families(
-    {
-      families: { tiny: { model: 'acme/mini' }, local: { model: 'vllm/current' } },
-      limits: { global: 8, models: { 'vllm/current': 4 } },
-    },
-    { families: { tiny: { thinking: 'high' } }, limits: { models: { 'vllm/current': 2 } } },
+    { families: { tiny: { model: 'acme/mini' }, local: { model: 'vllm/current' } } },
+    { families: { tiny: { thinking: 'high' } } },
   )
   expect(config.families.tiny).toEqual({ model: 'acme/mini', thinking: 'high', color: 'emerald' })
   expect(config.families.local.model).toBe('vllm/current')
   expect(config.families.local.color).toBeTruthy()
-  expect(config.limits).toEqual({ global: 8, models: { 'vllm/current': 2 } })
   expect(() => parseFamilies({ families: { Bad: {} } })).toThrow('lowercase')
-  expect(() => parseFamilies({ limits: { models: { 'vllm/current': -1 } } })).toThrow(
-    'whole number',
-  )
 })
 
 it("keeps each project's families and starts a project without its own from the ones saved last", async () => {

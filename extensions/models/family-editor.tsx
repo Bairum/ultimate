@@ -1,5 +1,5 @@
 /**
- * Editing model families in place: a family's popover (model, thinking, color, the concurrency caps, removal), a new
+ * Editing model families in place: a family's popover (model, thinking, color, removal), a new
  * family, and moving a feature to a family. Each saves this project's families at once through `SaveFamiliesAction`;
  * the Agents panel lists the families with who runs on each. An agent's family is its definition's, not saved here.
  */
@@ -26,10 +26,10 @@ import {
   familyTitle,
   isFamilyName,
 } from '../../lib/families.ts'
-import { refreshFamilies, runsOn } from './families.tsx'
+import { refreshFamilies } from './families.tsx'
 import { ModelRow } from './picker.tsx'
 import { SaveFamiliesAction } from './refs.ts'
-import type { FamiliesView, FamilyLimits, FamilyView, SaveFamilies } from './refs.ts'
+import type { FamiliesView, FamilyView, SaveFamilies } from './refs.ts'
 
 type Spec = SaveFamilies['families'][string]
 const label = 'font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase'
@@ -45,14 +45,13 @@ const specOf = (family: FamilyView): Spec => ({
 /** Save the families as `view` has them with `change` applied; feature assignments only, agents keep theirs in files. */
 async function save(
   view: FamiliesView,
-  change: Partial<Pick<SaveFamilies, 'families' | 'assign' | 'limits' | 'unpin' | 'switchRunning'>>,
+  change: Partial<Pick<SaveFamilies, 'families' | 'assign' | 'unpin' | 'switchRunning'>>,
 ) {
   const result = await api.action(SaveFamiliesAction, {
     families: Object.fromEntries(view.families.map((family) => [family.name, specOf(family)])),
     assign: Object.fromEntries(
       Object.entries(view.assign).filter(([id]) => Object.hasOwn(FEATURES, id)),
     ),
-    limits: view.limits,
     unpin: [],
     ...change,
   })
@@ -75,7 +74,7 @@ export function moveFeature(view: FamiliesView, id: string, family: string) {
 }
 
 /**
- * A family's settings in a popover over `children`: model, thinking, color and caps as a draft, saved together.
+ * A family's settings in a popover over `children`: model, thinking and color as a draft, saved together.
  * When the change moves open conversations, a ticked box moves those still on the family's old model along.
  */
 export function FamilyPopover({
@@ -110,7 +109,6 @@ function FamilyForm({
   const models = useModels()
   const initial = specOf(family)
   const [draft, setDraft] = useState(initial)
-  const [limits, setLimits] = useState<FamilyLimits>(view.limits)
   const [switching, setSwitching] = useState(true)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string>()
@@ -120,12 +118,7 @@ function FamilyForm({
   // A built-in level can be changed but not cleared: settings keep only what differs from it.
   const inherit = !BUILTIN_FAMILIES[family.name]?.thinking
   const builtin = Object.hasOwn(BUILTIN_FAMILIES, family.name)
-  const shared = view.families.filter(
-    (other) => other.name !== family.name && model && runsOn(other) === model,
-  )
-  const changed =
-    JSON.stringify(draft) !== JSON.stringify(initial) ||
-    JSON.stringify(limits) !== JSON.stringify(view.limits)
+  const changed = JSON.stringify(draft) !== JSON.stringify(initial)
   const runs = draft.model !== initial.model || draft.thinking !== initial.thinking
   const affected = runs
     ? view.users.reduce(
@@ -155,7 +148,6 @@ function FamilyForm({
       setPending(false)
     }
   }
-  const capOf = (ref: string | undefined) => (ref ? limits.models[ref] : undefined)
   return (
     <div className="flex flex-col gap-3 p-3">
       <div className="flex items-center gap-2">
@@ -229,37 +221,6 @@ function FamilyForm({
           ))}
         </select>
       </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div
-          className="flex flex-col gap-1"
-          title="Requests over a cap wait for a free slot. The cap is the model's, so families on the same model share it."
-        >
-          <div className={label}>At most, at once</div>
-          <LimitInput
-            disabled={!model}
-            label="This model's cap"
-            onChange={(value) => {
-              if (!model) return
-              const { [model]: _old, ...rest } = limits.models
-              setLimits({ ...limits, models: value ? { ...rest, [model]: value } : rest })
-            }}
-            value={capOf(model)}
-          />
-        </div>
-        <div className="flex flex-col gap-1">
-          <div className={label}>All models</div>
-          <LimitInput
-            label="Overall cap"
-            onChange={(global) => setLimits({ ...limits, global })}
-            value={limits.global}
-          />
-        </div>
-        {shared.length > 0 && (
-          <p className="col-span-2 -mt-1 text-[11px] text-muted-foreground/80">
-            {short(model!)} is shared with {shared.map((item) => familyTitle(item.name)).join(', ')}
-          </p>
-        )}
-      </div>
       {changed && affected > 0 && (
         <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
           <Checkbox checked={switching} onCheckedChange={(value) => setSwitching(value === true)} />
@@ -289,7 +250,6 @@ function FamilyForm({
           onClick={() =>
             void apply({
               families: families(draft),
-              limits,
               switchRunning: switching && affected > 0,
             })
           }
@@ -379,35 +339,6 @@ export function AddFamily({ view }: { view: FamiliesView }) {
 }
 
 const short = (ref: string) => ref.slice(ref.indexOf('/') + 1)
-
-function LimitInput({
-  value,
-  label: name,
-  disabled,
-  onChange,
-}: {
-  value: number | undefined
-  label: string
-  disabled?: boolean
-  onChange: (value: number | undefined) => void
-}) {
-  return (
-    <input
-      aria-label={name}
-      className={cn(control, 'tabular-nums')}
-      disabled={disabled}
-      min={0}
-      onChange={(event) => {
-        const next = Number.parseInt(event.target.value, 10)
-        onChange(Number.isFinite(next) && next > 0 ? next : undefined)
-      }}
-      placeholder="no limit"
-      step={1}
-      type="number"
-      value={value ?? ''}
-    />
-  )
-}
 
 const LIMIT = 150
 

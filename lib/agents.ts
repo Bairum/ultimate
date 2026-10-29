@@ -379,8 +379,10 @@ export async function discoverAgents(
           const base = definitions.get(overlay.name)
           if (!base) throw new Error(`addTools needs an earlier definition named ${overlay.name}`)
           const heading = source === 'user' ? 'User additions' : 'Project additions'
+          // A family without a model of its own replaces the model an earlier file pins.
+          const { model: _pin, ...unpinned } = base
           definitions.set(overlay.name, {
-            ...base,
+            ...(overlay.settings.family && !overlay.settings.model ? unpinned : base),
             ...overlay.settings,
             ...(overlay.settings.denyTools
               ? {
@@ -543,15 +545,15 @@ export async function saveOverlay(
   if (form.description.trim() !== base.description)
     settings.push(`description: ${scalar(form.description.trim())}`)
   const baseModel = base.model && `${base.model.provider}/${base.model.modelId}`
-  if (form.model !== baseModel) {
-    if (!form.model) throw cannot('clear the model')
-    settings.push(`model: ${scalar(form.model)}`)
-  }
+  // A family replaces the model the base pins; without one, there is nothing to run on instead.
+  const unpin = !form.model && !!baseModel
+  if (unpin && !form.family) throw cannot('clear the model without a family')
+  if (form.model && form.model !== baseModel) settings.push(`model: ${scalar(form.model)}`)
   if (form.thinking !== base.thinking) {
     if (!form.thinking) throw cannot('clear thinking')
     settings.push(`thinking: ${scalar(form.thinking)}`)
   }
-  if (form.family !== base.family) {
+  if (form.family !== base.family || unpin) {
     if (!form.family) throw cannot('clear the family')
     settings.push(`family: ${scalar(form.family)}`)
   }

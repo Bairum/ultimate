@@ -78,16 +78,12 @@ export type FamilyUser = {
   source?: 'builtin' | 'user' | 'project'
 }
 
-/** Request concurrency caps; unset or 0 is unlimited. `models` is keyed by `provider/id`. */
-export type FamilyLimits = { global?: number; models: Record<string, number> }
-
 export type FamiliesView = {
   /** In display order: built-ins, then the user's. */
   families: FamilyView[]
   users: FamilyUser[]
   /** The saved feature assignments; the project's team settings may add more. */
   assign: Record<string, string>
-  limits: FamilyLimits
   /**
    * Open conversations on their family's model, by user id; `default` counts those of no definition. A switch moves
    * them when their family's model changes.
@@ -99,14 +95,13 @@ export type FamiliesView = {
   errors: string[]
 }
 
-/** No arguments → the families, who uses which, and the concurrency caps. */
+/** No arguments → the families and who runs on which. */
 export const FamiliesAction = actionRef<null, FamiliesView>('models', 'families')
 
 export type SaveFamilies = {
   families: Record<string, { model?: string; thinking?: ModelThinkingLevel; color: string }>
   /** Which family each feature (`summaries`, `preview`) runs on; agents keep theirs in their definitions. */
   assign: Record<string, string>
-  limits: FamilyLimits
   /** Features whose user-settings pin (`summaryModel`, `instance.model`) a family replaces. */
   unpin: string[]
   /** Also move conversations that run on a family's old model to its new one. */

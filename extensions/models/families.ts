@@ -141,7 +141,6 @@ export async function familiesView(host: ExtensionHost): Promise<FamiliesView> {
     families,
     users: [...agents, ...features],
     assign: layers.base.assign,
-    limits: config.limits,
     open: await openOnFamily(host, config, definitions),
     from: layers.from,
     errors: layers.errors,
@@ -166,7 +165,7 @@ function userFamilies(families: SaveFamilies['families']) {
 }
 
 /** A saved value without its empty parts. */
-function compact(value: { families: object; assign: object; limits: object }): JsonObject {
+function compact(value: { families: object; assign: object }): JsonObject {
   return Object.fromEntries(
     Object.entries(value).filter(([, part]) => Object.keys(part).length),
   ) as JsonObject
@@ -187,16 +186,8 @@ export async function saveFamilies(host: ExtensionHost, args: SaveFamilies) {
   const before = await read(host)
   const beforeDefault = defaultsOf(host, before.config)
   const families = userFamilies(args.families)
-  const limits = {
-    ...(args.limits.global ? { global: args.limits.global } : {}),
-    models: Object.fromEntries(Object.entries(args.limits.models).filter(([, limit]) => limit > 0)),
-  }
-  const value = {
-    families,
-    assign: args.assign,
-    limits: limits.global === undefined && !Object.keys(limits.models).length ? {} : limits,
-  }
-  // Throws on an invalid name, model or limit before anything is written.
+  const value = { families, assign: args.assign }
+  // Throws on an invalid name or model before anything is written.
   parseFamilies(value)
   for (const user of Object.keys(args.assign))
     if (!Object.hasOwn(FEATURES, user))

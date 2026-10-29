@@ -14,7 +14,6 @@ import type { Context } from '@earendil-works/chord'
 import { UiState } from './ui-state.ts'
 import { listModels } from './models.ts'
 import { guardToolArguments, modelTrace } from './tool-arguments.ts'
-import { createModelGate, limitModels } from './model-limits.ts'
 import { readFamilies } from '../lib/families-settings.ts'
 import { refOf } from '../lib/families.ts'
 import { callTrace } from './trace.ts'
@@ -154,9 +153,7 @@ export async function prepareHarness(options: HostOptions) {
   const trace = callTrace(() => chapter.trace)
   const modelCalls = modelTrace(trace)
   registry.install(modelCalls.extension)
-  // Outermost, so a request's trace row starts once it has a slot rather than while it waits for one.
-  const modelGate = createModelGate(async () => (await readFamilies(userHome, projectRoot)).limits)
-  const modelRuntime = limitModels(guardToolArguments(runtime, modelCalls), modelGate)
+  const modelRuntime = guardToolArguments(runtime, modelCalls)
   const { faux } = options
   if (faux) {
     runtime.registerNativeProvider(faux.provider)
@@ -236,8 +233,6 @@ export async function prepareHarness(options: HostOptions) {
           await created.close(context)
         })
         chapter = await activeChapter(home)
-        // The model caps apply from the first request the harness makes.
-        await modelGate.refresh()
         storage = await openNodeSqliteStorage(chapter.database)
         harness = await Harness.open(
           storage,
