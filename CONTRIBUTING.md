@@ -11,6 +11,8 @@ Ultimate is a personal project, shared as inspiration, not as a library or a pro
   unmerged as reference implementations, titled "Feature: …" and labelled `feature`: I don't want to maintain code I
   don't need, but anyone who wants to solve the same problem can borrow from them. Browse them with
   `gh pr list --repo HazAT/ultimate --label feature`.
+- **Don't write `@ultimate` bare on GitHub.** In PR titles, bodies, comments and issues, put agent names in backticks
+  (`` `@ultimate` ``, `` `@lander` ``) or drop the @: on GitHub `@name` notifies the real user of that name.
 - **Issues are not reviewed.** Please don't expect a reply.
 - **Nothing is stable.** I change things as I go, fundamental ones included, without migration paths, deprecation
   periods, or regard for anyone building on top.
