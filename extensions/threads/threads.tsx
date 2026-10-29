@@ -10,6 +10,8 @@ export type Thread = {
   last: number
   /** The landing report that landed it, and the commit. */
   landed?: { entry: number; sha: string }
+  /** Messages @ultimate sent the user about it, by message id: an open question among them waits on the user. */
+  asks?: number[]
 }
 export type Threads = {
   /** The threads of each placed entry: most have one, a turn woken by several branches has each. */
@@ -32,6 +34,10 @@ const address = (value: unknown, self: number) => {
   return match ? conversation(Number(match[1]), self) : []
 }
 const union = (...lists: (readonly number[])[]) => [...new Set(lists.flat())]
+
+/** How a reply typed in a thread starts, so it and the turn it wakes belong to that thread. */
+export const REPLY = /^Re #(\d+): /
+export const reply = (thread: number, text: string) => `Re #${thread}: ${text}`
 
 /**
  * Which feature thread each entry of @ultimate's conversation (`self`) belongs to, from what the entries and the message
@@ -101,11 +107,22 @@ export function threadsOf(
       // Retired: older transcripts woke a turn with a pointer to the message.
       case 'board.wake':
         return conversation(senders.get(data.id), self)
+      // Typed in a thread: the thread's composer starts it with `Re #<branch>:`.
+      case 'pi.user': {
+        const content = entry.model?.[0]?.content
+        const text =
+          typeof content === 'string'
+            ? content
+            : (content?.find((block) => block.type === 'text')?.text ?? '')
+        const re = REPLY.exec(text)
+        return re ? conversation(Number(re[1]), self) : []
+      }
       default:
         return []
     }
   }
 
+  const asked = new Map<number, number[]>()
   let wake: readonly number[] = []
   let turn: EntryRecord[] = []
   let answered = true
@@ -147,9 +164,14 @@ export function threadsOf(
         wake = union(...targets)
         for (const earlier of turn) place(earlier.id, wake)
       }
-      own.forEach((call, index) =>
-        calls.set(call.id, targets[index].length ? targets[index] : wake),
-      )
+      own.forEach((call, index) => {
+        const reach = targets[index].length ? targets[index] : wake
+        calls.set(call.id, reach)
+        // What it told the user about these threads.
+        for (const sent of messages)
+          if (sent.to === 'user' && sent.call?.split('/')[0] === call.id)
+            for (const thread of reach) asked.set(thread, [...(asked.get(thread) ?? []), sent.id])
+      })
       place(entry.id, own.length ? union(...own.map((call) => calls.get(call.id)!)) : wake)
       continue
     }
@@ -162,9 +184,31 @@ export function threadsOf(
       place(entry.id, conversation(data.from, self))
     if (entry.kind === 'lineage.finished') place(entry.id, conversation(data.from, self))
   }
+  for (const [id, asks] of asked) {
+    const thread = threads.get(id)
+    if (thread) thread.asks = asks
+  }
   return { of, threads: [...threads.values()].toSorted((a, b) => a.first - b.first) }
 }
 
-/** The entries of thread `id`. */
-export const entriesOf = (threads: Threads, id: number) =>
-  new Set([...threads.of].flatMap(([entry, ids]) => (ids.includes(id) ? [entry] : [])))
+/**
+ * How the main stream shows `threads`. The turn a thread began in stays (the user's ask and @ultimate's answer that
+ * started it), and the thread's root row follows that answer. After it, an entry of one thread leaves the stream for that
+ * thread; one of several (a turn that answered several branches at once) stays.
+ */
+export function threading(entries: readonly EntryRecord[], { of, threads }: Threads) {
+  const answers = entries.filter((entry) => {
+    const message = entry.model?.[0]
+    return message?.role === 'assistant' && message.stopReason !== 'toolUse'
+  })
+  const roots = new Map(
+    threads.map((thread) => [
+      thread.id,
+      answers.find((entry) => entry.id >= thread.first)?.id ?? thread.first,
+    ]),
+  )
+  const hidden = new Set<number>()
+  for (const [entry, ids] of of)
+    if (ids.length === 1 && entry > roots.get(ids[0])!) hidden.add(entry)
+  return { of, hidden, roots }
+}

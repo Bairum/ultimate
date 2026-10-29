@@ -383,7 +383,7 @@ describe('web extension registry', () => {
     expect(compactTools(records, undefined, {}, report)).toBeUndefined()
     expect(report).toHaveBeenCalledWith('c', new Error('broken'))
     const shape =
-      'compact must be a { when, tools?, docs?, quiet?, summary?, thread?, threads?, lane? } object'
+      'compact must be a { when, tools?, docs?, quiet?, summary?, thread?, threads? } object'
     registry.replace('b', { default: { compact: { tools: ['workspace'] } } })
     expect(registry.getSnapshot()[1]?.error).toBe(shape)
     registry.replace('b', { default: { compact: { when: () => true, docs: [1] } } })

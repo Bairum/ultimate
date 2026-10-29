@@ -1,8 +1,7 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
-import { threadsOf } from '../../extensions/threads/threads.tsx'
+import { reply, threading, threadsOf } from '../../extensions/threads/threads.tsx'
 import type { Message } from '../../extensions/messages/refs.ts'
-import { laneAt, laneColumns } from '../../web/src/app/compact.ts'
 
 // Shapes as @ultimate's stored history has them: inputs carry `input`, a response its tool calls, a result its call id.
 const ULTIMATE = 10
@@ -112,23 +111,37 @@ describe('threadsOf', () => {
     // The user's unrelated prompt belongs to no thread.
     expect([20, 21].map(at)).toEqual([[], []])
     expect(threads.map((thread) => thread.id)).toEqual([21, 22, 23])
+    // The question asked about #22 is the thread's, so its open question waits on the user there.
+    expect(threads.find((thread) => thread.id === 22)?.asks).toEqual([5])
+
+    // The main stream: the turn that started all three stays, with their roots after its answer; each thread's later
+    // traffic leaves for its thread; the unrelated prompt stays.
+    const stream = threading(entries, { of, threads })
+    expect([...stream.roots]).toEqual([
+      [21, 6],
+      [22, 6],
+      [23, 6],
+    ])
+    const main = entries.filter((e) => !stream.hidden.has(e.id)).map((e) => e.id)
+    expect(main).toEqual([1, 2, 3, 4, 5, 6, 20, 21])
   })
 
-  it('lays out lanes side by side, reusing a column once its thread ended', () => {
-    const threads = new Map([
-      [1, [21]],
-      [2, [22]],
-      [3, [21]],
-      [4, [23]],
-    ])
-    const lanes = laneColumns(threads)
-    expect(lanes.width).toBe(2)
-    // #23 starts after #21 ended, so it takes #21's column.
-    expect(lanes.column.get(23)).toBe(0)
-    const part = (id: number) => ({ entry: { id } as EntryRecord })
-    expect(laneAt(lanes, [part(2)], threads)).toEqual([
-      { thread: 21, here: false, up: true, down: true },
-      { thread: 22, here: true, up: false, down: false },
-    ])
+  it('puts a reply typed in a thread, and the turn it wakes, in that thread', () => {
+    next = 1
+    const entries = [
+      prompt(),
+      respond([{ id: 'b', name: 'branch' }]),
+      result('b', 'branch', 'Branch #31 started; message 1 sent.'),
+      respond(),
+      entry('pi.user', {
+        input: true,
+        model: [{ role: 'user', content: reply(31, 'make it blue'), timestamp: 0 }],
+      }),
+      respond([{ id: 'm', name: 'message', to: '#31' }]),
+      result('m', 'message'),
+      respond(),
+    ]
+    const { of } = threadsOf(entries, [], ULTIMATE)
+    expect([5, 6, 7, 8].map((id) => of.get(id))).toEqual([[31], [31], [31], [31]])
   })
 })

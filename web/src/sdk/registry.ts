@@ -1,23 +1,23 @@
 import type { ComponentType } from 'react'
+import type { EntryRecord } from '@earendil-works/pi-durable'
 import type { ConversationSummary } from '../../../shared/protocol.ts'
 import { events } from './events.ts'
 import { errorMessage } from './format.ts'
 import type {
   CodeBlockRenderer,
   CompactCallTest,
-  CompactContribution,
   CompactDocs,
   CompactQuietTest,
   CompactRow,
   CompactSummaryProps,
   CommandContribution,
+  Threading,
   ComposerRenderer,
   Contribution,
   DocumentContribution,
   EntryRenderer,
   InboxRenderer,
   IntroContribution,
-  LaneProps,
   LinkRenderer,
   PanelContribution,
   SlotName,
@@ -149,9 +149,8 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
       summary: optional(isComponent),
       thread: optional(isFunction),
       threads: optional(isFunction),
-      lane: optional(isComponent),
     }),
-    'a { when, tools?, docs?, quiet?, summary?, thread?, threads?, lane? } object',
+    'a { when, tools?, docs?, quiet?, summary?, thread?, threads? } object',
   ],
   intro: [
     fields({
@@ -607,12 +606,7 @@ export function compactTools(
       keeps: CompactCallTest
       quiet: CompactQuietTest
       thread?: (row: CompactRow, docs: CompactDocs) => boolean
-      threads?: {
-        extension: string
-        version: number
-        of: NonNullable<CompactContribution['threads']>
-        lane?: ComponentType<LaneProps>
-      }
+      threads?: (entries: readonly EntryRecord[], docs: CompactDocs, shown: number) => Threading
       summary?: {
         extension: string
         version: number
@@ -677,19 +671,20 @@ export function compactTools(
     summary: matching.flatMap(({ name, version, compact }) =>
       compact.summary ? [{ extension: name, version, component: compact.summary }] : [],
     )[0],
-    // The first facet that buckets entries into threads draws their lanes too.
-    threads: matching.flatMap(({ name, version, compact }) => {
-      const { threads, lane } = compact
+    // The first facet that threads the conversation; a broken one leaves it unthreaded.
+    threads: matching.flatMap(({ name, compact }) => {
+      const { threads } = compact
       if (!threads) return []
-      const of: NonNullable<CompactContribution['threads']> = (entries, docs, shown) => {
-        try {
-          return threads(entries, docs, shown)
-        } catch (error) {
-          report(name, error)
-          return new Map()
-        }
-      }
-      return [{ extension: name, version, of, ...(lane ? { lane } : {}) }]
+      return [
+        (entries: readonly EntryRecord[], docs: CompactDocs, shown: number): Threading => {
+          try {
+            return threads(entries, docs, shown)
+          } catch (error) {
+            report(name, error)
+            return { of: new Map(), hidden: new Set(), roots: new Map() }
+          }
+        },
+      ]
     })[0],
   }
 }

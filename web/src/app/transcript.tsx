@@ -12,6 +12,7 @@ import {
 import {
   Fragment,
   memo,
+  useContext,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
@@ -48,15 +49,14 @@ import {
   useNow,
   useStore,
   useSystem,
-  useThreadFocus,
-  useThreadLanes,
   useUltimate,
 } from '../sdk/hooks.ts'
 import { entryRenderers, messageItems, toolLine } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary, Provided, Slot } from './boundary.tsx'
 import { ParkedRuns, RunStart } from '../sdk/types.ts'
-import type { CompactSummaryProps } from '../sdk/types.ts'
+import type { CompactSummaryProps, Threading } from '../sdk/types.ts'
+import { ThreadContext } from '../sdk/thread.ts'
 import { MessageActions } from './message-actions.tsx'
 import { textOf, UserView } from './user-turn.tsx'
 import {
@@ -66,8 +66,6 @@ import {
   groupBetween,
   groupQuiet,
   isOpenIn,
-  laneAt,
-  laneColumns,
   openIn,
   partKey,
   partsOf,
@@ -86,6 +84,45 @@ import { callsStart, indexTools, partialOf, slotsOf, toolCallView } from './mode
 import type { ToolResult } from './model.ts'
 import { ToolCallBlock } from './tool-call.tsx'
 import { TranscriptSkeleton } from './transcript-skeleton.tsx'
+
+/**
+ * The entries a threaded transcript shows: in the main stream, those of no thread, with a `threads.root` row where each
+ * thread's root entry was; in thread `thread`, that thread's entries alone.
+ */
+export function threadStream(
+  entries: readonly EntryRecord[],
+  { of, hidden, roots }: Threading,
+  thread: number | undefined,
+): EntryRecord[] {
+  if (thread !== undefined) return entries.filter((entry) => of.get(entry.id)?.includes(thread))
+  const rootsAt = Map.groupBy(roots, ([, entry]) => entry)
+  return entries.flatMap((entry) => {
+    // A root row is known by its thread, negated so it never takes a stored entry's id.
+    const rows = (rootsAt.get(entry.id) ?? []).map(
+      ([root]) =>
+        ({
+          id: -root,
+          conversationId: entry.conversationId,
+          kind: 'threads.root',
+          data: { thread: root },
+        }) as unknown as EntryRecord,
+    )
+    return hidden.has(entry.id) ? rows : [entry, ...rows]
+  })
+}
+
+/**
+ * Thread `thread` of the shown conversation as a transcript of its own, for a side pane: its entries in order, cards
+ * open, runs of work folded as in the main stream; `children` (such as its composer) go below it, in the thread.
+ */
+export function ThreadView({ thread, children }: { thread: number; children?: ReactNode }) {
+  return (
+    <ThreadContext value={thread}>
+      <Transcript dock />
+      {children}
+    </ThreadContext>
+  )
+}
 
 /** The shown conversation; `dock` fits it into a narrow side region. */
 export function Transcript({ dock }: { dock?: boolean }) {
@@ -507,88 +544,51 @@ function TranscriptEntries() {
   // Keyed on the tools, not `live`: a streamed token must not re-render every row.
   const slots = useMemo(() => slotsOf(live.tools), [live.tools])
   const partial = partialOf(live)
-  const visible = entries.filter(
+  const own = entries.filter(
     (entry) =>
       entry.conversationId === id &&
       !(entry.kind === 'pi.tool-result' && calls.has(toolCallId(entry) ?? '')),
+  )
+  // Background rows, such as traffic between agents, fold into one line per stretch.
+  const background = useCompactQuiet()
+  // A threaded conversation's main stream: each thread's entries leave it, and its root row stands where it began. A
+  // thread view shows one thread's entries alone.
+  const thread = useContext(ThreadContext)
+  const threading = useMemo(
+    () => (background?.threads && id !== undefined ? background.threads(own, id) : undefined),
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- `own` is derived from `entries` each render.
+    [background, entries, id],
+  )
+  const visible = useMemo(
+    () => (threading ? threadStream(own, threading, thread) : own),
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- `own` is derived from `entries` each render.
+    [threading, entries, thread],
   )
   const compact = useCompact()
   const keeps = (call: ToolCall) => !!compact?.(call)
   const rows: (CompactPart | WorkRun)[] = compact
     ? compactRows(visible, keeps)
     : visible.map((entry) => ({ entry }))
-  // Background rows, such as traffic between agents, fold into one line per stretch.
-  const background = useCompactQuiet()
-  // The threads each entry belongs to; with one focused, its rows show whole and other threads recede.
-  const bucket = background?.threads
-  const threads = useMemo(
-    () => (bucket && id !== undefined ? bucket.of(visible, id) : undefined),
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- `visible` is derived from `entries` each render.
-    [bucket, entries, id],
-  )
-  const [focus] = useThreadFocus(id)
-  const focused = threads && focus !== null ? focus : undefined
-  const inFocus = (part: CompactPart) => !!threads?.get(part.entry.id)?.includes(focused!)
-  const quiet = background
-    ? groupQuiet(rows, (part) =>
-        focused !== undefined && inFocus(part)
-          ? false
-          : background.quiet({ entry: part.entry, calls: shownCalls(part) }),
-      )
-    : rows
+  // In a thread every row is the thread itself: nothing there is background.
+  const quiet =
+    background && thread === undefined
+      ? groupQuiet(rows, (part) => background.quiet({ entry: part.entry, calls: shownCalls(part) }))
+      : rows
   // Background groups the reader or a reveal opened, by the keys of all their parts, as folded runs are.
   const [shownQuiet, setShownQuiet] = useState<ReadonlySet<string>>(new Set())
   // What a go-back set aside folds into one quiet row; the rows themselves render as usual inside it.
   const aside = useMemo(() => setAsideIds(entries), [entries])
   const grouped = groupAside(quiet, aside)
-  // What lies between two rows of the thread the reader follows folds into one line that opens it.
-  const thread = background?.thread
-  // Focused, the thread's rows and its runs of work are what the reader follows, with the rows of no thread that are the
-  // conversation itself (the user's own prompts and the answers to them); other threads recede between them.
-  const followed = (row: (typeof grouped)[number]) => {
-    if ('quiet' in row || 'aside' in row) return false
-    if (focused !== undefined && partsOf(row).every(inFocus)) return true
-    if ('work' in row) return false
-    if (focused !== undefined && threads?.get(row.entry.id)?.length) return false
-    return !!thread?.({ entry: row.entry, calls: shownCalls(row) })
-  }
-  const threaded = thread ? groupBetween(grouped, followed) : grouped.map((row) => row)
-  const [lanesOn] = useThreadLanes()
-  const lanes = useMemo(
-    () => (lanesOn && threads && bucket?.lane ? laneColumns(threads) : undefined),
-    [lanesOn, threads, bucket],
-  )
-  /**
-   * The lanes beside a top-level row, one 12 px column per thread, drawn by the facet that buckets threads; every row
-   * gets them while lanes are on, so the rows stay aligned.
-   */
-  const laneOf = (parts: readonly CompactPart[]) => {
-    if (!lanes || !bucket?.lane || !parts.length) return undefined
-    const Lane = bucket.lane
-    return (
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute -top-1.5 -bottom-1.5 left-0 flex"
-        data-lane
-      >
-        {laneAt(lanes, parts, threads!).map((lane, index) => (
-          // oxlint-disable-next-line react/no-array-index-key -- a lane's column is its position.
-          <div className="relative w-3 shrink-0" key={index}>
-            {lane && (
-              <ExtensionBoundary
-                extension={bucket.extension}
-                variant="inline"
-                version={bucket.version}
-              >
-                <Lane {...lane} />
-              </ExtensionBoundary>
-            )}
-          </div>
-        ))}
-      </div>
-    )
-  }
-  const lanePad = lanes ? { paddingLeft: lanes.width * 12 + 8 } : undefined
+  // What lies between two rows of what the reader follows folds into one line that opens it.
+  const follows = thread === undefined ? background?.thread : undefined
+  const threaded = follows
+    ? groupBetween(
+        grouped,
+        (row) =>
+          !('quiet' in row || 'work' in row || 'aside' in row) &&
+          follows({ entry: row.entry, calls: shownCalls(row) }),
+      )
+    : grouped.map((row) => row)
   const [shownBetween, setShownBetween] = useState(0)
   const [shownAside, setShownAside] = useState<ReadonlySet<number>>(new Set())
   // Folded runs the reader or a reveal opened, by the keys of all their parts: a run that gains earlier entries from a
@@ -671,23 +671,16 @@ function TranscriptEntries() {
       shownBetween,
     ],
   )
-  const render = (
-    row: CompactPart | WorkRun | QuietGroup,
-    last: boolean,
-    faded = '',
-    lane?: ReactNode,
-  ): ReactNode =>
+  const render = (row: CompactPart | WorkRun | QuietGroup, last: boolean, faded = ''): ReactNode =>
     'quiet' in row ? (
       // Found like a folded run: by its first entry, or its last when a page reaches into it.
       <div
-        className={cn(faded, lane && 'relative')}
-        style={lane ? lanePad : undefined}
+        className={faded}
         data-conversation-id={id}
         data-entry-id={partsOf(row)[0].entry.id}
         data-run-last={partsOf(row).at(-1)!.entry.id}
         key={`quiet:${quietKey(row)}`}
       >
-        {lane}
         <QuietRow
           busy={busy && last}
           group={row}
@@ -700,14 +693,12 @@ function TranscriptEntries() {
       </div>
     ) : 'work' in row ? (
       <div
-        className={cn('empty:hidden', faded, lane && 'relative')}
-        style={lane ? lanePad : undefined}
+        className={cn('empty:hidden', faded)}
         data-conversation-id={id}
         data-entry-id={row.work[0].entry.id}
         data-run-last={row.work.at(-1)!.entry.id}
         key={partKey(row.work[0])}
       >
-        {lane}
         <WorkRow
           busy={busy}
           onOpenChange={(value) => open(row, value)}
@@ -720,13 +711,11 @@ function TranscriptEntries() {
       </div>
     ) : (
       <div
-        className={cn('empty:hidden', faded, lane && 'relative')}
-        style={lane ? lanePad : undefined}
+        className={cn('empty:hidden', faded)}
         data-conversation-id={id}
         data-entry-id={row.entry.id}
         key={partKey(row)}
       >
-        {lane}
         <EntryView
           blocks={row.blocks}
           busy={busy}
@@ -766,7 +755,7 @@ function TranscriptEntries() {
       {!loading && visible.length > 0 && cursor === undefined && <Slot name="transcript.start" />}
       {threaded.map((item, index) => {
         const last = index === threaded.length - 1
-        if (!('between' in item)) return renderItem(item, last, '', laneOf(itemParts(item)))
+        if (!('between' in item)) return renderItem(item, last)
         const key = `between:${partKey(itemParts(item.between[0])[0])}`
         // The stretch the agent works in now stays in view while it works.
         const shown = (busy && last) || readBetween(id, item)
@@ -775,36 +764,20 @@ function TranscriptEntries() {
           'quiet' in row ? row.quiet : [row],
         )
         const faded = between.map((inner, inside) =>
-          renderItem(
-            inner,
-            last && inside === between.length - 1,
-            recedeRow,
-            laneOf(itemParts(inner)),
-          ),
-        )
-        const lane = laneOf(item.between.flatMap(itemParts))
-        const line = (
-          <BetweenLine
-            group={item}
-            onOpen={() => {
-              writeBetween(id, item, !shown)
-              setShownBetween((count) => count + 1)
-            }}
-            open={shown}
-            summary={background?.summary}
-            working={busy && last}
-          />
+          renderItem(inner, last && inside === between.length - 1, recedeRow),
         )
         return (
           <Fragment key={key}>
-            {lane ? (
-              <div className="relative" style={lanePad}>
-                {lane}
-                {line}
-              </div>
-            ) : (
-              line
-            )}
+            <BetweenLine
+              group={item}
+              onOpen={() => {
+                writeBetween(id, item, !shown)
+                setShownBetween((count) => count + 1)
+              }}
+              open={shown}
+              summary={background?.summary}
+              working={busy && last}
+            />
             {shown && faded}
             {shown && index < threaded.length - 1 && <BetweenRule />}
           </Fragment>
@@ -824,9 +797,8 @@ function TranscriptEntries() {
     item: CompactPart | WorkRun | QuietGroup | AsideGroup,
     last: boolean,
     faded = '',
-    lane?: ReactNode,
   ): ReactNode {
-    if (!('aside' in item)) return render(item, last, faded, lane)
+    if (!('aside' in item)) return render(item, last, faded)
     const key = asideKey(item)
     const shown = shownAside.has(key)
     return (

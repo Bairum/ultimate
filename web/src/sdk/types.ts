@@ -211,26 +211,17 @@ export interface CompactContribution {
    */
   thread?: (row: CompactRow, docs: CompactDocs) => boolean
   /**
-   * The threads each loaded entry belongs to, by entry id, such as the branch each of @ultimate's entries is about. With
-   * one focused (`useThreadFocus`), the transcript reads as that thread and everything else recedes between its rows.
+   * Threads of the conversation, such as one per branch @ultimate talks with: which loaded entries each thread holds
+   * (`of`), which of them leave the main stream (`hidden`), and where each thread's root row stands in it (`roots`,
+   * thread → entry). The main stream shows a `threads.root` entry (`data: { thread }`) in place of a root's entry, and
+   * `ThreadView` shows one thread's entries.
    */
-  threads?: (
-    entries: readonly EntryRecord[],
-    docs: CompactDocs,
-    conversation: number,
-  ) => ReadonlyMap<number, readonly number[]>
-  /**
-   * One thread's lane beside a row while lanes are on (`useThreadLanes`): the transcript gives each thread running past
-   * the row a full-height column of its own, 12 px wide, and draws this in it.
-   */
-  lane?: ComponentType<LaneProps>
+  threads?: (entries: readonly EntryRecord[], docs: CompactDocs, conversation: number) => Threading
 }
-/** One thread's lane beside a row: whether the row is in it, and whether the thread runs on above and below. */
-export interface LaneProps {
-  thread: number
-  here: boolean
-  up: boolean
-  down: boolean
+export type Threading = {
+  of: ReadonlyMap<number, readonly number[]>
+  hidden: ReadonlySet<number>
+  roots: ReadonlyMap<number, number>
 }
 /** A compact transcript row: an entry, and the visible tool calls it shows when it shows only some of its blocks. */
 export interface CompactRow {
