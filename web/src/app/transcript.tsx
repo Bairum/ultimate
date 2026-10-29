@@ -85,7 +85,7 @@ import { TranscriptSkeleton } from './transcript-skeleton.tsx'
 
 /** The shown conversation; `dock` fits it into a narrow side region. */
 export function Transcript({ dock }: { dock?: boolean }) {
-  const { id, loading, busy } = useConversation()
+  const { id, loading } = useConversation()
   const { conversationId } = useUltimate()
   // A conversation without messages opens as it is: no placeholder, nothing rising in.
   const messages = useStore((state) => {
@@ -147,16 +147,14 @@ export function Transcript({ dock }: { dock?: boolean }) {
     if (!scroll || !content) return undefined
     scroll.scrollTop = scroll.scrollHeight
     if (id !== undefined) reveal(scroll, content)
-    // The library observes content growth, not viewport shrinkage as the composer grows.
-    // Reuse its follow lock so resizing never pulls someone away from older messages.
+    // Pin to the bottom before paint as content grows or the viewport shrinks: the library follows a frame later, and in
+    // that frame the scrollbar thumb jumps. Its follow lock still decides, so nobody reading older messages is pulled.
     const resize = new ResizeObserver(() => {
-      // oxlint-disable-next-line typescript/no-floating-promises -- use-stick-to-bottom's frame loop resolves a boolean; it performs no rejecting async work.
-      void stick.current?.scrollToBottom({
-        animation: 'instant',
-        preserveScrollPosition: true,
-      })
+      const state = stick.current?.state
+      if (state?.isAtBottom) state.scrollTop = state.targetScrollTop
     })
     resize.observe(scroll)
+    resize.observe(content)
     return () => resize.disconnect()
   }, [id])
   // A sent message pins the view to the bottom and follows the run, even when the reader had scrolled up.
@@ -168,13 +166,7 @@ export function Transcript({ dock }: { dock?: boolean }) {
   // Keyed so a conversation never inherits the previous one's scroll position or follow state.
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      {/* Follow a streaming reply smoothly; otherwise late growth, such as an image decoding, just stays at the bottom. */}
-      <Conversation
-        className="min-h-0"
-        contextRef={stick}
-        key={id}
-        resize={busy ? 'smooth' : 'instant'}
-      >
+      <Conversation className="min-h-0" contextRef={stick} key={id} resize="instant">
         <ConversationContent className={cn(column(dock), 'gap-3 pt-6 pb-10')}>
           <TranscriptEntries />
         </ConversationContent>
