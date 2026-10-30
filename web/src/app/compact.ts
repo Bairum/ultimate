@@ -295,6 +295,18 @@ export function groupBetween<Row extends object>(
   return grouped
 }
 
+/**
+ * Whether a stretch between thread rows shows nothing: every row in it is a bare part that renders nothing (`hidden`).
+ * Such a stretch gets no line of its own; a line with nothing to count would be an empty chevron.
+ */
+export const emptyStretch = <Row extends object>(
+  group: BetweenGroup<Row>,
+  hidden: (part: CompactPart) => boolean,
+) =>
+  group.between.every(
+    (row) => !('work' in row || 'quiet' in row || 'aside' in row) && hidden(row as CompactPart),
+  )
+
 /** The folded run where `entry` first shows, if it starts in one: revealing the entry opens it. */
 export function runOf(rows: readonly (CompactPart | WorkRun | QuietGroup)[], entry: number) {
   const flat = rows.flatMap((row) => ('quiet' in row ? row.quiet : [row]))

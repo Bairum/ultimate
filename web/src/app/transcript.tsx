@@ -65,6 +65,7 @@ import {
   groupAside,
   groupBetween,
   groupQuiet,
+  emptyStretch,
   isOpenIn,
   openIn,
   partKey,
@@ -761,6 +762,15 @@ function TranscriptEntries() {
       {threaded.map((item, index) => {
         const last = index === threaded.length - 1
         if (!('between' in item)) return renderItem(item, last)
+        // Only rows that render nothing (a setup note, a reminder): no line, rather than an empty chevron.
+        if (
+          emptyStretch(
+            item,
+            (part) =>
+              background?.quiet({ entry: part.entry, calls: shownCalls(part) }) === 'hidden',
+          )
+        )
+          return null
         const key = `between:${partKey(itemParts(item.between[0])[0])}`
         // The stretch the agent works in now stays in view while it works.
         const shown = (busy && last) || readBetween(id, item)
