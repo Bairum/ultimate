@@ -210,30 +210,26 @@ function Brand() {
   )
 }
 
-/** One segment per surface beyond a phone, the shown one raised like a selected tab. */
+/** One lowercase word per surface beyond a phone, the shown one underlined in brand at the bar's bottom edge. */
 function SurfaceItems() {
   const surfaces = surfaceItems(useExtensions())
   const shown = useStore((state) => state.ui.surface?.id)
   return (
-    <nav className="flex shrink-0 items-center gap-0.5 rounded-md bg-muted/50 p-0.5 font-sans text-[12.5px] max-md:hidden">
+    <nav className="flex h-[35px] shrink-0 items-stretch gap-4 max-md:hidden">
       {surfaces.map((surface, index) => {
-        const Icon = surface.icon
         const active = surface.id === shown
         const button = (
           <button
             aria-current={active ? 'page' : undefined}
             className={cn(
-              'flex h-6 items-center gap-1.5 rounded-[5px] px-2 transition-colors outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
-              active
-                ? 'bg-background text-foreground shadow-xs ring-1 ring-border/70'
-                : 'hover:bg-accent/60',
+              'flex items-center border-y-2 border-transparent px-0.5 lowercase transition-colors outline-none hover:text-foreground focus-visible:text-foreground',
+              active && 'border-b-brand text-foreground',
             )}
             data-surface={surface.id}
             key={surface.id}
             onClick={() => actions.showSurface(surface.id)}
             type="button"
           >
-            <Icon className={cn('size-3.5', active && 'text-brand')} />
             {surface.title}
           </button>
         )
