@@ -34,6 +34,13 @@ const Requests = defineDoc<{ ids: Record<string, number> }>({
   fork: 'initial',
   initial: () => ({ ids: {} }),
 })
+/** An answer in a few characters: its picks (`1a 2b,c 3`) when the card numbered them, else its first line. */
+const answerSummary = (text: string) => {
+  const lines = text.split('\n').filter((line) => line.trim())
+  const picks = lines.flatMap((line) => /^(\d+[a-z,]*)[.:]/.exec(line)?.[1] ?? [])
+  return picks.length ? picks.join(' ') : (lines[0] ?? '')
+}
+
 export async function send(
   host: ExtensionHost,
   from: number | 'user',
@@ -219,7 +226,7 @@ export async function send(
                 ...(input.dismiss
                   ? { dismissed: true }
                   : {
-                      summary: input.text.split('\n').filter(Boolean).slice(0, 2).join(' · '),
+                      summary: answerSummary(input.text),
                     }),
               },
               content: input.dismiss
