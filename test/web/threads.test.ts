@@ -163,6 +163,50 @@ describe('threadsOf', () => {
     expect([...threading(entries, threaded).roots.values()]).toEqual([4, 4, 4])
   })
 
+  it("keeps a turn the user's own prompt woke in main, even when a branch report woke it too", () => {
+    next = 1
+    const entries = [
+      prompt(),
+      respond([{ id: 'b', name: 'branch' }]),
+      result('b', 'branch', 'Branch #51 started; message 1 sent.'),
+      respond(),
+      fromBranch(51, 2, 'board.reply'), // 5: a report and
+      prompt(), // 6: the user's prompt, both before @ultimate answers
+      respond(), // 7: its answer is to the user
+    ]
+    const { of, live } = threadsOf(entries, [], ULTIMATE)
+    expect(of.get(5)).toEqual([51])
+    expect([6, 7].map((id) => of.get(id))).toEqual([undefined, undefined])
+    expect(live).toEqual([])
+  })
+
+  it('places a turn the same once the message log has dropped its messages', () => {
+    next = 1
+    // #61 asks through @ultimate; the user's answer wakes a turn of #61's. The log no longer holds messages 3 and 4.
+    const entries = [
+      prompt(),
+      respond([{ id: 'b', name: 'branch' }]),
+      result('b', 'branch', 'Branch #61 started; message 1 sent.'),
+      respond(),
+      fromBranch(61, 2, 'board.reply'),
+      respond([{ id: 'q', name: 'message', to: 'user' }]),
+      result('q', 'message', 'Message 3 sent.'),
+      entry('board.message', { input: true, data: { id: 4, from: 'user', re: 3 } }),
+      respond(), // 9: answered in #61's thread
+    ]
+    const pruned = threadsOf(entries, [], ULTIMATE)
+    const logged = threadsOf(
+      entries,
+      [
+        message({ id: 3, from: ULTIMATE, to: 'user', reply: true, call: 'q' }),
+        message({ id: 4, from: 'user', to: ULTIMATE, re: 3 }),
+      ],
+      ULTIMATE,
+    )
+    expect([8, 9].map((id) => pruned.of.get(id))).toEqual([[61], [61]])
+    expect([...pruned.of]).toEqual([...logged.of])
+  })
+
   it('decides a running turn by what woke it, and never moves it after', () => {
     next = 1
     // A branch reports, and @ultimate is mid-run: its thread is known before the first response streams.

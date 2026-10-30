@@ -87,12 +87,12 @@ import { ToolCallBlock } from './tool-call.tsx'
 import { TranscriptSkeleton } from './transcript-skeleton.tsx'
 
 /**
- * The entries a threaded transcript shows: in the main stream, those of no thread, with a `threads.root` row where each
- * thread's root entry was; in thread `thread`, that thread's entries alone.
+ * The entries a threaded transcript shows: in the main stream, those it does not hide, with a root row (of the
+ * contribution's `root` kind) after each thread's root entry; in thread `thread`, that thread's entries alone.
  */
 export function threadStream(
   entries: readonly EntryRecord[],
-  { of, hidden, roots }: Threading,
+  { root: kind, of, hidden, roots }: Threading,
   thread: number | undefined,
 ): EntryRecord[] {
   if (thread !== undefined) return entries.filter((entry) => of.get(entry.id)?.includes(thread))
@@ -104,7 +104,7 @@ export function threadStream(
         ({
           id: -root,
           conversationId: entry.conversationId,
-          kind: 'threads.root',
+          kind,
           data: { thread: root },
         }) as unknown as EntryRecord,
     )
@@ -591,7 +591,7 @@ function TranscriptEntries() {
         (row) =>
           !('quiet' in row || 'work' in row || 'aside' in row) &&
           // A thread's root is what the reader follows of it.
-          (row.entry.kind === 'threads.root' ||
+          (row.entry.kind === threading?.root ||
             follows({ entry: row.entry, calls: shownCalls(row) })),
       )
     : grouped.map((row) => row)
@@ -762,8 +762,10 @@ function TranscriptEntries() {
       {threaded.map((item, index) => {
         const last = index === threaded.length - 1
         if (!('between' in item)) return renderItem(item, last)
-        // Only rows that render nothing (a setup note, a reminder): no line, rather than an empty chevron.
+        // In a threaded stream, a stretch whose traffic all went into threads can be left with only rows that render
+        // nothing (a setup note, a reminder): no line, rather than an empty chevron.
         if (
+          threading &&
           emptyStretch(
             item,
             (part) =>

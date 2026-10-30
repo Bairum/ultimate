@@ -51,12 +51,12 @@ export const RecentAction = actionRef<
  */
 export const OpenEditorAction = actionRef<null, { editor: string }>('lineage', 'openEditor')
 /**
- * `{ id }` → branch `id`'s latest abstract in its tree's tally: the open one while it works, else the state its last
- * landing froze (`landed`); null when it has none.
+ * `{ id, sha }` → the abstract of branch `id` as its landing of `sha` froze it in its tree's tally; null when that
+ * landing has none.
  */
 export const AbstractAction = actionRef<
-  { id: number },
-  { text: string; at: number; title?: string; feature?: string; landed?: true } | null
+  { id: number; sha: string },
+  { text: string; at: number; title?: string; feature?: string } | null
 >('lineage', 'abstract')
 /** `{ id, instructions? }` → `{ taskId }`: compact root `id`'s tally, for its history footer and the palette. */
 export const CompactAction = actionRef<{ id: number; instructions?: string }, { taskId: number }>(

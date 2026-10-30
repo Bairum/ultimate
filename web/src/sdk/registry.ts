@@ -681,7 +681,7 @@ export function compactTools(
             return threads(entries, docs, shown)
           } catch (error) {
             report(name, error)
-            return { of: new Map(), hidden: new Set(), roots: new Map(), live: [] }
+            return { root: '', of: new Map(), hidden: new Set(), roots: new Map(), live: [] }
           }
         },
       ]

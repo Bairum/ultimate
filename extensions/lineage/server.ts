@@ -1194,15 +1194,12 @@ export const actions = {
   /** `{id}`: branch `id`'s open abstract, else the one its newest landing froze, from its tree's tally. */
   abstract: implementAction(AbstractAction, async (args, { host }) => {
     const id = conversationArg(args)
+    const sha = (args as { sha?: unknown }).sha
+    if (typeof sha !== 'string' || !sha) throw new Error('Expected the landed sha')
     const roots = await rootsOf(host, context)
     return host.harness().commit(async (tx) => {
       const root = await tallyRoot(tx, id, roots)
       if (root === undefined) return null
-      const open = (await tx.doc(Tally, root)).abstracts[String(id)] as OpenAbstract | undefined
-      if (open) {
-        const { anchor: _anchor, ...state } = open
-        return state
-      }
       let cursor: Cursor | undefined
       do {
         const page = await tx.scanEntries({ conversationId: root }, 100, cursor)
@@ -1210,12 +1207,16 @@ export const actions = {
           const data = (entry.data ?? {}) as {
             source?: unknown
             from?: unknown
+            sha?: unknown
             abstract?: unknown
           }
-          if (entry.kind === 'lineage.note' && data.source === 'lander' && data.from === id)
-            return data.abstract
-              ? { ...(data.abstract as Omit<OpenAbstract, 'anchor'>), landed: true as const }
-              : null
+          if (
+            entry.kind === 'lineage.note' &&
+            data.source === 'lander' &&
+            data.from === id &&
+            data.sha === sha
+          )
+            return data.abstract ? (data.abstract as Omit<OpenAbstract, 'anchor'>) : null
         }
         cursor = page.next
       } while (cursor)

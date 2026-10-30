@@ -120,7 +120,7 @@ export function LanderReport({ entry }: { entry: EntryRecord }) {
       </LandingCard>
       {outcome.outcome !== 'failed' && (
         <Provided
-          input={{ from: outcome.conversationId ?? own, card: entry.id }}
+          input={{ from: outcome.conversationId ?? own, sha: outcome.sha }}
           point={LandingAfter}
         >
           {(after) => after}

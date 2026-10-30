@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
-import { useConversation, useConversations, useDocOf, useUiState } from '@/sdk'
+import { useConversation, useConversations, useDocOf, useTranscript, useUiState } from '@/sdk'
 import type { CompactDocs, EntryRecord } from '@/sdk'
 import { MessagesDoc } from '../messages/ui.tsx'
 import type { Message } from '../messages/refs.ts'
@@ -24,8 +24,9 @@ export function useThreads() {
   const busy = useConversation((conversation) => conversation.busy)
   const standing = useDocOf(1, StandingDoc)
   const log = useDocOf(1, MessagesDoc)
-  // The conversation's own entries: overlays sit outside the transcript's context.
-  const entries = useConversation((conversation) => conversation.entries)
+  // What the transcript around it has loaded, earlier pages included, so a root sees the same entries that split the
+  // stream; outside a transcript (the pane's header), the active entries.
+  const entries = useTranscript()
   if (!isUltimate(id, standing)) return undefined
   const threads = threadsOf(entries, log?.messages ?? [], id!)
   // The thread @ultimate is writing in: its run in progress was woken by that thread alone.

@@ -213,12 +213,14 @@ export interface CompactContribution {
   /**
    * Threads of the conversation, such as one per branch @ultimate talks with: which loaded entries each thread holds
    * (`of`), which of them leave the main stream (`hidden`), and where each thread's root row stands in it (`roots`,
-   * thread → entry). The main stream shows a `threads.root` entry (`data: { thread }`) in place of a root's entry, and
-   * `ThreadView` shows one thread's entries.
+   * thread → entry). The main stream shows an entry of kind `root` (`data: { thread }`, rendered by the contribution's
+   * entry renderer) after each root's entry, and `ThreadView` shows one thread's entries.
    */
   threads?: (entries: readonly EntryRecord[], docs: CompactDocs, conversation: number) => Threading
 }
 export type Threading = {
+  /** The entry kind of a thread's root row, which the contributing extension renders. */
+  root: string
   of: ReadonlyMap<number, readonly number[]>
   hidden: ReadonlySet<number>
   roots: ReadonlyMap<number, number>

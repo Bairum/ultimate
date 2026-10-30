@@ -9,19 +9,19 @@ import { LandingAfter } from '../workspaces/ui.tsx'
 import { isUltimate, messagesOf } from './model.tsx'
 import { Threads } from './pane.tsx'
 import { ThreadRoot } from './roots.tsx'
-import { threading, threadsOf } from './threads.tsx'
+import { ROOT, threading, threadsOf } from './threads.tsx'
 
 /**
- * Under a landing in @ultimate's conversation: the feature's catch-up, its abstract frozen at landing, so the reader
- * gets where it ended without opening the branch.
+ * Under a landing in @ultimate's conversation: the feature's catch-up, its abstract as this landing froze it, so the
+ * reader gets where it ended without opening the branch.
  */
-function useCatchUp({ from: branch }: { from: number; card: number }): ReactNode {
+function useCatchUp({ from: branch, sha }: { from: number; sha: string }): ReactNode {
   const id = useConversation((conversation) => conversation.id)
   const standing = useDocOf(1, StandingDoc)
   const show = isUltimate(id, standing) && branch !== id
   const abstract = useAction(
     AbstractAction,
-    { id: branch },
+    { id: branch, sha },
     // The landing card says what landed either way; the catch-up only adds to it.
     { enabled: show, onError: () => undefined },
   )
@@ -62,7 +62,7 @@ function useCatchUp({ from: branch }: { from: number; card: number }): ReactNode
 
 export default defineWebExtension({
   slots: { 'conversation.overlay': [Threads] },
-  entries: { 'threads.root': ThreadRoot },
+  entries: { [ROOT]: ThreadRoot },
   provides: [provide(LandingAfter, useCatchUp)],
   compact: {
     when: (conversation, docs) => isUltimate(conversation.id, docs[StandingDoc.kind]),
