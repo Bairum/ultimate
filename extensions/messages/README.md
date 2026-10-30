@@ -14,7 +14,7 @@ the same ones. `branch` takes the same `images` for its first message. @ultimate
 too: its bubble shows that entry's images as thumbnails that open full size.
 Address a conversation
 as `#123` or `123`, or a standing agent as `@name`. The lander runs no model and takes no messages.
-Only the `ultimate` resident's standing conversation may message `user`; other senders must send @ultimate a one-way update to relay.
+Only the `ultimate` resident's standing conversation and branches (conversations `branch` started) may message `user`; subagents and side chats are refused.
 Self-messages, unknown conversations and tallies are refused; use `note` for a tally. Unknown standing names list
 the valid ones. Standing agents are resolved and configured through the `subagents` service at delivery admission.
 Each post emits `board.sent` `{ message, from, to, reply, steer }` (`MessageSent`) in the posting commit, never the

@@ -1359,7 +1359,7 @@ it('lets a branch ask the user directly and leaves passive question and answer n
   })
   await until(async () => (await entries('board.asked')).length === 1)
   const [asked] = await entries('board.asked')
-  expect(asked.data).toEqual({ message: question.id, from: b.id })
+  expect(asked.data).toMatchObject({ message: question.id, from: b.id })
   expect(asked.input).not.toBe(true)
   expect(JSON.stringify(asked.model)).toContain('Use the smaller change?')
   expect(
@@ -1376,7 +1376,7 @@ it('lets a branch ask the user directly and leaves passive question and answer n
   await until(async () => (await entries('board.answered')).length === 1)
   await b.settled()
   const [answered] = await entries('board.answered')
-  expect(answered.data).toEqual({ message: question.id, from: b.id })
+  expect(answered.data).toMatchObject({ message: question.id, from: b.id })
   expect(answered.input).not.toBe(true)
   expect(JSON.stringify(answered.model)).toContain('A: Yes')
   const reply = (await f.log())!.messages.find((m) => m.from === 'user' && m.re === question.id)!

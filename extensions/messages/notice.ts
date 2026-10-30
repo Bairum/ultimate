@@ -8,7 +8,13 @@ export const notice = (host: Pick<ExtensionHost, 'harness'>) =>
     {
       to: number
       kind: 'board.asked' | 'board.answered'
-      data: { message: number; from: number; dismissed?: boolean }
+      data: {
+        message: number
+        from: number
+        call?: string
+        summary?: string
+        dismissed?: boolean
+      }
       content: string
     },
     { phase: 'submit' },

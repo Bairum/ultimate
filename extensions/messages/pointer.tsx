@@ -1,27 +1,39 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { MessageCircleQuestionIcon, SquareArrowOutUpRightIcon } from 'lucide-react'
-import { Card, cn, events, useDocOf, useUltimate } from '@/sdk'
+import { Card, cn, events, useConversation, useDocOf, useUltimate } from '@/sdk'
 import { Address, useAccentOf } from './cards.tsx'
-import { answerTo } from './data.tsx'
 import { MessagesDoc } from './refs.ts'
 
-/** A branch's question stays visible in @ultimate, with the answer card one click away. */
+type Notice = {
+  message: number
+  from: number
+  call?: string
+  summary?: string
+  dismissed?: boolean
+}
+
+/**
+ * A branch's question stays visible in @ultimate, with the answer card one click away. Its outcome comes from the
+ * `board.answered` note that follows it in this conversation, so it survives the capped message log; while that has not
+ * arrived, the log says whether the question is still open.
+ */
 export function QuestionPointer({ entry }: { entry: EntryRecord }) {
-  const { message: id, from } = entry.data as { message: number; from: number }
-  const log = useDocOf(1, MessagesDoc)
-  const message = log?.messages.find((m) => m.id === id)
-  const answer = message && answerTo(log?.messages ?? [], message)
-  const open = message?.to === 'user' && message.reply && message.state === 'delivered'
-  const dismissed = message?.state === 'dismissed'
-  const answered = message?.state === 'answered'
-  const questions = message?.questions ?? []
+  const { message: id, from, call, summary } = entry.data as Notice
+  const outcome = useConversation(
+    (conversation) =>
+      conversation.entries.find(
+        (e) => e.kind === 'board.answered' && (e.data as Notice).message === id,
+      )?.data as Notice | undefined,
+  )
+  const message = useDocOf(1, MessagesDoc)?.messages.find((m) => m.id === id)
+  const open = !outcome && message?.state === 'delivered'
   const accent = useAccentOf(from)
   const { showSurface, switchConversation } = useUltimate()
-  const summary = dismissed
-    ? undefined
-    : answered
-      ? answer?.text.split('\n').filter(Boolean).slice(0, 2).join(' · ')
-      : (questions[0]?.text ?? message?.text.split('\n')[0])
+  const [state, text] = outcome
+    ? outcome.dismissed
+      ? ['dismissed', undefined]
+      : ['answered', outcome.summary]
+    : [undefined, summary]
   return (
     <Card attention={open} data-message-pointer={id}>
       <header className="flex min-w-0 items-center gap-2 px-3 py-2 font-mono text-[11px] text-muted-foreground">
@@ -39,25 +51,14 @@ export function QuestionPointer({ entry }: { entry: EntryRecord }) {
         <button
           className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left hover:text-foreground"
           onClick={() => {
-            if (message?.call)
-              events.emit('messages:open', { conversation: from, call: message.call })
+            if (call) events.emit('messages:open', { conversation: from, call })
             showSurface('agent')
             switchConversation(from)
           }}
           type="button"
         >
-          {message && (
-            <span className="shrink-0">
-              {dismissed
-                ? 'dismissed'
-                : answered
-                  ? 'answered'
-                  : questions.length
-                    ? `asks you ${questions.length} question${questions.length === 1 ? '' : 's'}`
-                    : 'asks you'}
-            </span>
-          )}
-          {summary && <span className="min-w-0 flex-1 truncate">{summary}</span>}
+          {state && <span className="shrink-0">{state}</span>}
+          {text && <span className="min-w-0 flex-1 truncate">{text}</span>}
           <span className="ml-auto flex shrink-0 items-center gap-1">
             <SquareArrowOutUpRightIcon className="size-3" />
             Open

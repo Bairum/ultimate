@@ -199,13 +199,29 @@ export async function send(
       const notification = asked
         ? {
             kind: 'board.asked' as const,
-            data: { message: message.id, from },
+            // What the pointer shows outlives the capped message log.
+            data: {
+              message: message.id,
+              from,
+              ...(callId === undefined ? {} : { call: callId }),
+              summary: questions?.length
+                ? `asks you ${questions.length} question${questions.length === 1 ? '' : 's'} · ${questions[0].text}`
+                : `asks you · ${input.text.split('\n')[0]}`,
+            },
             content: `#${from} asked the user (message ${message.id}): ${gist(message)}. The user answers there; their answer reaches you as a note.`,
           }
         : answered
           ? {
               kind: 'board.answered' as const,
-              data: { message: answerId, from: to, ...(input.dismiss ? { dismissed: true } : {}) },
+              data: {
+                message: answerId,
+                from: to,
+                ...(input.dismiss
+                  ? { dismissed: true }
+                  : {
+                      summary: input.text.split('\n').filter(Boolean).slice(0, 2).join(' · '),
+                    }),
+              },
               content: input.dismiss
                 ? `The user dismissed #${to}'s questions (message ${answerId}).`
                 : `The user answered #${to}'s questions (message ${answerId}):\n${input.text}`,
