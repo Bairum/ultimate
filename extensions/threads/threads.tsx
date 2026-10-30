@@ -61,6 +61,13 @@ export function threadsOf(
   const threads = new Map<number, Thread>()
   const calls = new Map<string, readonly number[]>()
   const byId = new Map(messages.map((message) => [message.id, message]))
+  // Branches each call messaged, itself or from a script (`<script>/<n>`): starting one sends its first message.
+  const reached = new Map<string, number[]>()
+  for (const message of messages) {
+    if (message.from !== self || message.call === undefined) continue
+    const call = message.call.split('/')[0]
+    reached.set(call, union(reached.get(call) ?? [], conversation(message.to, self)))
+  }
   const results = new Map<string, number[]>()
   // Who sent each delivered message, from its entry: the log is bounded, the transcript is not.
   const senders = new Map<unknown, unknown>()
@@ -141,8 +148,10 @@ export function threadsOf(
       const own = message.content.filter((block) => block.type === 'toolCall')
       for (const call of own) {
         calls.set(call.id, wake)
-        // A branch it starts begins its thread here; the call itself stays where its turn is.
-        for (const started of results.get(call.id) ?? []) mention(entry.id, started)
+        // A branch it starts or messages is known from here on (its thread begins here when new); the call itself stays
+        // where its turn is.
+        for (const branch of union(results.get(call.id) ?? [], reached.get(call.id) ?? []))
+          mention(entry.id, branch)
         // What it told the user about the threads of its turn.
         for (const sent of messages)
           if (sent.to === 'user' && sent.call?.split('/')[0] === call.id)

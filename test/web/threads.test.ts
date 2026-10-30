@@ -146,6 +146,23 @@ describe('threadsOf', () => {
     expect([5, 6, 7, 8].map((id) => of.get(id))).toEqual([[31], [31], [31], [31]])
   })
 
+  it('knows a branch started from a script before it reports, so its card shows while it works', () => {
+    next = 1
+    // As a fresh @ultimate does it: one codemode script starts three branches; the result names none of them.
+    const entries = [
+      prompt(),
+      respond([{ id: 's', name: 'codemode' }]),
+      result('s', 'codemode', 'Script completed'),
+      respond(),
+    ]
+    const messages = [21, 22, 23].map((to, index) =>
+      message({ id: index + 1, from: ULTIMATE, to, call: `s/${index}` }),
+    )
+    const threaded = threadsOf(entries, messages, ULTIMATE)
+    expect(threaded.threads.map((thread) => thread.id)).toEqual([21, 22, 23])
+    expect([...threading(entries, threaded).roots.values()]).toEqual([4, 4, 4])
+  })
+
   it('decides a running turn by what woke it, and never moves it after', () => {
     next = 1
     // A branch reports, and @ultimate is mid-run: its thread is known before the first response streams.
