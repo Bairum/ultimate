@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest'
 import type { SystemInfo } from '../../shared/protocol.ts'
-import { errorReport } from '../../web/src/app/boundary.tsx'
+import { errorReport, stackFrames } from '../../web/src/app/boundary.tsx'
 
 // The real hooks connect to a server; errorReport reads only the system snapshot it is given.
 vi.mock('../../web/src/sdk/hooks.ts', async () => ({
@@ -47,4 +47,11 @@ it("keeps a crash's own frames, capped", () => {
   expect(report).toContain('at frame15\n```')
   expect(report).not.toContain('frame17')
   expect(report).not.toContain('react-dom')
+})
+
+it('leaves a multiline message out of the frames, so it cannot use up the cap', () => {
+  const error = new Error(Array.from({ length: 10 }, (_, line) => `line ${line}`).join('\n'))
+  const frames = stackFrames(error)
+  expect(frames).toMatch(/^at /)
+  expect(frames).not.toContain('line 9')
 })

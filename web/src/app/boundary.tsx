@@ -22,6 +22,11 @@ function extensionPath(system: SystemInfo | undefined, name: string, file = '') 
   })
 }
 
+/** A thrown error's frames: V8 starts its stack with `Name: message`, which the report already holds. */
+export function stackFrames(error: unknown) {
+  return error instanceof Error ? error.stack?.replace(String(error), '').trim() : undefined
+}
+
 /** What an error card hands over for debugging: the failure, where it lives, its stack and the running build. */
 export function errorReport(
   system: SystemInfo | undefined,
@@ -152,7 +157,7 @@ export class ExtensionBoundary extends Component<
   componentDidCatch(error: unknown, info: ErrorInfo) {
     console.error(`[extension ${this.props.extension}]`, error, info.componentStack)
     // The component stack names the extension's components; the JS stack, where in them it threw.
-    const thrown = error instanceof Error ? error.stack : undefined
+    const thrown = stackFrames(error)
     this.setState({
       stack: [thrown, info.componentStack?.trim()].filter(Boolean).join('\n') || undefined,
     })
