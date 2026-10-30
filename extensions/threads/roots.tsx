@@ -1,11 +1,10 @@
 import { cn } from 'cn'
-import { CornerDownRightIcon, MessageSquareIcon } from 'lucide-react'
 import { useRef } from 'react'
 import { Shimmer } from '@/components/ai/shimmer'
 import { formatAgo, useNow } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { FeatureTag, useOverview } from '../conversations/ui.tsx'
-import { tones, useLayout, useOpenThread, usePulse, useThread, useToggle } from './model.tsx'
+import { tones, useOpenThread, usePulse, useThread, useToggle } from './model.tsx'
 import type { Tone } from './model.tsx'
 
 /** Where a thread stands, as a dot. */
@@ -36,14 +35,10 @@ export function Fresh({ count, className }: { count: number; className?: string 
 
 /**
  * A thread's root in @ultimate's main stream, like a chat app's "N replies" row: where it stands, the feature, the
- * newest reply's first line and who said it, how many and when. A click opens the thread; with the rail on the left,
- * the roots live there and the stream keeps a one-line pointer.
+ * newest reply's first line and who said it, how many and when. A click opens the thread beside the conversation.
  */
 export function ThreadRoot({ entry }: { entry: EntryRecord }) {
-  const id = (entry.data as { thread: number }).thread
-  const layout = useLayout()
-  if (layout === 'rail') return <RootPointer id={id} />
-  return <RootCard id={id} />
+  return <RootCard id={(entry.data as { thread: number }).thread} />
 }
 
 function RootCard({ id }: { id: number }) {
@@ -119,34 +114,6 @@ function RootCard({ id }: { id: number }) {
           {active ? 'close thread' : 'open thread →'}
         </span>
       </span>
-    </button>
-  )
-}
-
-/** With the rail on: where the thread started, as one quiet line that opens it in the rail. */
-function RootPointer({ id }: { id: number }) {
-  const shown = useThread(id)
-  const [open] = useOpenThread()
-  const toggle = useToggle()
-  const feature = useOverview()[id]?.feature
-  if (!shown) return null
-  return (
-    <button
-      className={cn(
-        'flex w-fit max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm py-0.5 font-mono text-[11px] whitespace-nowrap text-muted-foreground hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none',
-        open === id && 'text-foreground',
-      )}
-      data-thread-root={id}
-      onClick={() => toggle(id, shown.newest)}
-      type="button"
-    >
-      <CornerDownRightIcon className="size-3 shrink-0" />
-      <MessageSquareIcon className="size-3 shrink-0" />
-      <span className="shrink-0">thread</span>
-      {feature && <FeatureTag className="shrink-0" feature={feature} />}
-      <span className="min-w-0 truncate text-foreground/80">{shown.title ?? `#${id}`}</span>
-      {shown.writing ? <Shimmer as="span">@ultimate writing…</Shimmer> : <Dot tone={shown.tone} />}
-      <Fresh count={shown.fresh} />
     </button>
   )
 }

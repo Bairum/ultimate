@@ -20,22 +20,14 @@ const hues = [
   'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300',
 ]
 
-/**
- * The hue a feature's tag is drawn in, as an index into sky, teal, emerald, amber, orange, rose, violet and indigo, so
- * other marks of the same feature can match it.
- */
-export function featureHue(feature: string) {
+export function FeatureTag({ feature, className }: { feature: string; className?: string }) {
   let hash = 0
   for (const char of feature) hash = (Math.imul(hash, 31) + char.codePointAt(0)!) | 0
-  return (hash >>> 0) % hues.length
-}
-
-export function FeatureTag({ feature, className }: { feature: string; className?: string }) {
   return (
     <span
       className={cn(
         'min-w-0 truncate rounded px-1.5 font-sans text-[10px] leading-4',
-        hues[featureHue(feature)],
+        hues[(hash >>> 0) % hues.length],
         className,
       )}
       data-feature={feature}

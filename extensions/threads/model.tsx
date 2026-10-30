@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
-import { useConversation, useConversations, useDocOf, useUiState, useViewport } from '@/sdk'
+import { useConversation, useConversations, useDocOf, useUiState } from '@/sdk'
 import type { CompactDocs, EntryRecord } from '@/sdk'
 import { MessagesDoc } from '../messages/ui.tsx'
 import type { Message } from '../messages/refs.ts'
@@ -17,17 +17,6 @@ export const messagesOf = (docs: CompactDocs) =>
 export const useOpenThread = () => useUiState<number | null>('ext.threads.open', null)
 /** The newest entry of each thread the reader has seen, by thread: a newer one marks the root unread. */
 export const useSeen = () => useUiState<Record<string, number>>('ext.threads.seen', {})
-/** Where threads show on a wide screen: a column on the `pane` right, or a `rail` of roots on the left. */
-export type Variant = 'pane' | 'rail'
-export function useVariant(): [Variant, (next: Variant) => void] {
-  const [variant, setVariant] = useUiState<string>('ext.threads.variant', 'pane')
-  return [variant === 'rail' ? 'rail' : 'pane', setVariant]
-}
-/** The layout in effect: a phone always opens a thread as a sheet over main, with the roots inline. */
-export function useLayout(): Variant | 'sheet' {
-  const [variant] = useVariant()
-  return useViewport() === 'phone' ? 'sheet' : variant
-}
 
 /** @ultimate's threads over the entries loaded: one per branch it talked with. */
 export function useThreads() {
@@ -225,20 +214,19 @@ export function usePulse(ref: RefObject<HTMLElement | null>, newest: number | un
 /** Main's reading column, as the transcript centres it. */
 const COLUMN = 736
 
-/** Pads `region`'s sides; its centred children centre in what is left. */
-function pad(region: HTMLElement, left: number, right: number) {
-  region.style.paddingLeft = left ? `${left}px` : ''
-  region.style.paddingRight = right ? `${right}px` : ''
+/** Pads `region`'s right side; its centred children centre in what is left. */
+function padRight(region: HTMLElement, px: number) {
+  region.style.paddingRight = px ? `${px}px` : ''
 }
 
 /**
- * Gives a column `want.left` px wide on the left, or `want.right` px on the right, of the region the returned `ref`'s
- * element sits in: the region pads that side, so main's transcript and composer centre in what is left as one column
- * beside it, and glide to their new place. A column that fits main's free margin takes it as it is. Undone on unmount.
+ * Gives a column `want` px wide on the right of the region the returned `ref`'s element sits in: the region pads its
+ * right side, so main's transcript and composer centre in what is left beside it, and glide to their new place. A column
+ * that fits main's free margin takes it as it is. Undone on unmount.
  */
-export function useInset(want: { left: number; right: number }) {
+export function useInset(want: number) {
   const ref = useRef<HTMLDivElement>(null)
-  const previous = useRef({ left: 0, right: 0 })
+  const previous = useRef(0)
   const [width, setWidth] = useState(0)
   useLayoutEffect(() => {
     const region = ref.current?.parentElement
@@ -247,19 +235,17 @@ export function useInset(want: { left: number; right: number }) {
     observer.observe(region)
     return () => {
       observer.disconnect()
-      pad(region, 0, 0)
+      padRight(region, 0)
     }
   }, [])
-  const margin = (width - COLUMN) / 2
-  const left = want.left > margin ? want.left : 0
-  const right = want.right > margin ? want.right : 0
+  const right = want > (width - COLUMN) / 2 ? want : 0
   useLayoutEffect(() => {
     const region = ref.current?.parentElement
     if (!region) return
-    // Main's column moves by half the change on each side: from there it glides back to rest.
-    const dx = (previous.current.left - left - previous.current.right + right) / 2
-    previous.current = { left, right }
-    pad(region, left, right)
+    // Main's column moves by half the change: from there it glides back to rest.
+    const dx = (right - previous.current) / 2
+    previous.current = right
+    padRight(region, right)
     if (!dx || reduced()) return
     for (const layer of region.children)
       if (layer instanceof HTMLElement && getComputedStyle(layer).position !== 'absolute')
@@ -267,6 +253,6 @@ export function useInset(want: { left: number; right: number }) {
           duration: 340,
           easing: ease,
         })
-  }, [left, right])
+  }, [right])
   return { ref, width }
 }
