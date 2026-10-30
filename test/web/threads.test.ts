@@ -90,15 +90,16 @@ describe('threadsOf', () => {
       message({ id: 8, from: 'user', to: ULTIMATE, re: 5 }),
       message({ id: 9, from: ULTIMATE, to: 22, call: 'go' }),
     ]
-    const { of, threads } = threadsOf(entries, messages, ULTIMATE)
+    const threaded = threadsOf(entries, messages, ULTIMATE)
+    const { of, threads } = threaded
     const at = (id: number) => of.get(id) ?? []
-    // Starting them: each call and result goes to its branch, the turn to all three.
-    expect(at(1)).toEqual([21, 22, 23])
-    expect(at(3)).toEqual([21])
-    expect(at(6)).toEqual([21, 22, 23])
+    // Starting them: the user's prompt woke that turn, so all of it stays in no thread; the threads begin there.
+    expect([1, 2, 3, 6].map(at)).toEqual([[], [], [], []])
+    expect(threads.map((thread) => thread.first)).toEqual([2, 2, 2])
     // #22's report wakes a turn; the question asked in it, and the user's answer, are #22's.
     expect([7, 8, 9].map(at)).toEqual([[22], [22], [22]])
     expect(at(15)).toEqual([22])
+    // The answer wakes a turn of #22's from its first token, so relaying the go stays there.
     expect([16, 17].map(at)).toEqual([[22], [22]])
     // #21 interleaves: its message, note and the turn they wake are #21's alone.
     expect([10, 11, 12, 13, 14].map(at)).toEqual([[21], [21], [21], [21], [21]])
@@ -116,7 +117,7 @@ describe('threadsOf', () => {
 
     // The main stream: the turn that started all three stays, with their roots after its answer; each thread's later
     // traffic leaves for its thread; the unrelated prompt stays.
-    const stream = threading(entries, { of, threads })
+    const stream = threading(entries, threaded)
     expect([...stream.roots]).toEqual([
       [21, 6],
       [22, 6],
@@ -143,5 +144,36 @@ describe('threadsOf', () => {
     ]
     const { of } = threadsOf(entries, [], ULTIMATE)
     expect([5, 6, 7, 8].map((id) => of.get(id))).toEqual([[31], [31], [31], [31]])
+  })
+
+  it('decides a running turn by what woke it, and never moves it after', () => {
+    next = 1
+    // A branch reports, and @ultimate is mid-run: its thread is known before the first response streams.
+    const woken = [
+      prompt(),
+      respond([{ id: 'b', name: 'branch' }]),
+      result('b', 'branch', 'Branch #41 started; message 1 sent.'),
+      respond(),
+      fromBranch(41, 2, 'board.reply'),
+    ]
+    expect(threadsOf(woken, [], ULTIMATE).live).toEqual([41])
+    // The user's own prompt wakes a turn that then messages #41 from a script: it stays in main throughout.
+    const typed = [...woken, respond(), prompt()]
+    expect(threadsOf(typed, [], ULTIMATE).live).toEqual([])
+    const messages = [message({ id: 3, from: ULTIMATE, to: 41, call: 's/1' })]
+    const after = [
+      ...typed,
+      respond([{ id: 's', name: 'codemode' }]),
+      result('s', 'codemode'),
+      respond(),
+    ]
+    const { of, live } = threadsOf(after, messages, ULTIMATE)
+    expect(live).toEqual([])
+    expect([7, 8, 9, 10].map((id) => of.get(id))).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ])
   })
 })

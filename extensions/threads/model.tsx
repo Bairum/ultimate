@@ -32,12 +32,16 @@ export function useLayout(): Variant | 'sheet' {
 /** @ultimate's threads over the entries loaded: one per branch it talked with. */
 export function useThreads() {
   const id = useConversation((conversation) => conversation.id)
+  const busy = useConversation((conversation) => conversation.busy)
   const standing = useDocOf(1, StandingDoc)
   const log = useDocOf(1, MessagesDoc)
   // The conversation's own entries: overlays sit outside the transcript's context.
   const entries = useConversation((conversation) => conversation.entries)
   if (!isUltimate(id, standing)) return undefined
-  return { self: id!, entries, threads: threadsOf(entries, log?.messages ?? [], id!) }
+  const threads = threadsOf(entries, log?.messages ?? [], id!)
+  // The thread @ultimate is writing in: its run in progress was woken by that thread alone.
+  const writing = busy && threads.live.length === 1 ? threads.live[0] : undefined
+  return { self: id!, entries, threads, writing }
 }
 
 export type Tone = 'waiting' | 'working' | 'landed' | 'idle'
@@ -167,6 +171,7 @@ export function useThread(id: number) {
   return {
     thread,
     title: conversation?.title,
+    writing: found.writing === id,
     tone,
     replies: replies.length,
     newest: newest?.id,

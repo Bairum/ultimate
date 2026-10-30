@@ -222,6 +222,11 @@ export type Threading = {
   of: ReadonlyMap<number, readonly number[]>
   hidden: ReadonlySet<number>
   roots: ReadonlyMap<number, number>
+  /**
+   * The threads the run in progress belongs to, known from the inputs that woke it: its streaming reply and working line
+   * show in that thread, never in the main stream, when it is exactly one.
+   */
+  live: readonly number[]
 }
 /** A compact transcript row: an entry, and the visible tool calls it shows when it shows only some of its blocks. */
 export interface CompactRow {

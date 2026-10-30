@@ -18,6 +18,8 @@ export type Threads = {
   of: ReadonlyMap<number, readonly number[]>
   /** Every thread, by its first entry. */
   threads: readonly Thread[]
+  /** The threads of the latest turn, from the inputs that woke it: where its run streams while it runs. */
+  live: readonly number[]
 }
 
 type Data = {
@@ -29,10 +31,6 @@ type Data = {
 
 const conversation = (value: unknown, self: number) =>
   typeof value === 'number' && value !== self ? [value] : []
-const address = (value: unknown, self: number) => {
-  const match = /^#?(\d+)$/.exec(String(value))
-  return match ? conversation(Number(match[1]), self) : []
-}
 const union = (...lists: (readonly number[])[]) => [...new Set(lists.flat())]
 
 /** How a reply typed in a thread starts, so it and the turn it wakes belong to that thread. */
@@ -45,9 +43,10 @@ export const reply = (thread: number, text: string) => `Re #${thread}: ${text}`
  *
  * - What a branch sends, its landing report and its notes belong to that branch.
  * - The user's answer to a question belongs where the question came from: the call that asked it.
- * - A turn belongs to the inputs that woke it: a run of inputs with no response between them wakes one turn.
- * - A response's calls that start a branch or message one belong to that branch; its other calls and its answer
- *   belong to the turn. A turn nothing threaded woke takes the branches its calls address, from its first input on.
+ * - A turn belongs to the inputs that woke it, decided when it starts and never changed after: a run of inputs with no
+ *   response between them wakes one turn, and everything it says and does belongs where they do. A turn nothing
+ *   threaded woke (the user's own prompt) stays in no thread, whatever branches it starts or messages; the branches it
+ *   starts begin their threads there.
  * - A tool result belongs with its call.
  *
  * Everything else (the user's own prompts, notes about main, build and to-do notes, messages from other projects)
@@ -62,14 +61,6 @@ export function threadsOf(
   const threads = new Map<number, Thread>()
   const calls = new Map<string, readonly number[]>()
   const byId = new Map(messages.map((message) => [message.id, message]))
-  // Branches a call reached: its own messages, a script's nested ones, and the branch it started.
-  const reached = new Map<string, number[]>()
-  for (const message of messages) {
-    if (message.call === undefined || typeof message.to !== 'number' || message.to === self)
-      continue
-    const call = message.call.split('/')[0]
-    reached.set(call, union(reached.get(call) ?? [], [message.to]))
-  }
   const results = new Map<string, number[]>()
   // Who sent each delivered message, from its entry: the log is bounded, the transcript is not.
   const senders = new Map<unknown, unknown>()
@@ -84,14 +75,16 @@ export function threadsOf(
     if (started) results.set(result.toolCallId, [Number(started[1])])
   }
 
+  /** Thread `id` is known from `entry` on, without the entry being in it. */
+  const mention = (entry: number, id: number) => {
+    const thread = threads.get(id)
+    if (thread) thread.last = Math.max(thread.last, entry)
+    else threads.set(id, { id, first: entry, last: entry })
+  }
   const place = (entry: number, ids: readonly number[]) => {
     if (!ids.length) return
     of.set(entry, union(of.get(entry) ?? [], ids))
-    for (const id of ids) {
-      const thread = threads.get(id)
-      if (thread) thread.last = Math.max(thread.last, entry)
-      else threads.set(id, { id, first: entry, last: entry })
-    }
+    for (const id of ids) mention(entry, id)
   }
   const input = (entry: EntryRecord): readonly number[] => {
     const data = (entry.data ?? {}) as Data
@@ -124,7 +117,6 @@ export function threadsOf(
 
   const asked = new Map<number, number[]>()
   let wake: readonly number[] = []
-  let turn: EntryRecord[] = []
   let answered = true
   for (const entry of entries) {
     const data = (entry.data ?? {}) as Data
@@ -140,39 +132,23 @@ export function threadsOf(
     )
       threads.get(ids[0])!.landed = { entry: entry.id, sha: outcome.sha }
     if (entry.input) {
-      if (answered) {
-        wake = ids
-        turn = []
-      } else wake = union(wake, ids)
+      wake = answered ? ids : union(wake, ids)
       answered = false
-      turn.push(entry)
       continue
     }
     if (message?.role === 'assistant') {
       answered = true
-      turn.push(entry)
       const own = message.content.filter((block) => block.type === 'toolCall')
-      const targets = own.map((call) =>
-        union(
-          reached.get(call.id) ?? [],
-          results.get(call.id) ?? [],
-          call.name === 'message' ? address((call.arguments as { to?: unknown }).to, self) : [],
-        ),
-      )
-      if (!wake.length && targets.some((reach) => reach.length)) {
-        // Nothing threaded woke this turn: it was about the branches it starts or messages.
-        wake = union(...targets)
-        for (const earlier of turn) place(earlier.id, wake)
-      }
-      own.forEach((call, index) => {
-        const reach = targets[index].length ? targets[index] : wake
-        calls.set(call.id, reach)
-        // What it told the user about these threads.
+      for (const call of own) {
+        calls.set(call.id, wake)
+        // A branch it starts begins its thread here; the call itself stays where its turn is.
+        for (const started of results.get(call.id) ?? []) mention(entry.id, started)
+        // What it told the user about the threads of its turn.
         for (const sent of messages)
           if (sent.to === 'user' && sent.call?.split('/')[0] === call.id)
-            for (const thread of reach) asked.set(thread, [...(asked.get(thread) ?? []), sent.id])
-      })
-      place(entry.id, own.length ? union(...own.map((call) => calls.get(call.id)!)) : wake)
+            for (const thread of wake) asked.set(thread, [...(asked.get(thread) ?? []), sent.id])
+      }
+      place(entry.id, wake)
       continue
     }
     if (message?.role === 'toolResult') {
@@ -188,41 +164,25 @@ export function threadsOf(
     const thread = threads.get(id)
     if (thread) thread.asks = asks
   }
-  return { of, threads: [...threads.values()].toSorted((a, b) => a.first - b.first) }
+  return { of, threads: [...threads.values()].toSorted((a, b) => a.first - b.first), live: wake }
 }
 
 /**
- * How the main stream shows `threads`. The turn a thread began in stays (the user's ask and @ultimate's answer that
- * started it), and the thread's root row follows that answer. After it, an entry of one thread leaves the stream for that
- * thread; one of several (a turn that answered several branches at once) stays.
+ * How the main stream shows `threads`: an entry of exactly one thread leaves the stream for it; one of several (a turn
+ * woken by several branches at once) stays. Each thread's root row stands after the answer that ended the turn it began
+ * in, so it follows the message that started it; while that turn still runs, the root waits for its answer.
  */
-export function threading(entries: readonly EntryRecord[], { of, threads }: Threads) {
+export function threading(entries: readonly EntryRecord[], { of, threads, live }: Threads) {
   const answers = entries.filter((entry) => {
     const message = entry.model?.[0]
     return message?.role === 'assistant' && message.stopReason !== 'toolUse'
   })
-  const roots = new Map(
-    threads.map((thread) => [
-      thread.id,
-      answers.find((entry) => entry.id >= thread.first)?.id ?? thread.first,
-    ]),
-  )
-  // What the user typed in the main stream stays there, in their own words, even when it is about one thread.
-  const typed = new Set<number>(
-    entries
-      .filter((entry) => {
-        if (entry.kind !== 'pi.user') return false
-        const content = entry.model?.[0]?.content
-        const text =
-          typeof content === 'string'
-            ? content
-            : (content?.find((block) => block.type === 'text')?.text ?? '')
-        return !REPLY.test(text)
-      })
-      .map((entry) => entry.id),
-  )
+  const roots = new Map<number, number>()
+  for (const thread of threads) {
+    const after = answers.find((entry) => entry.id >= thread.first)
+    if (after) roots.set(thread.id, after.id)
+  }
   const hidden = new Set<number>()
-  for (const [entry, ids] of of)
-    if (ids.length === 1 && entry > roots.get(ids[0])! && !typed.has(entry)) hidden.add(entry)
-  return { of, hidden, roots }
+  for (const [entry, ids] of of) if (ids.length === 1) hidden.add(entry)
+  return { of, hidden, roots, live }
 }

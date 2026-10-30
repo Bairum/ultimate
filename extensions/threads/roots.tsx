@@ -1,6 +1,7 @@
 import { cn } from 'cn'
 import { CornerDownRightIcon, MessageSquareIcon } from 'lucide-react'
 import { useRef } from 'react'
+import { Shimmer } from '@/components/ai/shimmer'
 import { formatAgo, useNow } from '@/sdk'
 import type { EntryRecord } from '@/sdk'
 import { FeatureTag, useOverview } from '../conversations/ui.tsx'
@@ -79,22 +80,32 @@ function RootCard({ id }: { id: number }) {
         <span className="shrink-0 text-muted-foreground/70">#{id}</span>
         <span className={cn('ml-auto shrink-0', tone.text)}>{tone.word}</span>
       </span>
-      {shown.line && (
-        <span className="flex min-w-0 items-baseline gap-1.5 pl-3.5 text-[13px]">
-          {shown.who && (
-            <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-              {shown.who}
-            </span>
-          )}
-          <span
-            className={cn(
-              'min-w-0 truncate',
-              shown.fresh ? 'text-foreground' : 'text-foreground/75',
-            )}
-          >
-            {shown.line}
-          </span>
+      {shown.writing ? (
+        <span
+          className="flex min-w-0 items-baseline gap-1.5 pl-3.5 text-[13px]"
+          data-thread-writing
+        >
+          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">@ultimate</span>
+          <Shimmer as="span">writing…</Shimmer>
         </span>
+      ) : (
+        shown.line && (
+          <span className="flex min-w-0 items-baseline gap-1.5 pl-3.5 text-[13px]">
+            {shown.who && (
+              <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                {shown.who}
+              </span>
+            )}
+            <span
+              className={cn(
+                'min-w-0 truncate',
+                shown.fresh ? 'text-foreground' : 'text-foreground/75',
+              )}
+            >
+              {shown.line}
+            </span>
+          </span>
+        )
       )}
       <span className="flex items-center gap-2 pl-3.5 font-mono text-[11px]">
         <span className="text-brand/90 group-hover:underline">
@@ -134,7 +145,7 @@ function RootPointer({ id }: { id: number }) {
       <span className="shrink-0">thread</span>
       {feature && <FeatureTag className="shrink-0" feature={feature} />}
       <span className="min-w-0 truncate text-foreground/80">{shown.title ?? `#${id}`}</span>
-      <Dot tone={shown.tone} />
+      {shown.writing ? <Shimmer as="span">@ultimate writing…</Shimmer> : <Dot tone={shown.tone} />}
       <Fresh count={shown.fresh} />
     </button>
   )

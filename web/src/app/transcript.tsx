@@ -564,6 +564,9 @@ function TranscriptEntries() {
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- `own` is derived from `entries` each render.
     [threading, entries, thread],
   )
+  // The run in progress streams where it belongs from its first token: in the one thread that woke it, else in main.
+  const runThread = threading?.live.length === 1 ? threading.live[0] : undefined
+  const runHere = runThread === thread
   const compact = useCompact()
   const keeps = (call: ToolCall) => !!compact?.(call)
   const rows: (CompactPart | WorkRun)[] = compact
@@ -785,11 +788,11 @@ function TranscriptEntries() {
           </Fragment>
         )
       })}
-      {partial && (
+      {partial && runHere && (
         <AssistantView busy message={partial} results={results} slots={slots} streaming />
       )}
       <Slot name="transcript.end" />
-      <LiveStatus busy={busy} id={id} live={live} partial={partial} />
+      {runHere && <LiveStatus busy={busy} id={id} live={live} partial={partial} />}
       {tailSpace > 0 && (
         <div aria-hidden="true" data-history-anchor-space style={{ height: tailSpace }} />
       )}

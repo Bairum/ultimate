@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { Shimmer } from '@/components/ai/shimmer'
 import {
   api,
   Composer,
@@ -313,7 +314,11 @@ function RailRow({ id }: { id: number }) {
       </span>
       <span className="flex w-full min-w-0 items-center gap-1.5 pl-3 font-mono text-[10.5px] text-muted-foreground/80">
         {feature && <FeatureTag className="min-w-0" feature={feature} />}
-        <span className={cn('shrink-0', tones[shown.tone].text)}>{tones[shown.tone].word}</span>
+        {shown.writing ? (
+          <Shimmer as="span">@ultimate writing…</Shimmer>
+        ) : (
+          <span className={cn('shrink-0', tones[shown.tone].text)}>{tones[shown.tone].word}</span>
+        )}
         {shown.at !== undefined && (
           <span className="ml-auto shrink-0">{formatAgo(shown.at, now)}</span>
         )}
