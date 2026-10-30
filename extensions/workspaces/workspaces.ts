@@ -142,8 +142,10 @@ async function atRisk(
     : []
   return {
     id,
-    uncommitted: (await git(workspace.path, 'status', '--porcelain')).split('\n').filter(Boolean)
-      .length,
+    // Untracked files count whatever status.showUntrackedFiles says: `git worktree remove` honours it and deletes them.
+    uncommitted: (await git(workspace.path, 'status', '--porcelain', '--untracked-files=all'))
+      .split('\n')
+      .filter(Boolean).length,
     unlanded: Number(
       await git(
         workspace.path,
@@ -688,13 +690,35 @@ export function workspaces(host: Host) {
     }
     return kept
   }
-  /** Whether the checkout at `path` holds ignored files other than `node_modules` folders, which a reinstall restores. */
+  /**
+   * Whether the checkout at `path`, or any populated submodule in it, holds ignored files other than `node_modules`
+   * folders, which a reinstall restores. Removal deletes ignored files, a forced one inside submodules too.
+   */
   async function ignoredBeyondDependencies(path: string) {
-    // `matching` names each ignored path itself, so an ignored node_modules folder is one line, wherever it sits.
-    return (await git(path, 'status', '--porcelain', '--ignored=matching'))
+    const submodules = (
+      await git(path, 'submodule', 'foreach', '--quiet', '--recursive', 'echo "$displaypath"')
+    )
       .split('\n')
-      .filter((line) => line.startsWith('!! '))
-      .some((line) => !/(^|\/)node_modules\/$/.test(line.slice(3)))
+      .filter(Boolean)
+    for (const checkout of [path, ...submodules.map((name) => join(path, name))]) {
+      // `matching` names each ignored path itself, so an ignored node_modules folder is one line, wherever it sits;
+      // untracked files are listed explicitly, since `status.showUntrackedFiles=no` rejects `--ignored` otherwise.
+      const status = await git(
+        checkout,
+        'status',
+        '--porcelain',
+        '--ignored=matching',
+        '--untracked-files=all',
+        '--ignore-submodules=all',
+      )
+      if (
+        status
+          .split('\n')
+          .some((line) => line.startsWith('!! ') && !/(^|\/)node_modules\/$/.test(line.slice(3)))
+      )
+        return true
+    }
+    return false
   }
   /**
    * Remove checkouts in `<home>/worktrees` that no record of this chapter knows: an earlier chapter made them, and its
@@ -739,17 +763,17 @@ export function workspaces(host: Host) {
         const branch = record
           .find((line) => line.startsWith('branch refs/heads/'))
           ?.slice('branch refs/heads/'.length)
-        // A detached checkout counts its HEAD's commits not on the target as work only it holds.
-        const work = await atRisk(0 as ConversationId, { path, branch: branch ?? '', target })
-        // Git removes ignored files with the checkout: anything beyond node_modules (a .env, local data) may be unique.
-        if (work.uncommitted || work.unlanded || (await ignoredBeyondDependencies(path))) {
-          kept.push(path)
-          return
-        }
         try {
+          // A detached checkout counts its HEAD's commits not on the target as work only it holds.
+          const work = await atRisk(0 as ConversationId, { path, branch: branch ?? '', target })
+          // Git removes ignored files with the checkout: anything beyond node_modules (a .env, local data) may be unique.
+          if (work.uncommitted || work.unlanded || (await ignoredBeyondDependencies(path))) {
+            kept.push(path)
+            return
+          }
           await removeWorktree(source, path)
         } catch (error) {
-          // removeWorktree refuses unique work (submodules, a detached HEAD) by throwing: that checkout stays.
+          // A check git cannot answer, or a removal refusing unique work (submodules, a detached HEAD): it stays.
           kept.push(path)
           console.warn(`workspaces: sweep kept ${path}:`, error)
           return

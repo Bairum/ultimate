@@ -1875,6 +1875,8 @@ it('sweep removes unrecorded clean worktrees and merged branches but keeps and r
   await writeFile(join(f.projectRoot, '.gitignore'), '.env\nnode_modules/\n')
   await git(f.projectRoot, 'add', '.gitignore')
   await git(f.projectRoot, 'commit', '-qm', 'ignore local files')
+  // `--ignored` alone fails under this setting; the sweep must still judge every checkout.
+  await git(f.projectRoot, 'config', 'status.showUntrackedFiles', 'no')
   await mkdir(join(f.home, 'worktrees'), { recursive: true })
   const clean = join(f.home, 'worktrees', '999')
   const dirty = join(f.home, 'worktrees', '998')
@@ -1895,6 +1897,41 @@ it('sweep removes unrecorded clean worktrees and merged branches but keeps and r
   expect(await git(f.projectRoot, 'worktree', 'list', '--porcelain')).toContain(dirty)
   expect(await git(f.projectRoot, 'branch', '--list', 'ultimate/x-998')).toContain('ultimate/x-998')
   expect(f.notice.mock.calls.flat().join('\n')).toContain('Kept 2 unrecorded worktrees')
+})
+it('sweep keeps a clean checkout whose submodule holds an ignored file', async () => {
+  const f = await fixture()
+  const library = await temp('ultimate-sweep-library-')
+  await git(library, 'init', '-q', '-b', 'main')
+  await writeFile(join(library, '.gitignore'), '.env\n')
+  await git(library, 'add', '.gitignore')
+  await git(
+    library,
+    '-c',
+    'user.name=T',
+    '-c',
+    'user.email=t@example.com',
+    'commit',
+    '-qm',
+    'library',
+  )
+  await git(
+    f.projectRoot,
+    '-c',
+    'protocol.file.allow=always',
+    'submodule',
+    'add',
+    '-q',
+    library,
+    'lib',
+  )
+  await git(f.projectRoot, 'commit', '-qm', 'add submodule')
+  await mkdir(join(f.home, 'worktrees'), { recursive: true })
+  const path = join(f.home, 'worktrees', '996')
+  await git(f.projectRoot, 'worktree', 'add', path, '-b', 'ultimate/x-996')
+  await git(path, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '-q')
+  await writeFile(join(path, 'lib/.env'), 'TOKEN=sub')
+  expect(await f.service.sweep(context)).toEqual([path])
+  expect(await readFile(join(path, 'lib/.env'), 'utf8')).toBe('TOKEN=sub')
 })
 it.concurrent('release includes transitively owned checkouts but not unrelated conversations', async () => {
   const f = await fixture()
