@@ -25,8 +25,10 @@ export function useThreads() {
   const standing = useDocOf(1, StandingDoc)
   const log = useDocOf(1, MessagesDoc)
   // What the transcript around it has loaded, earlier pages included, so a root sees the same entries that split the
-  // stream; outside a transcript (the pane's header), the active entries.
-  const entries = useTranscript()
+  // stream; outside a transcript (the pane's header and the seen marker), the active entries.
+  const loaded = useTranscript()
+  const active = useConversation((conversation) => conversation.entries)
+  const entries = loaded.length ? loaded : active
   if (!isUltimate(id, standing)) return undefined
   const threads = threadsOf(entries, log?.messages ?? [], id!)
   // The thread @ultimate is writing in: its run in progress was woken by that thread alone.

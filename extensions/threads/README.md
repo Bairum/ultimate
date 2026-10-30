@@ -33,5 +33,15 @@ streams in.
 - The thread's composer sends to @ultimate as `Re #<branch>: …`. What arrives while a thread is open counts as seen.
 - **Catch-up**: under a landing card, the branch's abstract frozen at landing (lineage's `abstract` action).
 
-The core transcript does the splitting: this extension contributes `compact.threads`. Disabled (`extensions.disable`),
-nothing contributes it, and @ultimate's transcript is the plain one.
+The core transcript does the splitting: this extension contributes `compact.threads`.
+
+## On and off
+
+Off by default while it is tried out (`defaultOff` in `shared/extension-api.ts`). Turn it on in user settings,
+`~/.ultimate/settings.json`:
+
+```json
+{ "extensions": { "enable": ["threads"] } }
+```
+
+Or in the Extensions tab. Off, nothing contributes `compact.threads`, and @ultimate's transcript is the plain one.

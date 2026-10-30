@@ -55,7 +55,7 @@ import { entryRenderers, messageItems, toolLine } from '../sdk/registry.ts'
 import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary, Provided, Slot } from './boundary.tsx'
 import { ParkedRuns, RunStart } from '../sdk/types.ts'
-import type { CompactSummaryProps, Threading } from '../sdk/types.ts'
+import type { CompactSummaryProps } from '../sdk/types.ts'
 import { ThreadContext } from '../sdk/thread.ts'
 import { MessageActions } from './message-actions.tsx'
 import { textOf, UserView } from './user-turn.tsx'
@@ -66,6 +66,7 @@ import {
   groupBetween,
   groupQuiet,
   emptyStretch,
+  threadStream,
   isOpenIn,
   openIn,
   partKey,
@@ -85,32 +86,6 @@ import { callsStart, indexTools, partialOf, slotsOf, toolCallView } from './mode
 import type { ToolResult } from './model.ts'
 import { ToolCallBlock } from './tool-call.tsx'
 import { TranscriptSkeleton } from './transcript-skeleton.tsx'
-
-/**
- * The entries a threaded transcript shows: in the main stream, those it does not hide, with a root row (of the
- * contribution's `root` kind) after each thread's root entry; in thread `thread`, that thread's entries alone.
- */
-export function threadStream(
-  entries: readonly EntryRecord[],
-  { root: kind, of, hidden, roots }: Threading,
-  thread: number | undefined,
-): EntryRecord[] {
-  if (thread !== undefined) return entries.filter((entry) => of.get(entry.id)?.includes(thread))
-  const rootsAt = Map.groupBy(roots, ([, entry]) => entry)
-  return entries.flatMap((entry) => {
-    // A root row is known by its thread, negated so it never takes a stored entry's id.
-    const rows = (rootsAt.get(entry.id) ?? []).map(
-      ([root]) =>
-        ({
-          id: -root,
-          conversationId: entry.conversationId,
-          kind,
-          data: { thread: root },
-        }) as unknown as EntryRecord,
-    )
-    return hidden.has(entry.id) ? rows : [entry, ...rows]
-  })
-}
 
 /**
  * Thread `thread` of the shown conversation as a transcript of its own, for a side pane: its entries in order, cards
@@ -555,9 +530,16 @@ function TranscriptEntries() {
   // A threaded conversation's main stream: each thread's entries leave it, and its root row stands where it began. A
   // thread view shows one thread's entries alone.
   const thread = useContext(ThreadContext)
+  // Threads read every loaded entry of the conversation, tool results with their calls included: a result can say what
+  // its call did (a message it sent, a branch it started).
   const threading = useMemo(
-    () => (background?.threads && id !== undefined ? background.threads(own, id) : undefined),
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- `own` is derived from `entries` each render.
+    () =>
+      background?.threads && id !== undefined
+        ? background.threads(
+            entries.filter((entry) => entry.conversationId === id),
+            id,
+          )
+        : undefined,
     [background, entries, id],
   )
   const visible = useMemo(

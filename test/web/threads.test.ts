@@ -2,6 +2,7 @@ import type { EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import { reply, threading, threadsOf } from '../../extensions/threads/threads.tsx'
 import type { Message } from '../../extensions/messages/refs.ts'
+import { threadStream } from '../../web/src/app/compact.ts'
 
 // Shapes as @ultimate's stored history has them: inputs carry `input`, a response its tool calls, a result its call id.
 const ULTIMATE = 10
@@ -205,6 +206,15 @@ describe('threadsOf', () => {
     )
     expect([8, 9].map((id) => pruned.of.get(id))).toEqual([[61], [61]])
     expect([...pruned.of]).toEqual([...logged.of])
+    // The transcript shows a call's result inside its call, so the stream it renders has no result rows; the threads
+    // still come from every loaded entry, and the answer's turn stays out of the main stream.
+    const stream = threadStream(
+      entries.filter((e) => e.kind !== 'pi.tool-result'),
+      threading(entries, pruned),
+      undefined,
+    ).map((e) => e.id)
+    expect(stream).not.toContain(8)
+    expect(stream).not.toContain(9)
   })
 
   it('decides a running turn by what woke it, and never moves it after', () => {
