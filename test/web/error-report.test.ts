@@ -31,14 +31,20 @@ it('reports a failed load with its full message, path, source and build', () => 
   )
 })
 
-it("caps a crash's stack", () => {
-  const stack = Array.from({ length: 40 }, (_, line) => `    at frame${line}`).join('\n')
+it("keeps a crash's own frames, capped", () => {
+  const stack = Array.from({ length: 40 }, (_, line) =>
+    line % 2
+      ? `    at frame${line}`
+      : '    at beginWork (/@fs/tmp/vite/deps/react-dom_client.js:1:1)',
+  ).join('\n')
   const report = errorReport(system, {
     extension: 'shell',
     error: 'boom',
     context: 'a component threw',
     stack,
   })
-  expect(report).toContain('at frame14\n```')
-  expect(report).not.toContain('frame15')
+  expect(report).toContain('Stack:\n```\nat frame1\n')
+  expect(report).toContain('at frame15\n```')
+  expect(report).not.toContain('frame17')
+  expect(report).not.toContain('react-dom')
 })

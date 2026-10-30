@@ -9,8 +9,8 @@ import { provisionOf, provisionsOf, slotItems } from '../sdk/registry.ts'
 import { ErrorReport } from '../sdk/types.ts'
 import type { Point, SlotName } from '../sdk/types.ts'
 
-/** Lines of a stack an error report keeps: the throw site and its callers, not the framework below them. */
-const STACK_LINES = 15
+/** Frames of a stack an error report keeps, after dropping dependencies (React, Vite's prebundles) and bare elements. */
+const STACK_LINES = 8
 
 /** Where an extension lives: `extensions/…` in the clone, `~/.ultimate/…` or the project's `.ultimate/…` otherwise. */
 function extensionPath(system: SystemInfo | undefined, name: string, file = '') {
@@ -28,7 +28,11 @@ export function errorReport(
   failure: { extension: string; error: string; context: string; stack?: string },
 ) {
   const source = system?.extensions.find((info) => info.name === failure.extension)?.source
-  const stack = failure.stack?.trim().split('\n').slice(0, STACK_LINES).join('\n')
+  const frames = failure.stack
+    ?.split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !/\/(node_modules|deps)\/|\(<anonymous>\)$/.test(line))
+  const stack = frames && [...new Set(frames)].slice(0, STACK_LINES).join('\n')
   const build = system && `${system.build.id} · gen ${system.build.generation}`
   return [
     `Extension \`${failure.extension}\` failed: ${failure.context}.`,
