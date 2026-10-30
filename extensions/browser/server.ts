@@ -8,17 +8,31 @@ import { defineExtension, defineTool, section } from '@earendil-works/pi-durable
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core'
 import type { ExtensionHost } from '../../server/extensions.ts'
 
+/** Chromium executables Playwright may have installed under `home` for `platform`, newest first. */
+export async function playwrightChromiums(
+  home: string,
+  platform = process.platform,
+  arch = process.arch,
+) {
+  const [cache, executable] =
+    platform === 'darwin'
+      ? [
+          join(home, 'Library/Caches/ms-playwright'),
+          `chrome-mac-${arch}/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
+        ]
+      : [join(home, '.cache/ms-playwright'), 'chrome-linux64/chrome']
+  return (await readdir(cache).catch(() => []))
+    .filter((name) => name.startsWith('chromium-'))
+    .toSorted((a, b) => b.localeCompare(a, 'en', { numeric: true }))
+    .map((name) => join(cache, name, executable))
+}
+
 export async function browserBinary() {
-  const cache = join(homedir(), '.cache/ms-playwright')
   const candidates = [
     process.env.ULTIMATE_CHROMIUM,
     '/usr/bin/chromium',
     '/usr/bin/google-chrome-stable',
-    ...(await readdir(cache).catch(() => []))
-      .filter((name) => name.startsWith('chromium-'))
-      .toSorted()
-      .toReversed()
-      .map((name) => join(cache, name, 'chrome-linux64/chrome')),
+    ...(await playwrightChromiums(homedir())),
   ].filter((path): path is string => !!path)
   for (const path of candidates) {
     try {
@@ -29,7 +43,7 @@ export async function browserBinary() {
     }
   }
   throw new Error(
-    'No Chromium found. Set ULTIMATE_CHROMIUM or install /usr/bin/chromium, /usr/bin/google-chrome-stable, or ~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome.',
+    'No Chromium found. Set ULTIMATE_CHROMIUM, install /usr/bin/chromium or /usr/bin/google-chrome-stable, or run `npx playwright install chromium` (~/.cache/ms-playwright on Linux, ~/Library/Caches/ms-playwright on macOS).',
   )
 }
 
@@ -143,7 +157,7 @@ export default function browserExtension(host: ExtensionHost) {
       defineTool({
         name: 'browser',
         description:
-          "Drive a fresh browser page with clicks, fills, keys, waits and JavaScript; report outcomes and optionally an image. Each step times out after 30 s. On an Ultimate page (this UI or a preview), `send` submits a prompt without the composer and `until` waits on Ultimate's state, never a guessed time: 'idle' (that conversation's turn is done), 'quiet' (nothing is busy, branches and subagents included), {entry: kind} or {event: name, where}; until defaults to 5 min (timeoutMs) and on timeout says what was still busy. Click and fill only to test the interaction itself.",
+          "Drive a fresh browser page with clicks, fills, keys, waits and JavaScript; report outcomes and optionally an image. Each step times out after 30 s. On an Ultimate page (this UI or a preview), `send` submits a prompt without the composer and `until` waits on Ultimate's state, never a guessed time: 'idle' (that conversation's turn is done), 'quiet' (nothing is busy, branches and subagents included), {entry: kind} or {event: name, where}; until defaults to 5 min (timeoutMs) and on timeout says what was still busy. Click and fill only to test the interaction itself. Scope selectors to one card or panel ('[data-entry-id=\"42\"] button:has-text(\"Retry\")', not 'button:has-text(\"Retry\")', which hits the first match on the page).",
         parameters: Type.Object({
           ...base,
           steps: Type.Array(
@@ -158,7 +172,12 @@ export default function browserExtension(host: ExtensionHost) {
               }),
               Type.Object({ press: Type.String() }),
               Type.Object({ wait: Type.Union([Type.Number({ minimum: 0 }), Type.String()]) }),
-              Type.Object({ eval: Type.String() }),
+              Type.Object({
+                eval: Type.String({
+                  description:
+                    "One expression, its value returned: 'document.title'. For statements or await, an async IIFE: '(async () => { const r = await fetch(\"/api/x\"); return r.status })()'. A bare 'const x = …; return x' fails.",
+                }),
+              }),
               Type.Object({
                 send: Type.String(),
                 conversation: Type.Optional(Type.Integer({ minimum: 1 })),

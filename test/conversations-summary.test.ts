@@ -123,7 +123,7 @@ it.each(['agent', 'lander'])(
 
 const luna = { provider: 'openai-codex', id: 'gpt-6-luna', thinking: 'medium' } as const
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
-// Release each fixture promptly instead of retaining every Vite server until the whole file ends.
+// Each test's servers close when it ends: closing every test's servers at once overruns the hook timeout under load.
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()))
 })

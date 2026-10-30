@@ -92,7 +92,8 @@ export interface ExtensionInfo {
     sections: string[]
     hooks: number
     docs: string[]
-    secrets?: { name: string; description: string; url?: string }[]
+    /** `provider`: a model provider whose configured auth stands in for the secret. */
+    secrets?: { name: string; description: string; url?: string; provider?: string }[]
     error?: string
   }
 }
@@ -197,7 +198,13 @@ export interface UiUpdateResponse {
   ok: true
   rev: number
 }
+/**
+ * Events of `GET /api/events`, one stream per browser tab. `stream` comes first with the id that
+ * `POST /api/events/<stream>/<sub>` (`{ conversation?, docs?, view? }`) and `DELETE` use to open and close a subscription
+ * of a conversation; `view`, `ops`, `doc` and `docOps` belong to one, whose id is their first data line.
+ */
 export interface ServerEvents {
+  stream: { id: string }
   system: SystemInfo
   conversations: ConversationSummary[]
   view: StreamedView

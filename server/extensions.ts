@@ -1,6 +1,6 @@
 import { PairingRequired } from './request-security.ts'
 import type { HttpCaller } from './request-security.ts'
-import { readFile } from 'node:fs/promises'
+import { readFile, realpath } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { compareExtensions, discoverExtensions } from './discovery.ts'
 import {
@@ -731,7 +731,9 @@ export async function loadExtensions(
     enqueue(async () => {
       try {
         const selected = new Set<string>()
-        const modules = vite.moduleGraph.getModulesByFile(file)
+        // Vite keys its graph by real path, while the watcher reports a symlinked extension's files through the
+        // link. A file removed since the event has no real path; its link path then misses the graph, as before.
+        const modules = vite.moduleGraph.getModulesByFile(await realpath(file).catch(() => file))
         const visited = new Set<import('vite-plus').ModuleNode>()
         const visit = (module: import('vite-plus').ModuleNode) => {
           if (visited.has(module)) return
@@ -864,10 +866,13 @@ export function validateSecrets(
         throw new Error('secret URLs must use http(s)')
       }
     }
+    if (item.provider !== undefined && (typeof item.provider !== 'string' || !item.provider))
+      throw new Error('secret providers must be non-empty strings')
     return {
       name: item.name,
       description: item.description,
       ...(item.url === undefined ? {} : { url: item.url }),
+      ...(item.provider === undefined ? {} : { provider: item.provider }),
     }
   })
 }

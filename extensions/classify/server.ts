@@ -18,6 +18,7 @@ export const secrets = [
     name: 'TYPESAFE_API_KEY',
     description: 'TypeSafe API key for Jev typed judgments',
     url: 'https://console.typesafe.ai/keys',
+    provider: 'typesafe',
   },
 ]
 
@@ -201,13 +202,18 @@ async function answerAll(
     cache.count({ cachedQuestions: ids.length })
     return { model: MODEL, answers, usage: { inputTokens: 0 } }
   }
-  const key = await readSecret(host.userHome, 'TYPESAFE_API_KEY')
+  // Pi's `typesafe` provider auth (models.json, auth.json or its env key) wins over the stored secret. An
+  // unresolvable models.json key throws rather than sending the stored secret to a configured endpoint.
+  const key =
+    (await host.modelRuntime.getAuth('typesafe'))?.auth.apiKey ??
+    (await readSecret(host.userHome, 'TYPESAFE_API_KEY'))
   if (!key) {
     throw new Error(
       'Missing TYPESAFE_API_KEY. Enable secrets and add TYPESAFE_API_KEY in the Secrets panel (⌘K → Secrets).',
     )
   }
-  const response = await fetch('https://api.typesafe.ai/v1/systemone', {
+  const base = host.modelRuntime.getProvider('typesafe')?.baseUrl ?? 'https://api.typesafe.ai/v1'
+  const response = await fetch(`${base.replace(/\/+$/, '')}/systemone`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: MODEL, state: request.state, questions: missing }),

@@ -26,7 +26,7 @@ export type PauseDocState = {
   manual?: boolean
   /** The user's setting: minutes after a rate-limit pause began that Ultimate presses Play by itself; unset is off. */
   autoPlay?: number
-  /** Bumped when gated in-task work (a triage model call) ends while paused, so the footer refreshes. */
+  /** Bumped when gated in-task work (an advisor model call) ends while paused, so the footer refreshes. */
   work?: number
 }
 
@@ -77,6 +77,12 @@ export const AutoPlayAction = actionRef<{ minutes: number | null }, PauseState>(
  * its last answer while the pause drained.
  */
 export type PauseNote = { since: number; until: number; finished?: boolean; auto?: boolean }
+
+/**
+ * The `pause.held` entry in a subagent's parent, mid-turn when the subagent hit a rate limit: subagent `child` hit
+ * `provider`'s limit for `model` at `at` (ms), and Ultimate is paused until Play.
+ */
+export type HeldNote = { child: number; provider: string; model: string; at: number }
 
 /** The `pause.autoplay` entry in @ultimate's transcript: the rate-limit pause from `since` played by itself at `at`. */
 export type AutoPlayed = { since: number; at: number; minutes: number }

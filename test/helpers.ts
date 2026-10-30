@@ -281,17 +281,21 @@ export async function post(server: string | { url: string }, path: string, data:
   })
   return { status: response.status, data: await response.json() }
 }
-export async function attach(server: string | { url: string }, query = '') {
+/** Read `/api/events`, subscribing each stream it opens as sub 0 to a conversation (the root by default) and its documents. */
+export async function attach(
+  server: string | { url: string },
+  subscription: { conversation?: number; docs?: string[] } = {},
+) {
   const url = typeof server === 'string' ? server : server.url
   const controller = new AbortController()
-  const events: { name: keyof ServerEvents; data: unknown }[] = []
+  const events: { name: keyof ServerEvents; data: unknown; sub?: number }[] = []
   let system: SystemInfo | undefined
   let view: ConversationView | undefined
   let connections = 0
   const task = (async () => {
     while (!controller.signal.aborted) {
       try {
-        const response = await fetch(url + '/api/events' + query, { signal: controller.signal })
+        const response = await fetch(url + '/api/events', { signal: controller.signal })
         if (response.status !== 200) throw new Error(`SSE status ${response.status}`)
         connections++
         const reader = response.body!.getReader()
@@ -305,10 +309,20 @@ export async function attach(server: string | { url: string }, query = '') {
             const block = wire.slice(0, index)
             wire = wire.slice(index + 2)
             const name = /^event: (.+)$/m.exec(block)?.[1] as keyof ServerEvents | undefined
-            const data = /^data: (.+)$/m.exec(block)?.[1]
+            // A subscription's events carry its id on the first data line.
+            const lines = [...block.matchAll(/^data: (.+)$/gm)].map((match) => match[1])
+            const data = lines.at(-1)
             if (!name || !data) continue
             const parsed: unknown = JSON.parse(data)
-            events.push({ name, data: parsed })
+            events.push({ name, data: parsed, ...(lines.length > 1 && { sub: Number(lines[0]) }) })
+            if (name === 'stream')
+              void fetch(`${url}/api/events/${(parsed as { id: string }).id}/0`, {
+                method: 'POST',
+                headers: { Origin: url },
+                body: JSON.stringify(subscription),
+              }).catch(() => {
+                // The stream ended: its reconnect subscribes again.
+              })
             if (name === 'system') system = parsed as SystemInfo
             if (name === 'view') view = parsed as ConversationView
             if (name === 'ops' && view) view = applyImmutable(view, parsed as Op[])

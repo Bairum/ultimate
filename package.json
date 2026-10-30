@@ -8,7 +8,6 @@
   "scripts": {
     "dev": "node server/main.ts",
     "start": "node bin/ultimate.ts",
-    "cli": "node bin/cli.ts",
     "check": "vp check && node scripts/deps.ts",
     "deps": "node scripts/deps.ts",
     "test": "node scripts/test.ts",
@@ -47,6 +46,7 @@
     "react-dom": "19.3.0",
     "streamdown": "2.7.0",
     "tailwindcss": "4.3.3",
+    "tone": "15.1.22",
     "unbash": "5.1.0",
     "undici": "8.10.2",
     "uqr": "0.1.3",

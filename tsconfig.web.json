@@ -39,6 +39,9 @@
     "extensions/sounds/cues.ts",
     "extensions/keep-warm/due.ts",
     "extensions/sounds/tones.ts",
+    "extensions/sounds/agents.ts",
+    "extensions/sounds/conductor.ts",
+    "extensions/sounds/engine.ts",
     "extensions/instance/links.ts",
     "extensions/update/item.ts",
     "extensions/pause/lasted.ts",
@@ -48,6 +51,7 @@
     "extensions/subagents/landing.ts",
     "extensions/onboarding/onboarded.ts",
     "extensions/sidebar/label.ts",
+    "extensions/tasks/kinds.ts",
     "extensions/sidebar/listed.ts",
     "extensions/side-chat/logic.ts",
     "extensions/voice-live/relay.ts",
@@ -64,6 +68,7 @@
     "lib/compare.ts",
     "lib/context-usage.ts",
     "lib/entries.ts",
+    "lib/families.ts",
     "extensions/subagents/message-types.ts",
     "test/web"
   ]

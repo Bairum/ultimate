@@ -23,6 +23,7 @@ import {
   useExtensions,
   useIntro,
   useModels,
+  useStore,
 } from '../sdk/hooks.ts'
 import { isMac } from '../sdk/keys.ts'
 import { touchKeyboard } from '../sdk/viewport.ts'
@@ -30,6 +31,7 @@ import type { ModelsResponse } from '../../../shared/protocol.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
 import { composerRenderers, inboxRenderer } from '../sdk/registry.ts'
 import { column } from './layout.ts'
+import { storeImages, storedImages } from './draft-images.ts'
 import {
   atFirstLine,
   mergedSteer,
@@ -153,6 +155,9 @@ export function ComposerRedirect({ to, children }: { to?: ComposerTarget; childr
 
 export function Composer({ dock }: { dock?: boolean }) {
   const { id, entries } = useConversation()
+  // Keyed by the conversation it is for, also while that one loads: one mount per switch, not one for the loading state.
+  const scoped = useContext(ConversationIdContext)
+  const requested = useStore((state) => state.requested)
   const renderers = composerRenderers(useExtensions())
   const core = renderers.reduce<ReactNode>(
     (previous, renderer) => {
@@ -168,7 +173,7 @@ export function Composer({ dock }: { dock?: boolean }) {
         </ExtensionBoundary>
       )
     },
-    <ConversationComposer dock={dock} key={id} />,
+    <ConversationComposer dock={dock} key={id ?? scoped ?? requested} />,
   )
   return <TranscriptContext value={entries}>{core}</TranscriptContext>
 }
@@ -187,7 +192,7 @@ function createDraft(id: number | string | undefined) {
   const key = id === undefined ? undefined : `ultimate.draft.${id}`
   let value: Draft = {
     text: key ? (localStorage.getItem(key) ?? '') : '',
-    images: [],
+    images: key ? storedImages(key) : [],
     sending: false,
     revision: 0,
   }
@@ -202,7 +207,9 @@ function createDraft(id: number | string | undefined) {
       }
     },
     set: (change: Partial<Draft>) => {
+      const images = value.images
       value = { ...value, ...change }
+      if (key && value.images !== images) storeImages(key, value.images)
       for (const listener of listeners) listener()
     },
   }

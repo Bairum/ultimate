@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterAll } from 'vitest'
 import { testTempPrefix } from './sweep-temp.ts'
 
-// Git and the server canonicalize paths; keep fixtures identical on macOS's symlinked temp directory.
+// macOS's TMPDIR is a symlink (/var -> /private/var); git and the server report the resolved path.
 const testTmpdir = realpathSync(mkdtempSync(join(tmpdir(), `${testTempPrefix}${process.pid}-`)))
 const agentDir = mkdtempSync(join(testTmpdir, 'ultimate-test-pi-'))
 process.env.PI_CODING_AGENT_DIR = agentDir

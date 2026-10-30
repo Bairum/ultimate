@@ -61,6 +61,7 @@ import {
   anchorSelector,
   compactRows,
   groupAside,
+  groupBetween,
   groupQuiet,
   isOpenIn,
   openIn,
@@ -72,7 +73,8 @@ import {
   windowGaps,
   windowKey,
 } from './compact.ts'
-import type { AsideGroup, CompactPart, QuietGroup, WorkRun } from './compact.ts'
+import type { AsideGroup, BetweenGroup, CompactPart, QuietGroup, WorkRun } from './compact.ts'
+import { foldKey, readFold, writeFold } from './fold.tsx'
 import { reachedFork } from './fork.ts'
 import { readerLeft } from './follow.ts'
 import { column } from './layout.ts'
@@ -83,7 +85,7 @@ import { TranscriptSkeleton } from './transcript-skeleton.tsx'
 
 /** The shown conversation; `dock` fits it into a narrow side region. */
 export function Transcript({ dock }: { dock?: boolean }) {
-  const { id, loading, busy } = useConversation()
+  const { id, loading } = useConversation()
   const { conversationId } = useUltimate()
   // A conversation without messages opens as it is: no placeholder, nothing rising in.
   const messages = useStore((state) => {
@@ -145,16 +147,14 @@ export function Transcript({ dock }: { dock?: boolean }) {
     if (!scroll || !content) return undefined
     scroll.scrollTop = scroll.scrollHeight
     if (id !== undefined) reveal(scroll, content)
-    // The library observes content growth, not viewport shrinkage as the composer grows.
-    // Reuse its follow lock so resizing never pulls someone away from older messages.
+    // Pin to the bottom before paint as content grows or the viewport shrinks: the library follows a frame later, and in
+    // that frame the scrollbar thumb jumps. Its follow lock still decides, so nobody reading older messages is pulled.
     const resize = new ResizeObserver(() => {
-      // oxlint-disable-next-line typescript/no-floating-promises -- use-stick-to-bottom's frame loop resolves a boolean; it performs no rejecting async work.
-      void stick.current?.scrollToBottom({
-        animation: 'instant',
-        preserveScrollPosition: true,
-      })
+      const state = stick.current?.state
+      if (state?.isAtBottom) state.scrollTop = state.targetScrollTop
     })
     resize.observe(scroll)
+    resize.observe(content)
     return () => resize.disconnect()
   }, [id])
   // A sent message pins the view to the bottom and follows the run, even when the reader had scrolled up.
@@ -166,13 +166,7 @@ export function Transcript({ dock }: { dock?: boolean }) {
   // Keyed so a conversation never inherits the previous one's scroll position or follow state.
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      {/* Follow a streaming reply smoothly; otherwise late growth, such as an image decoding, just stays at the bottom. */}
-      <Conversation
-        className="min-h-0"
-        contextRef={stick}
-        key={id}
-        resize={busy ? 'smooth' : 'instant'}
-      >
+      <Conversation className="min-h-0" contextRef={stick} key={id} resize="instant">
         <ConversationContent className={cn(column(dock), 'gap-3 pt-6 pb-10')}>
           <TranscriptEntries />
         </ConversationContent>
@@ -529,6 +523,17 @@ function TranscriptEntries() {
   // What a go-back set aside folds into one quiet row; the rows themselves render as usual inside it.
   const aside = useMemo(() => setAsideIds(entries), [entries])
   const grouped = groupAside(quiet, aside)
+  // What lies between two rows of the thread the reader follows folds into one line that opens it.
+  const thread = background?.thread
+  const threaded = thread
+    ? groupBetween(
+        grouped,
+        (row) =>
+          !('quiet' in row || 'work' in row || 'aside' in row) &&
+          thread({ entry: row.entry, calls: shownCalls(row) }),
+      )
+    : grouped.map((row) => row)
+  const [shownBetween, setShownBetween] = useState(0)
   const [shownAside, setShownAside] = useState<ReadonlySet<number>>(new Set())
   // Folded runs the reader or a reveal opened, by the keys of all their parts: a run that gains earlier entries from a
   // page, or later ones live, stays open.
@@ -559,7 +564,17 @@ function TranscriptEntries() {
       // Inside the window's range: a fill still reading it brings it.
       if (filling) return
     }
-    // Open its set-aside group and folded run first; the next commit scrolls.
+    // Open its stretch between thread rows, set-aside group and folded run first; the next commit scrolls.
+    const between = threaded.find(
+      (row): row is BetweenGroup<(typeof grouped)[number]> =>
+        'between' in row &&
+        row.between.some((inner) => itemParts(inner).some((part) => part.entry.id === reveal)),
+    )
+    if (between && !readBetween(id, between)) {
+      writeBetween(id, between, true)
+      setShownBetween((count) => count + 1)
+      return
+    }
     const group = grouped.find(
       (row): row is AsideGroup => 'aside' in row && !!runOf(row.aside, reveal),
     )
@@ -587,12 +602,24 @@ function TranscriptEntries() {
   })
   useLayoutEffect(
     () => revealStep(),
-    [reveal, loading, pending, error, history, opened, filling, shownAside, shownQuiet],
+    [
+      reveal,
+      loading,
+      pending,
+      error,
+      history,
+      opened,
+      filling,
+      shownAside,
+      shownQuiet,
+      shownBetween,
+    ],
   )
-  const render = (row: CompactPart | WorkRun | QuietGroup, last: boolean): ReactNode =>
+  const render = (row: CompactPart | WorkRun | QuietGroup, last: boolean, faded = ''): ReactNode =>
     'quiet' in row ? (
       // Found like a folded run: by its first entry, or its last when a page reaches into it.
       <div
+        className={faded}
         data-conversation-id={id}
         data-entry-id={partsOf(row)[0].entry.id}
         data-run-last={partsOf(row).at(-1)!.entry.id}
@@ -610,7 +637,7 @@ function TranscriptEntries() {
       </div>
     ) : 'work' in row ? (
       <div
-        className="empty:hidden"
+        className={cn('empty:hidden', faded)}
         data-conversation-id={id}
         data-entry-id={row.work[0].entry.id}
         data-run-last={row.work.at(-1)!.entry.id}
@@ -628,7 +655,7 @@ function TranscriptEntries() {
       </div>
     ) : (
       <div
-        className="empty:hidden"
+        className={cn('empty:hidden', faded)}
         data-conversation-id={id}
         data-entry-id={row.entry.id}
         key={partKey(row)}
@@ -670,34 +697,34 @@ function TranscriptEntries() {
       )}
       {!loading && visible.length === 0 && !partial && <EmptyState />}
       {!loading && visible.length > 0 && cursor === undefined && <Slot name="transcript.start" />}
-      {grouped.map((item, index) => {
-        const last = index === grouped.length - 1
-        if (!('aside' in item)) return render(item, last)
-        const key = asideKey(item)
-        const shown = shownAside.has(key)
+      {threaded.map((item, index) => {
+        const last = index === threaded.length - 1
+        if (!('between' in item)) return renderItem(item, last)
+        const key = `between:${partKey(itemParts(item.between[0])[0])}`
+        // The stretch the agent works in now stays in view while it works.
+        const shown = (busy && last) || readBetween(id, item)
+        // Open, a stretch shows its background groups' rows: their lines would repeat the stretch's.
+        const between = item.between.flatMap<CompactPart | WorkRun | AsideGroup>((row) =>
+          'quiet' in row ? row.quiet : [row],
+        )
+        const faded = between.map((inner, inside) =>
+          renderItem(inner, last && inside === between.length - 1, recedeRow),
+        )
         return (
-          <Collapsible
-            className="group/aside"
-            data-set-aside={item.steps}
-            key={`aside:${key}`}
-            onOpenChange={(value) =>
-              setShownAside((keys) => {
-                const next = new Set(keys)
-                if (value) next.add(key)
-                else next.delete(key)
-                return next
-              })
-            }
-            open={shown}
-          >
-            <CollapsibleTrigger className="flex cursor-pointer items-center gap-1.5 font-mono text-[11px] text-muted-foreground/70 hover:text-muted-foreground">
-              {item.steps} step{item.steps === 1 ? '' : 's'} set aside · {shown ? 'hide' : 'show'}
-              <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/aside:rotate-90" />
-            </CollapsibleTrigger>
-            <CollapsibleContent className="mt-3 flex flex-col gap-3 border-l border-dashed border-border/70 pl-3 opacity-70">
-              {item.aside.map((inner) => render(inner, false))}
-            </CollapsibleContent>
-          </Collapsible>
+          <Fragment key={key}>
+            <BetweenLine
+              group={item}
+              onOpen={() => {
+                writeBetween(id, item, !shown)
+                setShownBetween((count) => count + 1)
+              }}
+              open={shown}
+              summary={background?.summary}
+              working={busy && last}
+            />
+            {shown && faded}
+            {shown && index < threaded.length - 1 && <BetweenRule />}
+          </Fragment>
         )
       })}
       {partial && (
@@ -709,6 +736,136 @@ function TranscriptEntries() {
         <div aria-hidden="true" data-history-anchor-space style={{ height: tailSpace }} />
       )}
     </TranscriptContext>
+  )
+  function renderItem(
+    item: CompactPart | WorkRun | QuietGroup | AsideGroup,
+    last: boolean,
+    faded = '',
+  ): ReactNode {
+    if (!('aside' in item)) return render(item, last, faded)
+    const key = asideKey(item)
+    const shown = shownAside.has(key)
+    return (
+      <Collapsible
+        className={cn('group/aside', faded)}
+        data-set-aside={item.steps}
+        key={`aside:${key}`}
+        onOpenChange={(value) =>
+          setShownAside((keys) => {
+            const next = new Set(keys)
+            if (value) next.add(key)
+            else next.delete(key)
+            return next
+          })
+        }
+        open={shown}
+      >
+        <CollapsibleTrigger className="flex cursor-pointer items-center gap-1.5 font-mono text-[11px] text-muted-foreground/70 hover:text-muted-foreground">
+          {item.steps} step{item.steps === 1 ? '' : 's'} set aside · {shown ? 'hide' : 'show'}
+          <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/aside:rotate-90" />
+        </CollapsibleTrigger>
+        <CollapsibleContent className="mt-3 flex flex-col gap-3 border-l border-dashed border-border/70 pl-3 opacity-70">
+          {item.aside.map((inner) => render(inner, false))}
+        </CollapsibleContent>
+      </Collapsible>
+    )
+  }
+}
+
+/** Opened rows between thread rows stay faded and tighter, back to full on hover or focus. */
+const recedeRow =
+  '-mt-1.5 opacity-45 transition-opacity duration-200 hover:opacity-100 focus-within:opacity-100'
+
+/** All parts of a top-level row, set-aside groups included. */
+const itemParts = (item: CompactPart | WorkRun | QuietGroup | AsideGroup) =>
+  'aside' in item ? item.aside.flatMap(partsOf) : partsOf(item)
+
+/**
+ * Whether the reader opened a stretch: kept in this browser per conversation, under its first and its last part, so it
+ * stays open when a page brings earlier rows into it or live rows join it.
+ */
+const betweenKeys = (
+  id: number | undefined,
+  group: BetweenGroup<CompactPart | WorkRun | QuietGroup | AsideGroup>,
+) => {
+  const parts = group.between.flatMap(itemParts)
+  return [parts[0], parts.at(-1)!].map((part) => foldKey(id, `between:${partKey(part)}`))
+}
+const readBetween = (
+  id: number | undefined,
+  group: BetweenGroup<CompactPart | WorkRun | QuietGroup | AsideGroup>,
+) => betweenKeys(id, group).some(readFold)
+const writeBetween = (
+  id: number | undefined,
+  group: BetweenGroup<CompactPart | WorkRun | QuietGroup | AsideGroup>,
+  open: boolean,
+) => {
+  for (const key of betweenKeys(id, group)) writeFold(key, open)
+}
+
+/** The hairline that closes a stretch between thread rows. */
+function BetweenRule() {
+  return <div aria-hidden="true" className="my-1 h-px bg-border/50" />
+}
+
+/**
+ * A stretch between thread rows as a hairline divider carrying its summary, which opens or closes it.
+ */
+function BetweenLine({
+  group,
+  open,
+  onOpen,
+  working,
+  summary: Summary,
+}: {
+  group: BetweenGroup<CompactPart | WorkRun | QuietGroup | AsideGroup>
+  open: boolean
+  onOpen: () => void
+  working: boolean
+  summary:
+    | {
+        extension: string
+        version: number
+        component: ComponentType<CompactSummaryProps>
+      }
+    | undefined
+}) {
+  // Rows outside runs of work, which count as steps instead.
+  const rows = group.between
+    .flatMap((row) => ('aside' in row ? row.aside : [row]))
+    .flatMap((row) => ('quiet' in row ? row.quiet : [row]))
+    .flatMap((row) => ('work' in row ? [] : [{ entry: row.entry, calls: shownCalls(row) }]))
+  const steps = group.between.reduce(
+    (sum, row) => sum + ('work' in row ? row.steps : 'quiet' in row ? row.steps : 0),
+    0,
+  )
+  const fallback = <>{rows.length} updates</>
+  return (
+    <button
+      aria-expanded={open}
+      className="my-1 flex w-full min-w-0 cursor-pointer items-center gap-3 font-mono text-[11px] text-muted-foreground/60 transition-colors before:h-px before:w-6 before:shrink-0 before:bg-border/60 after:h-px after:flex-1 after:bg-border/60 hover:text-muted-foreground"
+      data-between={rows.length}
+      onClick={onOpen}
+      type="button"
+    >
+      <span className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+        {Summary ? (
+          <ExtensionBoundary
+            extension={Summary.extension}
+            fallback={fallback}
+            variant="inline"
+            version={Summary.version}
+          >
+            <Summary.component between rows={rows} steps={steps} working={working} />
+          </ExtensionBoundary>
+        ) : (
+          fallback
+        )}
+        <ChevronRightIcon
+          className={cn('size-3 shrink-0 transition-transform', open && 'rotate-90')}
+        />
+      </span>
+    </button>
   )
 }
 
@@ -1150,6 +1307,7 @@ function AssistantView({
           case 'thinking':
             if (!block.thinking && !block.redacted) return null
             return (
+              // oxlint-disable-next-line react/no-array-index-key -- Message content blocks are addressed by index.
               <Reasoning isStreaming={streaming && index === last} key={index}>
                 <ReasoningTrigger
                   label={`${streaming && index === last ? 'Thinking' : 'Thought'}${block.redacted ? ' (redacted)' : ''}`}
@@ -1159,6 +1317,7 @@ function AssistantView({
             )
           case 'text':
             return block.text ? (
+              // oxlint-disable-next-line react/no-array-index-key -- Message content blocks are addressed by index.
               <MessageResponse isAnimating={streaming && index === last} key={index}>
                 {block.text}
               </MessageResponse>

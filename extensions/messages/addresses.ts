@@ -3,11 +3,15 @@ import type { Context } from '@earendil-works/chord'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { WorkspacesApi } from '../workspaces/api.ts'
-import { isolatable } from '../../lib/git.ts'
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import type { Remote } from './refs.ts'
+import { Started } from './api.ts'
 
+/** The conversation that started branch `id`, which hears its final answers; undefined for anything else. */
+export async function starterOf(host: ExtensionHost, id: number | 'user', ctx: Context) {
+  if (typeof id !== 'number') return undefined
+  return (await host.harness().snapshot(Started, id as ConversationId, ctx))?.by
+}
 /** The conversation that started `id` as a subagent, which is the only one it may message. */
 export async function parentOf(host: ExtensionHost, id: number, ctx: Context) {
   const owner = (await host.harness().commit((tx) => tx.conversation(id as ConversationId), ctx))
@@ -17,24 +21,12 @@ export async function parentOf(host: ExtensionHost, id: number, ctx: Context) {
     ? owner
     : undefined
 }
-export async function lander(host: ExtensionHost, ctx: Context) {
-  const checkout = await isolatable(host.projectRoot)
-  if ('reason' in checkout) return undefined
-  return (await host.harness().snapshot(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID, ctx))
-    ?.landerConversations[checkout.source]
-}
 export async function senderName(host: ExtensionHost, id: number | 'user', ctx: Context) {
   if (id === 'user') return 'user'
   if (typeof id !== 'number') return 'another Ultimate'
   const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
   const name = Object.keys(index ?? {}).find((candidate) => index?.[candidate] === id)
-  const workspace = await host
-    .harness()
-    .snapshot(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID, ctx)
-  const label =
-    name ??
-    (Object.values(workspace?.landerConversations ?? {}).includes(id) ? 'lander' : undefined)
-  return `#${id}${label ? ` (@${label})` : ''}`
+  return `#${id}${name ? ` (@${name})` : ''}`
 }
 export async function resolve(
   host: ExtensionHost,
@@ -44,8 +36,7 @@ export async function resolve(
 ) {
   if (to === 'user') return to
   let id: number | undefined
-  if (to === '@lander') id = await lander(host, ctx)
-  else if (to.startsWith('@')) {
+  if (to.startsWith('@')) {
     const service = host.need(SubagentsApi)
     const valid = await service.residents(ctx)
     if (!valid.some((item) => `@${item.name}` === to))

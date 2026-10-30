@@ -137,7 +137,7 @@ it.concurrent('gates project resources and remembers the trust choice across reo
     expect(log.summary).not.toBe('')
     expect(log.provides).toContain('messages')
     expect(log.needs).toContain('subagents')
-    expect(log.events).toEqual(expect.arrayContaining(['board.sent', 'board.triaged']))
+    expect(log.events).toEqual(expect.arrayContaining(['board.sent']))
     expect(
       server.extensions.info().find((entry) => entry.name === 'messages')?.server?.tools,
     ).toContainEqual({ name: 'message', description: expect.stringMatching(/\S/) })

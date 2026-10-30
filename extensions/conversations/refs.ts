@@ -37,6 +37,8 @@ export const ContextDoc = docRef<ContextUsage>('conversations.context')
 export type SummaryModelSetting = {
   value: unknown
   source: 'default' | 'user' | 'project'
+  /** Without a pin: the model family summaries run on (`modelFamilies`). */
+  family?: string
   default: string
   /** The project's settings file, when it decides the model. */
   path?: string
@@ -51,12 +53,14 @@ export const RenameAction = actionRef<{ id: number; title: string }, { ok: boole
   'rename',
 )
 /**
- * `{ ids }` → `{ concluded, kept }`: conclude these conversations and free their worktrees; `kept` lists the worktrees
- * kept because they are busy or hold unlanded work.
+ * `{ ids }` → `{ concluded, stopped, previews, kept }`: conclude these conversations, stop the work they and their
+ * subagents still run (`stopped` lists the conversations that were busy) and the previews they started (`previews`, by
+ * instance id), then free their worktrees; `kept` lists the worktrees kept because they are busy or hold unlanded work.
+ * A caller inside a concluded tree is not stopped: it would wait on itself.
  */
 export const ConcludeAction = actionRef<
   { ids: number[] },
-  { concluded: number[]; kept: KeptWork[] }
+  { concluded: number[]; stopped: number[]; previews: string[]; kept: KeptWork[] }
 >('conversations', 'conclude')
 /** `{ ids }` → `{ resumed }`: resume these conversations and their ancestors; `resumed` lists the ones concluded before. */
 export const ResumeAction = actionRef<{ ids: number[] }, { resumed: number[] }>(

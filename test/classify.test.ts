@@ -1,3 +1,6 @@
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { afterEach, expect, it, vi } from 'vitest'
 import classify, { actions, secrets } from '../extensions/classify/server.ts'
 import { ClassifyApi } from '../extensions/classify/api.ts'
@@ -10,13 +13,21 @@ import { removeTemp, temp, until } from './helpers.ts'
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => {
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
   for (const close of cleanup.splice(0)) await close()
 })
 
-async function fixture(key = true) {
+async function fixture(key = true, models?: unknown) {
   const root = await temp()
   cleanup.push(() => removeTemp(root))
   if (key) await writeSecret(root, 'TYPESAFE_API_KEY', 'test-sentinel')
+  vi.stubEnv('TYPESAFE_API_KEY', undefined)
+  const modelsPath = join(root, 'models.json')
+  if (models) await writeFile(modelsPath, JSON.stringify(models))
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: models ? modelsPath : null,
+    authPath: join(root, 'auth.json'),
+  })
   const implement = vi.fn<(api: typeof ClassifyApi, service: ClassifyService) => void>()
   const resources = new Map<string, unknown>()
   const tools: Record<string, unknown> = {}
@@ -24,6 +35,7 @@ async function fixture(key = true) {
     userHome: root,
     home: root,
     implement,
+    modelRuntime,
     resource: (name: string, create: () => unknown) => {
       if (!resources.has(name)) resources.set(name, create())
       return resources.get(name)
@@ -77,6 +89,7 @@ it('declares a valid secret for the Secrets panel', () => {
       name: 'TYPESAFE_API_KEY',
       description: expect.any(String),
       url: 'https://console.typesafe.ai/keys',
+      provider: 'typesafe',
     },
   ])
   expect(secrets[0].name).toMatch(/^[A-Z][A-Z0-9_]*$/)
@@ -244,6 +257,23 @@ it('runs batches at most 8 states at a time with framed questions and records th
   expect(results['0']).toEqual({ passed: answers.passed })
   expect(usage).toEqual({ inputTokens: 19 * 123, usd: (19 * 123 * 0.042) / 1e6 })
   expect(tools.classify).toMatchObject({ input: 19 * 123, cost: { total: usage.usd } })
+})
+
+it("sends to the endpoint and key of Pi's configured typesafe provider over the stored secret", async () => {
+  vi.stubEnv('EXAMPLE_PROXY_KEY', 'proxy-sentinel')
+  const { service } = await fixture(true, {
+    providers: {
+      typesafe: { baseUrl: 'https://proxy.example.com/typesafe/v1', apiKey: '$EXAMPLE_PROXY_KEY' },
+    },
+  })
+  const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => Response.json(body))
+  vi.stubGlobal('fetch', fetch)
+  await service.ask({ caller: 'test', ...request }, new AbortController().signal)
+  expect(fetch.mock.calls[0][0]).toBe('https://proxy.example.com/typesafe/v1/systemone')
+  expect(fetch.mock.calls[0][1]?.headers).toEqual({
+    Authorization: 'Bearer proxy-sentinel',
+    'Content-Type': 'application/json',
+  })
 })
 
 it('names the missing key and Secrets panel without sending a request', async () => {

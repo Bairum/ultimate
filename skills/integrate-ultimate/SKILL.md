@@ -74,18 +74,16 @@ Worker reports and submissions state divergence from the task as given (agreemen
   user is logged in to and named after what it checks (`reviewer-correctness.md`, `reviewer-simplicity.md`,
   `reviewer-architecture.md`). Details: "Review team" in
   `extensions/subagents/README.md`.
-- **Project tools or settings for a built-in agent** (@ultimate, the lander): never copy its definition. Add
+- **Project tools or settings for a built-in agent** (@ultimate, the coordinator): never copy its definition. Add
   an overlay, a file of the same name marked by `addTools: [tool]` (`[]` when it only changes settings). It may
-  override any setting (`model`, `thinking`, `onFailure`, `description`, …) but never `tools`, and its optional body
+  override any setting (`model`, `thinking`, `description`, …) but never `tools`, and its optional body
   is appended to the built-in instructions as project additions; a copy stops following the built-in and the setup
   check warns about it.
 - **Lander:** checks and push are per project, in `<project>/.ultimate/settings.json` (read once the project is
   chosen): `"lander": { "checks": [...], "push": "origin" }` lists the project's own check commands in order (an array
   runs as a concurrent group) and the remote to push to; push only with the owner's consent. The lander's checkout
-  runs the worktree setup below first. To let the lander's model resolve
-  conflicts and failing checks instead of only diagnosing them, add a `lander` definition with `onFailure: fix` and the
-  tools it needs (`.ultimate/agents/lander.md`), per project or in `~/.ultimate/agents/`. Details:
-  `extensions/workspaces/README.md`.
+  runs the worktree setup below first. The lander runs no model: a conflict or a failing check goes back to the
+  submitting branch, which fixes it and submits again. Details: `extensions/workspaces/README.md`.
 
 ## Worktree setup
 
@@ -105,11 +103,13 @@ this, even unasked (setup health warns while it is missing), and propose it.
   - `.env`: `[ -f .env ] || cp "$ULTIMATE_SOURCE/.env" .env`, so keys work as in the source checkout.
   - SQLite: a copy-on-write clone of the source's file, instant and free until written:
     `cp -c` (macOS) or `cp --reflink=auto` (Linux), only when the worktree has none yet.
-  - A dev port of its own: the worktree folder is named after its conversation id, so
-    `PORT=$((20000 + $(basename "$PWD") % 1000 * 10))` gives a stable block of 10, written into `.env` (APP_URL,
-    the server and Vite ports). Check the dev script actually reads it.
-  - The lander: its checkout lives under `*/lander/*`; skip the database and dev-server steps there
-    (`case "$PWD" in */lander/*) exit 0;; esac`) and keep what the checks need.
+  - A dev port of its own: the worktree folder ends in its conversation id (`<home>/worktrees/<id>`, or
+    `ult-<hash>-<id>` under a configured `isolates.worktree.path`), so `id=$(basename "$PWD"); id=${id##*-}` then
+    `PORT=$((20000 + id % 1000 * 10))` gives a stable block of 10, written into `.env` (APP_URL, the server and Vite
+    ports). Check the dev script actually reads it.
+  - The lander: its checkout is `<home>/lander/<hash>`, or `ult-lander-<hash>` under a configured `path`; skip the
+    database and dev-server steps there (`case "$PWD" in */lander/*|*/ult-lander-*) exit 0;; esac`) and keep what the
+    checks need.
 - **Ask** before Postgres, MySQL or anything needing credentials: whether worktrees share the developer's database
   or get their own (`createdb -T <db> <db>_wt_<id>`, or a dump), and where credentials come from. Never copy
   production data into a worktree without the owner saying so.
@@ -127,10 +127,11 @@ composer install --no-interaction --prefer-dist
 npm ci --prefer-offline --no-audit --no-fund
 [ -f .env ] || cp "$ULTIMATE_SOURCE/.env" .env
 php artisan wayfinder:generate --with-form
-case "$PWD" in */lander/*) exit 0;; esac
+case "$PWD" in */lander/*|*/ult-lander-*) exit 0;; esac
 [ -f database/database.sqlite ] || cp -c "$ULTIMATE_SOURCE/database/database.sqlite" database/ 2>/dev/null \
   || cp --reflink=auto "$ULTIMATE_SOURCE/database/database.sqlite" database/
-PORT=$((20000 + $(basename "$PWD") % 1000 * 10))
+id=$(basename "$PWD"); id=${id##*-}
+PORT=$((20000 + id % 1000 * 10))
 status=0; grep -v -e '^APP_URL=' -e '^SERVER_PORT=' -e '^VITE_PORT=' .env > .env.tmp || status=$?
 [ "$status" -le 1 ] # 1 only means no other lines
 printf 'APP_URL=http://127.0.0.1:%s\nSERVER_PORT=%s\nVITE_PORT=%s\n' "$PORT" "$PORT" $((PORT + 1)) >> .env.tmp
