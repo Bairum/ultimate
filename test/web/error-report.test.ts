@@ -49,6 +49,26 @@ it("keeps a crash's own frames, capped", () => {
   expect(report).not.toContain('react-dom')
 })
 
+it('shortens Vite URLs in stack frames to paths', () => {
+  const report = errorReport(system, {
+    extension: 'shell',
+    error: 'boom',
+    context: 'a component threw',
+    stack: [
+      'at Crash (http://127.0.0.1:4747/@fs/home/me/.ultimate/extensions/shell/web.tsx?t=17:4:8)',
+      'at Slot (http://127.0.0.1:4747/@fs/home/me/ultimate/web/src/app/boundary.tsx:305:24)',
+      'at ExtensionBoundary (http://127.0.0.1:4747/src/app/boundary.tsx?t=17:162:8)',
+    ].join('\n'),
+  })
+  expect(report).toContain(
+    [
+      'at Crash (~/.ultimate/extensions/shell/web.tsx:4:8)',
+      'at Slot (web/src/app/boundary.tsx:305:24)',
+      'at ExtensionBoundary (src/app/boundary.tsx:162:8)',
+    ].join('\n'),
+  )
+})
+
 it('leaves a multiline message out of the frames, so it cannot use up the cap', () => {
   const error = new Error(Array.from({ length: 10 }, (_, line) => `line ${line}`).join('\n'))
   const frames = stackFrames(error)

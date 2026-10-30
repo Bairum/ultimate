@@ -27,6 +27,18 @@ export function stackFrames(error: unknown) {
   return error instanceof Error ? error.stack?.replace(String(error), '').trim() : undefined
 }
 
+/**
+ * A stack frame with short paths: Vite's URL loses its origin and `?t=` stamp, a file served by `/@fs/` reads as
+ * `shortenPath` shows it, and one under the web root as `src/…`.
+ */
+function shortFrame(system: SystemInfo | undefined, line: string) {
+  return line.replace(/https?:\/\/[^/\s]+(\/@fs)?\/([^?:\s)]*)(\?[^:\s)]*)?/g, (_, fs, path) =>
+    fs
+      ? shortenPath(`/${path}`, { cwd: system?.code.ultimateRoot, home: system?.machine.home })
+      : path,
+  )
+}
+
 /** What an error card hands over for debugging: the failure, where it lives, its stack and the running build. */
 export function errorReport(
   system: SystemInfo | undefined,
@@ -37,6 +49,7 @@ export function errorReport(
     ?.split('\n')
     .map((line) => line.trim())
     .filter((line) => line && !/\/(node_modules|deps)\/|\(<anonymous>\)$/.test(line))
+    .map((line) => shortFrame(system, line))
   const stack = frames && [...new Set(frames)].slice(0, STACK_LINES).join('\n')
   const build = system && `${system.build.id} · gen ${system.build.generation}`
   return [
