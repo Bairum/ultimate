@@ -110,11 +110,8 @@ export async function seedUserHome(from: string, to: string) {
       errorOnExist: true,
       force: false,
     }).catch(missing)
-  for (const name of LINKED)
-    await stat(join(source, name)).then(
-      () => symlink(join(source, name), join(target, name)),
-      missing,
-    )
+  // Linked even when missing: the first server to register creates the one registry every server shares.
+  for (const name of LINKED) await symlink(join(source, name), join(target, name))
 }
 
 /**

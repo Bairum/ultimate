@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,6 +14,7 @@ import {
 } from '../extensions/instance/server.ts'
 import { saveDefinition } from '../lib/agents.ts'
 import { writeFamilies } from '../lib/families-settings.ts'
+import { writeJson } from '../lib/json-file.ts'
 import { at, label } from '../extensions/instance/links.ts'
 
 const homes: string[] = []
@@ -112,7 +113,6 @@ it("keeps a preview's agent and family writes out of the user's linked config", 
   await writeFile(join(dotfiles, 'model-families.json'), '{}\n')
   await symlink(join(dotfiles, 'agents/helper.md'), join(user, '.ultimate/agents/helper.md'))
   await symlink(join(dotfiles, 'model-families.json'), join(user, '.ultimate/model-families.json'))
-  await writeFile(join(user, '.ultimate/tailscale.json'), '{"ports":{}}\n')
 
   await seedUserHome(user, copy)
   const runtime = await ModelRuntime.create()
@@ -130,10 +130,9 @@ it("keeps a preview's agent and family writes out of the user's linked config", 
   expect(await readFile(join(dotfiles, 'model-families.json'), 'utf8')).toBe('{}\n')
   expect(await readFile(join(copy, '.ultimate/agents/helper.md'), 'utf8')).toContain('Moved')
   expect(await readFile(join(copy, '.ultimate/model-families.json'), 'utf8')).toContain('recent')
-  // Every preview and the host pick Tailscale ports in one registry.
-  expect(await realpath(join(copy, '.ultimate/tailscale.json'))).toBe(
-    await realpath(join(user, '.ultimate/tailscale.json')),
-  )
+  // Every preview and the host pick Tailscale ports in one registry, even one the preview creates.
+  await writeJson(join(copy, '.ultimate/tailscale.json'), { ports: {} })
+  expect(await readFile(join(user, '.ultimate/tailscale.json'), 'utf8')).toContain('ports')
 })
 
 it('remembers stopped previews across restarts, one per port, the last 50', async () => {
