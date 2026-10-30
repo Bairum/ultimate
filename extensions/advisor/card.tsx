@@ -81,10 +81,12 @@ const points: Record<AdvisorNoteEntry['point'], string> = {
 export function AdviceText({ text }: { text: string }) {
   return text.split(/(`[^`\n]+`)/).map((part, index) =>
     /^`[^`\n]+`$/.test(part) ? (
+      // oxlint-disable-next-line react/no-array-index-key -- Code span positions in split advice; spans may repeat.
       <code className="rounded-sm bg-muted px-1 py-px font-mono text-[0.92em]" key={index}>
         {part.slice(1, -1)}
       </code>
     ) : (
+      // oxlint-disable-next-line react/no-array-index-key -- Text fragment positions in split advice; fragments may repeat.
       <MentionText key={index} text={part} />
     ),
   )

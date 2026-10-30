@@ -239,6 +239,7 @@ function Guidance({ guidance }: { guidance: CodexDetails['guidance'] }) {
   return (
     <ToolSection label="Guidance">
       {guidance.map((item, index) => (
+        // oxlint-disable-next-line react/no-array-index-key -- Fixed guidance entries have no id; text and timestamps may repeat.
         <p className="break-words whitespace-pre-wrap text-muted-foreground" key={index}>
           <span className="text-foreground/80">
             {item.from === 'user'
@@ -298,6 +299,7 @@ function Apps({ apps }: { apps: CodexDetails['apps'] }) {
   return (
     <ToolSection label="Apps · names from Codex, untrusted">
       {apps.map((app, index) => (
+        // oxlint-disable-next-line react/no-array-index-key -- App consent requests have no id and may name the same app more than once.
         <div className="flex min-w-0 items-baseline gap-2 leading-[1.7]" key={index}>
           <span className="min-w-0 flex-1 truncate text-foreground/90" title={app.app.text}>
             “{app.app.text}”
@@ -343,6 +345,7 @@ function Lines({ label, items }: { label: string; items: { text: string }[] }) {
     <div className="mt-1.5">
       <span className="text-[11px] text-muted-foreground/70">{label}</span>
       {items.map((item, index) => (
+        // oxlint-disable-next-line react/no-array-index-key -- Lines in a fixed result have no id and may repeat.
         <p className="break-words whitespace-pre-wrap text-foreground/85" key={index}>
           · {item.text}
         </p>
@@ -365,6 +368,7 @@ function Findings({ result }: { result: NonNullable<CodexDetails['result']> }) {
       {findings.length > 0 && (
         <div className="mt-1 divide-y divide-border/50" data-codex-findings>
           {findings.map((finding, index) => (
+            // oxlint-disable-next-line react/no-array-index-key -- Findings in a fixed result have no id and may repeat.
             <div className="py-1" key={index}>
               <p className="break-words whitespace-pre-wrap text-foreground/90">
                 {finding.claim.text}
@@ -411,6 +415,7 @@ function Steps({ steps, open }: { steps: CodexDetails['steps']; open?: boolean }
       <CollapsibleContent>
         <div className="px-2.5 pb-2">
           {steps.map((step, index) => (
+            // oxlint-disable-next-line react/no-array-index-key -- Completed steps have no id; tool names and timestamps may repeat.
             <div className="flex min-w-0 items-baseline gap-2 leading-[1.7]" key={index}>
               <span className="w-5 shrink-0 text-right text-muted-foreground/60 tabular-nums">
                 {index + 1}
@@ -440,6 +445,7 @@ function Shots({ call, saved }: { call: ToolCallView; saved: readonly string[] }
   return (
     <ToolSection className="flex gap-3">
       {call.images.slice(-1).map((image, index) => (
+        // oxlint-disable-next-line react/no-array-index-key -- At most one fixed result image is shown.
         <ToolImage alt="Last screenshot" className="max-w-56 shrink-0" image={image} key={index} />
       ))}
       <div className="flex min-w-0 flex-col gap-0.5 text-[11.5px]">
@@ -560,12 +566,14 @@ export function OperateCard({
                 <p
                   className="truncate text-foreground/80"
                   data-codex-guidance
+                  // oxlint-disable-next-line react/no-array-index-key -- Stateless live progress rows have no id and may repeat.
                   key={index}
                   title={step.guidance}
                 >
                   ↳ {step.guidance}
                 </p>
               ) : (
+                // oxlint-disable-next-line react/no-array-index-key -- Stateless live progress rows have no id and may repeat.
                 <div className="flex min-w-0 items-baseline gap-2 leading-[1.7]" key={index}>
                   <span className="w-5 shrink-0 text-right text-muted-foreground/60 tabular-nums">
                     {

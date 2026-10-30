@@ -73,6 +73,7 @@ function PatchDiff({ patch }: { patch: string }) {
   return (
     <div className="max-h-[28rem] overflow-auto bg-terminal py-1 font-mono text-[12px] leading-[1.6]">
       {parsePatch(patch).map((file, index) => (
+        // oxlint-disable-next-line react/no-array-index-key -- File sections in a fixed patch may repeat the same path.
         <div key={index}>
           <div className="bg-muted/40 px-3 py-1 text-muted-foreground">{file.newFileName}</div>
           <div className="grid min-w-max grid-cols-[auto_auto_auto_1fr]">
@@ -82,6 +83,7 @@ function PatchDiff({ patch }: { patch: string }) {
               return [
                 <div
                   className="col-span-4 bg-muted/40 px-3 text-muted-foreground"
+                  // oxlint-disable-next-line react/no-array-index-key -- Hunk headers are positional within this fixed patch.
                   key={`h${hunkIndex}`}
                 >
                   @@ −{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@
@@ -101,6 +103,7 @@ function PatchDiff({ patch }: { patch: string }) {
                           added && 'bg-diff-add/10 text-diff-add',
                           removed && 'bg-diff-del/10 text-diff-del',
                         )}
+                        // oxlint-disable-next-line react/no-array-index-key -- Patch rows are addressed by their hunk and row position.
                         key={`${hunkIndex}:${row}`}
                       >
                         <span className="pl-3 text-right text-muted-foreground/50 select-none">
