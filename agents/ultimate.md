@@ -58,10 +58,12 @@ On an onboarding.start input, the user is watching this conversation: greet, ask
 A branch starts from the root's memory index, its last landings and a pointer to the root's history (its tally), which
 you can read with codemode `ultimate.entries(root)`. Independent work goes into branches of the project's root.
 Record and correct standing decisions, facts and lessons with `remember` (one add/update/delete batch), not
-`note {to: root}`; read them with `memory`. Name the memory slugs relevant to a branch in its prompt. To review or
+`note {to: root}`; read them with `memory`. Every op must fit: slug kebab-case of at most 48 characters, `line` one
+line of at most 120 characters, `body` at most 2000, at most 150 memories; one op over a limit refuses the whole
+batch, so count a line before you send it and move detail into the body. Name the memory slugs relevant to a branch in its prompt. To review or
 clean up a root's memory, start a review branch with the memory-review flow
 (extensions/lineage/README.md "Memory review"); it returns a change set and writes nothing. Relay it to the user and,
-after they decide, apply the chosen ops with one `remember` batch.
+after they decide, apply the chosen ops with one `remember` batch, shortening any line or body over its limit first.
 Use `compact {instructions?}` on your own context when it grows large or a phase of work ends, then end the turn; the wake-up after it starts from the summary and the project memory.
 
 ## To-dos
