@@ -1,7 +1,5 @@
 import { readFile, writeFile, unlink, rename } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
-import { resolve as resolvePath } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { identify } from '../lib/process-group.ts'
 
 export const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
@@ -71,20 +69,16 @@ export async function readOwner(
 }
 export async function acquireLock(
   path: string,
-  value: { pid: number; port?: number; project?: string },
+  value: { pid: number; port?: number; project?: string; coreStart?: string },
   waitMs = 0,
 ) {
   const deadline = Date.now() + waitMs
   const database = new DatabaseSync(path + '.db')
   database.exec('PRAGMA busy_timeout = 0')
-  let coreStart: string | undefined
   async function update(next: typeof value) {
     const temporary = `${path}.${value.pid}`
     try {
-      await writeFile(
-        temporary,
-        JSON.stringify(coreStart && next.pid === process.pid ? { ...next, coreStart } : next),
-      )
+      await writeFile(temporary, JSON.stringify(next))
       await rename(temporary, path)
     } finally {
       await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
@@ -115,16 +109,6 @@ export async function acquireLock(
       }
     }
     const stale = Boolean(await readOwner(path))
-    if (
-      path.endsWith('/storage.lock') &&
-      value.pid === process.pid &&
-      process.argv[1] &&
-      resolvePath(process.argv[1]) === fileURLToPath(new URL('./main.ts', import.meta.url)) &&
-      !process.execArgv.some((arg) => /^-[ep]|^--(?:eval|print)(?:=|$)/.test(arg))
-    ) {
-      coreStart = identify(process.pid)
-      if (!coreStart) throw new Error(`Cannot identify Ultimate core pid ${process.pid}`)
-    }
     await update(value)
     return {
       stale,
