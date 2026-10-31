@@ -99,8 +99,7 @@ Server factories receive exactly these `ExtensionHost` fields (import its type o
 - `build()`, `system()`, `extensions()`: current build, system and extension inspection.
 - `conversations()`: every conversation's summary, as `useConversations()` gives the web; empty until the harness is open.
 - `harness()`, `uiState(context)`, `doc(kind)`: durable harness, root UI snapshot and exported conversation document token.
-- `provide(name, value)`, `use<T>(name)`: publish and look up typed process-local behaviour. Import the provider's contract with `import type`, never its implementation. Registrations are staged until installation succeeds, replaced on reload, and removed when the facet is disabled, removed or closed; a missing provider returns `undefined`. Look up at call time rather than retaining a provider across reloads. A failed replacement keeps the old provider. For example, workspaces provides `WorkspaceService` under `workspaces`; lineage provides `LineageService` under `lineage`. Shared branches and landings work without the other extension; isolated branches require workspaces.
-- `implement(api, value)`, `need(api)`, `want(api)`, `catalogue()`: the typed successors of `provide`/`use`; see [Extension APIs](#extension-apis).
+- `implement(api, value)`, `need(api)`, `want(api)`, `catalogue()`: publish and use typed process-local services; see [Extension APIs](#extension-apis). Registrations are staged until installation succeeds, replaced on reload, and removed when the facet is disabled, removed or closed; a failed replacement keeps the old provider.
 - `metadata`: the core's `ultimate.metadata` conversation document, `{ title?, label? }`; the shell names a conversation
   by them, so set them on conversations you create (`subagents` labels each child with its definition).
 - `emit(tx, event, data)`, `react(name, events, handler)`, `eventLog`: durable events; see [Events](#events).
@@ -208,8 +207,7 @@ providers and dependency cycles, each a sorted group of extensions that depend o
 
 Which channel to use: services for calls between extensions; documents for durable state; durable events for "this
 happened" (`host.emit` in your commit, `host.react` to act on it; see
-[docs/extensions.md](../docs/extensions.md#durable-events)); actions for the UI and user boundary. Extensions never call the untyped `host.provide` and `host.use`
-(`ultimate/no-raw-services`).
+[docs/extensions.md](../docs/extensions.md#durable-events)); actions for the UI and user boundary.
 
 ## Lifecycle
 
