@@ -51,7 +51,7 @@ export const ReasoningContent = memo(({ className, children, ...props }: Reasoni
   return (
     <CollapsibleContent
       className={cn(
-        'mt-1.5 border-l-2 border-border pl-3 text-[13px] text-muted-foreground italic',
+        'mt-1.5 border-l-2 border-border pl-3 text-[13px] text-muted-foreground',
         className,
       )}
       {...props}

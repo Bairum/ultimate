@@ -274,7 +274,7 @@
     @apply py-0.5;
   }
   & blockquote {
-    @apply border-l-2 border-border pl-3 text-muted-foreground italic;
+    @apply border-l-2 border-border pl-3 text-muted-foreground;
   }
   & hr {
     @apply my-5 border-border/70;
