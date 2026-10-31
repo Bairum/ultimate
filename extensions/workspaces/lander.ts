@@ -815,14 +815,7 @@ export function createLander(
         // waits as a note (messages counts this phase as under way); once decided, a branch left open reports when it stops.
         await runtime.commit(async (tx) => {
           let concluded = false
-          const items = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items
-          const own = items[String(branch)]?.path
-          // Concluding releases the worktrees sourced from the branch's checkout too, so a subagent still holding one
-          // (an idle designer) keeps the branch open rather than becoming unreachable.
-          const child = Object.values(items).some(
-            (item) => own !== undefined && item.source === own && item.state !== 'removed',
-          )
-          if (!child && !(await after.working(tx, branch)))
+          if (!(await after.working(tx, branch)))
             try {
               await after.conclude(tx, branch)
               concluded = true

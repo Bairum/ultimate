@@ -1174,25 +1174,6 @@ it.concurrent('keeps a landed branch and its checkout while a reply is under way
     `#${id} still has work under way; it reports when it stops.`,
   )
 })
-it.concurrent('keeps a landed branch open while a subagent still holds a worktree sourced from it', async () => {
-  const { f, id } = await concluding()
-  const workspace = (await f.service.get(id, context))!
-  await f.opened.harness.commit(async (tx) => {
-    ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items['99999'] = {
-      ...workspace,
-      path: `${workspace.path}-child`,
-      branch: `${workspace.branch}-child`,
-      source: workspace.path,
-      state: 'ready',
-    }
-  }, context)
-  await f.service.submit(id, 'None', context)
-  await submitted(f, id)
-  await f.opened.root.waitForIdle(context)
-  expect(await concludedIds(f)).not.toContain(id)
-  expect((await f.service.get(id, context))!.state).toBe('ready')
-  await access(workspace.path)
-})
 it.concurrent('wakes only the submitter on a failed landing and leaves it open', async () => {
   const { f, id } = await concluding()
   f.host.projectSettings = async () => ({ lander: { checks: ['exit 1'] } })
