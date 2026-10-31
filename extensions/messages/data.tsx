@@ -197,14 +197,15 @@ export function backgroundRow(
 /**
  * Whether a row of @ultimate's compact transcript is the conversation itself, what the user reads: their inputs, @ultimate's
  * messages and answers to them. Everything between two such rows recedes; cards that ask the user to act (`attention`
- * renderers) stay out of it too. `hidden` for a row that renders nothing in compact mode.
+ * renderers) stay out of it too. `hidden` for a row that renders nothing in compact mode, or that a stretch's line does
+ * not count: a system prompt change.
  */
 export function threadRow(
   row: { entry: EntryRecord; calls: readonly { id: string; name: string; arguments: unknown }[] },
   log: Readonly<MessagesData> | null | undefined,
 ): boolean | 'hidden' {
   const { entry, calls } = row
-  if (hiddenKinds.has(entry.kind)) return 'hidden'
+  if (hiddenKinds.has(entry.kind) || entry.kind === 'pi.system') return 'hidden'
   if (entry.kind === 'pi.user') return true
   if (entry.kind === 'board.message' || entry.kind === 'board.reply')
     return (entry.data as { from?: unknown } | undefined)?.from === 'user'

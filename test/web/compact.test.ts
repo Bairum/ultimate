@@ -268,6 +268,9 @@ describe('folded groups', () => {
     ].map((value) => ({ entry: value }))
     const thread = (row: CompactPart) => threadRow({ entry: row.entry, calls: [] }, undefined)
     expect(groupBetween(rows, thread).some((row) => 'between' in row)).toBe(false)
+    // Nor of a system prompt change alone, which a stretch's line does not count either.
+    const prompt = [rows[2], { entry: system() }, { entry: assistant('stop', text('pong')) }]
+    expect(groupBetween(prompt, thread).some((row) => 'between' in row)).toBe(false)
     // With a row that shows, the stretch folds with the hidden one inside it.
     const shown = [rows[0], rows[1], { entry: entry('lineage.note') }, rows[2]]
     expect(groupBetween(shown, thread).filter((row) => 'between' in row)).toHaveLength(1)
