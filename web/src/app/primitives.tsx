@@ -37,7 +37,10 @@ import { Transcript } from './transcript.tsx'
 export function StatusLine() {
   const phone = useViewport() === 'phone'
   return (
-    <footer className="status-line flex h-7 shrink-0 items-center gap-4 overflow-hidden border-t border-border/70 bg-sidebar px-3 font-mono text-[11.5px] text-muted-foreground max-md:px-8 md:pointer-coarse:box-content md:pointer-coarse:px-7 md:pointer-coarse:pb-3">
+    <footer
+      className="status-line flex h-7 shrink-0 items-center gap-4 overflow-hidden border-t border-border/70 bg-sidebar px-3 font-mono text-[11.5px] text-muted-foreground max-md:px-8 md:pointer-coarse:box-content md:pointer-coarse:px-7 md:pointer-coarse:pb-3"
+      data-ui="status-line"
+    >
       {phone ? (
         <>
           <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden whitespace-nowrap">

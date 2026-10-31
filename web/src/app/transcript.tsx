@@ -1120,8 +1120,10 @@ function EmptyState() {
   const Card = intro?.card
   return (
     <ConversationEmptyState className="min-h-[55vh]">
-      <div className="w-full max-w-md font-mono text-[12px]">
-        <div className="text-[13px] font-semibold tracking-[0.3em] text-brand">ULTIMATE</div>
+      <div className="w-full max-w-md font-mono text-[12px]" data-ui="empty-state">
+        <div className="text-[13px] font-semibold tracking-[0.3em] text-brand" data-ui="wordmark">
+          ULTIMATE
+        </div>
         <div className="mt-1 font-sans text-[13px] text-muted-foreground">
           {intro?.title ??
             (!system || system.project.root === system.code.ultimateRoot
