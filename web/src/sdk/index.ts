@@ -101,6 +101,7 @@ export {
   useModels,
   useNotices,
   useNow,
+  usePanels,
   useRestart,
   useReady,
   useStore,

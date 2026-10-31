@@ -28,7 +28,14 @@ import type { ActionArgs, ActionError, ActionOptions } from './api.ts'
 import { actionRef, docRef } from '../../../shared/extension-api.ts'
 import type { ActionRef, DocRef } from '../../../shared/extension-api.ts'
 import { api, registry, store, uiState } from './client.ts'
-import { HOME, compactDocs, compactTools, documentItems } from './registry.ts'
+import {
+  HOME,
+  compactDocs,
+  compactTools,
+  documentItems,
+  panelItems,
+  shownPanels,
+} from './registry.ts'
 import type { State } from './store.ts'
 import { errorMessage, formatDuration } from './format.ts'
 import type { CompactRow, ToolCallView, UltimateContext } from './types.ts'
@@ -249,6 +256,16 @@ export function useRegionOpen(region: Region) {
     on === 'desktop' ? false : (state.ui.open?.[on]?.[region] ?? ownDefault(region, on)),
   )
   return on === 'desktop' ? shared : own
+}
+/**
+ * The right panel's state: whether it is open, the panel it shows (the chosen one, else the first with a tab) and the
+ * panels in its tab row.
+ */
+export function usePanels() {
+  const panels = panelItems(useExtensions())
+  const open = useRegionOpen('panels')
+  const [selected] = useUiState<string | null>(shellKeys.panel, null)
+  return { open, ...shownPanels(panels, selected) }
 }
 /** `true` → boolean, `'a'` → string: an initial value names its type, not the only value. */
 export type Widen<T> = T extends boolean

@@ -18,8 +18,14 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { actions, layout, shellKeys } from '../sdk/actions.ts'
-import { useConversation, useExtensions, useRegionOpen, useUiState } from '../sdk/hooks.ts'
-import { panelItems, shownPanels, slotItems } from '../sdk/registry.ts'
+import {
+  useConversation,
+  useExtensions,
+  usePanels,
+  useRegionOpen,
+  useUiState,
+} from '../sdk/hooks.ts'
+import { slotItems } from '../sdk/registry.ts'
 import type { PanelItem } from '../sdk/registry.ts'
 import { overlays, useViewport } from '../sdk/viewport.ts'
 import { ExtensionBoundary, Slot } from './boundary.tsx'
@@ -346,11 +352,8 @@ function PanelTabs({ panels, active }: { panels: PanelItem[]; active: PanelItem 
 /** The right panel: a tab per extension panel (`mod+alt+b`), over the conversation below desktop width. */
 export function Panels() {
   useMountRegion('panels')
-  const panels = panelItems(useExtensions())
-  const open = useRegionOpen('panels')
+  const { open, active, tabs } = usePanels()
   const viewport = useViewport()
-  const [selected] = useUiState<string | null>(shellKeys.panel, null)
-  const { active, tabs } = shownPanels(panels, selected)
   // Only tabless panels and none opened: nothing to show until one is.
   if (!active) return null
   const overlay = overlays('panels', viewport)
