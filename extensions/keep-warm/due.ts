@@ -21,6 +21,10 @@ export type Target = {
   submission: boolean
 }
 
+/** A ping failed and no request renewed the cache since: a newer cached answer supersedes the failure. */
+export const failing = (failedAt: number | undefined, lastRequest: number | undefined) =>
+  failedAt !== undefined && (lastRequest === undefined || failedAt >= lastRequest)
+
 /** Only @ultimate or an idle coordinator waiting for delegated work. */
 export const eligible = (target: Target) =>
   ['claude-code', 'anthropic'].includes(target.provider) &&
@@ -46,7 +50,7 @@ export function due(activity: Activity) {
   if (!eligible(activity) || paused) return false
   if (lastRequest === undefined || inputAt === undefined) return false
   if (tokens === undefined || tokens < MIN_TOKENS) return false
-  if (failedAfter !== undefined && failedAfter >= lastRequest) return false
+  if (failing(failedAfter, lastRequest)) return false
   if (pingAt !== undefined && now - pingAt < LEAD) return false
   const age = now - lastRequest
   return age >= LEAD && age < TTL && now - inputAt < IDLE_STOP

@@ -66,7 +66,11 @@ export function NextChapter({
   className?: string
 }) {
   return (
-    <Card className={className} data-dream-prepared={prepared.chapter}>
+    <Card
+      attention={!sleep || sleep.phase === 'failed'}
+      className={className}
+      data-dream-prepared={prepared.chapter}
+    >
       <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
         <MoonStarIcon className="size-3.5 text-brand" />
         <span className="text-foreground">Ready for a fresh chapter</span>
@@ -75,7 +79,7 @@ export function NextChapter({
       <ul className="space-y-1.5 px-4 pt-4 pb-3" data-dream-learned>
         {prepared.learned.map((line) => (
           <li
-            className="border-l-2 border-brand/30 pl-3 text-[14.5px] leading-snug text-foreground/90 italic"
+            className="border-l-2 border-brand/30 pl-3 text-[14.5px] leading-snug text-foreground/90"
             key={line}
           >
             {line}

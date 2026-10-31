@@ -75,6 +75,7 @@ export function ModelRow({
         </span>
       )}
       <span className="ml-auto flex shrink-0 items-center gap-3 pl-3 text-[11px] text-muted-foreground tabular-nums">
+        {model.provider === 'anthropic' && <span className="text-warning/80">paid API</span>}
         {model.reasoning ? (
           <span
             className="flex items-center gap-1"
@@ -113,9 +114,15 @@ export function ModelPicker() {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
     const all = models?.models ?? []
     // Without a query: what can run now. With one: everything that matches, runnable and direct matches first
-    // (`claude-opus-4-8` before a reseller's `eu.anthropic.claude-opus-4-8`).
+    // (`claude-opus-4-8` before a reseller's `eu.anthropic.claude-opus-4-8`). A Claude model Claude Code also offers
+    // lists it before the paid Anthropic API even while logged out, so Enter never picks the paid one by accident.
+    const claude = new Set(
+      all.filter((model) => model.provider === 'claude-code').map((model) => model.id),
+    )
+    const twin = (model: ModelInfo) => claude.has(model.id)
     const rank = (model: ModelInfo) =>
-      (model.available ? 0 : 2) +
+      (model.available || (model.provider === 'claude-code' && terms.length) ? 0 : 2) +
+      (model.provider === 'anthropic' && twin(model) ? 0.5 : 0) +
       (terms.length && !model.id.toLowerCase().startsWith(terms[0]) ? 1 : 0)
     const found = (
       terms.length
@@ -190,7 +197,7 @@ export function ModelPicker() {
           setup; other models you are not logged in for open the login.
         </DialogDescription>
         <Command
-          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10.5px] [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:uppercase"
+          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:section-label"
           defaultValue={ref ? `${ref.provider}/${ref.modelId}` : undefined}
           shouldFilter={false}
         >
@@ -300,22 +307,20 @@ function ProviderHeading({ id, provider }: { id: string; provider: ProviderInfo 
     <span className="flex items-center gap-2">
       {id}
       {provider && provider.name !== id && (
-        <span className="truncate tracking-normal normal-case text-muted-foreground/60">
-          {provider.name}
-        </span>
+        <span className="truncate text-muted-foreground/60">{provider.name}</span>
       )}
       {label ? (
-        <span className="ml-auto tracking-normal normal-case text-success/80">
+        <span className="ml-auto text-success/80">
           ✓ {label}
           {provider?.isUsingSubscription ? ' · subscription' : ''}
         </span>
       ) : id === 'claude-code' ? (
-        <span className="ml-auto flex items-center gap-1 tracking-normal normal-case text-warning/80">
+        <span className="ml-auto flex items-center gap-1 text-warning/80">
           <TerminalIcon className="size-3" />
           external setup · ↵ opens setup
         </span>
       ) : (
-        <span className="ml-auto flex items-center gap-1 tracking-normal normal-case text-warning/80">
+        <span className="ml-auto flex items-center gap-1 text-warning/80">
           <KeyRoundIcon className="size-3" />
           not logged in · ↵ logs in
         </span>

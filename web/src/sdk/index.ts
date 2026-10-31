@@ -3,9 +3,11 @@
  * The guide is extensions/README.md.
  */
 export {
+  attention,
   ConversationKind,
   defineWebExtension,
   definePoint,
+  ErrorReport,
   MessageReference,
   ParkedRuns,
   provide,
@@ -16,10 +18,8 @@ export { resumed } from './resume.ts'
 export type {
   CompactCallTest,
   CompactContribution,
-  CompactQuietTest,
   CompactRow,
   CompactSummaryProps,
-  IntroContribution,
   CompactDocs,
   CommandContribution,
   CodeBlockRenderer,
@@ -70,7 +70,7 @@ export { UserText, UserView } from '../app/user-turn.tsx'
 export { AllProvided, Provided } from '../app/boundary.tsx'
 export { ConversationScope } from './conversation-scope.tsx'
 /** Sends what the composer inside it submits somewhere else, such as a new side chat; see `composer` renderers. */
-export { ComposerRedirect, fillComposer, insertIntoComposer } from '../app/composer.tsx'
+export { Composer, ComposerRedirect, fillComposer, insertIntoComposer } from '../app/composer.tsx'
 export type { ComposerTarget } from '../app/composer.tsx'
 export { api } from './client.ts'
 export { ActionError } from './api.ts'
@@ -102,12 +102,12 @@ export {
   useEvents,
   useExtensionUiState,
   useExtensions,
-  useIntro,
   useCopy,
   useModels,
   useNotices,
   usePairing,
   useNow,
+  usePanels,
   useRestart,
   useReady,
   useStore,

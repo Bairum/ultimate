@@ -3,7 +3,7 @@ import { useEffect } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { api, cn, defineWebExtension, formatAgo, useAction, useDocOf, useNow } from '@/sdk'
-import { TTL } from './due.ts'
+import { failing, TTL } from './due.ts'
 import { SetAction, StateAction, WarmDoc } from './refs.ts'
 import type { WarmConversation } from './refs.ts'
 
@@ -22,11 +22,14 @@ function cacheLine(state: WarmConversation, now: number) {
 /** Why no ping is coming, or when the next one is. */
 function nextLine(state: WarmConversation, now: number) {
   if (state.nextAt !== undefined) return `Next ping ${clock(Math.max(now, state.nextAt))}`
-  if (state.last?.error && state.lastRequest !== undefined && state.last.at >= state.lastRequest)
-    return 'Waiting for next answer'
+  if (state.lastRequest !== undefined && failed(state)) return 'Waiting for next answer'
   if (state.lastRequest !== undefined && state.lastRequest + TTL <= now) return 'Cache is cold'
   return 'No ping scheduled'
 }
+
+/** The last ping failed and nothing renewed the cache since: a later cached answer from @ultimate clears it. */
+const failed = (state: WarmConversation) =>
+  state.last?.error !== undefined && failing(state.last.at, state.lastRequest)
 
 /**
  * The status-line chip: whether @ultimate's prompt cache is kept warm. Quiet while it is, dimmed while off; the
@@ -49,7 +52,7 @@ function Chip() {
   const warm = state.conversations.some(
     (item) => item.lastRequest !== undefined && item.lastRequest + TTL > now,
   )
-  const failed = state.conversations.some((item) => item.last?.error !== undefined)
+  const red = state.conversations.some(failed)
   const toggle = (on: boolean) =>
     api
       .action(SetAction, { on })
@@ -68,7 +71,7 @@ function Chip() {
           type="button"
         >
           <FlameIcon
-            className={cn('size-3', state.on && warm && 'text-amber-500', failed && 'text-red-500')}
+            className={cn('size-3', state.on && warm && 'text-amber-500', red && 'text-red-500')}
           />
           warm
         </button>
@@ -85,9 +88,9 @@ function Chip() {
               <div>{cacheLine(item, now)}</div>
               <div>{state.on ? nextLine(item, now) : 'Off'}</div>
               {item.last && (
-                <div className={cn(item.last.error && 'text-red-500')}>
+                <div className={cn(failed(item) && 'text-red-500')}>
                   Last ping {formatAgo(item.last.at)}
-                  {item.last.error
+                  {item.last.error !== undefined
                     ? `: ${item.last.error}`
                     : ` · read ${tokens(item.last.read)}, wrote ${tokens(item.last.write)}`}
                 </div>

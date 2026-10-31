@@ -22,6 +22,7 @@ import {
   compactTools,
 } from '../../web/src/sdk/registry.ts'
 import type { ExtensionLoader, PanelItem, SurfaceItem } from '../../web/src/sdk/registry.ts'
+import { attention } from '../../web/src/sdk/types.ts'
 import type { WebExtension } from '../../web/src/sdk/types.ts'
 
 const path = (name: string) => `../../extensions/${name}/web.tsx`
@@ -382,48 +383,43 @@ describe('web extension registry', () => {
     expect(compactTools(records, { id: 3, busy: false }, {}, report)).toBeUndefined()
     expect(compactTools(records, undefined, {}, report)).toBeUndefined()
     expect(report).toHaveBeenCalledWith('c', new Error('broken'))
-    const shape = 'compact must be a { when, tools?, docs?, quiet?, summary?, thread? } object'
+    const shape = 'compact must be a { when, tools?, docs?, thread?, summary? } object'
     registry.replace('b', { default: { compact: { tools: ['workspace'] } } })
     expect(registry.getSnapshot()[1]?.error).toBe(shape)
     registry.replace('b', { default: { compact: { when: () => true, docs: [1] } } })
     expect(registry.getSnapshot()[1]?.error).toBe(shape)
-    registry.replace('b', { default: { compact: { when: () => true, quiet: true } } })
+    registry.replace('b', { default: { compact: { when: () => true, thread: true } } })
     expect(registry.getSnapshot()[1]?.error).toBe(shape)
   })
 
-  it('calls a row quiet when any facet does, hidden only when none shows it, and a throwing test no', async () => {
+  it('never folds a row an attention renderer draws: thread, and its calls kept', async () => {
     const Summary = component('summary')
     const registry = createRegistry()
     await registry.setLoaders({
       [path('a')]: async () =>
         module({
-          compact: { when: () => true, quiet: ({ entry }) => entry.kind === 'note' || 'hidden' },
+          compact: { when: () => true, thread: () => false, summary: Summary },
         }),
       [path('b')]: async () =>
         module({
-          compact: {
-            when: () => true,
-            quiet: ({ entry }) => {
-              if (entry.kind === 'boom') throw new Error('broken')
-              return entry.kind === 'reply'
-            },
-            summary: Summary,
-          },
+          entries: { 'dream.prepared': attention(component('card')), other: component('other') },
+          tools: { setup: attention(component('setup')) },
         }),
     })
-    const report = vi.fn<(extension: string, error: unknown) => void>()
-    const { quiet, summary } = compactTools(
+    const { thread, keeps, summary } = compactTools(
       registry.getSnapshot(),
       { id: 1, busy: false },
       {},
-      report,
+      vi.fn(),
     )!
-    expect(quiet(row('note'), {})).toBe(true)
-    expect(quiet(row('reply'), {})).toBe(true)
-    expect(quiet(row('user'), {})).toBe('hidden')
-    expect(quiet(row('boom'), {})).toBe('hidden')
-    expect(report).toHaveBeenCalledWith('b', new Error('broken'))
-    expect(summary).toMatchObject({ extension: 'b', component: Summary })
+    const setup = { type: 'toolCall' as const, id: 's', name: 'setup', arguments: {} }
+    expect(thread!(row('dream.prepared'), {})).toBe(true)
+    expect(thread!(row('other'), {})).toBe(false)
+    expect(summary).toMatchObject({ extension: 'a', component: Summary })
+    expect(keeps(setup, {})).toBe(true)
+    expect(thread!({ entry: { kind: 'pi.assistant' } as EntryRecord, calls: [setup] }, {})).toBe(
+      true,
+    )
   })
 
   it('keeps a call its test keeps from the root documents, and counts a throwing test as no', async () => {

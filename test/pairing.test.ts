@@ -3,7 +3,7 @@ import { fixture, servers } from './server-fixture.ts'
 import { cookieHeaders, post, temp, fauxServer } from './helpers.ts'
 import { classify, userCookie } from '../server/request-security.ts'
 import type { PairingOpener } from '../server/request-security.ts'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { Messages } from '../extensions/messages/api.ts'
 import { context } from '../server/harness.ts'
@@ -156,4 +156,18 @@ it('accepts the real messages/remote HTTP action without browser headers or a co
     text: 'A peer update',
     remote: { key: 'peer-http', project: 'peer', machine: 'test' },
   })
+})
+
+it('does not serve private config or the pairing key through Vite while serving user extension assets', async () => {
+  const { server, options } = await fixture(false, { boundary: source })
+  const config = join(options.userHome, '.ultimate')
+  await writeFile(join(config, 'secrets.json'), '{"synthetic":true}', { mode: 0o600 })
+  await mkdir(join(config, 'extensions'), { recursive: true })
+  await writeFile(join(config, 'extensions/asset.txt'), 'extension asset')
+  const read = (file: string) => fetch(`${server.url}/@fs/${join(config, file)}`)
+  expect((await read('secrets.json')).status).toBe(403)
+  expect((await read('user-key?url&inline')).status).toBe(403)
+  const asset = await read('extensions/asset.txt')
+  expect(asset.status).toBe(200)
+  expect(await asset.text()).toBe('extension asset')
 })

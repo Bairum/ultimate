@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { lstat, mkdir, readdir, realpath, rm } from 'node:fs/promises'
+import { lstat, mkdir, readdir, realpath, rm, rmdir } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import type { Context } from '@earendil-works/chord'
 import {
@@ -578,9 +578,13 @@ export function workspaces(host: Host) {
           workspace.path,
           treeName(workspace.branch),
         )
-      } else if (await onDisk(workspace.path))
-        // Release clears the leftover folder of its own checkout first; any other folder there is not ours to remove.
-        throw new Error(`Workspace path is not a registered checkout: ${workspace.path}`)
+      } else if (await onDisk(workspace.path)) {
+        // Only an empty leftover is disposable; ignored files can still hold unique work.
+        if ((await readdir(workspace.path)).length)
+          throw new Error(`Workspace path is not a registered checkout: ${workspace.path}`)
+        // Unlike recursive removal, rmdir also refuses files created after the check.
+        await rmdir(workspace.path)
+      }
       if (await git(workspace.source, 'branch', '--list', workspace.branch)) {
         const merged = await git(
           workspace.source,
@@ -931,6 +935,12 @@ export function workspaces(host: Host) {
       workspace = (await get(id, context))!
       if (workspace.state === 'failed')
         return `Workspace setup failed: ${workspace.error}; fix the cause, then call a tool again to retry the setup`
+    }
+    if (workspace.state === 'removed') {
+      // A released checkout comes back on its first tool call, also mid-run.
+      const kept = await ready(id, context)
+      if (kept) return `Workspace is removed: ${kept.reason ?? 'its checkout keeps changes'}`
+      workspace = (await get(id, context))!
     }
     if (workspace.state !== 'ready')
       return `Workspace is ${workspace.state}: ${workspace.error ?? 'checkout is not ready; send a new input to retry'}`

@@ -5,6 +5,7 @@ import { projectHome } from './project.ts'
 import type { Source } from './project.ts'
 import { compareExtensions } from './discovery.ts'
 import { acquireLock } from './lock.ts'
+import { identify } from '../lib/process-group.ts'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { FauxProviderHandle } from '@earendil-works/pi-ai/providers/faux'
@@ -130,7 +131,8 @@ export interface HostOptions {
 export async function prepareHarness(options: HostOptions) {
   const { ultimateRoot } = options
   const projectRoot = await realpath(options.projectRoot ?? ultimateRoot)
-  const userHome = options.userHome ?? homedir()
+  // ULTIMATE_USER_HOME: where `.ultimate/` user config lives when it is not HOME's (a preview's private copy).
+  const userHome = options.userHome ?? process.env.ULTIMATE_USER_HOME ?? homedir()
   const builds = createBuild(ultimateRoot)
   const home = options.home ?? process.env.ULTIMATE_HOME ?? projectHome(projectRoot, userHome)
   await mkdir(home, { recursive: true })
@@ -219,9 +221,12 @@ export async function prepareHarness(options: HostOptions) {
     extensionSources,
     faux,
     async open(resume = true) {
+      // The supervisor checks this start identity before it signals a stale owner (retireStorageOwner).
+      const coreStart = identify(process.pid)
+      if (!coreStart) throw new Error(`Cannot identify Ultimate core pid ${process.pid}`)
       const owner = await acquireLock(
         join(home, 'storage.lock'),
-        { pid: process.pid },
+        { pid: process.pid, coreStart },
         process.env.ULTIMATE_SUPERVISED === '1' ? 10000 : 0,
       )
       let harness: Harness | undefined

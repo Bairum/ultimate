@@ -21,7 +21,6 @@ import {
   TranscriptContext,
   useConversation,
   useExtensions,
-  useIntro,
   useModels,
   useStore,
 } from '../sdk/hooks.ts'
@@ -187,8 +186,8 @@ type Draft = {
 }
 
 // In-flight submissions and retryable failures belong to the conversation, not its mounted editor.
-const drafts = new Map<number | string | undefined, ReturnType<typeof createDraft>>()
-function createDraft(id: number | string | undefined) {
+const drafts = new Map<number | undefined, ReturnType<typeof createDraft>>()
+function createDraft(id: number | undefined) {
   const key = id === undefined ? undefined : `ultimate.draft.${id}`
   let value: Draft = {
     text: key ? (localStorage.getItem(key) ?? '') : '',
@@ -215,7 +214,7 @@ function createDraft(id: number | string | undefined) {
   }
 }
 
-function getDraft(id: number | string | undefined) {
+function getDraft(id: number | undefined) {
   if (!drafts.has(id)) drafts.set(id, createDraft(id))
   return drafts.get(id)!
 }
@@ -259,7 +258,6 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   const queued = inbox.filter((item) => item.mode !== 'write')
   const scoped = useContext(ConversationIdContext)
   const target = useContext(ComposerTargetContext)
-  const intro = useIntro()
   const draft = getDraft(id)
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
   const setError = (message: string | undefined) => draft.set({ error: message })
@@ -368,6 +366,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     // Only the shown conversation's composer takes typing shortcuts (Escape, Shift+Tab): they act on that conversation.
     <div
       data-composer-target={scoped === undefined ? 'conversation' : 'scope'}
+      data-ui="composer"
       className={cn(column(dock), 'pb-2')}
     >
       <Inbox items={inbox} />
@@ -400,9 +399,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
           onKeyDown={onKeyDown}
           placeholder={
             target?.placeholder ??
-            (busy
-              ? 'Steer the run, or queue a follow-up…'
-              : (intro?.placeholder ?? 'Ask Ultimate to change something…'))
+            (busy ? 'Steer the run, or queue a follow-up…' : 'Ask Ultimate to change something…')
           }
           value={text}
         />
