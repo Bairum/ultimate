@@ -149,8 +149,8 @@ function FamilyForm({
               aria-checked={name === draft.color}
               aria-label={name}
               className={cn(
-                'size-3 rounded-full ring-offset-1 ring-offset-popover transition-transform hover:scale-125',
-                name === draft.color && 'ring-1 ring-foreground/70',
+                'size-3 rounded-full ring-offset-1 ring-offset-popover transition-shadow hover:ring-1 hover:ring-foreground/40',
+                name === draft.color && 'ring-1 ring-foreground/70 hover:ring-foreground/70',
               )}
               key={name}
               onClick={() => set({ color: name })}

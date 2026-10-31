@@ -106,7 +106,7 @@ function Progress({ done }: { done: boolean[] }) {
           // oxlint-disable-next-line react/no-array-index-key -- Progress dots correspond to fixed question positions.
           key={index}
           className={cn(
-            'h-1 rounded-full transition-all duration-300 ease-out',
+            'h-1 rounded-full transition-[width,background-color] duration-300 ease-out',
             value ? 'w-3 bg-brand' : 'w-1.5 bg-muted-foreground/30',
           )}
         />
