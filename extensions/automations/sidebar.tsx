@@ -64,8 +64,8 @@ export function AutomationsSection() {
         <button
           aria-label={`${list.length} active${failing ? `, ${failing} need attention` : ''}: show all automations`}
           className={cn(
-            'cursor-pointer rounded-full bg-sidebar-accent px-1.5 font-mono text-[9.5px] leading-4 tabular-nums outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
-            failing ? 'text-error' : 'text-foreground/80',
+            'cursor-pointer rounded-sm px-0.5 font-mono text-[11px] tabular-nums outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
+            failing ? 'text-error' : 'text-muted-foreground/60',
           )}
           data-automations-open
           onClick={() => openAutomationsPanel(shell)}

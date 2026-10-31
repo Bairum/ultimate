@@ -39,9 +39,7 @@ export function Section({
       >
         <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/section:rotate-90" />
         {label}
-        <span className="rounded-full bg-sidebar-accent px-1.5 text-[9.5px] leading-4 tracking-normal text-foreground/80 tabular-nums">
-          {count}
-        </span>
+        <span className="text-muted-foreground/60 tabular-nums">{count}</span>
       </CollapsibleTrigger>
       <CollapsibleContent className="flex flex-col gap-px">{children}</CollapsibleContent>
     </Collapsible>
