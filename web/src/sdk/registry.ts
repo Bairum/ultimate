@@ -15,7 +15,6 @@ import type {
   DocumentContribution,
   EntryRenderer,
   InboxRenderer,
-  IntroContribution,
   LinkRenderer,
   PanelContribution,
   SlotName,
@@ -147,16 +146,6 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
       summary: optional(isComponent),
     }),
     'a { when, tools?, docs?, thread?, summary? } object',
-  ],
-  intro: [
-    fields({
-      when: isFunction,
-      title: isString,
-      hint: optional(isString),
-      placeholder: optional(isString),
-      card: optional(isComponent),
-    }),
-    'a { when, title, hint?, placeholder?, card? } object',
   ],
   documents: [
     arrayOf(
@@ -459,34 +448,6 @@ export function documentItems(records: readonly ExtensionRecord[]): Map<string, 
     for (const document of extension?.documents ?? [])
       byKind.set(document.kind, { ...document, extension: name, version })
   return byKind
-}
-
-/**
- * The last facet's intro whose `when` matches `conversation`, with the facet's name and version for its card's error
- * boundary; a throwing `when` is reported and skipped.
- */
-export function introOf(
-  records: readonly ExtensionRecord[],
-  conversation: ConversationSummary | undefined,
-  report: (extension: string, error: unknown) => void,
-): (IntroContribution & { extension: string; version: number }) | undefined {
-  if (!conversation) return undefined
-  const record = records.findLast(({ name, extension }) => {
-    if (!extension?.intro) return false
-    try {
-      return extension.intro.when(conversation)
-    } catch (error) {
-      report(name, error)
-      return false
-    }
-  })
-  return (
-    record?.extension?.intro && {
-      ...record.extension.intro,
-      extension: record.name,
-      version: record.version,
-    }
-  )
 }
 
 export function composerRenderers(

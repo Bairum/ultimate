@@ -28,7 +28,7 @@ import type { ActionArgs, ActionError, ActionOptions } from './api.ts'
 import { actionRef, docRef } from '../../../shared/extension-api.ts'
 import type { ActionRef, DocRef } from '../../../shared/extension-api.ts'
 import { api, registry, store, uiState } from './client.ts'
-import { HOME, compactDocs, compactTools, documentItems, introOf } from './registry.ts'
+import { HOME, compactDocs, compactTools, documentItems } from './registry.ts'
 import type { State } from './store.ts'
 import { errorMessage, formatDuration } from './format.ts'
 import type { CompactRow, ToolCallView, UltimateContext } from './types.ts'
@@ -337,20 +337,6 @@ function useCompactConfig() {
     [records, conversation, docs],
   )
   return { compact, docs }
-}
-const introFailures = new Set<string>()
-function reportIntro(extension: string, error: unknown) {
-  const message = `extension ${extension}: intro is off, its when() threw: ${errorMessage(error)}`
-  if (introFailures.has(message)) return
-  introFailures.add(message)
-  queueMicrotask(() => store.notify({ level: 'error', message }))
-}
-/** The shown conversation's `intro` contribution, if one matches. */
-export function useIntro() {
-  const records = useExtensions()
-  const id = useConversation((conversation) => conversation.id)
-  const conversation = useStore((state) => state.conversations.find((summary) => summary.id === id))
-  return useMemo(() => introOf(records, conversation, reportIntro), [records, conversation])
 }
 /** Document renderers by kind (`documents` contributions); the Documents tab shows the rest as JSON. */
 export function useDocumentRenderers() {

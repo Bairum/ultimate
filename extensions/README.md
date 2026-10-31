@@ -35,7 +35,7 @@ sending states (side-chat forks @ultimate this way). Only the shown conversation
 
 Wrap `<Conversation/>` in `<ConversationScope id={id}>` (both from `@/sdk`) to render another live conversation without
 switching the shell. `useConversation(select?)`, `useTranscript`, `useDoc`/`useDocKind`, `useUltimate().conversationId`,
-`useIntro`, `useCompact`/`useCompactThread`, and `useAction` follow the nearest scope, as do transcript/composer
+`useCompact`/`useCompactThread`, and `useAction` follow the nearest scope, as do transcript/composer
 contributions. Scopes of the same id share a stream; the last unmount releases it. Outside a scope these hooks keep
 their existing behaviour. A shortcut pressed inside a scope runs its command with the scope's id as
 `context.conversationId` (Escape stops the scoped run). Explicit `useDocOf` ids, root UI state, shell navigation, the
@@ -302,7 +302,7 @@ No restart, no reload.
 
 ## Contributions
 
-`defineWebExtension({ slots, panels, surfaces, tools, toolLines, entries, link, messageActions, messageDetails, answerLabels, userBubble, compact, intro, documents, commands })`; every key is optional. Extensions load
+`defineWebExtension({ slots, panels, surfaces, tools, toolLines, entries, link, messageActions, messageDetails, answerLabels, userBubble, compact, documents, commands })`; every key is optional. Extensions load
 in parallel, installing independently; contributions follow discovery order: built-in → user → project, then folder name within each source. Give a slot item `{ component, order }` to move it (default order 0, lower first).
 
 ### Slots
@@ -474,11 +474,6 @@ workspace outcomes and scripts its log says messaged you, and shows its messages
 in a folded run opens the run. `thread: (row, docs) => boolean` names the rows the reader follows; everything between two
 of them recedes into one line that opens it, worded by the first matching facet's `summary` component (`rows`, `steps`,
 `working`), an update count otherwise. Messages marks your inputs and @ultimate's messages to you as thread.
-
-`intro` says what a matching conversation is before its first message: `{ when(conversation), title, hint?, placeholder?, card? }`
-replaces the empty state's line under ULTIMATE, adds a hint below it, and sets the composer's placeholder while it is
-idle; `card`, a component, renders under the empty state, such as a setup card the conversation needs first. The last
-matching facet wins.
 
 ### Entry renderers
 

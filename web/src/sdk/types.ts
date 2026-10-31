@@ -224,19 +224,6 @@ export type CompactDocs = Readonly<Record<string, Readonly<JsonObject> | null | 
 export type CompactCallTest = (call: ToolCall, docs: CompactDocs) => boolean
 
 /**
- * What an empty conversation says it is, and its composer's placeholder, for matching conversations; the last matching
- * facet wins. The core's own wording applies otherwise.
- */
-export interface IntroContribution {
-  when: (conversation: ConversationSummary) => boolean
-  title: string
-  hint?: string
-  placeholder?: string
-  /** Shown under the empty state, such as a setup card the conversation needs first. */
-  card?: ComponentType
-}
-
-/**
  * A value one extension's browser code asks for and another provides: the web's extension point. The asking extension
  * declares it in its `ui.tsx` as `definePoint<Input, Value>('<owner>.<point>')` and renders `<Provided point input>`;
  * a higher extension imports it and lists `provide(Point, useValue)` under `provides`. Dependencies keep pointing at
@@ -324,8 +311,6 @@ export interface WebExtension {
   userBubble?: readonly ComponentType<{ entry: EntryRecord }>[]
   /** Shows matching conversations in compact mode; the visible tools of every matching facet combine. */
   compact?: CompactContribution
-  /** The empty state's wording and the composer's placeholder for matching conversations. */
-  intro?: IntroContribution
   /** Document renderers; a later facet wins a kind. */
   documents?: readonly DocumentContribution[]
   commands?: readonly CommandContribution[]
