@@ -199,34 +199,25 @@ export interface CompactContribution {
   /** Kinds of the root conversation's documents `when` and the tests read; the transcript follows them and passes them in. */
   docs?: readonly string[]
   /**
-   * Rows that are background to the conversation, such as traffic between agents: two or more in a row, with the runs of work
-   * between them, fold into one line that expands to them. A row is a stored entry with the visible calls it shows.
-   */
-  quiet?: CompactQuietTest
-  /** The line a folded group of quiet rows shows; the first matching facet's wins, a step count otherwise. */
-  summary?: ComponentType<CompactSummaryProps>
-  /**
    * Rows that are the conversation the reader follows, such as @ultimate's messages to the user: everything between two of
-   * them recedes into one faded stretch.
+   * them recedes into one faded stretch. A row is a stored entry with the visible calls it shows.
    */
   thread?: (row: CompactRow, docs: CompactDocs) => boolean
+  /** The line a receded stretch shows; the first matching facet's wins, an update count otherwise. */
+  summary?: ComponentType<CompactSummaryProps>
 }
 /** A compact transcript row: an entry, and the visible tool calls it shows when it shows only some of its blocks. */
 export interface CompactRow {
   entry: EntryRecord
   calls: readonly ToolCall[]
 }
-/** Whether a row is background; `hidden` for one that renders nothing, which joins a group without counting. */
-export type CompactQuietTest = (row: CompactRow, docs: CompactDocs) => boolean | 'hidden'
 export interface CompactSummaryProps {
-  /** The group's rows that are no runs of work. */
+  /** The stretch's rows that are no runs of work. */
   rows: readonly CompactRow[]
   /** Steps in its runs of work. */
   steps: number
   /** Whether the agent still works in it. */
   working: boolean
-  /** Whether it sums up a whole stretch between thread rows (`thread`), landings and notes included, not one quiet group. */
-  between?: boolean
 }
 /** The root conversation's documents of the contributions' `docs` kinds, by kind, as `useDocOf(1, kind)` reads them. */
 export type CompactDocs = Readonly<Record<string, Readonly<JsonObject> | null | undefined>>

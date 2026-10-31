@@ -35,7 +35,7 @@ sending states (side-chat forks @ultimate this way). Only the shown conversation
 
 Wrap `<Conversation/>` in `<ConversationScope id={id}>` (both from `@/sdk`) to render another live conversation without
 switching the shell. `useConversation(select?)`, `useTranscript`, `useDoc`/`useDocKind`, `useUltimate().conversationId`,
-`useIntro`, `useCompact`/`useCompactQuiet`, and `useAction` follow the nearest scope, as do transcript/composer
+`useIntro`, `useCompact`/`useCompactThread`, and `useAction` follow the nearest scope, as do transcript/composer
 contributions. Scopes of the same id share a stream; the last unmount releases it. Outside a scope these hooks keep
 their existing behaviour. A shortcut pressed inside a scope runs its command with the scope's id as
 `context.conversationId` (Escape stops the scoped run). Explicit `useDocOf` ids, root UI state, shell navigation, the
@@ -471,7 +471,9 @@ follows and passes to them by kind. The tools of every matching facet combine. R
 test for the shown conversation or `undefined`, to adapt to it. Messages turns it on for @ultimate's conversation, found
 by the standing agents' index (`StandingDoc`) rather than its title, keeping messages, branch starts,
 workspace outcomes and scripts its log says messaged you, and shows its messages to you as bubbles. Revealing an entry
-in a folded run opens the run.
+in a folded run opens the run. `thread: (row, docs) => boolean` names the rows the reader follows; everything between two
+of them recedes into one line that opens it, worded by the first matching facet's `summary` component (`rows`, `steps`,
+`working`), an update count otherwise. Messages marks your inputs and @ultimate's messages to you as thread.
 
 `intro` says what a matching conversation is before its first message: `{ when(conversation), title, hint?, placeholder?, card? }`
 replaces the empty state's line under ULTIMATE, adds a hint below it, and sets the composer's placeholder while it is

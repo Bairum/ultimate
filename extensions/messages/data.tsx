@@ -5,13 +5,6 @@ import type { MessagesData, Message, Remote } from './refs.ts'
 export const remoteLabel = (remote: Pick<Remote, 'project' | 'machine'>) =>
   `@ultimate@${remote.project} on ${remote.machine}`
 
-/** Whether tool call `call` ended in an error, from its stored result. */
-export const callFailed = (entries: readonly EntryRecord[], call: string) =>
-  entries.some((entry) => {
-    const message = entry.model?.[0]
-    return message?.role === 'toolResult' && message.toolCallId === call && message.isError
-  })
-
 /** Only incoming requests belong to an answer, never the outgoing reply log item. */
 export function answeredMessages(messages: Message[], conversation: number, entry: number) {
   return messages.filter((message) => message.to === conversation && message.answer === entry)

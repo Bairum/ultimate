@@ -312,20 +312,15 @@ export function useCompact(): ((call: ToolCall) => boolean) | undefined {
   return useMemo(() => compact && ((call: ToolCall) => compact.keeps(call, docs)), [compact, docs])
 }
 /**
- * Which rows of the shown compact transcript are background that folds into groups, and the line a group shows (`compact` contributions'
- * `quiet` and `summary`), else `undefined`.
+ * Which rows of the shown compact transcript are the thread the reader follows, and the line a receded stretch between
+ * them shows (`compact` contributions' `thread` and `summary`), else `undefined`.
  */
-export function useCompactQuiet() {
+export function useCompactThread() {
   const { compact, docs } = useCompactConfig()
-  return useMemo(
-    () =>
-      compact && {
-        quiet: (row: CompactRow) => compact.quiet(row, docs),
-        summary: compact.summary,
-        thread: compact.thread && ((row: CompactRow) => compact.thread!(row, docs)),
-      },
-    [compact, docs],
-  )
+  return useMemo(() => {
+    const thread = compact?.thread
+    return thread && { test: (row: CompactRow) => thread(row, docs), summary: compact.summary }
+  }, [compact, docs])
 }
 function useCompactConfig() {
   const records = useExtensions()

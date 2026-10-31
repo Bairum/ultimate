@@ -18,7 +18,6 @@ export { resumed } from './resume.ts'
 export type {
   CompactCallTest,
   CompactContribution,
-  CompactQuietTest,
   CompactRow,
   CompactSummaryProps,
   IntroContribution,

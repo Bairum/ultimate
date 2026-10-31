@@ -7,7 +7,6 @@ import type {
   CodeBlockRenderer,
   CompactCallTest,
   CompactDocs,
-  CompactQuietTest,
   CompactRow,
   CompactSummaryProps,
   CommandContribution,
@@ -144,11 +143,10 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
       when: isFunction,
       tools: optional(arrayOf((tool) => isString(tool) || isFunction(tool))),
       docs: optional(arrayOf(isString)),
-      quiet: optional(isFunction),
-      summary: optional(isComponent),
       thread: optional(isFunction),
+      summary: optional(isComponent),
     }),
-    'a { when, tools?, docs?, quiet?, summary?, thread? } object',
+    'a { when, tools?, docs?, thread?, summary? } object',
   ],
   intro: [
     fields({
@@ -602,7 +600,6 @@ export function compactTools(
 ):
   | {
       keeps: CompactCallTest
-      quiet: CompactQuietTest
       thread?: (row: CompactRow, docs: CompactDocs) => boolean
       summary?: {
         extension: string
@@ -625,7 +622,7 @@ export function compactTools(
   })
   if (!matching.length) return undefined
   // Rows that ask the user to act (`attention` renderers) never fold: their calls stay out of runs of work, and the rows
-  // count as thread, never background.
+  // count as thread.
   const asks = (kind: 'entries' | 'tools') =>
     new Set(
       records.flatMap(({ extension }) =>
@@ -659,18 +656,6 @@ export function compactTools(
           return false
         }
       }),
-    quiet: (row, docs) => {
-      if (asking(row)) return false
-      const verdicts = matching.map(({ name, compact }) => {
-        try {
-          return compact.quiet?.(row, docs) ?? false
-        } catch (error) {
-          report(name, error)
-          return false
-        }
-      })
-      return verdicts.includes(true) || (verdicts.includes('hidden') ? 'hidden' : false)
-    },
     thread: matching.some(({ compact }) => compact.thread)
       ? (row, docs) =>
           asking(row) ||

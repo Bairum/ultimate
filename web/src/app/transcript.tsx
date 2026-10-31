@@ -40,7 +40,7 @@ import { elidePath, formatDuration, shortenPath } from '../sdk/format.ts'
 import {
   TranscriptContext,
   useCompact,
-  useCompactQuiet,
+  useCompactThread,
   useConversation,
   useExtensions,
   useIntro,
@@ -62,18 +62,16 @@ import {
   compactRows,
   groupAside,
   groupBetween,
-  groupQuiet,
   isOpenIn,
   openIn,
   partKey,
   partsOf,
-  quietOf,
   runOf,
   setAsideIds,
   windowGaps,
   windowKey,
 } from './compact.ts'
-import type { AsideGroup, BetweenGroup, CompactPart, QuietGroup, WorkRun } from './compact.ts'
+import type { AsideGroup, BetweenGroup, CompactPart, WorkRun } from './compact.ts'
 import { foldKey, readFold, writeFold } from './fold.tsx'
 import { reachedFork } from './fork.ts'
 import { readerLeft } from './follow.ts'
@@ -508,28 +506,22 @@ function TranscriptEntries() {
       entry.conversationId === id &&
       !(entry.kind === 'pi.tool-result' && calls.has(toolCallId(entry) ?? '')),
   )
-  // Background rows, such as traffic between agents, fold into one line per stretch.
-  const background = useCompactQuiet()
+  const thread = useCompactThread()
   const compact = useCompact()
   const keeps = (call: ToolCall) => !!compact?.(call)
   const rows: (CompactPart | WorkRun)[] = compact
     ? compactRows(visible, keeps)
     : visible.map((entry) => ({ entry }))
-  const quiet = background
-    ? groupQuiet(rows, (part) => background.quiet({ entry: part.entry, calls: shownCalls(part) }))
-    : rows
-  // Background groups the reader or a reveal opened, by the keys of all their parts, as folded runs are.
-  const [shownQuiet, setShownQuiet] = useState<ReadonlySet<string>>(new Set())
   // What a go-back set aside folds into one quiet row; the rows themselves render as usual inside it.
   const aside = useMemo(() => setAsideIds(entries), [entries])
-  const grouped = groupAside(quiet, aside)
+  const grouped = groupAside(rows, aside)
   // What lies between two rows of what the reader follows folds into one line that opens it.
-  const follows = background?.thread
+  const follows = thread?.test
   const threaded = follows
     ? groupBetween(
         grouped,
         (row) =>
-          !('quiet' in row || 'work' in row || 'aside' in row) &&
+          !('work' in row || 'aside' in row) &&
           follows({ entry: row.entry, calls: shownCalls(row) }),
       )
     : grouped.map((row) => row)
@@ -583,11 +575,6 @@ function TranscriptEntries() {
       setShownAside((keys) => new Set(keys).add(first))
       return
     }
-    const stretch = quietOf(group ? group.aside : quiet, reveal)
-    if (stretch && !isOpenIn(shownQuiet, stretch)) {
-      setShownQuiet((keys) => openIn(keys, stretch, true))
-      return
-    }
     const run = compact && runOf(rows, reveal)
     if (run && !isOpen(run)) {
       open(run, true)
@@ -602,40 +589,10 @@ function TranscriptEntries() {
   })
   useLayoutEffect(
     () => revealStep(),
-    [
-      reveal,
-      loading,
-      pending,
-      error,
-      history,
-      opened,
-      filling,
-      shownAside,
-      shownQuiet,
-      shownBetween,
-    ],
+    [reveal, loading, pending, error, history, opened, filling, shownAside, shownBetween],
   )
-  const render = (row: CompactPart | WorkRun | QuietGroup, last: boolean, faded = ''): ReactNode =>
-    'quiet' in row ? (
-      // Found like a folded run: by its first entry, or its last when a page reaches into it.
-      <div
-        className={faded}
-        data-conversation-id={id}
-        data-entry-id={partsOf(row)[0].entry.id}
-        data-run-last={partsOf(row).at(-1)!.entry.id}
-        key={`quiet:${quietKey(row)}`}
-      >
-        <QuietRow
-          busy={busy && last}
-          group={row}
-          onOpenChange={(value) => setShownQuiet((keys) => openIn(keys, row, value))}
-          open={isOpenIn(shownQuiet, row)}
-          summary={background?.summary}
-        >
-          {row.quiet.map((inner, index) => render(inner, last && index === row.quiet.length - 1))}
-        </QuietRow>
-      </div>
-    ) : 'work' in row ? (
+  const render = (row: CompactPart | WorkRun, last: boolean, faded = ''): ReactNode =>
+    'work' in row ? (
       <div
         className={cn('empty:hidden', faded)}
         data-conversation-id={id}
@@ -703,12 +660,8 @@ function TranscriptEntries() {
         const key = `between:${partKey(itemParts(item.between[0])[0])}`
         // The stretch the agent works in now stays in view while it works.
         const shown = (busy && last) || readBetween(id, item)
-        // Open, a stretch shows its background groups' rows: their lines would repeat the stretch's.
-        const between = item.between.flatMap<CompactPart | WorkRun | AsideGroup>((row) =>
-          'quiet' in row ? row.quiet : [row],
-        )
-        const faded = between.map((inner, inside) =>
-          renderItem(inner, last && inside === between.length - 1, recedeRow),
+        const faded = item.between.map((inner, inside) =>
+          renderItem(inner, last && inside === item.between.length - 1, recedeRow),
         )
         return (
           <Fragment key={key}>
@@ -719,7 +672,7 @@ function TranscriptEntries() {
                 setShownBetween((count) => count + 1)
               }}
               open={shown}
-              summary={background?.summary}
+              summary={thread?.summary}
               working={busy && last}
             />
             {shown && faded}
@@ -738,7 +691,7 @@ function TranscriptEntries() {
     </TranscriptContext>
   )
   function renderItem(
-    item: CompactPart | WorkRun | QuietGroup | AsideGroup,
+    item: CompactPart | WorkRun | AsideGroup,
     last: boolean,
     faded = '',
   ): ReactNode {
@@ -777,7 +730,7 @@ const recedeRow =
   '-mt-1.5 opacity-45 transition-opacity duration-200 hover:opacity-100 focus-within:opacity-100'
 
 /** All parts of a top-level row, set-aside groups included. */
-const itemParts = (item: CompactPart | WorkRun | QuietGroup | AsideGroup) =>
+const itemParts = (item: CompactPart | WorkRun | AsideGroup) =>
   'aside' in item ? item.aside.flatMap(partsOf) : partsOf(item)
 
 /**
@@ -786,18 +739,18 @@ const itemParts = (item: CompactPart | WorkRun | QuietGroup | AsideGroup) =>
  */
 const betweenKeys = (
   id: number | undefined,
-  group: BetweenGroup<CompactPart | WorkRun | QuietGroup | AsideGroup>,
+  group: BetweenGroup<CompactPart | WorkRun | AsideGroup>,
 ) => {
   const parts = group.between.flatMap(itemParts)
   return [parts[0], parts.at(-1)!].map((part) => foldKey(id, `between:${partKey(part)}`))
 }
 const readBetween = (
   id: number | undefined,
-  group: BetweenGroup<CompactPart | WorkRun | QuietGroup | AsideGroup>,
+  group: BetweenGroup<CompactPart | WorkRun | AsideGroup>,
 ) => betweenKeys(id, group).some(readFold)
 const writeBetween = (
   id: number | undefined,
-  group: BetweenGroup<CompactPart | WorkRun | QuietGroup | AsideGroup>,
+  group: BetweenGroup<CompactPart | WorkRun | AsideGroup>,
   open: boolean,
 ) => {
   for (const key of betweenKeys(id, group)) writeFold(key, open)
@@ -818,7 +771,7 @@ function BetweenLine({
   working,
   summary: Summary,
 }: {
-  group: BetweenGroup<CompactPart | WorkRun | QuietGroup | AsideGroup>
+  group: BetweenGroup<CompactPart | WorkRun | AsideGroup>
   open: boolean
   onOpen: () => void
   working: boolean
@@ -833,12 +786,8 @@ function BetweenLine({
   // Rows outside runs of work, which count as steps instead.
   const rows = group.between
     .flatMap((row) => ('aside' in row ? row.aside : [row]))
-    .flatMap((row) => ('quiet' in row ? row.quiet : [row]))
     .flatMap((row) => ('work' in row ? [] : [{ entry: row.entry, calls: shownCalls(row) }]))
-  const steps = group.between.reduce(
-    (sum, row) => sum + ('work' in row ? row.steps : 'quiet' in row ? row.steps : 0),
-    0,
-  )
+  const steps = group.between.reduce((sum, row) => sum + ('work' in row ? row.steps : 0), 0)
   const fallback = <>{rows.length} updates</>
   return (
     <button
@@ -856,7 +805,7 @@ function BetweenLine({
             variant="inline"
             version={Summary.version}
           >
-            <Summary.component between rows={rows} steps={steps} working={working} />
+            <Summary.component rows={rows} steps={steps} working={working} />
           </ExtensionBoundary>
         ) : (
           fallback
@@ -872,78 +821,12 @@ function BetweenLine({
 /** A set-aside group is known by its first entry, so it stays open while later rows join it. */
 const asideKey = (group: AsideGroup) => partsOf(group.aside[0])[0].entry.id
 
-/** A quiet group's React key: its first part. */
-const quietKey = (group: QuietGroup) => partKey(partsOf(group)[0])
-
 /** The tool calls a row shows: all of its entry's, or those of its blocks. */
 function shownCalls({ entry, blocks }: CompactPart): ToolCall[] {
   const message = entry.model?.[0]
   if (message?.role !== 'assistant') return []
   return message.content.flatMap((block, index) =>
     block.type === 'toolCall' && (!blocks || blocks.includes(index)) ? [block] : [],
-  )
-}
-
-/**
- * Background rows folded into one quiet line, which an extension's `summary` words (a step count otherwise); open, the
- * rows render as usual beneath it.
- */
-function QuietRow({
-  group,
-  open,
-  onOpenChange,
-  busy,
-  summary: Summary,
-  children,
-}: {
-  group: QuietGroup
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  busy: boolean
-  summary:
-    | {
-        extension: string
-        version: number
-        component: ComponentType<CompactSummaryProps>
-      }
-    | undefined
-  children: ReactNode
-}) {
-  const rows = group.quiet.flatMap((row) =>
-    'work' in row ? [] : [{ entry: row.entry, calls: shownCalls(row) }],
-  )
-  const fallback = (
-    <>
-      {rows.length} updates
-      {group.steps > 0 && ` · ${group.steps} step${group.steps === 1 ? '' : 's'}`}
-    </>
-  )
-  return (
-    <Collapsible
-      className="group/quiet"
-      data-compact-quiet={rows.length}
-      onOpenChange={onOpenChange}
-      open={open}
-    >
-      <CollapsibleTrigger className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 text-left font-mono text-[11px] text-muted-foreground/70 hover:text-muted-foreground">
-        {Summary ? (
-          <ExtensionBoundary
-            extension={Summary.extension}
-            fallback={fallback}
-            variant="inline"
-            version={Summary.version}
-          >
-            <Summary.component rows={rows} steps={group.steps} working={busy} />
-          </ExtensionBoundary>
-        ) : (
-          fallback
-        )}
-        <ChevronRightIcon className="size-3 shrink-0 transition-transform group-data-[state=open]/quiet:rotate-90" />
-      </CollapsibleTrigger>
-      <CollapsibleContent className="mt-3 flex flex-col gap-3 border-l border-border/70 pl-3">
-        {children}
-      </CollapsibleContent>
-    </Collapsible>
   )
 }
 
