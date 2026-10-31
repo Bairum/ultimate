@@ -108,7 +108,12 @@ export function Address({
     return (
       <span className="flex items-center gap-1.5" title="@ultimate">
         <AgentMark name={name} size="sm" />
-        <span className="font-sans text-[10.5px] font-semibold tracking-[0.28em]">ULTIMATE</span>
+        <span
+          className="font-sans text-[10.5px] font-semibold tracking-[0.28em]"
+          data-ui="wordmark"
+        >
+          ULTIMATE
+        </span>
       </span>
     )
   return (
@@ -204,6 +209,8 @@ export function Bubble({
     <section
       data-message-outgoing={message?.id}
       data-compact-bubble
+      data-sender={accent === accentOf('ultimate') ? 'ultimate' : undefined}
+      data-ui="message-card"
       className="group/bubble mt-2 w-full min-w-0"
     >
       <header className="flex h-6 min-w-0 items-center gap-2 font-mono text-[11px] text-muted-foreground">
@@ -667,6 +674,8 @@ export function MessageInput({ entry }: { entry: EntryRecord }) {
     >
       <section
         data-message-input={origin.id}
+        data-sender={accent === accentOf('ultimate') ? 'ultimate' : undefined}
+        data-ui="message-card"
         className={cn('group/bubble min-w-0 rounded-lg border', accent.edge, accent.fill)}
       >
         <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
