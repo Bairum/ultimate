@@ -976,6 +976,11 @@ Keep UI state that should survive a reload in `useExtensionUiState`; keep throwa
   `text-warning`, `text-error`, `text-diff-add`, `text-diff-del`. Opacity modifiers work: `bg-error/10`. They follow
   the light and dark themes; never hard-code colours.
 - No new CSS files, no inline style objects for colours.
+- A theme extension (a CSS file imported from its `web.tsx`) targets the app through stable `data-ui` hooks, never
+  Tailwind classes: `titlebar`, `surface-tabs`, `wordmark`, `ultimate-button`, `sidebar-row`, `sidebar-section-header`,
+  `conversation-header`, `turn-header`, `empty-state`, `card`, `message-card` (with `data-sender`), `composer`,
+  `side-chat-hint`, `side-chat-switch`, `palette` and `status-line`; selected rows and tabs carry `data-selected`. Keep
+  these when changing that markup.
 - Dense and quiet: 12–14 px, monospace (`font-mono`) for meta such as paths, counts, ids, and durations; proportional
   for prose. Subtle borders (`border-border/70`), little motion.
 

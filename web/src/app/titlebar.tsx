@@ -113,7 +113,12 @@ const wordmark =
 
 /** The ULTIMATE wordmark beyond a phone; with `onClick` a button, for an extension that fills `titlebar.brand`. */
 export function Wordmark({ onClick, label }: { onClick?: () => void; label?: string }) {
-  if (!onClick) return <span className={wordmark}>ULTIMATE</span>
+  if (!onClick)
+    return (
+      <span className={wordmark} data-ui="wordmark">
+        ULTIMATE
+      </span>
+    )
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -123,6 +128,7 @@ export function Wordmark({ onClick, label }: { onClick?: () => void; label?: str
             wordmark,
             'h-6 cursor-pointer px-1.5 transition-colors outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring',
           )}
+          data-ui="wordmark"
           onClick={onClick}
           type="button"
         >
@@ -156,6 +162,7 @@ function Brand() {
               wordmark,
               'transition-opacity outline-none hover:opacity-80 focus-visible:ring-1 focus-visible:ring-ring md:hidden',
             )}
+            data-ui="wordmark"
             title="Switch surface"
             type="button"
           >
@@ -214,7 +221,10 @@ function SurfaceItems() {
   const surfaces = surfaceItems(useExtensions())
   const shown = useStore((state) => state.ui.surface?.id)
   return (
-    <nav className="flex h-[35px] shrink-0 items-stretch gap-4 max-md:hidden">
+    <nav
+      className="flex h-[35px] shrink-0 items-stretch gap-4 max-md:hidden"
+      data-ui="surface-tabs"
+    >
       {surfaces.map((surface, index) => {
         const active = surface.id === shown
         const button = (
@@ -224,6 +234,7 @@ function SurfaceItems() {
               'flex items-center border-y-2 border-transparent px-0.5 lowercase transition-colors outline-none hover:text-foreground focus-visible:text-foreground',
               active && 'border-b-brand text-foreground',
             )}
+            data-selected={active || undefined}
             data-surface={surface.id}
             key={surface.id}
             onClick={() => actions.showSurface(surface.id)}
@@ -254,7 +265,10 @@ function SurfaceItems() {
  */
 export function TitleBar() {
   return (
-    <div className="flex h-9 shrink-0 items-center gap-3 overflow-hidden border-b border-border/70 bg-sidebar pr-3 font-mono text-[11.5px] text-muted-foreground">
+    <div
+      className="flex h-9 shrink-0 items-center gap-3 overflow-hidden border-b border-border/70 bg-sidebar pr-3 font-mono text-[11.5px] text-muted-foreground"
+      data-ui="titlebar"
+    >
       <div className="flex min-w-0 flex-1 items-center overflow-hidden whitespace-nowrap">
         {/* As wide as the docked sidebar on every surface, so the surfaces never move and start where Agent's conversation does. */}
         <div
