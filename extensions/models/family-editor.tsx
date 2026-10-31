@@ -31,7 +31,7 @@ import { SaveFamiliesAction } from './refs.ts'
 import type { FamiliesView, FamilyView, SaveFamilies } from './refs.ts'
 
 type Spec = SaveFamilies['families'][string]
-const label = 'font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase'
+const label = 'section-label'
 const control =
   'h-7 w-full min-w-0 rounded-md border border-border/80 bg-background px-2 font-mono text-[11.5px] outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50'
 
@@ -142,11 +142,7 @@ function FamilyForm({
     <div className="flex flex-col gap-3 p-3">
       <div className="flex items-center gap-2">
         <span className="font-mono text-[12.5px] font-medium">{familyTitle(family.name)}</span>
-        {family.project && (
-          <span className={cn(label, 'tracking-normal normal-case')}>
-            · the project's settings change it
-          </span>
-        )}
+        {family.project && <span className={label}>· the project's settings change it</span>}
         <div className="ml-auto flex gap-1" role="radiogroup" aria-label="Color">
           {Object.keys(FAMILY_COLORS).map((name) => (
             <button
@@ -383,7 +379,7 @@ function ModelSelect({
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[min(34rem,90vw)] p-0">
         <Command
-          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10.5px] [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:uppercase"
+          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:section-label"
           shouldFilter={false}
           {...(value ? { defaultValue: value } : {})}
         >

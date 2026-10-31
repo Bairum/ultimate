@@ -57,7 +57,7 @@ export function AutomationsSection() {
       open={expanded}
     >
       <div className="mx-2 flex h-6 items-center gap-1">
-        <CollapsibleTrigger className="group/automations flex h-6 cursor-pointer items-center gap-1 rounded-md px-1 font-mono text-[9.5px] tracking-wider text-muted-foreground/70 uppercase outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
+        <CollapsibleTrigger className="group/automations flex h-6 cursor-pointer items-center gap-1 rounded-md px-1 section-label outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
           <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]/automations:rotate-90" />
           Automations
         </CollapsibleTrigger>
