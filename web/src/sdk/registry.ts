@@ -561,7 +561,7 @@ export function compactTools(
 ):
   | {
       keeps: CompactCallTest
-      thread?: (row: CompactRow, docs: CompactDocs) => boolean
+      thread?: (row: CompactRow, docs: CompactDocs) => boolean | 'hidden'
       summary?: {
         extension: string
         version: number
@@ -618,9 +618,9 @@ export function compactTools(
         }
       }),
     thread: matching.some(({ compact }) => compact.thread)
-      ? (row, docs) =>
-          asking(row) ||
-          matching.some(({ name, compact }) => {
+      ? (row, docs) => {
+          if (asking(row)) return true
+          const verdicts = matching.map(({ name, compact }) => {
             try {
               return compact.thread?.(row, docs) ?? false
             } catch (error) {
@@ -629,6 +629,11 @@ export function compactTools(
               return true
             }
           })
+          // Hidden only when every facet says so: a row any facet shows counts in its stretch.
+          return (
+            verdicts.includes(true) || (verdicts.every((v) => v === 'hidden') ? 'hidden' : false)
+          )
+        }
       : undefined,
     summary: matching.flatMap(({ name, version, compact }) =>
       compact.summary ? [{ extension: name, version, component: compact.summary }] : [],

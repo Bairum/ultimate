@@ -200,9 +200,10 @@ export interface CompactContribution {
   docs?: readonly string[]
   /**
    * Rows that are the conversation the reader follows, such as @ultimate's messages to the user: everything between two of
-   * them recedes into one faded stretch. A row is a stored entry with the visible calls it shows.
+   * them recedes into one faded stretch. A row is a stored entry with the visible calls it shows; `hidden` marks one that
+   * renders nothing, so a stretch of only those shows no line.
    */
-  thread?: (row: CompactRow, docs: CompactDocs) => boolean
+  thread?: (row: CompactRow, docs: CompactDocs) => boolean | 'hidden'
   /** The line a receded stretch shows; the first matching facet's wins, an update count otherwise. */
   summary?: ComponentType<CompactSummaryProps>
 }

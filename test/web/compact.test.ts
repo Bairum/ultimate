@@ -14,6 +14,7 @@ import {
   windowKey,
 } from '../../web/src/app/compact.ts'
 import type { CompactPart, WorkRun } from '../../web/src/app/compact.ts'
+import { threadRow } from '../../extensions/messages/data.tsx'
 
 let nextId = 1
 const entry = (kind: string, message?: object, data?: object) =>
@@ -255,5 +256,20 @@ describe('folded groups', () => {
     expect(ids.map((row) => ('between' in row ? row.between.map(({ id }) => id) : row.id))).toEqual(
       [[1], 2, [3, 4], 5, [6]],
     )
+  })
+
+  it("folds no stretch made only of rows that render nothing, such as the user's hidden answers", () => {
+    // @ultimate's answer, the hidden note carrying the user's answers, then the user's next input: no empty line between.
+    nextId = 1
+    const rows = [
+      assistant('stop', text('I can ask you directly.')),
+      entry('board.answered'),
+      user('next'),
+    ].map((value) => ({ entry: value }))
+    const thread = (row: CompactPart) => threadRow({ entry: row.entry, calls: [] }, undefined)
+    expect(groupBetween(rows, thread).some((row) => 'between' in row)).toBe(false)
+    // With a row that shows, the stretch folds with the hidden one inside it.
+    const shown = [rows[0], rows[1], { entry: entry('lineage.note') }, rows[2]]
+    expect(groupBetween(shown, thread).filter((row) => 'between' in row)).toHaveLength(1)
   })
 })

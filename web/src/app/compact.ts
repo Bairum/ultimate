@@ -221,22 +221,32 @@ export interface BetweenGroup<Row> {
 /**
  * `rows` with each stretch between two `thread` rows (and before the first, and after the last) folded into one group:
  * the conversation reads as its thread, the rest receding between. Only a whole row can be thread; runs of work and
- * groups never are.
+ * groups never are. A `hidden` row renders nothing: a stretch of only those stays as its rows, so no empty line shows.
  */
 export function groupBetween<Row extends object>(
   rows: readonly Row[],
-  thread: (row: Row) => boolean,
+  thread: (row: Row) => boolean | 'hidden',
 ): (Row | BetweenGroup<Row>)[] {
   const grouped: (Row | BetweenGroup<Row>)[] = []
   let stretch: Row[] = []
-  for (const row of rows) {
-    if (thread(row)) {
-      if (stretch.length) grouped.push({ between: stretch })
-      stretch = []
-      grouped.push(row)
-    } else stretch.push(row)
+  let shows = false
+  const flush = () => {
+    if (shows) grouped.push({ between: stretch })
+    else grouped.push(...stretch)
+    stretch = []
+    shows = false
   }
-  if (stretch.length) grouped.push({ between: stretch })
+  for (const row of rows) {
+    const verdict = thread(row)
+    if (verdict === true) {
+      flush()
+      grouped.push(row)
+    } else {
+      stretch.push(row)
+      if (verdict === false) shows = true
+    }
+  }
+  flush()
   return grouped
 }
 
