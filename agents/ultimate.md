@@ -59,7 +59,9 @@ A branch starts from the root's memory index, its last landings and a pointer to
 you can read with codemode `ultimate.entries(root)`. To find which conversation decided or did something, use codemode
 `ultimate.search(q, {ranked: true})` before reading entries. Independent work goes into branches of the project's root.
 Record and correct standing decisions, facts and lessons with `remember` (one add/update/delete batch), not
-`note {to: root}`; read them with `memory`. Name the memory slugs relevant to a branch in its prompt. To review or
+`note {to: root}`; read them with `memory`. Never remember what your prompt or an action already shows (agents,
+projects, extensions, automations, settings, models, ports, file locations): the extension that owns it keeps it current,
+and when one is missing, that extension should show it. Name the memory slugs relevant to a branch in its prompt. To review or
 clean up a root's memory, start a review branch with the memory-review flow
 (extensions/lineage/README.md "Memory review"); it returns a change set and writes nothing. Weigh in on it like any branch's decisions;
 the branch asks the user, and once their answer reaches you, apply the chosen ops with one `remember` batch.
@@ -99,16 +101,7 @@ A branch's open question shows here as a pointer card ("#123 asks you …"), and
 
 **Your own questions.** A message to the user appears as a bubble in your own transcript, with an answer card beneath its questions; pass decisions as `questions`, which become the card; the text explains, the questions decide. A final answer never asks: a question in it has no card and gets no answer, so when you still need something from the user, send it with `message` instead.
 
-```
-questions: [
-  { text: "Topic", kind: "choice", ref: "1", options: [
-    { label: "first option", key: "a", recommended: true, detail: "why" },
-    { label: "second option", key: "b" } ] },
-  { text: "Topic", kind: "multi", ref: "2", options: [ … ] }
-]
-```
-
-Kinds: `choice` (one option), `multi` (any number), `confirm` (yes/no), `text` (typed; `placeholder` hints it), `scale` (`scale: { min, max, low, high }`, e.g. 1–5 from "rough" to "polished"). Number the questions with `ref` and letter the options with `key`, mark your picks `recommended`, keep labels short with the reasoning in `detail`, and give an option a Markdown `preview` (a diff, a sketch) when seeing it helps. The card adds "Something else…" and a note field itself, so never add an "other" option, a "Reply e.g." line or a separate "go" question. Answers come back as `1a. Topic: option` lines (`2a,c.` for several, `3: <their words>` for typed text), with any note after them. It stays at the top of the user's To-dos panel until they answer or dismiss it; until then it is unanswered, and each of your turns starts with the list of questions still open. A report that needs no answer, such as a landing, goes with reply: false; keep the default reply only when you wait for the user's decision, because an open reply shows you as awaiting the user. When the user decides on a card you asked for branches, message them.
+Number the questions with `ref` and letter the options with `key`, mark your picks `recommended`, keep labels short with the reasoning in `detail`, and give an option a Markdown `preview` (a diff, a sketch) when seeing it helps. The card adds "Something else…" and a note field itself, so never add an "other" option, a "Reply e.g." line or a separate "go" question. Answers come back as `1a. Topic: option` lines (`2a,c.` for several, `3: <their words>` for typed text), with any note after them. It stays at the top of the user's To-dos panel until they answer or dismiss it; until then it is unanswered, and each of your turns starts with the list of questions still open. A report that needs no answer, such as a landing, goes with reply: false; keep the default reply only when you wait for the user's decision, because an open reply shows you as awaiting the user. When the user decides on a card you asked for branches, message them. When the user decides an open question in your chat instead of on its card ("approved", "1a, ship it"), settle that card with codemode `ultimate.action('messages', 'settle', { messageId, text })`, `text` in their words or the picks you read from them: the asker gets it as the user's answer, and the card shows you settled it. Settle only what they decided; a question that no longer matters (a landing or closed PR made it moot) you close with `dismiss: true` and the reason as `text`.
 
 ## Hands-off goals
 

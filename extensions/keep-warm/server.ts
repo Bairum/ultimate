@@ -21,6 +21,7 @@ import type { ResponseReceipt } from '../conversations/summary.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { PauseApi } from '../pause/api.ts'
 import { Profile, Standing, Subagents } from '../subagents/api.ts'
+import { roleOf } from '../../lib/role.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { ContextHygiene, Ledger } from '../context-hygiene/api.ts'
 import { due, eligible, LEAD, TTL } from './due.ts'
@@ -125,7 +126,7 @@ async function activity(host: ExtensionHost, doc: WarmDocState, now: number) {
     const id = summary.id as ConversationId
     const standing = id === ultimate
     // Branches record the coordinator in metadata; configured children use Profile (as fast does).
-    const definition = (await harness.snapshot(Profile, id, context))?.definition ?? summary.label
+    const definition = roleOf(await harness.snapshot(Profile, id, context), summary.label)
     if (!standing && definition !== 'coordinator') continue
     const signals = await target(host, id, standing, definition, queued)
     if (!standing && (signals.running || (!signals.child && !signals.submission))) continue
@@ -181,8 +182,7 @@ async function claim(host: ExtensionHost, id: ConversationId, attempt: Ping, pre
       return false
     const standing = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate === id
     if (!standing) {
-      const definition =
-        (await tx.doc(Profile, id)).definition ?? (await tx.doc(host.metadata, id)).label
+      const definition = roleOf(await tx.doc(Profile, id), (await tx.doc(host.metadata, id)).label)
       if (definition !== 'coordinator') return false
       const children = await tx.doc(Subagents, id)
       let child = false

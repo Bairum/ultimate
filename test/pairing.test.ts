@@ -6,6 +6,7 @@ import type { PairingOpener } from '../server/request-security.ts'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { Messages } from '../extensions/messages/api.ts'
+import { Standing } from '../extensions/subagents/api.ts'
 import { context } from '../server/harness.ts'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 
@@ -156,6 +157,53 @@ it('accepts the real messages/remote HTTP action without browser headers or a co
     text: 'A peer update',
     remote: { key: 'peer-http', project: 'peer', machine: 'test' },
   })
+})
+
+// Settling once trusted the conversationId an HTTP caller named, so an unpaired script naming @ultimate answered the
+// user's question for them. Only @ultimate's own tool calls settle; the user answers on the card.
+it('refuses messages/settle over HTTP, even naming @ultimate with a paired cookie', async () => {
+  const userHome = await temp()
+  const projectRoot = join(userHome, 'project')
+  await mkdir(projectRoot)
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    home: join(userHome, 'state'),
+    userHome,
+  })
+  servers.push(server)
+  const asker = await server.harness.createConversation(
+    { ownership: { kind: 'ownerless' } },
+    context,
+  )
+  await server.harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = server.root.id
+    ;(await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.push({
+      id: 999,
+      from: asker.id,
+      to: 'user',
+      text: 'Ship it?',
+      at: Date.now(),
+      reply: true,
+      state: 'delivered',
+    })
+  }, context)
+  const args = { messageId: 999, text: 'Yes, ship it' }
+  const unpaired = await fetch(server.url + '/api/extensions/messages/actions/settle', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: server.url },
+    body: JSON.stringify({ conversationId: server.root.id, args }),
+  })
+  expect(unpaired.status).toBe(500)
+  expect(
+    await post(server, '/api/extensions/messages/actions/settle', {
+      conversationId: server.root.id,
+      args,
+    }),
+  ).toEqual({ status: 500, data: { error: "Only @ultimate settles the user's questions" } })
+  const log = await server.harness.snapshot(Messages, ROOT_CONVERSATION_ID, context)
+  expect(log?.messages.find((message) => message.id === 999)?.state).toBe('delivered')
+  expect(log?.messages.some((message) => message.re === 999)).toBe(false)
 })
 
 it('does not serve private config or the pairing key through Vite while serving user extension assets', async () => {

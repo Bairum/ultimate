@@ -54,6 +54,7 @@ vi.mock('@/sdk', () => ({
     refetch: () => Promise.resolve(undefined),
   }),
   useCommands: () => [],
+  useConversationSummary: () => undefined,
   useConversations: () => [],
   useExtensionUiState: <T>(key: string, initial: T) => [
     key === 'expanded' ? shell.expanded : initial,

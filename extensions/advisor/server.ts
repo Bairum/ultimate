@@ -15,6 +15,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { updateSettings, userSettingsPath } from '../../lib/settings.ts'
 import { Standing, Profile } from '../subagents/api.ts'
+import { roleOf } from '../../lib/role.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { ClassifyApi } from '../classify/api.ts'
 import { Gate } from '../messages/api.ts'
@@ -193,8 +194,10 @@ export default function advisor(host: ExtensionHost) {
     const definition =
       id === standing?.ultimate
         ? 'ultimate'
-        : ((await host.harness().snapshot(Profile, id, context))?.definition ??
-          host.conversations().find((c) => c.id === id)?.label)
+        : roleOf(
+            await host.harness().snapshot(Profile, id, context),
+            host.conversations().find((c) => c.id === id)?.label,
+          )
     if (!ROLES.includes(definition as Role)) return undefined
     const role = definition as Role
     if (!view.effective.roles?.[role]?.enabled) return undefined

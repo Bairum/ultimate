@@ -9,6 +9,7 @@ import {
 } from '../extensions/keep-warm/due.ts'
 import type { Activity } from '../extensions/keep-warm/due.ts'
 import * as keepWarm from '../extensions/keep-warm/server.ts'
+import { roleOf } from '../lib/role.ts'
 
 const now = Date.parse('2026-10-24T12:00:00Z')
 const minutes = (count: number) => count * 60_000
@@ -108,6 +109,14 @@ it('warms only idle coordinators waiting on a running child or pending submissio
   expect(due({ ...base, child: true, paused: true })).toBe(false)
   expect(due({ ...base, child: true, provider: 'openai' })).toBe(false)
   expect(due({ ...base, child: true, provider: 'claude-code' })).toBe(true)
+})
+
+// A child made on the fly with label `coordinator` was warmed and advised as one: role checks fell back to its label.
+it('gives an agent made on the fly no role, whatever its label', () => {
+  expect(roleOf({ adhoc: true }, 'coordinator')).toBeUndefined()
+  expect(roleOf({}, 'coordinator')).toBe('coordinator')
+  expect(roleOf({ definition: 'worker' }, 'coordinator')).toBe('worker')
+  expect(roleOf(undefined, 'coordinator')).toBe('coordinator')
 })
 
 it('renews only once per cache window, about 55 minutes after a successful ping', () => {
