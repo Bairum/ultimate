@@ -99,3 +99,22 @@ it('fetches one asset once whatever host names frames give it, and maps a bounde
   await sourceFrames(many.join('\n'), fetchAssets('http://host'))
   expect(requested).toHaveLength(8)
 })
+
+// Error reports in the browser map frames too (web/src/app/boundary.tsx), where Node's Buffer does not exist.
+it('reads an asset without Node APIs and drops one over 32 MiB', async () => {
+  vi.stubGlobal('Buffer', undefined)
+  const body = (mib: number) =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < mib; i++) controller.enqueue(new Uint8Array(1024 * 1024).fill(97))
+        controller.close()
+      },
+    })
+  vi.stubGlobal(
+    'fetch',
+    async (url: URL | string) => new Response(body(String(url).includes('big') ? 33 : 2)),
+  )
+  const read = fetchAssets('http://host')
+  expect((await read('http://host/assets/ok.js'))?.length).toBe(2 * 1024 * 1024)
+  expect(await read('http://host/assets/big.js')).toBeUndefined()
+})

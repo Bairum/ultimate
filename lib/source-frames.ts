@@ -81,17 +81,20 @@ async function readAsset(url: string) {
     // A redirect is not followed: the asset could send this server to any address (#95583).
     const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(5000) })
     if (!response.ok || !response.body) return undefined
-    const chunks: Uint8Array[] = []
+    // Runs in the browser too (web/src/app/boundary.tsx): a reader and TextDecoder, no Node Buffer.
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let text = ''
     let size = 0
-    for await (const chunk of response.body) {
-      size += chunk.byteLength
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+      size += chunk.value.byteLength
       if (size > MAX_BYTES) {
-        await response.body.cancel()
+        await reader.cancel()
         return undefined
       }
-      chunks.push(chunk)
+      text += decoder.decode(chunk.value, { stream: true })
     }
-    return Buffer.concat(chunks).toString('utf8')
+    return text + decoder.decode()
   } catch {
     return undefined // Unreachable or timed out: the frame stays as it is.
   }
