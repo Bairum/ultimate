@@ -138,17 +138,20 @@ export const previewBranch = (home: string) =>
 /**
  * Git config for the previewed repository: every push goes to a transport that does not exist (`pushInsteadOf`, which
  * `--no-verify` cannot skip), and a reference-transaction hook refuses any change to a branch or tag outside the
- * preview's own `ultimate/<hash>-` branches.
+ * preview's own `ultimate/<hash>-` branches. Git skips `pushInsteadOf` for an explicit `pushurl`, so each of `remotes`
+ * has its push URLs reset to none (#95583).
  */
-export function guardConfig(branch: string) {
+export function guardConfig(branch: string, remotes: string[]) {
   const own = ` refs/heads/${branch.slice(0, branch.lastIndexOf('-') + 1)}`
   const refs = `[ "$1" != prepared ] || ! grep -E ' refs/(heads|tags)/' | grep -qvF '${own}' || { echo 'A preview moves only its own branches.' >&2; exit 1; } #`
+  const quote = (value: string) => value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')
   return [
     '[url "ultimate-preview-never-pushes://"]',
     '\tpushInsteadOf =',
+    ...remotes.flatMap((remote) => [`[remote "${quote(remote)}"]`, '\tpushurl =']),
     '[hook "ultimate-preview"]',
     '\tevent = reference-transaction',
-    `\tcommand = "${refs.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`,
+    `\tcommand = "${quote(refs)}"`,
     '',
   ].join('\n')
 }
@@ -375,7 +378,8 @@ async function previewGit(project: string, home: string) {
   if (!(await git(project, 'branch', '--list', branch))) await git(project, 'branch', branch)
   const common = await git(project, 'rev-parse', '--path-format=absolute', '--git-common-dir')
   const config = join(home, 'preview.gitconfig')
-  await writeFile(config, guardConfig(branch))
+  const remotes = (await git(project, 'remote')).split('\n').filter(Boolean)
+  await writeFile(config, guardConfig(branch, remotes))
   return { common: await realpath(common), branch, config }
 }
 

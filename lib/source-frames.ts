@@ -58,7 +58,9 @@ export function fetchAssets(origin: string) {
     try {
       const target = new URL(url)
       if (!target.pathname.startsWith('/assets/')) return undefined
+      // A redirect is not followed: the asset could send this server to any address (#95583).
       const response = await fetch(new URL(target.pathname + target.search, origin), {
+        redirect: 'manual',
         signal: AbortSignal.timeout(5000),
       })
       return response.ok ? await response.text() : undefined

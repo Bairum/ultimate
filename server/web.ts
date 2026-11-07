@@ -302,15 +302,20 @@ export async function createWeb(options: {
     }
   })
 
-  /** `path` in bundle `id`, when it is a file there. */
+  /**
+   * `path` in bundle `id`, when it is a file there. Checked by real path too: a symlink inside the bundle must not serve
+   * a file outside it (#95583).
+   */
   async function bundled(id: string, path: string) {
     const base = join(folder, id)
     const full = resolve(base, '.' + path)
     if (!inside(full, base)) return undefined
-    return stat(full).then(
-      (info) => (info.isFile() ? full : undefined),
-      () => undefined, // Not in this bundle.
-    )
+    try {
+      const [real, realBase] = await Promise.all([realpath(full), realpath(base)])
+      return inside(real, realBase) && (await stat(real)).isFile() ? real : undefined
+    } catch {
+      return undefined // Not in this bundle.
+    }
   }
 
   return {
@@ -339,9 +344,11 @@ export async function createWeb(options: {
       }
       const path = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname)
       let found: string | undefined
+      let foundIn: string | undefined
       if (path !== '/' && path !== '/index.html')
         for (const id of [current.id, ...retired.keys()]) {
           found = await bundled(id, path)
+          foundIn = id
           if (found) break
         }
       if (!found) {
@@ -362,21 +369,19 @@ export async function createWeb(options: {
         response.end(html)
         return
       }
-      const gzip =
-        /\bgzip\b/.test(request.headers['accept-encoding'] ?? '') &&
-        (await stat(found + '.gz').then(
-          () => true,
-          () => false, // Small files are not compressed.
-        ))
+      const gzipped =
+        /\bgzip\b/.test(request.headers['accept-encoding'] ?? '') && foundIn !== undefined
+          ? await bundled(foundIn, path + '.gz') // Small files are not compressed.
+          : undefined
       response.writeHead(200, {
         'Content-Type': types[extname(found)] ?? 'application/octet-stream',
         // Asset names carry their content hash; the other public files can change in place.
         'Cache-Control': path.startsWith('/assets/')
           ? 'public, max-age=31536000, immutable'
           : 'no-cache',
-        ...(gzip ? { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' } : {}),
+        ...(gzipped ? { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' } : {}),
       })
-      createReadStream(gzip ? found + '.gz' : found)
+      createReadStream(gzipped ?? found)
         .on('error', () => response.destroy())
         .pipe(response)
     },

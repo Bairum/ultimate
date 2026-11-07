@@ -40,6 +40,9 @@ export default function attachments(host: Pick<ExtensionHost, 'home' | 'onOpen' 
   return { name: 'attachments' }
 }
 
+/** Uploading writes into the project's home: only a paired browser may (#95583). */
+export const userActions = ['upload']
+
 export const actions = {
   /** `{ name, data }`: a file the composer attached, as base64; stored under a fresh folder, its path returned. */
   upload: implementAction(UploadAction, async (args, { host }) => {

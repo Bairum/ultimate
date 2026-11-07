@@ -12,7 +12,7 @@ import { expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../../server/harness.ts'
 import { Metadata } from '../../server/metadata.ts'
 import { emit } from '../../server/events.ts'
-import instance, { actions } from '../../extensions/instance/server.ts'
+import instance, { actions, guardConfig } from '../../extensions/instance/server.ts'
 import subagents from '../../extensions/subagents/server.ts'
 import { Subagents } from '../../extensions/subagents/api.ts'
 import workspaceExtension from '../../extensions/workspaces/server.ts'
@@ -304,6 +304,38 @@ it('selects shared, isolated main and owned child checkouts with the main projec
     await f.close()
   }
 }, 120000)
+// The guard's empty pushInsteadOf alone let a remote with an explicit pushurl push (#95583).
+it('keeps a guarded repository from pushing through an explicit pushurl', async () => {
+  const root = await temp()
+  try {
+    const remote = join(root, 'remote.git')
+    const repo = join(root, 'repo')
+    await git(root, 'init', '-q', '--bare', remote)
+    await git(root, 'init', '-q', '-b', 'main', repo)
+    await git(
+      repo,
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.invalid',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'x',
+    )
+    await git(repo, 'remote', 'add', 'origin', 'https://example.invalid/r.git')
+    await git(repo, 'config', 'remote.origin.pushurl', remote)
+    const config = join(root, 'guard.gitconfig')
+    await writeFile(config, guardConfig('ultimate/abc123-preview', ['origin']))
+    await expect(
+      git(repo, '-c', `include.path=${config}`, 'push', 'origin', 'main'),
+    ).rejects.toThrow(/ultimate-preview-never-pushes/)
+    expect(await git(remote, 'for-each-ref')).toBe('')
+  } finally {
+    await removeTemp(root)
+  }
+})
 it('previews a workspace of another project on the host Ultimate', async () => {
   const f = await fixture({ foreign: true })
   try {

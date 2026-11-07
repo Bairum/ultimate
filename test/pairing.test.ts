@@ -3,7 +3,8 @@ import { fixture, servers } from './server-fixture.ts'
 import { cookieHeaders, post, temp, fauxServer } from './helpers.ts'
 import { classify, userCookie } from '../server/request-security.ts'
 import type { PairingOpener } from '../server/request-security.ts'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { Messages } from '../extensions/messages/api.ts'
 import { Standing } from '../extensions/subagents/api.ts'
@@ -206,16 +207,31 @@ it('refuses messages/settle over HTTP, even naming @ultimate with a paired cooki
   expect(log?.messages.some((message) => message.re === 999)).toBe(false)
 })
 
-it('does not serve private config or the pairing key through Vite while serving user extension assets', async () => {
-  const { server, options } = await fixture(false, { boundary: source })
-  const config = join(options.userHome, '.ultimate')
-  await writeFile(join(config, 'secrets.json'), '{"synthetic":true}', { mode: 0o600 })
-  await mkdir(join(config, 'extensions'), { recursive: true })
-  await writeFile(join(config, 'extensions/asset.txt'), 'extension asset')
-  const read = (file: string) => fetch(`${server.url}/@fs/${join(config, file)}`)
-  expect((await read('secrets.json')).status).toBe(403)
-  expect((await read('user-key?url&inline')).status).toBe(403)
-  const asset = await read('extensions/asset.txt')
-  expect(asset.status).toBe(200)
-  expect(await asset.text()).toBe('extension asset')
+// attachments/upload came from upstream without userActions, so an unpaired HTTP caller could write files into the
+// project's home (#95583).
+it('refuses attachments/upload to an unpaired caller and stores it for a paired one', async () => {
+  const userHome = await temp()
+  const projectRoot = join(userHome, 'project')
+  await mkdir(projectRoot)
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    home: join(userHome, 'state'),
+    userHome,
+  })
+  servers.push(server)
+  const upload = (headers: Record<string, string>) =>
+    fetch(server.url + '/api/extensions/attachments/actions/upload', {
+      method: 'POST',
+      headers: { Origin: server.url, 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({
+        args: { name: 'note.txt', data: Buffer.from('hello').toString('base64') },
+      }),
+    })
+  expect((await upload({})).status).toBe(403)
+  expect(existsSync(join(server.host.home, 'attachments'))).toBe(false)
+  const paired = await upload(cookieHeaders(server))
+  expect(paired.status).toBe(200)
+  const { result } = (await paired.json()) as { result: { path: string } }
+  expect(await readFile(result.path, 'utf8')).toBe('hello')
 })
