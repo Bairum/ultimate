@@ -1,3 +1,5 @@
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { afterEach, expect, it, vi } from 'vitest'
 import { fetchAssets, sourceFrames } from '../lib/source-frames.ts'
 
@@ -61,4 +63,22 @@ it("fetches only its own origin's bundle assets", async () => {
   expect(requested).toEqual([])
   const text = 'Error\n    at x (http://[bad]/assets/x.js:1:1)'
   expect(await sourceFrames(text, read)).toBe(text)
+})
+
+// An asset that redirected made this server follow it to any address, such as localhost or the tailnet (#95583).
+it('does not follow an asset redirect', async () => {
+  const hits: string[] = []
+  const server = createServer((request, response) => {
+    hits.push(request.url ?? '')
+    if (request.url === '/assets/x.js') response.writeHead(302, { Location: '/private' })
+    response.end('private')
+  })
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
+  try {
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    expect(await fetchAssets(origin)(`${origin}/assets/x.js`)).toBeUndefined()
+    expect(hits).toEqual(['/assets/x.js'])
+  } finally {
+    await new Promise((done) => server.close(done))
+  }
 })

@@ -61,7 +61,10 @@ async function fixture({ foreign = false } = {}) {
   await writeFile(
     join(source, '.ultimate/settings.json'),
     JSON.stringify({
-      isolates: { worktree: { setup: [`ln -s '${join(checkout, 'node_modules')}' node_modules`] } },
+      // -fn: the fork's clone already copied the source's node_modules link; a plain -s nested a link inside it.
+      isolates: {
+        worktree: { setup: [`ln -sfn '${join(checkout, 'node_modules')}' node_modules`] },
+      },
     }),
   )
   await writeFile(
