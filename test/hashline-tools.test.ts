@@ -11,7 +11,7 @@ import {
 } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest'
-import { Type } from '@earendil-works/pi-ai'
+import { bool, obj, opt, str } from '@earendil-works/pi-schema'
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -54,11 +54,11 @@ beforeAll(async () => {
         defineTool({
           name: 'nested',
           description: 'test nested rules',
-          parameters: Type.Object({
-            input: Type.String(),
-            read: Type.Boolean(),
-            direct: Type.Optional(Type.Boolean()),
-            parallel: Type.Optional(Type.Boolean()),
+          parameters: obj({
+            input: str(),
+            read: bool(),
+            direct: opt(bool()),
+            parallel: opt(bool()),
           }),
           async execute(args, api, ctx) {
             if (args.parallel) {

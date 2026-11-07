@@ -15,7 +15,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { ToolResultMessage } from '@earendil-works/pi-ai'
 import type { ToolHooks, HookApi } from '@earendil-works/pi-durable'
-import { Type } from '@earendil-works/pi-ai'
+import { bool, num, obj, opt, str } from '@earendil-works/pi-schema'
 import { expect, it, vi } from 'vitest'
 import type { ExtensionHost } from '../server/extensions.ts'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
@@ -58,12 +58,12 @@ it.each(['success', 'timeout', 'long lines'])(
           defineTool({
             name: 'bash',
             description: 'Fake spilled bash output',
-            parameters: Type.Object({}),
-            structuredOutputSchema: Type.Object({
-              output: Type.String(),
-              truncated: Type.Boolean(),
-              fullOutputPath: Type.Optional(Type.String()),
-              exitCode: Type.Number(),
+            parameters: obj({}),
+            structuredOutputSchema: obj({
+              output: str(),
+              truncated: bool(),
+              fullOutputPath: opt(str()),
+              exitCode: num(),
             }),
             outputLimits: { retain: 'tail' },
             execute: async (_args, api) => {

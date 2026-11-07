@@ -63,8 +63,7 @@ async function onboardingFixture() {
   }
   const enabled = (name: string) =>
     server.extensions.info().find((entry) => entry.name === name)?.enabled
-  const web = async () =>
-    Object.keys((await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders)
+  const web = async () => server.web.facets()
   const tools = async () => (await server.root.agent(context)).tools.map((tool) => tool.name)
   return {
     home,
@@ -301,8 +300,8 @@ it.concurrent('offers setup only to named definitions, refuses inapplicable card
         context,
       )
       await server.harness.waitForIdle(context)
-      const view = await conversation.viewState(context)
-      return view.value.entries.findLast((entry) => entry.kind === 'pi.tool-result')!
+      const view = await conversation.context(context)
+      return view.entries.findLast((entry) => entry.kind === 'pi.tool-result')!
     }
     expect(JSON.stringify(await run('setup', { card: 'project' }))).toContain('undecided')
     await post(server, '/api/extensions/onboarding/actions/decide', { args: { local: false } })
@@ -338,7 +337,7 @@ it.concurrent('offers setup only to named definitions, refuses inapplicable card
     )
     expect(receipts.map((receipt) => receipt.status)).toEqual([200, 200])
     await server.harness.waitForIdle(context)
-    const entries = (await conversation.viewState(context)).value.entries.filter(
+    const entries = (await conversation.context(context)).entries.filter(
       (entry) => entry.kind === 'onboarding.choice',
     )
     expect(entries).toHaveLength(1)
@@ -379,7 +378,7 @@ it.concurrent('offers setup only to named definitions, refuses inapplicable card
     }
     expect(server.system.current().project.decision).toBe(true)
     expect(
-      (await conversation.viewState(context)).value.entries.filter(
+      (await conversation.context(context)).entries.filter(
         (entry) =>
           entry.kind === 'onboarding.choice' &&
           (entry.data as { toolCallId: string }).toolCallId === retry.toolCallId,
@@ -396,7 +395,7 @@ it.concurrent('offers setup only to named definitions, refuses inapplicable card
       ).toBe(200)
     await server.harness.waitForIdle(context)
     expect(
-      (await conversation.viewState(context)).value.entries.filter(
+      (await conversation.context(context)).entries.filter(
         (entry) =>
           entry.kind === 'onboarding.choice' &&
           (entry.data as { toolCallId: string }).toolCallId === retry.toolCallId,

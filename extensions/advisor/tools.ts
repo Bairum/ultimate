@@ -1,7 +1,7 @@
 import { constants } from 'node:fs'
 import { open, realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute, relative, resolve } from 'node:path'
-import { Type } from '@earendil-works/pi-ai'
+import { int, obj, opt, str } from '@earendil-works/pi-schema'
 import { exec } from '../../lib/exec.ts'
 
 export const OUTPUT_LIMIT = 8192
@@ -115,19 +115,19 @@ export const toolDefinitions = [
     name: 'advisor_read',
     description:
       'Read a checkout file. Secrets, gitignored files and paths outside the checkout are refused.',
-    parameters: Type.Object({
-      path: Type.String(),
-      offset: Type.Optional(Type.Integer({ minimum: 1 })),
-      limit: Type.Optional(Type.Integer({ minimum: 1 })),
+    parameters: obj({
+      path: str(),
+      offset: opt(int({ minimum: 1 })),
+      limit: opt(int({ minimum: 1 })),
     }),
   },
   {
     name: 'advisor_grep',
     description: 'Search the checkout, returning at most 50 matches.',
-    parameters: Type.Object({
-      pattern: Type.String(),
-      path: Type.Optional(Type.String()),
-      glob: Type.Optional(Type.String()),
+    parameters: obj({
+      pattern: str(),
+      path: opt(str()),
+      glob: opt(str()),
     }),
   },
 ]

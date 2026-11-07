@@ -2,7 +2,7 @@ import { chmod, stat } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import type { Context } from '@earendil-works/chord'
 import { withCancel } from '@earendil-works/chord/context'
-import { Type } from '@earendil-works/pi-ai'
+import { bool, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { defineExtension, defineTool, wrapTool } from '@earendil-works/pi-durable'
 import type {
   ToolExecutionApi,
@@ -229,7 +229,7 @@ function editTool(host: Pick<ExtensionHost, 'harness'>) {
   return defineTool({
     name: 'edit',
     description: editDescription,
-    parameters: Type.Object({ input: Type.String() }),
+    parameters: obj({ input: str() }),
     executionMode: 'sequential',
     outputLimits: { maxBytes: 128 * 1024, maxLines: 3000 },
     async execute({ input }, api, context): Promise<ToolExecutionResult> {
@@ -434,12 +434,12 @@ const grep = defineTool({
   name: 'grep',
   description:
     'Search with ripgrep. Results use [path#TAG] headers and N:TEXT rows, ready for hashline edits. Narrow the pattern if capped.',
-  parameters: Type.Object({
-    pattern: Type.String(),
-    path: Type.Optional(Type.String()),
-    glob: Type.Optional(Type.String()),
-    ignoreCase: Type.Optional(Type.Boolean()),
-    context: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
+  parameters: obj({
+    pattern: str(),
+    path: opt(str()),
+    glob: opt(str()),
+    ignoreCase: opt(bool()),
+    context: opt(int({ minimum: 0, maximum: 10 })),
   }),
   outputLimits: { maxBytes: 128 * 1024, maxLines: 3000 },
   async execute(args, api, context) {

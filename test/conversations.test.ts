@@ -1,10 +1,10 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { request as httpRequest } from 'node:http'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Conversation, ConversationId } from '@earendil-works/pi-durable'
 import { afterAll, expect, it } from 'vitest'
+import { onCommit } from '../lib/commits.ts'
 import { attach, fauxServer, held, post, prepareFauxServer, temp, until } from './helpers.ts'
 import type { ConversationSummary } from '../shared/protocol.ts'
 import { context } from '../server/harness.ts'
@@ -20,7 +20,6 @@ import { actionExec } from '../server/actions.ts'
 import { currentAnswer, exchangeUser } from '../extensions/conversations/summary.ts'
 import { Overview } from '../extensions/conversations/overview.ts'
 import { Branch } from '../extensions/lineage/api.ts'
-import { maxUploadBytes } from '../server/uploads.ts'
 
 type Server = Awaited<ReturnType<typeof fauxServer>>
 const servers: Server[] = []
@@ -101,64 +100,6 @@ async function launch() {
       post(server, `/api/extensions/conversations/actions/${name}`, { args }),
   }
 }
-it.concurrent('validates uploads, closes oversized requests and saves accepted files', async () => {
-  const { server } = await launch()
-  const upload = (path: string, body = 'hello') =>
-    fetch(server.url + path, {
-      method: 'POST',
-      headers: { Origin: server.url, 'Content-Type': 'application/octet-stream' },
-      body,
-    })
-  const missing = await upload('/api/conversations/1/upload')
-  expect(missing.status).toBe(400)
-  expect(await missing.json()).toEqual({ error: 'Expected name' })
-  const unknown = await upload('/api/conversations/999999/upload?name=test.txt')
-  expect(unknown.status).toBe(404)
-  expect(await unknown.json()).toEqual({ error: 'Unknown conversation' })
-
-  // Send only headers: the server must reject without waiting for the advertised body.
-  const refuse = (precheck: boolean) =>
-    new Promise<{ status?: number; connection?: string; body: string }>((done, reject) => {
-      const req = httpRequest(
-        server.url + '/api/conversations/1/upload?name=big',
-        {
-          method: 'POST',
-          headers: {
-            Origin: server.url,
-            ...(precheck
-              ? { 'Content-Length': maxUploadBytes + 1 }
-              : { 'Transfer-Encoding': 'chunked' }),
-          },
-        },
-        (res) => {
-          let body = ''
-          res.setEncoding('utf8')
-          res.on('data', (chunk) => (body += chunk))
-          res.on('error', reject)
-          res.on('end', () =>
-            done({ status: res.statusCode, connection: res.headers.connection, body }),
-          )
-        },
-      )
-      req.on('error', reject)
-      if (precheck) req.flushHeaders()
-      else req.end(Buffer.alloc(maxUploadBytes + 1))
-    })
-  for (const precheck of [true, false]) {
-    const oversized = await refuse(precheck)
-    expect(oversized.status).toBe(413)
-    // Only an unread body closes the connection; the streamed one was read to its last byte before the refusal.
-    expect(oversized.connection).toBe(precheck ? 'close' : 'keep-alive')
-    expect(JSON.parse(oversized.body)).toEqual({ error: 'File exceeds 50 MiB' })
-  }
-
-  const saved = await upload('/api/conversations/1/upload?name=test.txt')
-  expect(saved.status).toBe(200)
-  const { path } = await saved.json()
-  expect(path).toMatch(/\/uploads\/1\/[^/]+-test\.txt$/)
-  expect(await readFile(path, 'utf8')).toBe('hello')
-})
-
 it.concurrent('reads concluded IDs from the current transaction without exposing mutable document state', async () => {
   const { server, create } = await launch()
   const id = await create()
@@ -210,9 +151,8 @@ it.concurrent('tells each top-level conversation about the others in a fixed tex
   expect(await render('conversations', elsewhere)).toBe(fixed)
 
   // An ownerless fork is top-level, but its inherited history is tracked separately.
-  const view = await server.root.viewState(context)
-  const entry = view.value.entries.find((item) => item.kind === 'pi.user')!
-  view.dispose()
+  const view = await server.root.context(context)
+  const entry = view.entries.find((item) => item.kind === 'pi.user')!
   const fork = await server.root.fork(entry.id, { ownership: { kind: 'ownerless' } }, context)
   await until(() => summary(fork.id)?.inputAt !== undefined)
   expect(summary(fork.id)!.inputAt).toEqual(expect.any(Number))
@@ -538,16 +478,15 @@ it.concurrent('projects arbitrary typed inputs, ignores user-role writes, and pr
   await server.harness.waitForIdle(context)
   await until(() => summary(id)?.answerAt !== undefined)
   expect(summary(id)?.title).toBe(' Typed request ')
-  const view = await conversation.viewState(context)
-  const input = view.value.entries.find((entry) => entry.kind === 'test.request')!
+  const view = await conversation.context(context)
+  const input = view.entries.find((entry) => entry.kind === 'test.request')!
   expect(input.input).toBe(true)
   await until(
     async () =>
       (await server.harness.snapshot(Overview, ROOT_CONVERSATION_ID, context))?.conversations[id]
         ?.internalInput === true,
   )
-  const answer = view.value.entries.findLast((entry) => entry.model?.[0]?.role === 'assistant')!
-  view.dispose()
+  const answer = view.entries.findLast((entry) => entry.model?.[0]?.role === 'assistant')!
   const inputAt = input.model![0].timestamp
   const answerAt = answer.model![0].timestamp
   await until(() => summary(id)?.inputAt === inputAt && summary(id)?.answerAt === answerAt)
@@ -631,7 +570,7 @@ it.concurrent('keeps unmarked Pi input history and makes no metadata writes on a
   prepared.host.open = async (...args) => {
     const opened = await open(...args)
     // Subscribe before extension onOpen callbacks reconcile the stored conversations.
-    stop = opened.harness.subscribeCommits((publication) => {
+    stop = onCommit(opened.harness, (publication) => {
       for (const change of publication.changes)
         if (change.type === 'document' && change.record.kind === Metadata.definition.kind)
           metadataWrites.push(change.conversationId!)

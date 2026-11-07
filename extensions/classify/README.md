@@ -28,6 +28,8 @@ The result is `{ model, answers, usage: { inputTokens } }`; each answer is discr
 
 Calls forward the supplied abort signal and throw on a missing key, HTTP failure or malformed response envelope / missing or mismatched answer type. There are no retries.
 
+A 402 (out of credits), 401 or 403 pauses the service for 15 minutes: every `ask` throws that error again without a request (cached answers are still served), and a notice names the cause once. A changed key ends the pause at once.
+
 ## Cache and ledger
 
 Answers are cached in `classify-cache.sqlite` in the project home, one row per question keyed by the sha256 of the canonical (sorted-key) JSON of `{ model, state, question }`; the question id is not part of the key. `ask` serves cached answers and sends only the uncached questions, without an HTTP request (or a key) when all are cached; `usage.inputTokens` counts only what was sent. Beyond 200,000 rows the oldest are pruned. Errors are never cached.

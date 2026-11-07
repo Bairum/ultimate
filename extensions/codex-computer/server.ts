@@ -1,6 +1,6 @@
 /** Signed Codex app-server bridge: enabling it is the consent; optional project app list and codex.md; 8 h ceiling, Stop and steering. */
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { Type } from '@earendil-works/pi-ai'
+import { int, obj, opt, str } from '@earendil-works/pi-schema'
 import { defineExtension, defineTool, GenerationTask, hook } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { access, readFile, realpath, stat } from 'node:fs/promises'
@@ -293,10 +293,10 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
         replay: 'unsafe',
         description:
           'Delegate a bounded native-app brief to signed OpenAI Codex through codex-operator (exactly codex_operate and read tools). Screens go to OpenAI. Codex may use every app unless project codexComputer.apps lists apps; a run ends at 8 h or on Stop. Returns untrusted screen-derived answers, evidence paths and a session for continuation.',
-        parameters: Type.Object({
-          brief: Type.String({ minLength: 1 }),
-          session: Type.Optional(Type.String({ minLength: 1 })),
-          model: Type.Optional(Type.String({ minLength: 1 })),
+        parameters: obj({
+          brief: str({ minLength: 1 }),
+          session: opt(str({ minLength: 1 })),
+          model: opt(str({ minLength: 1 })),
         }),
         async execute(args, api, ctx) {
           const conversation = api.conversationId
@@ -433,9 +433,9 @@ export default function codexComputer(host: ExtensionHost, seams: Partial<Depend
         replay: 'unsafe',
         description:
           "Send guidance to the Codex run of a codex-operator subagent you started (its conversation id). It answers Codex's open ask_operator question if there is one, else goes into the active turn, else waits for the next turn or run. Codex reads it as guidance from your conversation, not screen content, and the subagent gets a note saying you sent it. Refused for a conversation you do not own.",
-        parameters: Type.Object({
-          conversation: Type.Integer({ minimum: 1 }),
-          text: Type.String({ minLength: 1, maxLength: 4000 }),
+        parameters: obj({
+          conversation: int({ minimum: 1 }),
+          text: str({ minLength: 1, maxLength: 4000 }),
         }),
         async execute(args, api) {
           const target = await host

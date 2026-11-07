@@ -24,7 +24,7 @@ What Ultimate is and why it exists, in plain words: [danielgriesser.com/ultimate
 - **Specialize it for your project.** Working on a web shop? Ask Ultimate for what makes work on that shop easier: a
   tool that queries the staging catalog, a panel that shows the order pipeline, a reviewer that knows your checkout
   rules, a skill for releases. It writes them as extensions, agents, and skills into `<project>/.ultimate/`, and they
-  hot-reload while you talk.
+  go live while you talk.
 - **Commit them with the project.** `.ultimate/` is part of the repository, so everyone who opens the project gets the
   same specialized agent. Ultimate asks once before it uses a project's setup, because project extensions run code.
 - **One familiar core everywhere.** The conversation, Pi's tools, the model and login, and the way it works are the same
@@ -101,6 +101,15 @@ cd ~/Projects/app && ultimate  # or Ultimate on one of your projects
 - On another machine: `ssh -L 4747:127.0.0.1:4747 <host>`, then open `http://127.0.0.1:4747`. Ultimate only listens on
   loopback.
 
+### Keep up to date
+
+The [Ultimate changelog](https://danielgriesser.com/ultimate/changelog/)
+([RSS](https://danielgriesser.com/ultimate/changelog/rss.xml)) says what landed, week by week, with links to the
+code. A clone that tracks this repository unchanged already gets everything through the update item in the status
+line. For a fork or a customised copy, paste the page's [follow prompt](https://danielgriesser.com/ultimate/changelog/#follow)
+into @ultimate: once a day it checks for new entries, costing nothing on quiet days, and tells you what is worth
+bringing into your copy, changing nothing without your yes. See what's new, pull in what you want; nothing requires it.
+
 ### Recommended models
 
 We recommend running @ultimate on Claude Code Opus 5.5 (`claude-code/claude-opus-5-5`), and ideally the
@@ -114,8 +123,8 @@ account limits, and subscription coverage is not guaranteed. This is a recommend
 ### Terminal status
 
 `pnpm start` / `ultimate` shows a compact live terminal dashboard: the public URL, supervisor/core lifecycle,
-core generation and PID, embedded Vite readiness, registered extension services, and the last event. Routine
-Vite/HMR output updates the dashboard instead of scrolling; warnings and errors remain in scrollback. Redirected
+core generation and PID, web readiness, registered extension services, and the last event. Routine
+Vite output updates the dashboard instead of scrolling; warnings and errors remain in scrollback. Redirected
 output is plain text with no dashboard escape sequences. Detailed, timestamped JSON lines (including routine
 output and diagnostics) are appended to `<state home>/supervisor.log`; this file is not automatically rotated.
 A log-write failure warns once and does not stop supervision.
@@ -185,7 +194,7 @@ stays docked on every surface, and the choice is durable: reloads, other tabs, a
 - "Build a surface for …" — a whole app with its UI, server actions, and the agent docked beside it; switch to it while
   it is being built.
 - "Build a small extension that …" — it reads [extensions/README.md](extensions/README.md), writes
-  `<project>/.ultimate/extensions/<name>/web.tsx`, and the UI hot-reloads in front of you.
+  `<project>/.ultimate/extensions/<name>/web.tsx`, and the UI switches to it in front of you.
 - "Take a screenshot of yourself and tell me what looks off" — it can see and drive its own UI.
 - "Delegate to a worker: …" — subagents run as their own conversations (Agents tab, `open #id`).
 - "Use codemode to check which of your extensions failed to load" — one sandboxed script over its own runtime.

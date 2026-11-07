@@ -152,13 +152,28 @@ export const actions = {
   }),
 }
 
+/**
+ * After a billing (402) or auth (401/403) failure, no request goes out for this long: neither fixes itself between
+ * tool rounds, and callers like phase ask on every round. 15 minutes caps a stuck account at four calls an hour and
+ * still recovers soon after a top-up without a restart; a changed key retries at once.
+ */
+export const cooldownMs = 15 * 60_000
+const rejected: Record<number, string> = {
+  401: 'TypeSafe: API key rejected',
+  402: 'TypeSafe: out of credits',
+  403: 'TypeSafe: API key not allowed',
+}
+
+type Pause = { key: string; until: number; error: string }
+
 export default function classify(host: ExtensionHost) {
+  const pause: { current?: Pause } = {}
   const service: ClassifyService = {
     async ask({ caller, ...request }, signal) {
       const cache = cacheOf(host)
       const started = performance.now()
       try {
-        const result = await answerAll(host, cache, request, signal)
+        const result = await answerAll(host, cache, pause, request, signal)
         cache.use(`ask:${caller}`, {
           ms: performance.now() - started,
           usd: (result.usage.inputTokens * USD_PER_MILLION_INPUT) / 1e6,
@@ -180,6 +195,7 @@ export default function classify(host: ExtensionHost) {
 async function answerAll(
   host: ExtensionHost,
   cache: Cache,
+  pause: { current?: Pause },
   request: { state: JsonValue; questions: Record<string, ClassifyQuestion> },
   signal: AbortSignal,
 ): Promise<ClassifyResult> {
@@ -212,6 +228,8 @@ async function answerAll(
       'Missing TYPESAFE_API_KEY. Enable secrets and add TYPESAFE_API_KEY in the Secrets panel (⌘K → Secrets).',
     )
   }
+  const paused = pause.current
+  if (paused?.key === key && Date.now() < paused.until) throw new Error(paused.error)
   const base = host.modelRuntime.getProvider('typesafe')?.baseUrl ?? 'https://api.typesafe.ai/v1'
   const response = await fetch(`${base.replace(/\/+$/, '')}/systemone`, {
     method: 'POST',
@@ -220,7 +238,13 @@ async function answerAll(
     signal,
   })
   if (!response.ok) {
-    throw new Error(`TypeSafe ${response.status}: ${(await response.text()).slice(0, 1000)}`)
+    const error = `TypeSafe ${response.status}: ${(await response.text()).slice(0, 1000)}`
+    const status = rejected[response.status]
+    if (status) {
+      pause.current = { key, until: Date.now() + cooldownMs, error }
+      host.notice(`${status}; classification paused for ${cooldownMs / 60_000} minutes`)
+    }
+    throw new Error(error)
   }
   const body: unknown = await response.json()
   if (

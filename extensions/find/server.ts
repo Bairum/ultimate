@@ -1,4 +1,4 @@
-import { Type } from '@earendil-works/pi-ai'
+import { arr, obj, opt, str } from '@earendil-works/pi-schema'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import { basename, isAbsolute, relative, resolve } from 'node:path'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -38,21 +38,21 @@ export default function findExtension(host: Pick<ExtensionHost, 'want' | 'projec
         replay: 'safe',
         description:
           'Describe a behaviour in words; get the files and line ranges that implement it, strongest first, with a 0–1 confidence each. Searches the git-visible files under `path` (default: the working directory). Use grep for known strings.',
-        parameters: Type.Object({
-          query: Type.String({
+        parameters: obj({
+          query: str({
             minLength: 1,
             maxLength: 2000,
             description: 'What the code does, in plain language (not a regex).',
           }),
-          keywords: Type.Optional(
-            Type.Array(Type.String({ minLength: 1, maxLength: 200 }), {
+          keywords: opt(
+            arr(str({ minLength: 1, maxLength: 200 }), {
               maxItems: 20,
               description:
                 'Identifiers or terms likely to appear verbatim in the implementation; [] if unsure.',
             }),
           ),
-          path: Type.Optional(
-            Type.String({
+          path: opt(
+            str({
               description: 'A directory or file inside the working directory to search.',
             }),
           ),

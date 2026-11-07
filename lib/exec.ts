@@ -1,8 +1,5 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-
 /** Run a program without a shell: resolves `{ stdout, stderr }`, rejects with them attached to execFile's error. */
-export const exec = promisify(execFile)
+export { execFile as exec } from './spawn.ts'
 
 /**
  * This server's environment for a command run in a project, without the `NODE_ENV=development` Vite's dev server sets

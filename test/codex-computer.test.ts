@@ -5,7 +5,7 @@ import {
   fauxProvider,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
-import { Type } from '@earendil-works/pi-ai'
+import { obj } from '@earendil-works/pi-schema'
 import { createRegistry, defineTool, Harness, MemoryStorage } from '@earendil-works/pi-durable'
 import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-durable'
 import { EventEmitter } from 'node:events'
@@ -178,7 +178,7 @@ async function fixture(apps?: string[], settings: Record<string, unknown> = {}) 
       defineTool({
         name: 'read',
         description: 'Fake read',
-        parameters: Type.Object({}),
+        parameters: obj({}),
         replay: 'safe',
         execute: async () => ({ output: [] }),
       }),
@@ -260,9 +260,8 @@ it('returns a result the durable tool wrapper accepts when the model calls it', 
   await f.harness.waitForIdle(context)
   // Bridgestone #22950: "returned structuredOutput but declares no structuredOutputSchema", reported on every run.
   expect(f.reports).toEqual([])
-  const view = await f.root.viewState(context)
-  const result = view.value.entries.find((entry) => entry.kind === 'pi.tool-result')
-  view.dispose()
+  const view = await f.root.context(context)
+  const result = view.entries.find((entry) => entry.kind === 'pi.tool-result')
   expect(JSON.stringify(result)).toContain('Codex: done')
 })
 const data = (value: { details?: unknown }) => value.details as CodexDetails
