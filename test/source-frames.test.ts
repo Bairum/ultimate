@@ -82,3 +82,20 @@ it('does not follow an asset redirect', async () => {
     await new Promise((done) => server.close(done))
   }
 })
+
+// A page's error text could name many scripts, on many host names, and each was downloaded whole (#95583).
+it('fetches one asset once whatever host names frames give it, and maps a bounded number of scripts', async () => {
+  const requested: string[] = []
+  vi.stubGlobal('fetch', async (url: URL | string) => {
+    requested.push(String(url))
+    return new Response('code')
+  })
+  const read = fetchAssets('http://host')
+  const same = Array.from({ length: 20 }, (_, i) => `at f (http://h${i}.example/assets/a.js:1:1)`)
+  await sourceFrames(same.join('\n'), read)
+  expect(requested).toEqual(['http://host/assets/a.js'])
+  requested.length = 0
+  const many = Array.from({ length: 40 }, (_, i) => `at f (http://host/assets/s${i}.js:1:1)`)
+  await sourceFrames(many.join('\n'), fetchAssets('http://host'))
+  expect(requested).toHaveLength(8)
+})

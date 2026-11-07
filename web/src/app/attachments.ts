@@ -6,9 +6,17 @@ export type AttachedFile = { name: string; size: string; mimeType: string; path:
 
 const line = /^Attached file: `([^`\n]+)` \(([^,\n]+), ([^)\n]+)\) at `([^`\n]+)`$/
 
+/**
+ * `value` safe inside the line, so a crafted file name or type cannot end the line and add prompt text of its own
+ * (#95583): no control characters or backticks, and in the parenthesised size and type no parentheses or commas.
+ */
+// oxlint-disable-next-line no-control-regex -- Control characters are what this strips.
+const quoted = (value: string) => value.replace(/[\u0000-\u001f\u007f`]/g, '')
+const plain = (value: string) => quoted(value).replace(/[(),]/g, '')
+
 /** The prompt line that references `file`: plain text, so it survives replay, compaction and merged steers as typed. */
 export const attachmentLine = (file: AttachedFile) =>
-  `Attached file: \`${file.name}\` (${file.size}, ${file.mimeType || 'application/octet-stream'}) at \`${file.path}\``
+  `Attached file: \`${quoted(file.name) || 'file'}\` (${plain(file.size)}, ${plain(file.mimeType) || 'application/octet-stream'}) at \`${quoted(file.path)}\``
 
 /** `text` with its attachment lines taken out as files, in order; text without them comes back as is. */
 export function splitAttachments(text: string): { text: string; files: AttachedFile[] } {

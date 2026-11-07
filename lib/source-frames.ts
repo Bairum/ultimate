@@ -2,6 +2,10 @@ import { originalPositionFor, TraceMap } from '@jridgewell/trace-mapping'
 
 /** `http://…/a.js:1:2` in a stack frame: the script's URL, line and column. */
 const frame = /(https?:\/\/[^\s()]+?\.m?js):(\d+):(\d+)/g
+/** Error text comes from a page: it maps at most this many scripts, the rest stay as they are (#95583). */
+const MAX_SCRIPTS = 8
+/** A script or source map larger than this reads as none (#95583). */
+const MAX_BYTES = 32 * 1024 * 1024
 
 /**
  * `text` with every bundled frame (`http://host/assets/web-x.js:1:1759`) replaced by the source position its script's
@@ -16,6 +20,7 @@ export async function sourceFrames(
   const load = (script: string) => {
     let map = maps.get(script)
     if (!map) {
+      if (maps.size >= MAX_SCRIPTS) return undefined
       map = read(script).then(async (code) => {
         const url = code && /\/\/# sourceMappingURL=(\S+)\s*$/.exec(code)?.[1]
         const json = url && (await read(new URL(url, script).href))
@@ -54,18 +59,40 @@ export async function sourceFrames(
  * text and the frame stays as it is.
  */
 export function fetchAssets(origin: string) {
+  // By the URL actually fetched: frames on many host names all name the same asset of `origin`.
+  const fetched = new Map<string, Promise<string | undefined>>()
   return async (url: string) => {
+    let target: URL
     try {
-      const target = new URL(url)
-      if (!target.pathname.startsWith('/assets/')) return undefined
-      // A redirect is not followed: the asset could send this server to any address (#95583).
-      const response = await fetch(new URL(target.pathname + target.search, origin), {
-        redirect: 'manual',
-        signal: AbortSignal.timeout(5000),
-      })
-      return response.ok ? await response.text() : undefined
+      target = new URL(url)
     } catch {
-      return undefined // Malformed, unreachable or timed out: the frame stays as it is.
+      return undefined // Malformed: the frame stays as it is.
     }
+    if (!target.pathname.startsWith('/assets/')) return undefined
+    const asset = new URL(target.pathname + target.search, origin).href
+    let text = fetched.get(asset)
+    if (!text) fetched.set(asset, (text = readAsset(asset)))
+    return text
+  }
+}
+
+async function readAsset(url: string) {
+  try {
+    // A redirect is not followed: the asset could send this server to any address (#95583).
+    const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(5000) })
+    if (!response.ok || !response.body) return undefined
+    const chunks: Uint8Array[] = []
+    let size = 0
+    for await (const chunk of response.body) {
+      size += chunk.byteLength
+      if (size > MAX_BYTES) {
+        await response.body.cancel()
+        return undefined
+      }
+      chunks.push(chunk)
+    }
+    return Buffer.concat(chunks).toString('utf8')
+  } catch {
+    return undefined // Unreachable or timed out: the frame stays as it is.
   }
 }
