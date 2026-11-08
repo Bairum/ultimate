@@ -639,11 +639,28 @@ export function OperateCard({
               switched windows {details.windows.length}×
             </span>
           )}
-          {details.duplicates?.map((d) => (
-            <span className="text-error" key={d.app}>
-              {d.pids.length} {d.app} running (pids {d.pids.join(', ')}): quit the extra one
-            </span>
-          ))}
+          {details.duplicates?.map((d) => {
+            const idle = d.processes?.filter((p) => !p.windows).map((p) => p.pid) ?? []
+            return (
+              <span
+                className="text-error"
+                key={d.app}
+                title={d.processes
+                  ?.map(
+                    (p) =>
+                      `pid ${p.pid}: ${p.windows ? p.titles.map((t) => t.text).join(', ') || `${p.windows} untitled windows` : 'no windows'}`,
+                  )
+                  .join('\n')}
+              >
+                {d.pids.length} {d.app} running (pids {d.pids.join(', ')}):{' '}
+                {idle.length && idle.length < d.pids.length
+                  ? `quit the windowless one (pid ${idle.join(', ')})`
+                  : d.processes
+                    ? 'each has windows'
+                    : 'quit the extra one'}
+              </span>
+            )
+          })}
           <span>{details.counts.minutes < 1 ? '<1' : Math.round(details.counts.minutes)} min</span>
           {details.session && (
             <span className="min-w-0 truncate" title={details.session}>

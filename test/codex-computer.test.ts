@@ -26,7 +26,7 @@ import type { ActionContext } from '../server/actions.ts'
 import type { ExtensionHost } from '../server/extensions.ts'
 import codexComputer, { actions, userActions } from '../extensions/codex-computer/server.ts'
 import { CEILING_MS } from '../extensions/codex-computer/app-server.ts'
-import type { Child } from '../extensions/codex-computer/app-server.ts'
+import type { AppProcess, Child } from '../extensions/codex-computer/app-server.ts'
 import type { CodexDetails } from '../extensions/codex-computer/refs.ts'
 import { removeTemp, temp, until } from './helpers.ts'
 import { pruneEvidence, resultsDirectory } from '../extensions/codex-computer/evidence.ts'
@@ -129,7 +129,7 @@ async function fixture(apps?: string[], settings: Record<string, unknown> = {}) 
     () => fake as unknown as Child,
   )
   const codesign = vi.fn<(path: string) => Promise<void>>(async () => {})
-  const processes = vi.fn<(app: string) => Promise<number[]>>(async () => [])
+  const processes = vi.fn<(app: string) => Promise<AppProcess[]>>(async () => [])
   const resources = new Map<string, unknown>()
   const processCloses: (() => Promise<void>)[] = []
   const facetCloses: (() => Promise<void>)[] = []
@@ -925,11 +925,14 @@ it('never puts a frame Codex cut short into the result, and drops one already st
     stored.content[2],
   ])
 })
-it('on a getApp timeout with two processes of the app running, steers Codex to stop and names the pids', async () => {
+it('on a getApp timeout with two processes of the app running, names each pid with its windows and the windowless one', async () => {
   const f = await fixture()
   const { promise } = await running(f)
-  f.processes.mockResolvedValue([63045, 63877])
-  // Bridgestone 2026-10-27: two Citrix Viewer processes; getApp timed out for minutes while Codex retried.
+  // Bridgestone 2026-11-08: one Citrix Viewer held every window, a stale one had none, and getApp timed out.
+  f.processes.mockResolvedValue([
+    { pid: 22465, windows: 2, titles: ['OpsMate AI - Microsoft Edge', 'MyBridgestone'] },
+    { pid: 99713, windows: 0, titles: [] },
+  ])
   const step = {
     type: 'mcpToolCall',
     server: 'cua_repl',
@@ -944,12 +947,31 @@ it('on a getApp timeout with two processes of the app running, steers Codex to s
   f.fake.item(step)
   await until(() => f.fake.sent.some((m) => m.method === 'turn/steer'))
   expect(f.processes.mock.calls).toEqual([['Citrix Viewer']])
-  expect(JSON.stringify(f.fake.sent.find((m) => m.method === 'turn/steer'))).toContain(
-    '2 processes of Citrix Viewer are running (pids 63045, 63877)',
-  )
+  const steer = JSON.stringify(f.fake.sent.find((m) => m.method === 'turn/steer'))
+  expect(steer).toContain('2 processes of Citrix Viewer are running (pids 22465, 99713)')
+  expect(steer).toContain('The windowless one (pid 99713) blocks it')
+  expect(steer).toContain('pid 22465: 2 windows')
+  expect(steer).toContain('OpsMate AI - Microsoft Edge')
+  expect(steer).toContain('pid 99713: no windows')
   f.fake.complete()
   const details = data(await promise)
-  expect(details.duplicates).toEqual([{ app: 'Citrix Viewer', pids: [63045, 63877] }])
+  expect(details.duplicates).toEqual([
+    {
+      app: 'Citrix Viewer',
+      pids: [22465, 99713],
+      processes: [
+        {
+          pid: 22465,
+          windows: 2,
+          titles: [
+            { text: 'OpsMate AI - Microsoft Edge', untrusted: true },
+            { text: 'MyBridgestone', untrusted: true },
+          ],
+        },
+        { pid: 99713, windows: 0, titles: [] },
+      ],
+    },
+  ])
   expect(f.progress.join('')).toContain('2 processes of Citrix Viewer are running')
 })
 it('flags a switch to another window in the state Codex reads, including nested state text', async () => {

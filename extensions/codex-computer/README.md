@@ -147,10 +147,16 @@ check each remote click's effect and stop with "remote click mapping out of sync
 windows of the same browser (such as Ultimate's own UI) off the screen the session is on.
 
 Two processes of the same app make `getApp` time out or find no window, and Codex used to retry for minutes
-(Bridgestone, 2026-10-27: two Citrix Viewer processes). When a `getApp("<name>")` step fails that way, the wrapper
-lists running processes once per app (`ps -axo pid=,comm=`, executables named exactly `<name>`; read-only). With
-more than one it steers Codex to stop and report that the user must quit the extra one, and the card and result
-(`duplicates`) name the pids. A fixed rule caps `getApp` retries at two.
+(Bridgestone, 2026-10-27: two Citrix Viewer processes). Computer Use picks a macOS app only by name, full path or
+bundle id, never by pid or window: `getApp({ windowId })` is refused on macOS, `listApps()` carries no windows, and
+every identifier timed out the same way (Bridgestone, 2026-11-08; three TextEdits gave `cgWindowNotFound`). So the
+wrapper diagnoses rather than selects. When a `getApp("<name>")` step fails that way, it lists the app's processes
+once per app (`ps -axo pid=,comm=`, executables named exactly `<name>`) with each one's normal windows and titles from
+the macOS window list (`CGWindowListCopyWindowInfo` through `osascript`); both are read-only. With more than one it
+steers Codex to stop and report each pid with its windows. When some have no windows (on 2026-11-08 a stale Citrix
+Viewer had none while the other held every window), it names the windowless pid as the one the user should quit;
+when every one has windows it asks the user to quit none. The card and result (`duplicates`, with `processes`) carry
+the same. A fixed rule caps `getApp` retries at two.
 
 `windowNotFoundAtPosition` from Codex's click means another window covers that screen point. On USG's Mac every such
 failure (screen x 52–105) fell on macOS Stage Manager's strip of recent apps along the left edge, over the OpsMate

@@ -268,6 +268,8 @@ export type Callbacks = {
   progress: (milestone: string) => void
 }
 
+/** A running process of an app, with its count of normal windows and their non-empty titles. */
+export type AppProcess = { pid: number; windows: number; titles: string[] }
 export async function operate(input: {
   host: ExtensionHost
   conversation: number
@@ -288,8 +290,8 @@ export async function operate(input: {
   /** Ultimate's side of ask_operator and report_progress; offered only to a Codex that supports dynamic tools. */
   callbacks?: Callbacks
   spawn: Spawn
-  /** Running process ids of an app, by its executable's name; read-only. */
-  processes?: (app: string) => Promise<number[]>
+  /** Running processes of an app, by its executable's name, with their windows; read-only. */
+  processes?: (app: string) => Promise<AppProcess[]>
   signal?: AbortSignal
   output: (text: string) => void
   live: Set<Run>
@@ -611,8 +613,11 @@ export async function operate(input: {
   const checked = new Set<string>()
   /**
    * Bridgestone 2026-10-27: with two Citrix Viewer processes, getApp("Citrix Viewer") timed out for minutes and
-   * Codex kept retrying. When getApp for an app fails to find or reach it, count that app's processes; with more
-   * than one, tell Codex to stop and say which the user must quit.
+   * Codex kept retrying. Computer Use selects a macOS app only by name, path or bundle id, never by pid or window
+   * (2026-11-08: `getApp({ windowId })` is refused, every identifier timed out, and three TextEdits gave
+   * cgWindowNotFound). When getApp for an app fails to find or reach it, list that app's processes with their
+   * windows; with more than one, tell Codex to stop and report which pid holds which windows and which windowless
+   * one blocks getApp.
    */
   const checkDuplicates = (item: Record<string, unknown>) => {
     if (!input.processes) return
@@ -620,7 +625,7 @@ export async function operate(input: {
     const app = /getApp\(\s*["'`]([^"'`]{1,100})["'`]/.exec(code)?.[1]
     if (!app || checked.has(app)) return
     if (
-      !/timeoutReached|noWindowsAvailable|appNotFound|not found/i.test(
+      !/timeoutReached|noWindowsAvailable|appNotFound|cgWindowNotFound|not found/i.test(
         JSON.stringify(item.result ?? ''),
       )
     )
@@ -629,13 +634,29 @@ export async function operate(input: {
     work.push(
       input
         .processes(app)
-        .then(async (pids) => {
-          if (ended || pids.length < 2) return
-          details.duplicates = [...(details.duplicates ?? []), { app, pids }]
-          const note = `${pids.length} processes of ${app} are running (pids ${pids.join(', ')})`
+        .then(async (found) => {
+          if (ended || found.length < 2) return
+          const pids = found.map((p) => p.pid)
+          details.duplicates = [
+            ...(details.duplicates ?? []),
+            { app, pids, processes: found.map((p) => ({ ...p, titles: p.titles.map(text) })) },
+          ]
+          const note = `${found.length} processes of ${app} are running (pids ${pids.join(', ')})`
           output(`${note}\n`)
+          const each = found
+            .map((p) =>
+              p.windows
+                ? `pid ${p.pid}: ${p.windows} windows ${JSON.stringify(p.titles.map((t) => t.slice(0, 80)))}`
+                : `pid ${p.pid}: no windows`,
+            )
+            .join('\n')
+          const idle = found.filter((p) => !p.windows).map((p) => p.pid)
+          const advice =
+            idle.length && idle.length < found.length
+              ? `The windowless one (pid ${idle.join(', ')}) blocks it: report that the user should quit that ${app} and keep the one with the windows.`
+              : 'Every one has windows, so do not ask the user to quit any: report each pid with its windows.'
           await run.steer(
-            `${note}, so getApp cannot pick one. Stop now and report that the user must quit the extra ${app} and leave one running.`,
+            `${note}. getApp cannot pick one by pid or window, so stop now. ${advice} Never ask to quit any other app. Windows per process, from the macOS window list:\n${untrusted(each)}`,
             'operator',
             'Ultimate',
           )
