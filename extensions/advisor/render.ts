@@ -1,6 +1,6 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { isInput } from '../../lib/entries.ts'
-import type { Role, StoredNote, Severity } from './refs.ts'
+import type { LedgerItem, Role, StoredNote, Severity } from './refs.ts'
 import { SEVERITIES } from './refs.ts'
 
 export const rank = (s: Severity) => SEVERITIES.indexOf(s)
@@ -21,7 +21,7 @@ export function renderInput(
   rubric: string,
   agents: string,
   signal?: string,
-  ledger?: unknown,
+  ledger?: { items: readonly LedgerItem[] },
   latest?: string,
   compact = false,
   continuations: readonly string[] = [],
@@ -66,25 +66,46 @@ export function renderInput(
         : [],
     ),
   )
+  const inputs = clean.filter(isInput)
   return JSON.stringify({
     role,
     rubric: rubric.slice(0, 20_480),
     signal,
     agents: agents.slice(0, 8192),
-    request: textOf(clean.find(isInput)).slice(0, compact ? 1500 : 8000),
+    request: textOf(inputs[0]).slice(0, compact ? 1500 : 8000),
+    // Messages that arrived during the run (steers, replies, a parent's go): the agent acts on them, so judging it by
+    // the first request alone raised false alarms about authorised work (#101169).
+    laterInputs:
+      inputs.length > 1
+        ? inputs
+            .slice(1)
+            .slice(compact ? -3 : -8)
+            .map((e) => ({ entry: e.id, text: textOf(e).slice(0, compact ? 500 : 1500) }))
+        : undefined,
     latest:
       latest?.slice(0, compact ? 1500 : 8000) ??
       clean
         .filter((e) => e.model?.some((m) => m.role === 'assistant'))
         .slice(-1)
         .map((e) => ({ entry: e.id, text: textOf(e).slice(0, compact ? 1500 : 8000) })),
-    ledger: ledger === undefined ? undefined : JSON.stringify(ledger).slice(0, 8192),
+    ledger: ledger === undefined ? undefined : newestFirst(ledger.items, 8192),
     // Notes routed here from finished children: the agent already has them, so never raise them again.
     alreadyRaised: raised.length
       ? raised.slice(-10).map((n) => `${n.severity}: ${n.note.slice(0, 300)}`)
       : undefined,
     recentTools: calls.slice(compact ? -10 : -25),
   }).slice(0, compact ? 12_000 : 90_000)
+}
+/** Ledger items newest first, as many as fit in `limit` characters: the oldest are the ones left out (#101169). */
+function newestFirst(items: readonly LedgerItem[], limit: number) {
+  const kept: LedgerItem[] = []
+  let size = 2
+  for (const item of items.toSorted((a, b) => b.since - a.since)) {
+    size += JSON.stringify(item).length + 1
+    if (size > limit) break
+    kept.push(item)
+  }
+  return kept
 }
 export type ReviewNote = { severity: Severity; note: string; evidence: string }
 export const normalize = (text: string) => text.toLowerCase().replace(/\s+/g, ' ').trim()

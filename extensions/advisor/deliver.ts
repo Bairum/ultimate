@@ -37,10 +37,11 @@ export function route(
   lastInput: number | undefined,
   now: number,
   continued: 'run' | 'review' | undefined,
-  ledgerActionable: boolean,
 ): { delivered: AdvisorNoteEntry['delivered']; reason: DeliveryReason } {
+  // @ultimate is never held, continued or steered: concerns and blockers reach it as passive notes it acknowledges
+  // (cards alone piled up unread, #101169); nits stay cards.
   if (role === 'ultimate')
-    return { delivered: ledgerActionable ? 'note' : 'card', reason: 'default' }
+    return { delivered: reaches(notes, 'concern') ? 'note' : 'card', reason: 'default' }
   const quiet = lastInput !== undefined && now - lastInput < (profile.quietMs ?? 600_000)
   const continues = point === 'answer' && reaches(notes, profile.continueOn)
   const steers = point !== 'answer' && point !== 'idle' && reaches(notes, profile.steerOn)
@@ -86,7 +87,12 @@ export async function deliver(
     const live = await host.harness().snapshot(LiveDoc, id, context)
     if (!live?.run || live.run.inputs[0] !== run) entry = { ...entry, delivered: 'note' }
   }
-  const content = advisory(entry.advisor, entry.notes)
+  // @ultimate's transcript is the user's chat: its acknowledgements go with its work, not into answers to the user.
+  const content =
+    advisory(entry.advisor, entry.notes) +
+    (entry.role === 'ultimate'
+      ? ' These lines are for the advisor, not the user: write them in the text before a tool call, never in a message or answer to the user; act on a note the user must decide by asking them.'
+      : '')
   const draft = { kind: 'advisor.note', data: entry }
   // Writes permit an entry without model messages: cards never enter the model context.
   const submission =

@@ -34,6 +34,9 @@ header counts questions apart from to-dos. An open to-do's ▶ button (on hover 
 user, `Work on to-do #<id>: <text>` (`Help me with to-do #<id>: …` for the user's own), after its current run if
 it is busy, and opens its conversation. ⌘K “Show open questions” opens this tab.
 
+Other extensions add rows to "For you", after the questions, through the web point `ForYou` in `ui.tsx`
+(`{ count, rows }`, counted in the header): the advisor lists @ultimate's open concerns and blockers there.
+
 ## Actions
 
 All user-only, for the panel.

@@ -450,21 +450,6 @@ export async function review(
           text: '',
         })
       if (!skipped && notes.length) {
-        const items = input.role === 'ultimate' ? (await tx.doc(Ledger, id)).items : []
-        const actionableItems = (ledgerSnapshot?.items ?? []).filter(
-          (i) =>
-            items.some((currentItem) => currentItem.id === i.id) &&
-            !changes.resolve.includes(i.id) &&
-            (i.kind === 'question' || (i.dueAt !== undefined && i.dueAt < Date.now())),
-        )
-        const actionable = notes.every((n) =>
-          actionableItems.some(
-            (i) =>
-              n.evidence.includes(i.id) ||
-              (i.entry !== undefined &&
-                new RegExp(`(?:#|entry[ :]+)${i.entry}\\b`, 'i').test(n.evidence)),
-          ),
-        )
         let { delivered, reason } = route(
           input.role,
           profile,
@@ -473,7 +458,6 @@ export async function review(
           row.lastInput,
           Date.now(),
           continuation ? 'review' : row.continued ? 'run' : undefined,
-          actionable,
         )
         // Finished work (or an answer that left before its review) cannot be continued: its parent can still act.
         const finished = gone || !!input.deadline

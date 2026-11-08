@@ -6,16 +6,27 @@ import {
   PlayIcon,
   PlusIcon,
 } from 'lucide-react'
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
-import { api, cn, errorMessage, events, formatAgo, useDocOf, useNow, useUltimate } from '@/sdk'
+import {
+  AllProvided,
+  api,
+  cn,
+  errorMessage,
+  events,
+  formatAgo,
+  useDocOf,
+  useNow,
+  useUltimate,
+} from '@/sdk'
 import { Address, MessagesDoc, emptyMessages, useAccentOf } from '../messages/ui.tsx'
 import type { Question } from '../messages/refs.ts'
 import { waiting } from '../questions/ui.tsx'
 import { StandingAction } from '../subagents/ui.tsx'
 import { AddAction, DoneAction, ReopenAction, TodosDoc } from './refs.ts'
 import type { Todo } from './refs.ts'
+import { ForYou } from './ui.tsx'
 
 /** The fields of a waiting message a question row shows. */
 type Asked = {
@@ -34,11 +45,26 @@ const owners: { id: Todo['owner']; label: string }[] = [
 ]
 
 /**
- * The project's to-dos: what waits on you (questions asked of you, read live from Messages, then your own to-dos), what
- * @ultimate is still on, a field to add one for either of you, and the done ones folded away. A question is answered
- * where it was asked: its row opens that conversation at the message, whose card has the choices and Dismiss.
+ * The project's to-dos: what waits on you (questions asked of you, read live from Messages, rows other extensions add
+ * through `ForYou`, then your own to-dos), what @ultimate is still on, a field to add one for either of you, and the
+ * done ones folded away. A question is answered where it was asked: its row opens that conversation at the message,
+ * whose card has the choices and Dismiss.
  */
 export function Todos() {
+  return (
+    <AllProvided input={null} point={ForYou}>
+      {(provided) => <List provided={provided} />}
+    </AllProvided>
+  )
+}
+
+function List({
+  provided,
+}: {
+  provided: readonly ({ count: number; rows: ReactNode } | undefined)[]
+}) {
+  const extra = provided.filter((item) => item !== undefined && item.count > 0)
+  const added = extra.reduce((total, item) => total + item!.count, 0)
   const items = useDocOf(1, TodosDoc)?.items ?? []
   const questions = waiting((useDocOf(1, MessagesDoc) ?? emptyMessages).messages)
   const now = useNow(60_000)
@@ -47,7 +73,7 @@ export function Todos() {
   const yours = open.filter((todo) => todo.owner === 'user')
   const ultimate = open.filter((todo) => todo.owner === 'ultimate')
   const done = items.filter((todo) => todo.done).toReversed()
-  const count = questions.length + open.length
+  const count = questions.length + open.length + added
 
   const run = (action: Promise<unknown>) => {
     setError(undefined)
@@ -86,10 +112,14 @@ export function Todos() {
           {questions.length > 0 && (
             <span className="text-amber-700 dark:text-amber-300">
               {questions.length} {questions.length === 1 ? 'question' : 'questions'}
-              {open.length > 0 && ' · '}
+              {open.length + added > 0 && ' · '}
             </span>
           )}
-          {open.length ? `${open.length} open` : questions.length ? '' : 'none open'}
+          {open.length + added
+            ? `${open.length + added} open`
+            : questions.length
+              ? ''
+              : 'none open'}
         </span>
       </div>
       <AddTodo add={(text, owner) => run(api.action(AddAction, { text, owner }))} />
@@ -101,9 +131,17 @@ export function Todos() {
         </p>
       ) : (
         <>
-          <Section title="For you" owner="user" empty={!questions.length && !yours.length}>
+          <Section
+            title="For you"
+            owner="user"
+            empty={!questions.length && !yours.length && !added}
+          >
             {questions.map((message) => (
               <QuestionRow key={`q${message.id}`} message={message} now={now} />
+            ))}
+            {extra.map((item, index) => (
+              // oxlint-disable-next-line react/no-array-index-key -- One group per provider, in discovery order.
+              <Fragment key={index}>{item!.rows}</Fragment>
             ))}
             {yours.map((todo) => (
               <TodoRow key={todo.id} todo={todo} now={now} toggle={toggle} start={start} />
