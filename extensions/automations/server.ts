@@ -720,6 +720,8 @@ function backend(host: ExtensionHost) {
 function input(args: unknown, action: string): Args {
   return { ...(args as Omit<Args, 'action'>), action }
 }
+/** A prompt starts agent runs, like a submit: over HTTP only a paired browser (the form) creates or changes one. */
+export const userActions = ['create', 'update']
 export const actions = {
   events: implementAction(EventsAction, () => TRIGGER_EVENTS),
   list: implementAction(

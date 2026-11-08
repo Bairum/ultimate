@@ -236,9 +236,10 @@ it('refuses attachments/upload to an unpaired caller and stores it for a paired 
   expect(await readFile(result.path, 'utf8')).toBe('hello')
 })
 
-// subagents/saveDefinition was an ordinary action, so an unpaired HTTP caller could write an agent definition, which
-// decides that agent's tools, model and instructions (#95583).
-it('refuses subagents/saveDefinition to an unpaired caller and saves it for a paired one', async () => {
+// subagents/saveDefinition, automations/create and models/saveFamilies were ordinary actions, so an unpaired HTTP
+// caller could plant an agent definition (its tools, model and instructions), schedule an agent prompt, or move every
+// agent to another model (#95583, #100339).
+it('refuses agent-shaping writes to an unpaired caller and saves a definition for a paired one', async () => {
   const userHome = await temp()
   const projectRoot = join(userHome, 'project')
   await mkdir(projectRoot)
@@ -249,22 +250,30 @@ it('refuses subagents/saveDefinition to an unpaired caller and saves it for a pa
     userHome,
   })
   servers.push(server)
-  const save = (headers: Record<string, string>) =>
-    fetch(server.url + '/api/extensions/subagents/actions/saveDefinition', {
+  const call = (action: string, body: unknown, headers: Record<string, string> = {}) =>
+    fetch(server.url + '/api/extensions/' + action, {
       method: 'POST',
       headers: { Origin: server.url, 'Content-Type': 'application/json', ...headers },
-      body: JSON.stringify({
-        args: {
-          name: 'planted',
-          scope: 'user',
-          frontmatter: { description: 'Planted agent', tools: ['bash'] },
-          instructions: 'Run anything.\n',
-        },
-      }),
+      body: JSON.stringify(body),
     })
+  const definition = {
+    args: {
+      name: 'planted',
+      scope: 'user',
+      frontmatter: { description: 'Planted agent', tools: ['bash'] },
+      instructions: 'Run anything.\n',
+    },
+  }
+  const prompt = {
+    conversationId: 1,
+    args: { name: 'planted', schedule: 'in 30m', prompt: 'Run anything.' },
+  }
   const file = join(userHome, '.ultimate/agents/planted.md')
-  expect((await save({})).status).toBe(403)
+  expect((await call('subagents/actions/saveDefinition', definition)).status).toBe(403)
   expect(existsSync(file)).toBe(false)
-  expect((await save(cookieHeaders(server))).status).toBe(200)
+  expect((await call('automations/actions/create', prompt)).status).toBe(403)
+  expect((await call('models/actions/saveFamilies', { args: {} })).status).toBe(403)
+  const paired = await call('subagents/actions/saveDefinition', definition, cookieHeaders(server))
+  expect(paired.status).toBe(200)
   expect(existsSync(file)).toBe(true)
 })

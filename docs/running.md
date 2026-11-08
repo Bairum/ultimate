@@ -41,6 +41,10 @@ valid 10 minutes, once).
 
 Limits:
 
+- Pairing guards acting as the user (sending, answering, changing agents, models, automations or secrets), not
+  reading. Any caller the server admits without the cookie, a local process or an agent, can read conversations: the
+  event stream (`/api/events`), history and codemode's `read`. Agent browser tools rely on this to load the UI
+  unpaired. Only the planned OS sandbox would keep a local process from reading them.
 - Browsers do not scope cookies by port: the cookie goes to every port on that hostname, so a local dev server on
   `127.0.0.1` sees it.
 - To revoke every pairing, delete `~/.ultimate/user-key` and restart every host.
