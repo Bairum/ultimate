@@ -122,12 +122,13 @@ async function ensureOne(host: ExtensionHost, builtIn: BuiltIn, seed: Seed | und
   const ultimate = (await harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
   if (ultimate === undefined) return
   // A create whose receipt was lost gets the automation it made back from its key, not a second one.
-  const created = (await host.invoke(
-    'automations',
-    'create',
-    { name, condition, subscribers: ['@ultimate'], key: `dream:${doc.definition.kind}` },
-    signal,
-  )) as Automation
+  // The service, not the action: `automations/create` is user-only (#100339).
+  const created = await host.need(AutomationsApi).create({
+    name,
+    condition,
+    subscribers: ['@ultimate'],
+    key: `dream:${doc.definition.kind}`,
+  })
   if (carried?.enabled === false && created.enabled)
     await host.need(AutomationsApi).pause(created.id)
   await remember({ id: created.id })

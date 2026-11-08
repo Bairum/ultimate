@@ -10,6 +10,7 @@ import type { Todo } from '../todos/refs.ts'
 import { Roots } from '../lineage/api.ts'
 import { Messages } from '../messages/api.ts'
 import type { Automation } from '../automations/types.ts'
+import { AutomationsApi } from '../automations/api.ts'
 import { BuiltInDoc, PauseDoc } from './built-ins.ts'
 import { deliver } from './delivery.ts'
 import type { Prepared } from './refs.ts'
@@ -256,18 +257,16 @@ export async function applySeed(host: ExtensionHost) {
       receipt.applied = Date.now()
     }, context)
   }
-  const signal = new AbortController().signal
   for (const automation of seed.automations) {
     if (!carries(automation)) continue
     const receipt = await harness.snapshot(SeedState, ROOT_CONVERSATION_ID, context)
     if (receipt?.automations.includes(automation.name)) continue
     // Names are unique in a seed: a create whose receipt was lost gets its automation back from the key.
-    await host.invoke(
-      'automations',
-      'create',
-      { ...automation, key: `seed:${host.chapter.name}:${automation.name}` },
-      signal,
-    )
+    // The service, not the action: `automations/create` is user-only (#100339).
+    await host.need(AutomationsApi).create({
+      ...automation,
+      key: `seed:${host.chapter.name}:${automation.name}`,
+    })
     await harness.commit(async (tx) => {
       const saved = await tx.doc(SeedState, ROOT_CONVERSATION_ID)
       if (!saved.automations.includes(automation.name)) saved.automations.push(automation.name)

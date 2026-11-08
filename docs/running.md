@@ -41,7 +41,7 @@ valid 10 minutes, once).
 
 Limits:
 
-- Pairing guards acting as the user (sending, answering, changing agents, models, automations or secrets), not
+- Pairing guards acting as the user (sending, answering, editing agents, models, secrets or an automation's prompt), not
   reading. Any caller the server admits without the cookie, a local process or an agent, can read conversations: the
   event stream (`/api/events`), history and codemode's `read`. Agent browser tools rely on this to load the UI
   unpaired. Only the planned OS sandbox would keep a local process from reading them.

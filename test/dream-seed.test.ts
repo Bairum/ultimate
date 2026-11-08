@@ -1,5 +1,4 @@
 import { join } from 'node:path'
-import type { JsonValue } from '@earendil-works/chord'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { Tx } from '@earendil-works/pi-durable'
@@ -20,6 +19,8 @@ import automations, {
   Automations,
 } from '../extensions/automations/server.ts'
 import type { Automation } from '../extensions/automations/types.ts'
+import { AutomationsApi } from '../extensions/automations/api.ts'
+import type { AutomationsService } from '../extensions/automations/api.ts'
 import type { Seed } from '../extensions/dream/types.ts'
 import dream, { Next } from '../extensions/dream/server.ts'
 import { applySeed, buildSeed, SeedState, writeSeed } from '../extensions/dream/seed.ts'
@@ -47,10 +48,13 @@ async function fixture() {
   let cloud: CloudService | undefined
   const tokens = [...lineageDocs, Messages, Todos, Next]
   const resources = new Map<string, unknown>()
+  /** Services the facets implement: automations' AutomationsApi, which dream's seed creates through. */
+  const provided = new Map<string, unknown>()
+  // Like the real host, refuse user-only actions such as `create` (#100339).
   const invoke = vi.fn<ExtensionHost['invoke']>(async (extension, action, args) => {
-    if (extension !== 'automations' || !['list', 'create', 'describe'].includes(action))
+    if (extension !== 'automations' || !['list', 'describe'].includes(action))
       throw new Error(`Unexpected action ${extension}/${action}`)
-    const result = await automationActions[action as 'list' | 'create' | 'describe'](args, {
+    const result = await automationActions[action as 'list' | 'describe'](args, {
       host,
     } as ActionContext)
     return action === 'list'
@@ -72,7 +76,7 @@ async function fixture() {
     },
     metadata: Metadata,
     ...eventHost(() => opened.harness, 'automations'),
-    implement: () => {},
+    implement: (api: { name: string }, value: unknown) => void provided.set(api.name, value),
     onRelease: () => {},
     onClose: () => {},
     projectSetup: async () => ({ decision: false }),
@@ -85,19 +89,21 @@ async function fixture() {
     },
     react: () => {},
     notice: () => {},
-    want: (api: { name: string }) => (api.name === CloudApi.name ? cloud : undefined),
-    need: () => ({
-      standing: async () =>
-        opened.harness.commit(async (tx) => {
-          const standing = await tx.doc(Standing, ROOT_CONVERSATION_ID)
-          if (!standing.ultimate) {
-            const created = await tx.createConversation({ ownership: { kind: 'ownerless' } })
-            await configure(tx, created.id, {})
-            standing.ultimate = created.id
-          }
-          return standing.ultimate
-        }, context),
-    }),
+    want: (api: { name: string }) =>
+      api.name === CloudApi.name ? cloud : (provided.get(api.name) as never),
+    need: (api: { name: string }) =>
+      provided.get(api.name) ?? {
+        standing: async () =>
+          opened.harness.commit(async (tx) => {
+            const standing = await tx.doc(Standing, ROOT_CONVERSATION_ID)
+            if (!standing.ultimate) {
+              const created = await tx.createConversation({ ownership: { kind: 'ownerless' } })
+              await configure(tx, created.id, {})
+              standing.ultimate = created.id
+            }
+            return standing.ultimate
+          }, context),
+      },
     invoke,
   } as unknown as ExtensionHost
   prepared.registry.install(automations(host))
@@ -116,6 +122,9 @@ async function fixture() {
     home,
     host,
     invoke,
+    /** Create an automation as dream does, through the service. */
+    create: (args: Record<string, unknown>) =>
+      (provided.get(AutomationsApi.name) as AutomationsService).create(args as never),
     open,
     close,
     /** What a facet reload does: onOpen again on the open harness. */
@@ -197,12 +206,7 @@ const PREPARED = {
 it('carries the seed into a fresh chapter once, including user memory, the handover and its chapter entry', async () => {
   const f = await fixture()
   await f.source()
-  await f.host.invoke(
-    'automations',
-    'create',
-    { name: 'Daily', prompt: 'Review', schedule: 'every 1d' },
-    new AbortController().signal,
-  )
+  await f.create({ name: 'Daily', prompt: 'Review', schedule: 'every 1d' })
   f.scripts([
     { id: 'A1', name: 'Watch it', ask: 'Watch the build', prompt: 'Summarise', enabled: true },
     { id: 'build-watch', scope: 'project', name: 'Project watch', ask: 'Watch CI', enabled: true },
@@ -346,16 +350,7 @@ it.each(['on', 'off'] as const)(
 it('carries subscriber-only schedules as to-dos instead of recreating stale conversation ids', async () => {
   const f = await fixture()
   await f.source()
-  await f.host.invoke(
-    'automations',
-    'create',
-    {
-      name: 'Wake me',
-      schedule: 'every 1d',
-      subscribers: [ROOT_CONVERSATION_ID],
-    },
-    new AbortController().signal,
-  )
+  await f.create({ name: 'Wake me', schedule: 'every 1d', subscribers: [ROOT_CONVERSATION_ID] })
   const seed = await buildSeed(f.host, PREPARED)
   expect(seed.automations).toEqual([{ name: 'Wake me', schedule: { kind: 'every', ms: 86400000 } }])
   expect(seed.counts.automations).toBe(1)
@@ -375,8 +370,7 @@ it('carries subscriber-only schedules as to-dos instead of recreating stale conv
 it('carries event and standing context triggers, but leaves numeric context targets for recreation', async () => {
   const f = await fixture()
   await f.source()
-  const signal = new AbortController().signal
-  const triggers: JsonValue[] = [
+  const triggers: Record<string, unknown>[] = [
     {
       name: 'Landed',
       prompt: 'Review landing',
@@ -394,7 +388,7 @@ it('carries event and standing context triggers, but leaves numeric context targ
       condition: { metric: 'context', of: '#1', above: 80 },
     },
   ]
-  for (const args of triggers) await f.host.invoke('automations', 'create', args, signal)
+  for (const args of triggers) await f.create(args)
   const seed = await buildSeed(f.host, PREPARED)
   expect(seed.counts.automations).toBe(3)
   expect(seed.automations[0]).toEqual({
@@ -528,12 +522,7 @@ it('merges root memories by updated, maps automation options, and rejects duplic
       lesson: { kind: 'lesson', line: 'Newer', body: 'Use the latest.', updated: 30 },
     }
   }, context)
-  await f.host.invoke(
-    'automations',
-    'create',
-    { name: 'Review', prompt: 'Read', schedule: 'every 1d', thinking: 'high' },
-    new AbortController().signal,
-  )
+  await f.create({ name: 'Review', prompt: 'Read', schedule: 'every 1d', thinking: 'high' })
   let seed = await buildSeed(f.host, PREPARED)
   expect(seed.memories.lesson.line).toBe('Newer')
   expect(seed.memories['about-daniel']).toBeDefined()

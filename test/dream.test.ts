@@ -18,6 +18,7 @@ import { Standing } from '../extensions/subagents/api.ts'
 import { ContextUsageDoc } from '../extensions/conversations/api.ts'
 import automations, {
   actions as automationActions,
+  userActions as automationUserActions,
   Automations,
 } from '../extensions/automations/server.ts'
 import dream, {
@@ -72,8 +73,10 @@ async function fixture() {
       ],
     ]),
   )
+  // Like the real host, refuse user-only actions: dream creates through AutomationsApi (#100339).
   const invoke = vi.fn<ExtensionHost['invoke']>(async (extension, action, args) => {
-    if (extension !== 'automations') throw new Error(`Unexpected ${extension}/${action}`)
+    if (extension !== 'automations' || automationUserActions.includes(action))
+      throw new Error(`Unexpected ${extension}/${action}`)
     return automationActions[action as 'list'](args, { host } as ActionContext)
   })
   const host = {
