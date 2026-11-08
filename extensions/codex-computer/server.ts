@@ -15,7 +15,7 @@ import { SteerAction, StopAction } from './refs.ts'
 import type { CodexDetails, Delivery } from './refs.ts'
 import { State, updateState, validate, untrusted } from './state.ts'
 import { ASK_MS, operate, spawnServer } from './app-server.ts'
-import type { Callbacks, Run, Spawn } from './app-server.ts'
+import type { AppProcess, Callbacks, Run, Spawn } from './app-server.ts'
 import { checkImage, resultsDirectory, pruneEvidence } from './evidence.ts'
 import { LineageApi } from '../lineage/api.ts'
 
@@ -179,14 +179,34 @@ async function callbacks(host: ExtensionHost, conversation: number): Promise<Cal
 export type Dependencies = {
   spawn: Spawn
   codesign: (path: string) => Promise<void>
-  processes: (app: string) => Promise<number[]>
+  processes: (app: string) => Promise<AppProcess[]>
 }
-/** Pids whose executable is named `app` exactly (`…/Citrix Viewer.app/Contents/MacOS/Citrix Viewer`). */
-export async function processesOf(app: string) {
+/**
+ * Processes whose executable is named `app` exactly (`…/Citrix Viewer.app/Contents/MacOS/Citrix Viewer`), each with
+ * its normal-layer windows from the macOS window list and their titles; read-only. Bridgestone 2026-11-08: of two
+ * Citrix Viewers one held every window and the other none, and the windowless one made getApp time out.
+ */
+export async function processesOf(app: string): Promise<AppProcess[]> {
   const { stdout } = await exec('/bin/ps', ['-axo', 'pid=,comm='], { timeout: 5000 })
-  return stdout.split('\n').flatMap((line) => {
+  const pids = stdout.split('\n').flatMap((line) => {
     const match = /^\s*(\d+)\s+(.*)$/.exec(line)
     return match && match[2].split('/').at(-1) === app ? [Number(match[1])] : []
+  })
+  if (pids.length < 2) return pids.map((pid) => ({ pid, windows: 0, titles: [] }))
+  const list = await exec(
+    '/usr/bin/osascript',
+    [
+      '-l',
+      'JavaScript',
+      '-e',
+      'ObjC.import("CoreGraphics"); JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(0, 0))).filter((w) => w.kCGWindowLayer === 0).map((w) => [w.kCGWindowOwnerPID, w.kCGWindowName ?? ""]))',
+    ],
+    { timeout: 5000 },
+  )
+  const windows = JSON.parse(list.stdout) as [number, string][]
+  return pids.map((pid) => {
+    const own = windows.filter(([owner]) => owner === pid)
+    return { pid, windows: own.length, titles: own.map(([, title]) => title).filter(Boolean) }
   })
 }
 function runtime(host: ExtensionHost) {
