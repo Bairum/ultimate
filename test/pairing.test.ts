@@ -235,3 +235,36 @@ it('refuses attachments/upload to an unpaired caller and stores it for a paired 
   const { result } = (await paired.json()) as { result: { path: string } }
   expect(await readFile(result.path, 'utf8')).toBe('hello')
 })
+
+// subagents/saveDefinition was an ordinary action, so an unpaired HTTP caller could write an agent definition, which
+// decides that agent's tools, model and instructions (#95583).
+it('refuses subagents/saveDefinition to an unpaired caller and saves it for a paired one', async () => {
+  const userHome = await temp()
+  const projectRoot = join(userHome, 'project')
+  await mkdir(projectRoot)
+  const server = await fauxServer({
+    ultimateRoot: resolve('.'),
+    projectRoot,
+    home: join(userHome, 'state'),
+    userHome,
+  })
+  servers.push(server)
+  const save = (headers: Record<string, string>) =>
+    fetch(server.url + '/api/extensions/subagents/actions/saveDefinition', {
+      method: 'POST',
+      headers: { Origin: server.url, 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({
+        args: {
+          name: 'planted',
+          scope: 'user',
+          frontmatter: { description: 'Planted agent', tools: ['bash'] },
+          instructions: 'Run anything.\n',
+        },
+      }),
+    })
+  const file = join(userHome, '.ultimate/agents/planted.md')
+  expect((await save({})).status).toBe(403)
+  expect(existsSync(file)).toBe(false)
+  expect((await save(cookieHeaders(server))).status).toBe(200)
+  expect(existsSync(file)).toBe(true)
+})

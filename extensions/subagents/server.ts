@@ -381,6 +381,8 @@ async function waitInterruptibly(
 /** Extension-owned standing definitions retire when their extension is disabled live. */
 export const reloadOnSettings = true
 
+/** Writing or deleting a definition file decides an agent's tools, model and instructions: a paired browser only. */
+export const userActions = ['saveDefinition', 'deleteDefinition']
 /** Browser actions for the Agents tab. */
 export const actions = {
   /** `{name}`: open the current definition's standing conversation. */
