@@ -963,6 +963,40 @@ it('records late and unread notes on the five-minute tick and reports lifecycle 
     roles: { worker: { delivered: 2, read: 0, late: 1, unread: 1, pending: 0 } },
   })
 })
+// #101169: @ultimate is idle until the user writes, so its notes must wait to be read; its nits never reach the model.
+it('keeps an idle ultimate note open and leaves its nits as cards', async () => {
+  const f = await fixture('ultimate')
+  f.response.content = [
+    fauxText(
+      JSON.stringify({
+        notes: [
+          { ...notes[0], severity: 'concern', note: 'Promise broken' },
+          { ...notes[0], severity: 'nit', note: 'Wording' },
+        ],
+      }),
+    ),
+  ]
+  await review(
+    f.host,
+    f.api(),
+    { role: 'ultimate', point: 'answer', run: 100 },
+    f.config,
+    [],
+    context,
+  )
+  const delivered = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes
+  expect(delivered.map((n) => [n.severity, n.delivered])).toEqual([
+    ['concern', 'note'],
+    ['nit', 'card'],
+  ])
+  vi.spyOn(f.host, 'conversations').mockReturnValue([
+    { id: f.id, label: 'ultimate', busy: false, answerAt: 1, inputAt: 0, cwd: f.host.projectRoot },
+  ] as never)
+  await expireNotes(f.host, f.config, new Set(), context)
+  const state = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
+  expect(state.notes[0]).toMatchObject({ status: 'open' })
+  expect(state.notes[0].response).toBeUndefined()
+})
 it('skips a pending delivery dismissed by the user', async () => {
   const f = await fixture()
   const note = {
