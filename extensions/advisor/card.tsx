@@ -69,6 +69,13 @@ export const deliveries: Record<
     loud: true,
   },
 }
+/** A steer after the reviewed run ended started a new run: how an idle @ultimate is woken (#107397). */
+const woke = {
+  word: 'woke the agent',
+  read: 'woke the agent',
+  title: 'Arrived after the answer and started a new run',
+  loud: true,
+}
 
 const points: Record<AdvisorNoteEntry['point'], string> = {
   answer: 'on answer',
@@ -99,7 +106,10 @@ export function AdvisorNoteCard({ entry }: { entry: EntryRecord }) {
   const state = useAdvisorState()
   const now = useNow(60_000)
   const top = worst(data.notes.map((n) => n.severity)) ?? 'nit'
-  const delivery = deliveries[data.delivered]
+  const delivery =
+    data.delivered === 'steer' && data.reason === 'ended' && data.routedTo === undefined
+      ? woke
+      : deliveries[data.delivered]
   const stored = data.notes.map((note) => state.notes.find((n) => n.id === note.id))
   // One delivery carries every note of the review, so the first request that read any of them read them all.
   const readAt = stored

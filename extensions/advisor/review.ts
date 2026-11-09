@@ -2,13 +2,14 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context, JsonValue } from '@earendil-works/chord'
 import { copyJson } from '@earendil-works/chord'
-import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { InboxDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, EntryRecord, Cursor, HookApi, Tx } from '@earendil-works/pi-durable'
 import type { AssistantMessage, Message } from '@earendil-works/pi-ai'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { ClassifyApi } from '../classify/api.ts'
 import { Gate } from '../messages/api.ts'
+import { PauseApi } from '../pause/api.ts'
 import { Standing, Subagents } from '../subagents/api.ts'
 import { isInput } from '../../lib/entries.ts'
 import { parseModel } from './config.ts'
@@ -388,6 +389,12 @@ export async function review(
     }
     usd = receipts.reduce((total, r) => total + r.usage.cost.total, 0)
     const intervention = await lastIntervention(host, id, context)
+    // A run an advisor note started (request id `advisor:…`) never wakes @ultimate again: its notes wait for the user.
+    const woken =
+      input.run !== undefined &&
+      !!(
+        await (await host.harness().submission(input.run as never, context))?.status(context)
+      )?.requestId?.startsWith('advisor:')
     let entry: AdvisorNoteEntry | undefined
     let recipient: ConversationId = id
     await host.harness().commit(async (tx) => {
@@ -479,6 +486,22 @@ export async function review(
           recipient = parent
           if (finished) reason = input.deadline ? 'deadline' : 'ended'
           delivered = finished && wakes(host, runs, id, notes) ? 'steer' : 'note'
+        }
+        // @ultimate idles once it answers, and a passive note waits for the user's next message (#107397): a concern or
+        // blocker on an idle @ultimate wakes it once per user input, never from a run an advisor note started, nor paused.
+        if (
+          input.role === 'ultimate' &&
+          delivered === 'note' &&
+          input.run !== undefined &&
+          !woken &&
+          row.wokeRun !== input.run &&
+          live.run === undefined &&
+          !(await tx.doc(InboxDoc, id)).items.length &&
+          !host.want(PauseApi)?.paused()
+        ) {
+          row.wokeRun = input.run
+          delivered = 'steer'
+          reason = 'ended'
         }
         entry = {
           review: reviewId,

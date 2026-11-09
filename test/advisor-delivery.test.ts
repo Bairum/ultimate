@@ -7,6 +7,7 @@ import {
   Harness,
   MemoryStorage,
   createRegistry,
+  InboxDoc,
   LiveDoc,
   ROOT_CONVERSATION_ID,
   defineTask,
@@ -996,6 +997,49 @@ it('keeps an idle ultimate note open and leaves its nits as cards', async () => 
   const state = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
   expect(state.notes[0]).toMatchObject({ status: 'open' })
   expect(state.notes[0].response).toBeUndefined()
+})
+// #107397: @ultimate's answer review lands after it idles, so a passive note waited for the user's next message.
+it('wakes an idle ultimate once per user input with a concern, never for a nit or from its woken run', async () => {
+  const f = await fixture('ultimate')
+  await f.harness.commit(async (tx) => {
+    delete (await tx.doc(LiveDoc, f.id)).run
+  }, context)
+  f.harness.resume()
+  const reviewWith = async (severity: 'nit' | 'concern', note: string, run: number) => {
+    f.response.content = [fauxText(JSON.stringify({ notes: [{ ...notes[0], severity, note }] }))]
+    const api = f.api()
+    await review(f.host, api, { role: 'ultimate', point: 'answer', run }, f.config, [], context)
+    return f.harness.commit(
+      async (tx) => tx.submissionByRequest(f.id, `advisor:${api.taskId}:answer:verification`),
+      context,
+    )
+  }
+  const settled = () =>
+    until(async () => {
+      const live = await f.harness.snapshot(LiveDoc, f.id, context)
+      const inbox = await f.harness.snapshot(InboxDoc, f.id, context)
+      return !live?.run && !inbox?.items.length
+    })
+  expect((await reviewWith('nit', 'Wording', 100))?.type).toBe('write')
+  const wake = await reviewWith('concern', 'Promise broken', 100)
+  expect(wake?.type).toBe('input')
+  const conversation = (await f.harness.conversation(f.id, context))!
+  const [woken] = (
+    await conversation.entries({ order: 'ascending' }, 20, undefined, context)
+  ).items.filter((e) => e.kind === 'advisor.note' && e.model)
+  expect(woken.model?.[0].content).toContain('arrived after your last answer')
+  await settled()
+  // A second note on the same user input, and a note on the woken run's own answer, wait for the user.
+  expect((await reviewWith('concern', 'Another concern', 100))?.type).toBe('write')
+  await settled()
+  expect((await reviewWith('concern', 'Still wrong', wake!.id as number))?.type).toBe('write')
+  const state = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
+  expect(state.notes.map((n) => [n.note, n.delivered])).toEqual([
+    ['Wording', 'card'],
+    ['Promise broken', 'steer'],
+    ['Another concern', 'note'],
+    ['Still wrong', 'note'],
+  ])
 })
 it('skips a pending delivery dismissed by the user', async () => {
   const f = await fixture()

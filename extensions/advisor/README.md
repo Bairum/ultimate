@@ -44,7 +44,7 @@ Enabled-role defaults:
 
 | Role                                | Advisors            | Review points   | Special defaults                                      |
 | ----------------------------------- | ------------------- | --------------- | ----------------------------------------------------- |
-| ultimate                            | promises            | answer, idle    | Never holds, continues or steers; see below           |
+| ultimate                            | promises            | answer, idle    | Never holds, continues or steers a run; see below     |
 | coordinator                         | verification        | answer, signals | Ungated; `rounds` and the Jev gate are opt-in         |
 | worker, designer                    | scope, verification | answer          |                                                       |
 | scout, reviewer, dream-pass, lander | verification        | answer          |                                                       |
@@ -57,7 +57,7 @@ Rubrics resolve from this extension's `rubrics/`, then `~/.ultimate/advisors/`, 
 
 The model returns JSON notes (`severity`, `note`, nonempty `evidence`); longer notes are clipped to 500 characters and evidence to 300. Only @ultimate can update the promise/question ledger (`add`, `resolve`), with at most 5 additions per review and 50 open items (oldest dropped). The user can resolve/dismiss notes or give thumbs feedback.
 
-@ultimate's concerns and blockers reach it as passive notes (its `delivery` setting does not apply), and its nits stay cards: cards alone piled up unread. The note asks it to acknowledge in the text before a tool call, never in its answers to the user. The same concerns and blockers also sit in the user's To-dos panel (under "For you") with what @ultimate did about them, until the user ticks them or the close-out resolves them; a deferred one stays listed until ticked.
+@ultimate's concerns and blockers reach it as passive notes (its `delivery` setting does not apply), and its nits stay cards: cards alone piled up unread. The note asks it to acknowledge in the text before a tool call, never in its answers to the user. Its answer review usually settles after @ultimate went idle, where a passive note would wait for the user's next message, so a concern or blocker on an idle @ultimate (no run, nothing queued, not paused) is instead an input that wakes it, once per user input: the `wokeRun` row in `advisor.runs` keys it on the reviewed run's first input. The input says the note arrived after its answer and to correct it, start the work or dispute it; its answer is a normal answer in the user's chat. Notes on that woken run's answer, later notes of the same input, and idle-scan notes stay passive. The card reads "woke the agent". The same concerns and blockers also sit in the user's To-dos panel (under "For you") with what @ultimate did about them, until the user ticks them or the close-out resolves them; a deferred one stays listed until ticked.
 
 Deterministic signals name repeated identical tool calls, three consecutive tool errors, force-push/hard-reset/destructive deletion commands, writes outside the checkout, completion claims immediately after a failed check, and runs over 40 tool rounds. Cleanup targets confined to descendants of `/tmp`, `$TMPDIR` or the OS temp directory are excluded; mixed, non-temp or uncertain targets still signal. Signals request a review, not a safety decision.
 

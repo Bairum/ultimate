@@ -19,6 +19,7 @@ import { roleOf } from '../../lib/role.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { ClassifyApi } from '../classify/api.ts'
 import { Gate } from '../messages/api.ts'
+import { PauseApi } from '../pause/api.ts'
 import { Roots } from '../lineage/api.ts'
 import {
   ConfigAction,
@@ -179,6 +180,7 @@ export default function advisor(host: ExtensionHost) {
   const config = configuration(host)
   host.want(ClassifyApi)
   host.want(Gate)
+  host.want(PauseApi)
   host.want(ConversationsApi)
   async function enabled(id: ConversationId, context: Context) {
     const view = await config(false)

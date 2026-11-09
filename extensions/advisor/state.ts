@@ -30,6 +30,8 @@ export const Runs = defineDoc<{
       continued?: boolean
       /** The reviewed answer (its `answerAt`) whose blocker last woke the parent: one wake per answer. */
       woke?: number
+      /** The run (its first input) whose answer review last woke @ultimate itself: one wake per user input. */
+      wokeRun?: number
       rounds: number
       lastRound?: number
       pending?: number

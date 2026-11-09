@@ -38,8 +38,8 @@ export function route(
   now: number,
   continued: 'run' | 'review' | undefined,
 ): { delivered: AdvisorNoteEntry['delivered']; reason: DeliveryReason } {
-  // @ultimate is never held, continued or steered: concerns and blockers reach it as passive notes it acknowledges
-  // (cards alone piled up unread, #101169); nits stay cards.
+  // @ultimate is never held, continued or steered mid-run: concerns and blockers reach it as passive notes it
+  // acknowledges (cards alone piled up unread, #101169); nits stay cards. The review wakes an idle one (`review.ts`).
   if (role === 'ultimate')
     return { delivered: reaches(notes, 'concern') ? 'note' : 'card', reason: 'default' }
   const quiet = lastInput !== undefined && now - lastInput < (profile.quietMs ?? 600_000)
@@ -83,12 +83,16 @@ export async function deliver(
   const placed = placement.placed
   entry = { ...entry, notes: placement.notes }
   if (!entry.notes.length) return undefined
-  if (entry.delivered === 'steer' && !placed) {
+  // A mid-run steer whose run ended becomes a note; @ultimate's steer is the wake of its idle conversation.
+  if (entry.delivered === 'steer' && !placed && entry.role !== 'ultimate') {
     const live = await host.harness().snapshot(LiveDoc, id, context)
     if (!live?.run || live.run.inputs[0] !== run) entry = { ...entry, delivered: 'note' }
   }
   // @ultimate's transcript is the user's chat: its acknowledgements go with its work, not into answers to the user.
   const content =
+    (entry.role === 'ultimate' && entry.delivered === 'steer'
+      ? 'This advisor note arrived after your last answer to the user. Act on it now: correct that answer, start the work it names, or mark it disputed with a reason. Your answer reaches the user: keep it a short follow-up.\n'
+      : '') +
     advisory(entry.advisor, modelNotes(entry)) +
     (entry.role === 'ultimate'
       ? ' These lines are for the advisor, not the user: write them in the text before a tool call, never in a message or answer to the user; act on a note the user must decide by asking them.'
