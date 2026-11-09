@@ -8,7 +8,8 @@ import { LineageApi, Roots } from '../lineage/api.ts'
 import { actingAs } from '../../lib/acting-as.ts'
 import { imagesParameter } from './images.ts'
 import { send } from './send.ts'
-import { Started } from './api.ts'
+import { Messages, Started } from './api.ts'
+import { isOwed } from '../../lib/message-state.ts'
 
 export const branchTool = (host: ExtensionHost) =>
   defineTool({
@@ -79,7 +80,23 @@ export const branchTool = (host: ExtensionHost) =>
             ...(modelTools && 'add' in modelTools && modelTools.add?.length ? { modelTools } : {}),
           })
           ;(await tx.doc(host.metadata, branch.id)).label = 'coordinator'
-          ;(await tx.doc(Started, branch.id)).by = from
+          const started = await tx.doc(Started, branch.id)
+          started.by = from
+          // An agent's request the starter still owes an answer (send.ts's test for what is owed) is what the branch
+          // works on: its result reaches that agent once it is concluded (route.ts). Without the link, a result routed
+          // to a concluded branch reached no one (danielgriesser.com #13859/15161, @writer's briefing). Only one owed
+          // request makes the link: with two (a steer, or another agent still waiting) the branch cannot tell which it
+          // serves, and a result sent to the wrong agent, possibly another project's, is worse than none (#105197).
+          const owed = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.filter(
+            (m) => m.to === from && m.from !== 'user' && isOwed(m),
+          )
+          const [only] = owed
+          if (owed.length === 1 && only.from !== 'user')
+            started.serves = {
+              message: only.id,
+              from: only.from,
+              ...(only.remote ? { remote: only.remote } : {}),
+            }
         }, ctx)
         id = await api.memo('branch-id', branch.id, ctx)
       }

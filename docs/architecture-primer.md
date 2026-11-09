@@ -290,12 +290,12 @@ tool that reports "interrupted" may or may not have finished, so it checks befor
   documents, task graph; `server/api.ts:85-105`, `:304-350`) and invokes extension actions at
   `POST /api/extensions/:name/actions/:action` (`server/api.ts:107-149`).
 - `server/extensions.ts` discovers, validates and installs extension facets (below); `server/events.ts` provides durable
-  events and reactors; `server/trace.ts` records every call into `trace.sqlite` (`docs/extensions.md:153-194`).
+  events and reactors; `server/trace.ts` records every call into `trace.sqlite` (`docs/extensions/introspection.md`).
 
 ### 3.5 The extension model
 
 Almost everything is an extension, including the conversation UI itself (`extensions/README.md:3-6`). A folder
-`extensions/<name>/` holds up to these files (`docs/extensions.md:3-8`, `:120-148`):
+`extensions/<name>/` holds up to these files (`docs/extensions/server.md`, `docs/extensions/contracts.md`):
 
 | File        | Role                                                                                            |
 | ----------- | ----------------------------------------------------------------------------------------------- |
@@ -312,10 +312,10 @@ the opt-in; `defaultOff` built-ins need `extensions.enable` (`shared/extension-a
 
 **Reload.** Server facets load through Vite's `ssrLoadModule`, are validated, and are installed into the Pi Durable
 registry; file watchers reinstall a changed facet and its dependents, and a failed load keeps the previous version
-(`server/extensions.ts:480-538`, `:645-697`; `docs/extensions.md:8`). Web facets come from a generated virtual module
+(`server/extensions.ts:480-538`, `:645-697`; `docs/extensions/server.md`). Web facets come from a generated virtual module
 of lazy imports, replaced in place by Vite HMR (`server/vite-extensions.ts:10-21`, `web/src/extensions.ts:13-60`).
 
-**Talking to each other**: four channels, chosen by what crosses them (`docs/extensions.md:150-151`):
+**Talking to each other**: four channels, chosen by what crosses them (`docs/extensions/contracts.md`):
 
 | Channel       | For                      | API                                                                            |
 | ------------- | ------------------------ | ------------------------------------------------------------------------------ |
@@ -355,15 +355,15 @@ flowchart LR
 
 - **`need` vs `want`.** `need` is a hard dependency (an error while nothing provides it); `want` is optional and returns
   undefined. Handles resolve the current provider on every access, so they survive provider reloads
-  (`docs/extensions.md:102-111`, `server/extension-apis.ts:47-132`).
+  (`docs/extensions/contracts.md`, `server/extension-apis.ts:47-132`).
 - **Core tier.** The always-on heart (agent, prompt, coding-tools, conversations, models, documents, notices, secrets,
   theme, workspaces, subagents, lineage, messages, onboarding, sidebar) depends only on itself, in nine layers, one way
-  (`docs/extensions.md:61-89`). When a lower layer needs something a higher one knows, it declares an **extension
-  point** and the higher one implements it (`docs/extensions.md:91-118`). `pnpm deps` fails on a cycle or a core
+  (`docs/extensions/core-tier.md`). When a lower layer needs something a higher one knows, it declares an **extension
+  point** and the higher one implements it (`docs/extensions/contracts.md`). `pnpm deps` fails on a cycle or a core
   extension depending on an optional one.
 - **Durable events.** An event commits _inside_ the transaction that makes the change, and a reactor's cursor advances
   in its handler's transaction, so reactor writes happen exactly once; effects outside the transaction are at least
-  once (`docs/extensions.md:17-32`, `server/events.ts:55-80`). Events live in one ownerless "Events" conversation
+  once (`docs/extensions/events.md`, `server/events.ts:55-80`). Events live in one ownerless "Events" conversation
   (`docs/durability.md:11-15`).
 
 ### 3.6 Surfaces and the web SDK
@@ -561,7 +561,7 @@ What Ultimate chooses, and what it deliberately does **not** build:
 | **One file per project**           | Each project home has its own `state.sqlite` and one owner process (`docs/running.md:12`)                                      | No database server, no cross-process locking, no shared multi-project store                              |
 | **A tiny supervisor**              | `bin/` only owns the port, lock and swaps; changes rarely (`AGENTS.md:62`)                                                     | No orchestration layer; the core swaps itself with a type-checked handover                               |
 | **Features are extensions**        | Even the Agent surface is one; new UI is a new folder (`extensions/README.md:3-6`, `AGENTS.md:64-68`)                          | No feature code in `server/` or `web/` that would need a restart                                         |
-| **Typed, one-way contracts**       | `api.ts` services, `need`/`want`, points and events; core tier depends only downward (`docs/extensions.md:61-118`)             | No global event bus for state, no cycles, no untyped `provide`/`use`                                     |
+| **Typed, one-way contracts**       | `api.ts` services, `need`/`want`, points and events; core tier depends only downward (`docs/extensions/core-tier.md`)          | No global event bus for state, no cycles, no untyped `provide`/`use`                                     |
 | **Layering over configuration**    | Built-in → user → project, later wins, for extensions, agents, skills and settings (`docs/settings.md:3`)                      | No plugin registry, no config DSL; a folder _is_ the opt-in                                              |
 | **Behaviour lives in prompts**     | Rules about how agents act live in `agents/*.md` and prompts; code guards only safety and invalid states (`AGENTS.md:110-111`) | No policy engine; lint enforces only what the user asked for                                             |
 | **Isolation by directory**         | Worktrees (copy-on-write clones), not containers (`extensions/subagents/README.md:72,90`)                                      | No sandboxes or remote machines; cheap, fast, Git-native                                                 |
@@ -587,7 +587,7 @@ Everything above is composed from these. If you learn only one table, learn this
 | 7   | **Tool**                    | A schema-validated call run as its own task, with a replay policy                                                     | `PD/README.md:245-305`; `defineTool`                                     |
 | 8   | **Hook / section / wrap**   | The only ways to change the built-in loop: before/after input, request, tool, compaction; prompt sections; decorators | `PD/dist/harness/types.d.ts:786-838`, `PD/dist/harness/define.d.ts:4-17` |
 | 9   | **Extension facet**         | A folder with `server.ts` (Pi Durable extension, actions, reactors) and `web.tsx` (UI contributions), hot-reloaded    | `extensions/README.md`, `server/extensions.ts`, `web/src/sdk/`           |
-| 10  | **Contract**                | `api.ts` service tokens (`need`/`want`), extension points, `refs.ts` doc/action refs                                  | `shared/extension-api.ts`, `docs/extensions.md:100-151`                  |
+| 10  | **Contract**                | `api.ts` service tokens (`need`/`want`), extension points, `refs.ts` doc/action refs                                  | `shared/extension-api.ts`, `docs/extensions/contracts.md`                |
 | 11  | **Durable event + reactor** | "This happened", committed with the change; handled once per reactor via a cursor in the same tx                      | `shared/events.ts`, `server/events.ts:55-80`                             |
 | 12  | **Agent definition**        | Markdown + frontmatter profile for subagents, standing agents, automations and the lander                             | `agents/*.md`, `lib/agents.ts`                                           |
 | 13  | **Workspace**               | A per-conversation Git worktree, copy-on-write cloned, with a record in `ultimate.workspaces`                         | `extensions/workspaces/`                                                 |
@@ -615,7 +615,7 @@ Composed examples:
 | **Chapter**             | One `state.sqlite` generation of a project home; "Fall asleep" starts a fresh one (`server/harness.ts:131`, `extensions/dream/README.md`) |
 | **Coordinator**         | The agent that runs a branch: plans, delegates, verifies, submits (`agents/coordinator.md`)                                               |
 | **Core swap**           | Replacing the core child process with type-checked new code, handing over storage (`bin/ultimate.ts:394-444`)                             |
-| **Core tier**           | The always-on extensions, depending only on each other, one way (`docs/extensions.md:61-89`)                                              |
+| **Core tier**           | The always-on extensions, depending only on each other, one way (`docs/extensions/core-tier.md`)                                          |
 | **Divergence**          | How a result differs from the task as given, stated at submit; "None" when it matches                                                     |
 | **Extension point**     | A contract a lower extension declares and `want`s, which a higher one implements                                                          |
 | **Facet**               | One side of an extension: server (`server.ts`) or web (`web.tsx`)                                                                         |
@@ -641,7 +641,7 @@ Composed examples:
 | Hook and task types               | `PD/dist/harness/types.d.ts`, `PD/dist/types.d.ts`, `PD/dist/harness/generation.d.ts`, `PD/dist/harness/tool.d.ts`                                                             |
 | Layers and conventions            | `AGENTS.md`                                                                                                                                                                    |
 | Starting, swapping, resetting     | `docs/running.md`, `bin/ultimate.ts`, `server/main.ts`, `server/harness.ts`                                                                                                    |
-| Durability, events, documents     | `docs/durability.md`, `docs/extensions.md`, `server/events.ts`                                                                                                                 |
+| Durability, events, documents     | `docs/durability.md`, `docs/extensions/events.md`, `docs/extensions/documents.md`, `server/events.ts`                                                                          |
 | Writing an extension or surface   | `extensions/README.md`, the `write-extension` skill, `extensions/status-line`, `extensions/coding-tools`                                                                       |
 | Trees, memory, notes, catch-up    | `extensions/lineage/README.md`                                                                                                                                                 |
 | Messages and the user boundary    | `extensions/messages/README.md`                                                                                                                                                |
@@ -650,4 +650,4 @@ Composed examples:
 | Automations                       | `extensions/automations/README.md`                                                                                                                                             |
 | Settings and trust                | `docs/settings.md`, `server/discovery.ts`, `server/project-setup.ts`                                                                                                           |
 | What is patched or copied from Pi | `docs/pi-upstream.md` (`rg "Pi upstream:"`)                                                                                                                                    |
-| Inspecting a live system          | codemode `ultimate.*`: `entries`, `search`, `taskGraph`, `trace`, `catalogue`, `api(name)` (`docs/extensions.md:196-198`)                                                      |
+| Inspecting a live system          | codemode `ultimate.*`: `entries`, `search`, `taskGraph`, `trace`, `catalogue`, `api(name)` (`docs/extensions/introspection.md`)                                                |

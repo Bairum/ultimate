@@ -1,7 +1,7 @@
 /** Who a message is from and to: resolving addresses, naming senders, and a subagent's parent. */
 import type { Context } from '@earendil-works/chord'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import type { Remote } from './refs.ts'
@@ -11,6 +11,21 @@ import { Started } from './api.ts'
 export async function starterOf(host: ExtensionHost, id: number | 'user', ctx: Context) {
   if (typeof id !== 'number') return undefined
   return (await host.harness().snapshot(Started, id as ConversationId, ctx))?.by
+}
+/**
+ * Inside `tx`, for the starter `to` reading branch `from`'s reply or report: whose request the branch serves, and that
+ * concluding it sends the starter's final answer there. Empty for anything else.
+ */
+export async function servesLine(
+  tx: Tx,
+  from: number | 'user' | 'remote',
+  to: number | 'user' | 'remote',
+) {
+  if (typeof from !== 'number') return ''
+  const { by, serves } = await tx.doc(Started, from as ConversationId)
+  if (!serves || by !== to) return ''
+  const asker = serves.from === 'remote' ? remoteLabel(serves.remote!) : `#${serves.from}`
+  return `\n#${from} works on ${asker}'s message ${serves.message}. Once #${from} is concluded, your final answer to it goes to ${asker} instead.`
 }
 /** The conversation that started `id` as a subagent, which is the only one it may message. */
 export async function parentOf(host: ExtensionHost, id: number, ctx: Context) {

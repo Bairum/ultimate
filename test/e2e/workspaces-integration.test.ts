@@ -28,7 +28,7 @@ import { git } from '../../lib/git.ts'
 import { setup } from '../../extensions/workspaces/setup.ts'
 import type { LanderEntry, WorkspaceIndex } from '../../extensions/workspaces/types.ts'
 import { createLander, landerCheckout, landerPath } from '../../extensions/workspaces/lander.ts'
-import { CheckRan, SubmissionLanded } from '../../extensions/workspaces/api.ts'
+import { CheckRan, SubmissionFailed, SubmissionLanded } from '../../extensions/workspaces/api.ts'
 import lineage, { leaveNote, startBranch } from '../../extensions/lineage/server.ts'
 import { LineageApi, Roots } from '../../extensions/lineage/api.ts'
 import {
@@ -1157,6 +1157,12 @@ it.concurrent('wakes only the submitter on a failed landing and leaves it open',
   const { id: submission } = await f.service.submit(id, 'None', context)
   const [report] = await submitted(f, id)
   expect(report).toContain('was not landed: check failed twice: exit 1')
+  expect(await f.host.eventLog.recent({ events: [SubmissionFailed] })).toMatchObject([
+    {
+      fails: 'workspaces.landed',
+      data: { submission, conversationId: id, reason: 'check failed twice: exit 1' },
+    },
+  ])
   expect(await concludedIds(f)).not.toContain(id)
   expect((await f.service.get(id, context))!.state).toBe('ready')
   const requests = await f.opened.harness.commit(
@@ -1245,6 +1251,14 @@ it.concurrent('lands two submissions in order onto a moved target and reports bo
       `^Merge .* from #${second} into main\nMerge .* from #${first} into main\nmoved.txt$`,
     ),
   )
+  expect(
+    await git(
+      f.projectRoot,
+      'log',
+      '-1',
+      '--format=%(trailers:key=Ultimate-Conversation,valueonly)',
+    ),
+  ).toBe(String(second))
   expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
   for (const name of ['one.txt', 'two.txt', 'moved.txt'])
     expect(await readFile(join(f.projectRoot, name), 'utf8')).toBe(name)
@@ -1276,6 +1290,7 @@ it.concurrent('lands two submissions in order onto a moved target and reports bo
     'fast-forwarding',
     'landed',
   ])
+  expect(firstLog[5].runs).toBe('test -f base.txt')
   expect(firstLog[6].check).toEqual({ command: 'test -f base.txt', result: 'passed' })
   const landedOne = firstLog.at(-1)!
   expect(landedOne).toMatchObject({ conversationId: first, outcome: 'landed' })
