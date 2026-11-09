@@ -107,11 +107,21 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(share(event.request))
 })
 
-async function share(request) {
+// One share at a time: with the share extension off (the default) no page takes a share out, and any site can post
+// here, so each share replaces the one before rather than piling up (#105197). Shares run one after another, so two
+// posts at once cannot both clear the cache and then both stash.
+let sharing = Promise.resolve()
+function share(request) {
+  const next = sharing.then(() => stash(request))
+  sharing = next.catch(() => {
+    // A failed share answers its own request with the error; the next share still runs.
+  })
+  return next
+}
+
+async function stash(request) {
   const form = await request.formData()
   const id = crypto.randomUUID()
-  // One share at a time: with the share extension off (the default) no page takes a share out, and any site can post
-  // here, so an older share is dropped rather than left to pile up (#105197).
   await caches.delete('ultimate-share')
   const cache = await caches.open('ultimate-share')
   const files = form.getAll('files').filter((file) => file instanceof File && file.size > 0)
