@@ -107,7 +107,9 @@ export async function acknowledge(
   const matches = [
     ...text.matchAll(
       // Tolerates list markers, quotes and inline code around the line, as agents format replies.
-      /^[\s>*\-•`]*advisor\s+`?([a-z0-9]+)`?\s*:\s*`?(addressed|deferred|disputed)`?\s*[—–\-:]\s*(.+)$/gim,
+      // The status ends at a separator (dash, colon, period) or the line end, so prose such as
+      // "advisor 0001: addressed by …" never counts; agents write `addressed.` too (#108592).
+      /^[\s>*\-•`]*advisor\s+`?([a-z0-9]+)`?\s*:\s*`?(addressed|deferred|disputed)`?\s*(?:[—–\-:.]\s*(.*))?$/gim,
     ),
   ]
   if (!matches.length) return
@@ -125,7 +127,7 @@ export async function acknowledge(
         note.response = {
           status: match[2].toLowerCase() as 'addressed' | 'deferred' | 'disputed',
           source: 'ack',
-          reason: match[3].trim().slice(0, 500),
+          reason: (match[3] ?? '').trim().slice(0, 500),
           at: Date.now(),
         }
     }

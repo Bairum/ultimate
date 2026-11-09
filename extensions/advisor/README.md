@@ -90,7 +90,7 @@ advisor 00002: deferred — waiting on the user's decision
 advisor 00003: disputed — this check does not apply here
 ```
 
-Acknowledgements are case-insensitive; the latest line replaces an earlier acknowledgement. A note becomes read when a model request contains its `<advisory id="ref">` tag, without changing the request. Continuations count as read at delivery. Cards never count as read or receive responses.
+Acknowledgements are case-insensitive; the status ends at a dash, colon, period or the line end (`advisor 00001: addressed.` counts, `advisor 00001: addressed by …` does not), and the latest line replaces an earlier acknowledgement. A note becomes read when a model request contains its `<advisory id="ref">` tag, without changing the request. Continuations count as read at delivery. Cards never count as read or receive responses.
 
 At a final answer, after any advisor continuation of that run, acknowledged notes resolve without a model call. Other notes read in the run are judged, durably and without tools, from bounded transcript evidence:
 

@@ -813,6 +813,22 @@ it.each(['addressed', 'deferred', 'disputed'])(
     expect(
       (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0].response,
     ).toMatchObject({ status: 'deferred', reason: 'later' })
+    await f.hooks.afterResponse(
+      fauxAssistantMessage([fauxText(`advisor ${note.ref}: ${status}. reran it`)]),
+      f.api(),
+      context,
+    )
+    expect(
+      (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0].response,
+    ).toMatchObject({ status, reason: 'reran it' })
+    await f.hooks.afterResponse(
+      fauxAssistantMessage([fauxText(`advisor ${note.ref}: deferred.`)]),
+      f.api(),
+      context,
+    )
+    expect(
+      (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes[0].response,
+    ).toMatchObject({ status: 'deferred', reason: '' })
   },
 )
 it('judges read notes once, resolves acknowledgements without a model, and preserves user closes', async () => {
