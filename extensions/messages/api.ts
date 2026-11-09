@@ -53,11 +53,13 @@ export const Messages = defineDoc<{ messages: Message[]; next: number }>({
   fork: 'initial',
   initial: () => ({ messages: [], next: 1 }),
 })
+/** The agent's request a branch works on: the one request its starter owed an answer when it started the branch. */
+export type Serves = { message: number; from: number | 'remote'; remote?: Remote }
 /**
- * Who started a branch through `branch`, so its later final answers reach that conversation. `yielded` is the newest
- * generation observed, so a replayed hook creates no second observer.
+ * Who started a branch through `branch`, so its later final answers reach that conversation, and the request it serves.
+ * `yielded` is the newest generation observed, so a replayed hook creates no second observer.
  */
-export const Started = defineDoc<{ by?: number; yielded?: number }>({
+export const Started = defineDoc<{ by?: number; yielded?: number; serves?: Serves }>({
   kind: 'board.started',
   checkpointWhen: () => false,
   version: 1,

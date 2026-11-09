@@ -72,6 +72,9 @@ export const defaultOff: readonly string[] = [
   'hashline',
   'codex-computer',
   'voice-live',
+  'push',
+  // Off until it asks before anything reaches the composer: any site can post to a share target (#105197).
+  'share',
 ]
 
 /** Who provides and who consumes each API, as `host.catalogue()` reports it. */
