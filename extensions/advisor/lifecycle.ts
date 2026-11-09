@@ -396,9 +396,11 @@ export async function expireNotes(
       if (note.response) continue
       const summary = summaries.find((s) => s.id === to)
       const ended = concluded.has(to)
-      // A routed note waits for its parent's next turn however long that takes: it is never late.
+      // A routed note waits for its parent's next turn however long that takes, and so does an @ultimate note (a
+      // standing agent, idle until the user writes): neither is ever late.
       const late =
         note.routedTo === undefined &&
+        note.role !== 'ultimate' &&
         summary?.answerAt !== undefined &&
         note.at > summary.answerAt &&
         (summary.inputAt ?? 0) <= summary.answerAt &&

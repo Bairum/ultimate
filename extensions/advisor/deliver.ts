@@ -37,10 +37,11 @@ export function route(
   lastInput: number | undefined,
   now: number,
   continued: 'run' | 'review' | undefined,
-  ledgerActionable: boolean,
 ): { delivered: AdvisorNoteEntry['delivered']; reason: DeliveryReason } {
+  // @ultimate is never held, continued or steered: concerns and blockers reach it as passive notes it acknowledges
+  // (cards alone piled up unread, #101169); nits stay cards.
   if (role === 'ultimate')
-    return { delivered: ledgerActionable ? 'note' : 'card', reason: 'default' }
+    return { delivered: reaches(notes, 'concern') ? 'note' : 'card', reason: 'default' }
   const quiet = lastInput !== undefined && now - lastInput < (profile.quietMs ?? 600_000)
   const continues = point === 'answer' && reaches(notes, profile.continueOn)
   const steers = point !== 'answer' && point !== 'idle' && reaches(notes, profile.steerOn)
@@ -86,7 +87,12 @@ export async function deliver(
     const live = await host.harness().snapshot(LiveDoc, id, context)
     if (!live?.run || live.run.inputs[0] !== run) entry = { ...entry, delivered: 'note' }
   }
-  const content = advisory(entry.advisor, entry.notes)
+  // @ultimate's transcript is the user's chat: its acknowledgements go with its work, not into answers to the user.
+  const content =
+    advisory(entry.advisor, modelNotes(entry)) +
+    (entry.role === 'ultimate'
+      ? ' These lines are for the advisor, not the user: write them in the text before a tool call, never in a message or answer to the user; act on a note the user must decide by asking them.'
+      : '')
   const draft = { kind: 'advisor.note', data: entry }
   // Writes permit an entry without model messages: cards never enter the model context.
   const submission =
@@ -117,7 +123,7 @@ export async function deliver(
       for (const note of state.notes)
         if (note.conversation === id && ids.has(note.id)) {
           note.entry = status.entry
-          note.delivered = entry.delivered
+          note.delivered = deliveredAs(entry, note)
           if (entry.delivered === 'continue') {
             note.readAt ??= Date.now()
             if (run !== undefined) {
@@ -132,6 +138,18 @@ export async function deliver(
     stored(host, id, entry.notes, false)
   return entry.delivered === 'continue' ? content : undefined
 }
+/**
+ * How one note of a review reached the agent: @ultimate's nits stay cards even when a concern of the same review is
+ * delivered as a note, so the agent is never asked to acknowledge a nit (#101169).
+ */
+export const deliveredAs = (
+  entry: Pick<AdvisorNoteEntry, 'role' | 'delivered'>,
+  note: { severity: ReviewNote['severity'] },
+): AdvisorNoteEntry['delivered'] =>
+  entry.role === 'ultimate' && note.severity === 'nit' ? 'card' : entry.delivered
+/** The notes of a delivery that enter the model context. */
+const modelNotes = (entry: AdvisorNoteEntry) =>
+  entry.notes.filter((n) => deliveredAs(entry, n) !== 'card')
 /** Drops notes the user dismissed before delivery; the earlier placement when this is a replay. */
 function place(
   host: ExtensionHost,

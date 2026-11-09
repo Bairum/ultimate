@@ -153,7 +153,7 @@ it('routes quiet periods, idle and ultimate without waking ultimate', () => {
     quietMs: 100,
   }
   const at = (point: 'answer' | 'rounds' | 'idle', last: number, continued?: 'run' | 'review') =>
-    route('worker', profile, point, notes, last, 200, continued, false)
+    route('worker', profile, point, notes, last, 200, continued)
   expect(at('answer', 0)).toEqual({ delivered: 'continue', reason: 'continue' })
   expect(at('answer', 0, 'run')).toEqual({ delivered: 'card', reason: 'cap' })
   expect(at('answer', 0, 'review')).toEqual({ delivered: 'card', reason: 'continue' })
@@ -161,11 +161,14 @@ it('routes quiet periods, idle and ultimate without waking ultimate', () => {
   expect(at('rounds', 0)).toEqual({ delivered: 'steer', reason: 'steer' })
   expect(at('rounds', 150)).toEqual({ delivered: 'note', reason: 'quiet' })
   expect(at('idle', 0)).toEqual({ delivered: 'card', reason: 'default' })
+  // @ultimate is never held or steered: concerns and blockers reach it as passive notes, nits stay cards (#101169).
   for (const point of ['answer', 'rounds', 'idle', 'signals'] as const) {
-    const ultimate = (actionable: boolean) =>
-      route('ultimate', profile, point, notes, undefined, 200, undefined, actionable).delivered
-    expect(ultimate(false)).toBe('card')
-    expect(ultimate(true)).toBe('note')
+    const ultimate = (severity: 'nit' | 'concern' | 'blocker') =>
+      route('ultimate', profile, point, [{ ...notes[0], severity }], undefined, 200, undefined)
+        .delivered
+    expect(ultimate('nit')).toBe('card')
+    expect(ultimate('concern')).toBe('note')
+    expect(ultimate('blocker')).toBe('note')
   }
 })
 it('writes a card without model context, and a note as passive user context', async () => {
@@ -615,7 +618,7 @@ it('keeps the original brief after an advisor continuation and never counts its 
     submission.mockRestore()
   }
 })
-it('does not let newly invented ledger items authorize a passive ultimate note, and bounds the ledger', async () => {
+it('delivers an ultimate blocker as a passive note, and bounds the ledger', async () => {
   const f = await fixture('ultimate')
   await f.harness.commit(async (tx) => {
     const ledger = await tx.doc(Ledger, f.id)
@@ -649,13 +652,43 @@ it('does not let newly invented ledger items authorize a passive ultimate note, 
     [],
     context,
   )
-  const conversation = (await f.harness.conversation(f.id, context))!
-  const entries = (await conversation.entries({ order: 'ascending' }, 20, undefined, context)).items
-  expect(entries.find((e) => e.kind === 'advisor.note')?.data).toMatchObject({ delivered: 'card' })
+  // A model-visible write waits for the live run to end, so check the stored note rather than the transcript.
+  const state = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
+  expect(state.notes.find((n) => n.role === 'ultimate')).toMatchObject({ delivered: 'note' })
   const ledger = (await f.harness.snapshot(Ledger, f.id, context))!.items
   expect(ledger).toHaveLength(50)
   expect(ledger.filter((i) => i.text.startsWith('Invented'))).toHaveLength(5)
   expect(ledger.some((i) => i.id === 'old0')).toBe(false)
+})
+// #101169: the advisor judged work by the run's first request alone, and cut @ultimate's ledger oldest first.
+it('shows the advisor later inputs of the run and the newest ledger items first', () => {
+  const input = (id: number, text: string) =>
+    ({
+      id,
+      kind: 'pi.user',
+      model: [{ role: 'user', content: text, timestamp: 0 }],
+    }) as never
+  const items = Array.from({ length: 80 }, (_, i) => ({
+    id: `item${i}`,
+    kind: 'promise' as const,
+    text: `Promise ${i} `.padEnd(150, '.'),
+    since: i,
+  }))
+  const rendered = JSON.parse(
+    renderInput(
+      [input(1, 'Change only P1'), input(2, 'P2 and P3 are approved too')],
+      'ultimate',
+      '',
+      '',
+      undefined,
+      { items },
+    ),
+  )
+  expect(rendered.request).toBe('Change only P1')
+  expect(rendered.laterInputs).toEqual([{ entry: 2, text: 'P2 and P3 are approved too' }])
+  expect(rendered.ledger[0].id).toBe('item79')
+  expect(rendered.ledger.length).toBeLessThan(80)
+  expect(JSON.stringify(rendered.ledger).length).toBeLessThanOrEqual(8192)
 })
 it.each(['idle', 'new run'] as const)(
   'downgrades a stale steer to a passive note: %s',
@@ -929,6 +962,40 @@ it('records late and unread notes on the five-minute tick and reports lifecycle 
   expect(await actions.stats({ days: 7 }, { host: f.host } as never)).toMatchObject({
     roles: { worker: { delivered: 2, read: 0, late: 1, unread: 1, pending: 0 } },
   })
+})
+// #101169: @ultimate is idle until the user writes, so its notes must wait to be read; its nits never reach the model.
+it('keeps an idle ultimate note open and leaves its nits as cards', async () => {
+  const f = await fixture('ultimate')
+  f.response.content = [
+    fauxText(
+      JSON.stringify({
+        notes: [
+          { ...notes[0], severity: 'concern', note: 'Promise broken' },
+          { ...notes[0], severity: 'nit', note: 'Wording' },
+        ],
+      }),
+    ),
+  ]
+  await review(
+    f.host,
+    f.api(),
+    { role: 'ultimate', point: 'answer', run: 100 },
+    f.config,
+    [],
+    context,
+  )
+  const delivered = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!.notes
+  expect(delivered.map((n) => [n.severity, n.delivered])).toEqual([
+    ['concern', 'note'],
+    ['nit', 'card'],
+  ])
+  vi.spyOn(f.host, 'conversations').mockReturnValue([
+    { id: f.id, label: 'ultimate', busy: false, answerAt: 1, inputAt: 0, cwd: f.host.projectRoot },
+  ] as never)
+  await expireNotes(f.host, f.config, new Set(), context)
+  const state = (await f.harness.snapshot(State, ROOT_CONVERSATION_ID, context))!
+  expect(state.notes[0]).toMatchObject({ status: 'open' })
+  expect(state.notes[0].response).toBeUndefined()
 })
 it('skips a pending delivery dismissed by the user', async () => {
   const f = await fixture()
