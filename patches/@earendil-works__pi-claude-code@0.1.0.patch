@@ -1,8 +1,16 @@
 diff --git a/src/claude-cli.ts b/src/claude-cli.ts
-index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a8bba6c62 100644
+index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..21a4385e05fc186073633030fca682716faffc74 100644
 --- a/src/claude-cli.ts
 +++ b/src/claude-cli.ts
-@@ -19,7 +19,7 @@ import type {
+@@ -6,6 +6,7 @@ import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:pat
+ import { fileURLToPath } from "node:url";
+ import { createInterface } from "node:readline";
+ import { spawn, type ChildProcess } from "node:child_process";
++import { once } from "node:events";
+ import { registerSessionResourceCleanup } from "@earendil-works/pi-ai";
+ import { TurnRelay } from "./turn-relay.ts";
+ import { usageCreditsAllowed, usageCreditsChargeError, type RateLimitInfo } from "./billing.ts";
+@@ -19,7 +20,7 @@ import type {
    NativeResult,
    NativeUsage,
  } from "./native-types.ts";
@@ -11,7 +19,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a
  
  export const INSTALL_HINT =
    "Claude Code is not installed. Install it with `npm install -g @anthropic-ai/claude-code` " +
-@@ -31,6 +31,8 @@ export interface ClaudeStatus {
+@@ -31,6 +32,8 @@ export interface ClaudeStatus {
    loggedIn: boolean;
    /** True when Claude Code reports a Claude Pro/Max-style subscription login. */
    subscription: boolean;
@@ -20,7 +28,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a
    authMethod?: string;
    plan?: string;
    detail?: string;
-@@ -45,7 +47,6 @@ export interface RunClaudeInput {
+@@ -45,7 +48,6 @@ export interface RunClaudeInput {
    systemPrompt: string;
    manifest: ToolManifestEntry[];
    extraBody: Record<string, unknown>;
@@ -28,7 +36,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a
    signal?: AbortSignal;
    timeoutMs?: number;
    env?: Record<string, string | undefined>;
-@@ -158,26 +159,36 @@ export async function getClaudeStatus(
+@@ -158,26 +160,36 @@ export async function getClaudeStatus(
    const env = withConfigDirectory(envInput);
    const command = await resolveClaudeExecutable(env);
    if (!command) return { available: false, loggedIn: false, subscription: false, detail: INSTALL_HINT };
@@ -62,11 +70,11 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a
 +    payload = JSON.parse(result.stdout) as typeof payload;
 +  } catch {
 +    payload = undefined;
-   }
++  }
 +  if (typeof payload?.loggedIn !== "boolean") {
 +    const detail = `claude auth status gave no status (exit ${result.code}): ${result.stderr.trim().slice(0, 300)}`;
 +    return { available: true, loggedIn: false, subscription: false, unknown: true, command, detail };
-+  }
+   }
 +  const loggedIn = payload.loggedIn;
 +  const plan = typeof payload.subscriptionType === "string" ? payload.subscriptionType : undefined;
 +  return {
@@ -81,7 +89,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a
  }
  
  const READY_STATUS_TTL_MS = 60_000;
-@@ -199,6 +210,7 @@ async function readyClaudeCommand(
+@@ -199,6 +211,7 @@ async function readyClaudeCommand(
  
    const status = await getClaudeStatus(env, signal);
    if (!status.available || !status.command) throw new Error(INSTALL_HINT);
@@ -89,7 +97,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a
    if (!status.loggedIn) {
      readyStatusCache.delete(key);
      throw new Error(LOGIN_HINT);
-@@ -316,6 +328,13 @@ export async function discoverClaudeModels(
+@@ -316,6 +329,13 @@ export async function discoverClaudeModels(
    }
  }
  
@@ -103,7 +111,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a
  function spawnCommand(
    command: string,
    args: string[],
-@@ -324,23 +343,31 @@ function spawnCommand(
+@@ -324,23 +344,31 @@ function spawnCommand(
    if (process.platform === "win32" && /\.(?:cmd|bat)$/iu.test(command)) {
      const comspec = options?.env?.COMSPEC || process.env.COMSPEC || "cmd.exe";
      const quote = (value: string) => `"${value.replace(/"/gu, '""')}"`;
@@ -141,7 +149,25 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a
    if (process.platform === "win32") {
      const killer = spawn("taskkill", ["/F", "/T", "/PID", String(child.pid)], {
        stdio: "ignore",
-@@ -544,15 +571,23 @@ function setReplayCacheBreakpoints(messages: NativeRequestMessage[]): void {
+@@ -444,14 +472,10 @@ function processEnvironment(
+   return env;
+ }
+ 
+-async function writeFrame(child: ChildProcess, frame: NativeFrame): Promise<void> {
++export async function writeFrame(child: ChildProcess, frame: NativeFrame): Promise<void> {
+   if (!child.stdin?.writable) throw new Error("Claude Code stdin closed during history replay");
+-  if (!child.stdin.write(`${JSON.stringify(frame)}\n`)) {
+-    await new Promise<void>((resolve, reject) => {
+-      child.stdin!.once("drain", resolve);
+-      child.stdin!.once("error", reject);
+-    });
+-  }
++  // events.once drops both listeners whichever settles; a bare once("error") stayed on the reused stdin after each drain.
++  if (!child.stdin.write(`${JSON.stringify(frame)}\n`)) await once(child.stdin, "drain");
+ }
+ 
+ function nativeErrorText(event: Extract<NativeOutputEvent, { type: "assistant" }>): string | undefined {
+@@ -544,15 +568,23 @@ function setReplayCacheBreakpoints(messages: NativeRequestMessage[]): void {
    const userIndexes = messages
      .map((message, index) => (message.role === "user" ? index : -1))
      .filter((index) => index >= 0);
@@ -172,7 +198,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a
    }
    const final = messages.at(-1);
    if (final) setCacheBreakpoint(final);
-@@ -642,6 +677,11 @@ export function rewriteInitialRequest(
+@@ -642,6 +674,11 @@ export function rewriteInitialRequest(
    };
    let messages = payload.messages;
    const first = messages?.[0];
@@ -184,7 +210,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a
    if (first?.role !== "user" || !Array.isArray(first.content)) {
      throw new Error("Claude Code request is missing its initial user message");
    }
-@@ -666,9 +706,11 @@ export function rewriteInitialRequest(
+@@ -666,9 +703,11 @@ export function rewriteInitialRequest(
    if (nativeSystemInjections) {
      messages = injectNativeSystemMessages(messages!, nativeSystemInjections);
      payload.messages = messages;
@@ -197,7 +223,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a
  
    return Buffer.from(JSON.stringify(payload));
  }
-@@ -726,6 +768,20 @@ function launchPlan(input: RunClaudeInput): ClaudeLaunchPlan {
+@@ -726,6 +765,20 @@ function launchPlan(input: RunClaudeInput): ClaudeLaunchPlan {
    };
  }
  
@@ -218,7 +244,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a
  class ClaudeProcess {
    busy = false;
    readonly createdAt = Date.now();
-@@ -976,11 +1032,7 @@ class ClaudeProcess {
+@@ -976,11 +1029,7 @@ class ClaudeProcess {
          message = assistants.at(-1);
        }
  
@@ -231,7 +257,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..84ea5dde00f9fa72c9c29d294325e25a
  
        const nativeFailureHandled = this.relay.denied > 0 || message.stop_reason === "refusal";
        if (nativeError && !nativeFailureHandled) throw new Error(`Claude Code API error: ${nativeError}`);
-@@ -990,13 +1042,6 @@ class ClaudeProcess {
+@@ -990,13 +1039,6 @@ class ClaudeProcess {
          throw new Error(`Claude Code request failed: ${result.subtype ?? "unknown result"}`);
        }
  

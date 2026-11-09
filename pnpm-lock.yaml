@@ -10,7 +10,7 @@ overrides:
 patchedDependencies:
   '@earendil-works/chord@1.5.0': 0a84e0316a4ce02b090b6c94540148771592890bc6f0869d75243fa34e5d3f25
   '@earendil-works/pi-ai@1.5.0': ef92391f98de55547f55cd5a319ffd9733e0a9a690b86b8107feebec19d7d1e4
-  '@earendil-works/pi-claude-code@0.1.0': d74c68802285b391ba99fe2c9fcf814d13070504f9dabb867ebcdaeb13991f34
+  '@earendil-works/pi-claude-code@0.1.0': 33658de18a4e500a7d747eb001445f4c580012849d3c7d5c4660b0a646862072
   '@earendil-works/pi-durable@1.5.0': bf497a135c5f0a4a0f281d6fc345501dd8703ebce702cdd1da71e43d74982d3e
 
 importers:
@@ -25,7 +25,7 @@ importers:
         version: 1.5.0(patch_hash=ef92391f98de55547f55cd5a319ffd9733e0a9a690b86b8107feebec19d7d1e4)(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.4)(undici@8.10.2)(zod@4.6.7)
       '@earendil-works/pi-claude-code':
         specifier: github:earendil-works/pi-claude-code#70abb65186592ca788b29b3db22c3160d629c41f
-        version: https://codeload.github.com/earendil-works/pi-claude-code/tar.gz/70abb65186592ca788b29b3db22c3160d629c41f(patch_hash=d74c68802285b391ba99fe2c9fcf814d13070504f9dabb867ebcdaeb13991f34)(@earendil-works/pi-ai@1.5.0(patch_hash=ef92391f98de55547f55cd5a319ffd9733e0a9a690b86b8107feebec19d7d1e4)(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.4)(undici@8.10.2)(zod@4.6.7))(@earendil-works/pi-coding-agent@1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.4)(zod@4.6.7))
+        version: https://codeload.github.com/earendil-works/pi-claude-code/tar.gz/70abb65186592ca788b29b3db22c3160d629c41f(patch_hash=33658de18a4e500a7d747eb001445f4c580012849d3c7d5c4660b0a646862072)(@earendil-works/pi-ai@1.5.0(patch_hash=ef92391f98de55547f55cd5a319ffd9733e0a9a690b86b8107feebec19d7d1e4)(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.4)(undici@8.10.2)(zod@4.6.7))(@earendil-works/pi-coding-agent@1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.4)(zod@4.6.7))
       '@earendil-works/pi-codemode':
         specifier: 1.5.0
         version: 1.5.0
@@ -4059,7 +4059,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-claude-code@https://codeload.github.com/earendil-works/pi-claude-code/tar.gz/70abb65186592ca788b29b3db22c3160d629c41f(patch_hash=d74c68802285b391ba99fe2c9fcf814d13070504f9dabb867ebcdaeb13991f34)(@earendil-works/pi-ai@1.5.0(patch_hash=ef92391f98de55547f55cd5a319ffd9733e0a9a690b86b8107feebec19d7d1e4)(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.4)(undici@8.10.2)(zod@4.6.7))(@earendil-works/pi-coding-agent@1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.4)(zod@4.6.7))':
+  '@earendil-works/pi-claude-code@https://codeload.github.com/earendil-works/pi-claude-code/tar.gz/70abb65186592ca788b29b3db22c3160d629c41f(patch_hash=33658de18a4e500a7d747eb001445f4c580012849d3c7d5c4660b0a646862072)(@earendil-works/pi-ai@1.5.0(patch_hash=ef92391f98de55547f55cd5a319ffd9733e0a9a690b86b8107feebec19d7d1e4)(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.4)(undici@8.10.2)(zod@4.6.7))(@earendil-works/pi-coding-agent@1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.4)(zod@4.6.7))':
     dependencies:
       '@earendil-works/pi-ai': 1.5.0(patch_hash=ef92391f98de55547f55cd5a319ffd9733e0a9a690b86b8107feebec19d7d1e4)(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.4)(undici@8.10.2)(zod@4.6.7)
       '@earendil-works/pi-coding-agent': 1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.4)(zod@4.6.7)
