@@ -37,7 +37,8 @@ report.**
   the `workspaces.branches` point this extension provides (`starter`, `underway`).
 - **Answers back down.** When every input of the primary agent's run was a branch's reply or report, its final answer
   goes to each of those branches (not concluded, not messaged in the run) with `routed: true`, so a weigh-in reaches the
-  branch. User input, notes and landing cards route nothing.
+  branch. User input, notes and landing cards route nothing. The reply or report @ultimate reads says so (`routeLine`),
+  pointing a result for the user to `message {to: 'user'}`; an echo, or a concluded branch's, keeps its usual text.
 - **Results to the asker.** A branch started while its starter owed an agent an answer records it as `serves`; once the
   branch is concluded, the starter's final answer goes to that agent instead, another project's Ultimate included.
 - **Everything else wakes:** reply-enabled messages and one-way messages from anyone who is not the recipient's child or

@@ -6,6 +6,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { Standing, Subagents, SubagentsApi } from '../subagents/api.ts'
 import type { Remote } from './refs.ts'
 import { Started } from './api.ts'
+import { ConversationsApi } from '../conversations/api.ts'
 
 /** The conversation that started branch `id`, which hears its final answers; undefined for anything else. */
 export async function starterOf(host: ExtensionHost, id: number | 'user', ctx: Context) {
@@ -26,6 +27,24 @@ export async function servesLine(
   if (!serves || by !== to) return ''
   const asker = serves.from === 'remote' ? remoteLabel(serves.remote!) : `#${serves.from}`
   return `\n#${from} works on ${asker}'s message ${serves.message}. Once #${from} is concluded, your final answer to it goes to ${asker} instead.`
+}
+/**
+ * Inside `tx`, for @ultimate reading a reply or report of a branch it started that is not concluded: that `board.route`
+ * sends its final answer back down to the branch, not to the user. Empty for anything else. Bridgestone #387494: twice
+ * a receipt meant for the user, written as the final answer to a branch's reply (388574, 388844), reached only the
+ * branch, while the one-way report text even said the answer was not sent to it.
+ */
+export async function routeLine(
+  host: ExtensionHost,
+  tx: Tx,
+  from: number | 'user' | 'remote',
+  to: number | 'user' | 'remote',
+) {
+  if (typeof from !== 'number' || typeof to !== 'number') return ''
+  if ((await tx.doc(Started, from as ConversationId)).by !== to) return ''
+  if ((await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate !== to) return ''
+  if ((await host.need(ConversationsApi).concludedIn(tx)).has(from as ConversationId)) return ''
+  return `If this run answers only branches' messages, your final answer goes back to #${from} (unless you message #${from} in this run). For the user, use message {to: 'user'}.`
 }
 /** The conversation that started `id` as a subagent, which is the only one it may message. */
 export async function parentOf(host: ExtensionHost, id: number, ctx: Context) {

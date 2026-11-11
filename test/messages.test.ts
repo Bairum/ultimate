@@ -1411,7 +1411,7 @@ it("routes a branch's later final answer to its starter once, waking it when the
     true,
   ])
   expect(f.observed).toContain(
-    `Message from #${b.id}:\nAnswer: Landed abc123\nOne-way message: #${b.id} expects no answer, and your answer here is not sent to it. If it needs to hear from you, message it.`,
+    `Message from #${b.id}:\nAnswer: Landed abc123\nOne-way message: If this run answers only branches' messages, your final answer goes back to #${b.id} (unless you message #${b.id} in this run). For the user, use message {to: 'user'}.`,
   )
   // A reopen replays nothing: the answer was routed exactly once.
   await f.opened.close()
@@ -1530,6 +1530,16 @@ it("routes @ultimate's final answer to a branch's reply back to the branch, once
     [false, expect.any(Number)],
   ])
   expect(toBranch[1].text).toContain('Reply from')
+  // The reply @ultimate read said where its final answer goes, so a result meant for the user goes with message.
+  expect(f.observed).toContainEqual(
+    expect.stringContaining(
+      `\nIf this run answers only branches' messages, your final answer goes back to #${b.id} (unless you message #${b.id} in this run). For the user, use message {to: 'user'}.`,
+    ),
+  )
+  // The branch's answer to the routed weigh-in is an echo, which routes nowhere: it keeps the one-way text.
+  expect(f.observed).toContainEqual(
+    expect.stringMatching(new RegExp(`^Message from #${b.id}:[^]*expects no answer`)),
+  )
   // The branch woke, and its answer to the routed weigh-in is an echo: @ultimate's answer to it stays local.
   expect((await b.from()).map((m) => [m.re, m.report, m.echo])).toEqual([
     [1, undefined, undefined],
