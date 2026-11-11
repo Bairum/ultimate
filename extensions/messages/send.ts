@@ -14,7 +14,7 @@ import type { Device } from '../../shared/events.ts'
 import { resolveImages } from './images.ts'
 import type { ImagesRef } from './images.ts'
 import { append } from './log.ts'
-import { parentOf, resolve, senderName, starterOf } from './addresses.ts'
+import { parentOf, replyLines, resolve, senderName, starterOf } from './addresses.ts'
 import { delivery } from './delivery.ts'
 import { notice } from './notice.ts'
 
@@ -168,6 +168,7 @@ export async function send(
           ...(callId === undefined ? {} : { call: callId }),
           ...(images ? { images } : {}),
         })
+        const line = await replyLines(host, tx, from, to)
         await tx.createTask(
           delivery(host),
           {
@@ -176,7 +177,7 @@ export async function send(
             note: false,
             fromLabel: toLabel,
             toLabel: fromLabel,
-            reply: { message: response, failed: false },
+            reply: { message: response, failed: false, ...(line ? { serves: line } : {}) },
           },
           {
             conversationId: ROOT_CONVERSATION_ID,

@@ -21,7 +21,7 @@ import { Messages } from './api.ts'
 import type { Message } from './api.ts'
 import { imagesOf } from '../../lib/entries.ts'
 import { append, terminal } from './log.ts'
-import { remoteLabel, routeLine, servesLine } from './addresses.ts'
+import { remoteLabel, replyLines, routeLine, servesLine } from './addresses.ts'
 
 export function delivery(host: ExtensionHost) {
   // A standing recipient is reconfigured from its current definition before each delivery, by name or by number.
@@ -41,8 +41,8 @@ export function delivery(host: ExtensionHost) {
       note: boolean
       fromLabel: string
       toLabel: string
-      /** Another project's Ultimate answered `message`: deliver only this reply. */
-      reply?: { message: Message; failed: boolean; stopped?: boolean }
+      /** Another project's Ultimate answered `message`, or an agent answered it with `message`: deliver only this reply. */
+      reply?: { message: Message; failed: boolean; stopped?: boolean; serves?: string }
     },
     | { phase: 'deliver' }
     /** `stopped`: the recipient's run was stopped before it answered; `failed` is set too, as for any non-answer. */
@@ -235,9 +235,7 @@ export function delivery(host: ExtensionHost) {
             ...(error ? { error } : {}),
             ...(m.remote ? { remote: m.remote } : {}),
           })
-          const routing = await routeLine(host, tx, response.from, response.to)
-          const line =
-            (await servesLine(tx, response.from, response.to)) + (routing && `\n${routing}`)
+          const line = await replyLines(host, tx, response.from, response.to)
           return {
             status: 'running',
             checkpoint: {

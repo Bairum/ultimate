@@ -1546,6 +1546,20 @@ it("routes @ultimate's final answer to a branch's reply back to the branch, once
     [undefined, true, true],
   ])
 })
+it('tells @ultimate where its final answer goes when a branch answers it with message', async () => {
+  // #112982's review: a reply sent with message enters delivery's reply phase directly, without the routing line.
+  const f = await fixture()
+  const b = await branched(f)
+  const asked = 'SEND ' + JSON.stringify({ to: '#1', text: 'Sent with message' })
+  await sendMessage(f.host, 1, { to: `#${b.id}`, text: asked, reply: true }, context, {
+    requestId: 'ask:message',
+  })
+  const reply = () =>
+    f.observed.find((t) => t.startsWith(`Reply from #${b.id}`) && t.includes('Sent with message'))
+  await until(async () => reply() !== undefined)
+  expect(reply()).toContain(`your final answer goes back to #${b.id}`)
+  await b.settled()
+})
 it("sends @ultimate's answer to a branch it concluded to the agent whose request the branch worked on", async () => {
   // danielgriesser.com: @writer asked @ultimate for a briefing, got "I've started branch #14919", and the briefing,
   // @ultimate's answer to the branch's reply after concluding it (#13859/15161), reached no one.

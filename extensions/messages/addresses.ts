@@ -46,6 +46,16 @@ export async function routeLine(
   if ((await host.need(ConversationsApi).concludedIn(tx)).has(from as ConversationId)) return ''
   return `If this run answers only branches' messages, your final answer goes back to #${from} (unless you message #${from} in this run). For the user, use message {to: 'user'}.`
 }
+/** Both lines for the starter `to` reading branch `from`'s reply, decided with the reply and kept in its checkpoint. */
+export async function replyLines(
+  host: ExtensionHost,
+  tx: Tx,
+  from: number | 'user' | 'remote',
+  to: number | 'user' | 'remote',
+) {
+  const routing = await routeLine(host, tx, from, to)
+  return (await servesLine(tx, from, to)) + (routing && `\n${routing}`)
+}
 /** The conversation that started `id` as a subagent, which is the only one it may message. */
 export async function parentOf(host: ExtensionHost, id: number, ctx: Context) {
   const owner = (await host.harness().commit((tx) => tx.conversation(id as ConversationId), ctx))
