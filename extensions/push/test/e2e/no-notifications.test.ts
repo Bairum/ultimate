@@ -26,7 +26,8 @@ it('runs through an answered question without an error where the Notifications a
   await mkdir(join(home, '.ultimate'), { recursive: true })
   await writeFile(
     join(home, '.ultimate/settings.json'),
-    JSON.stringify({ extensions: { enable: ['push'] } }),
+    // The fork turns share off (#105197); this test needs its worker, present by default upstream.
+    JSON.stringify({ extensions: { enable: ['push', 'share'] } }),
   )
   const server = await fauxServer({
     ultimateRoot: resolve('.'),

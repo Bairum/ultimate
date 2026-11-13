@@ -268,8 +268,14 @@ export function cookieHeaders(server: string | { url: string }) {
   if (!cookie) throw new Error('No test user cookie for this server')
   return { Cookie: cookie }
 }
-export async function post(server: string | { url: string }, path: string, data: unknown = {}) {
+export async function post(
+  server: string | { url: string; host?: { userHome: string } },
+  path: string,
+  data: unknown = {},
+) {
   const url = typeof server === 'string' ? server : server.url
+  // Fork pairing (browser-pairing-security, d7118d9): direct servers need the same paired helper calls as fauxServer.
+  if (typeof server !== 'string' && server.host) await registerUserCookie(url, server.host.userHome)
   const response = await fetch(url + path, {
     method: 'POST',
     headers: {
