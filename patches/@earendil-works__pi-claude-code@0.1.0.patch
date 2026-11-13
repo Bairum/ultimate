@@ -1,5 +1,5 @@
 diff --git a/src/claude-cli.ts b/src/claude-cli.ts
-index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..18db6267101deb84111372524adb3ccf72edc04c 100644
+index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..308bdb7d80032c401d27c790f73c10acaf628d4f 100644
 --- a/src/claude-cli.ts
 +++ b/src/claude-cli.ts
 @@ -1,4 +1,5 @@
@@ -374,16 +374,19 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..18db6267101deb84111372524adb3ccf
  class ClaudeProcess {
    busy = false;
    readonly createdAt = Date.now();
-@@ -912,6 +1016,8 @@ class ClaudeProcess {
+@@ -912,6 +1016,11 @@ class ClaudeProcess {
          : undefined,
        input.betas,
      );
 +    const observe = tap;
-+    if (observe) this.relay.onExchange = (exchange) => observe({ sessionId: input.sessionId, model: input.model, exchange });
++    // #114261: clear a warm relay's observer too when Wire was disabled between turns.
++    this.relay.onExchange = observe
++      ? (exchange) => observe({ sessionId: input.sessionId, model: input.model, exchange })
++      : undefined;
  
      const abort = () => {
        this.relay.abort();
-@@ -976,11 +1082,14 @@ class ClaudeProcess {
+@@ -976,11 +1085,14 @@ class ClaudeProcess {
          message = assistants.at(-1);
        }
  
@@ -402,7 +405,7 @@ index 6c0595e212349b18f3d980cd2de5ea07e8b5ab65..18db6267101deb84111372524adb3ccf
  
        const nativeFailureHandled = this.relay.denied > 0 || message.stop_reason === "refusal";
        if (nativeError && !nativeFailureHandled) throw new Error(`Claude Code API error: ${nativeError}`);
-@@ -990,13 +1099,6 @@ class ClaudeProcess {
+@@ -990,13 +1102,6 @@ class ClaudeProcess {
          throw new Error(`Claude Code request failed: ${result.subtype ?? "unknown result"}`);
        }
  

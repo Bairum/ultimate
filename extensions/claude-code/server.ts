@@ -63,7 +63,11 @@ export default function claudeCode(host: ExtensionHost) {
   useSpawn(spawn)
   // Pi upstream: @earendil-works/pi-claude-code@0.1.0 src/claude-cli.ts useExchangeTap (patched). Hands each relayed
   // request and its raw answer to whoever implements ClaudeCodeExchanges (wire), with credentials redacted.
-  useExchangeTap(({ sessionId, model, exchange }) => {
+  const tap: NonNullable<Parameters<typeof useExchangeTap>[0]> = ({
+    sessionId,
+    model,
+    exchange,
+  }) => {
     const exchanges = host.want(ClaudeCodeExchanges)
     if (!exchanges) return
     exchanges.record({
@@ -80,7 +84,7 @@ export default function claudeCode(host: ExtensionHost) {
       ...(exchange.failure === undefined ? {} : { failure: exchange.failure }),
       ...(exchange.message === undefined ? {} : { message: exchange.message }),
     })
-  })
+  }
   // Browser refresh, facet reload and host restart are distinct. A landing can replace this facet through its import
   // graph even when this file did not change, before any restart. A supervised swap calls `release()`, which suspends
   // the harness before extension cleanup; an ordinary `close()` cleans up extensions first. The e2e test covers both.
@@ -111,6 +115,8 @@ export default function claudeCode(host: ExtensionHost) {
   const withEnv = <O extends { env?: Record<string, string | undefined>; sessionId?: string }>(
     options: O | undefined,
   ) => {
+    // #114261: Wire is optional. Without a consumer the relay must not retain raw exchange buffers.
+    useExchangeTap(host.want(ClaudeCodeExchanges) ? tap : undefined)
     let extra: Record<string, string> | undefined
     try {
       const sessionId = options?.sessionId
