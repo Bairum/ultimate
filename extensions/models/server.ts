@@ -95,8 +95,17 @@ function running(host: ExtensionHost, args: ActionInput<{ flowId: string }>) {
 /** Prompts and events as plain JSON: a document holds no `undefined`. */
 const json = <T>(value: T): Json<T> => JSON.parse(JSON.stringify(value))
 
-/** `saveFamilies` decides which model every agent of this project runs on. */
-export const userActions = ['login', 'answer', 'cancel', 'logout', 'saveFamilies']
+// Upstream b5fc9e4a added family/default writes without pairing gates (#114261).
+/** These actions decide which model an agent runs on or change provider login. */
+export const userActions = [
+  'login',
+  'answer',
+  'cancel',
+  'logout',
+  'saveFamilies',
+  'setFamily',
+  'setDefault',
+]
 export const hostActions = ['login', 'answer', 'logout']
 
 /**

@@ -273,6 +273,11 @@ it('refuses agent-shaping writes to an unpaired caller and saves a definition fo
   expect(existsSync(file)).toBe(false)
   expect((await call('automations/actions/create', prompt)).status).toBe(403)
   expect((await call('models/actions/saveFamilies', { args: {} })).status).toBe(403)
+  const defaultModel = await call('models/actions/setDefault', { args: { model: 'faux/faux' } })
+  expect(defaultModel.status).toBe(403)
+  expect(await defaultModel.json()).toEqual({
+    error: 'Pair this browser with Ultimate to do this',
+  })
   const paired = await call('subagents/actions/saveDefinition', definition, cookieHeaders(server))
   expect(paired.status).toBe(200)
   expect(existsSync(file)).toBe(true)
