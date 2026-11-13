@@ -44,7 +44,7 @@ export async function routeLine(
   if ((await tx.doc(Started, from as ConversationId)).by !== to) return ''
   if ((await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate !== to) return ''
   if ((await host.need(ConversationsApi).concludedIn(tx)).has(from as ConversationId)) return ''
-  return `If this run answers only branches' messages, your final answer goes back to #${from} (unless you message #${from} in this run). For the user, use message {to: 'user'}.`
+  return `Your final answer in this run goes back to #${from} (unless you message #${from} in this run). For the user, use message {to: 'user'}.`
 }
 /** Both lines for the starter `to` reading branch `from`'s reply, decided with the reply and kept in its checkpoint. */
 export async function replyLines(

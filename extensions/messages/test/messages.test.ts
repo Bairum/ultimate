@@ -1437,7 +1437,7 @@ it("routes a branch's later final answer to its starter once, waking it when the
     true,
   ])
   expect(f.observed).toContain(
-    `Message from #${b.id}:\nAnswer: Landed abc123\nOne-way message: If this run answers only branches' messages, your final answer goes back to #${b.id} (unless you message #${b.id} in this run). For the user, use message {to: 'user'}.`,
+    `Message from #${b.id}:\nAnswer: Landed abc123\nOne-way message: Your final answer in this run goes back to #${b.id} (unless you message #${b.id} in this run). For the user, use message {to: 'user'}.`,
   )
   // A reopen replays nothing: the answer was routed exactly once.
   await f.opened.close()
@@ -1559,7 +1559,7 @@ it("routes @ultimate's final answer to a branch's reply back to the branch, once
   // The reply @ultimate read said where its final answer goes, so a result meant for the user goes with message.
   expect(f.observed).toContainEqual(
     expect.stringContaining(
-      `\nIf this run answers only branches' messages, your final answer goes back to #${b.id} (unless you message #${b.id} in this run). For the user, use message {to: 'user'}.`,
+      `\nYour final answer in this run goes back to #${b.id} (unless you message #${b.id} in this run). For the user, use message {to: 'user'}.`,
     ),
   )
   // The branch's answer to the routed weigh-in is an echo, which routes nowhere: it keeps the one-way text.
@@ -1583,7 +1583,7 @@ it('tells @ultimate where its final answer goes when a branch answers it with me
   const reply = () =>
     f.observed.find((t) => t.startsWith(`Reply from #${b.id}`) && t.includes('Sent with message'))
   await until(async () => reply() !== undefined)
-  expect(reply()).toContain(`your final answer goes back to #${b.id}`)
+  expect(reply()).toContain(`Your final answer in this run goes back to #${b.id}`)
   await b.settled()
 })
 it("sends @ultimate's answer to a branch it concluded to the agent whose request the branch worked on", async () => {
