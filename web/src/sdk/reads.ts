@@ -1,6 +1,7 @@
 import { actionRef } from '../../../shared/extension-api.ts'
 import { actionMessage } from './api.ts'
 import type { ActionArgs, ActionError, ActionOptions, Api } from './api.ts'
+import { driven, refusedForPairing } from './pairing.ts'
 import type { Store } from './store.ts'
 
 /** What one component reading an action wants: its own error handler, a poll period, refreshing on window focus. */
@@ -141,7 +142,9 @@ export function createReads(api: Api, store: Store) {
         set({ error: failure, loading: false, settled: true })
         // One report per failed call: the first reader's handler, else a notice.
         if (onError) onError(failure)
-        else store.notify({ level: 'error', message: actionMessage(failure) })
+        // #114261: shared reads must preserve useAction's pairing notice instead of adding a raw 403.
+        else if (!refusedForPairing(failure) || driven())
+          store.notify({ level: 'error', message: actionMessage(failure) })
         return undefined
       } finally {
         if (controller === own) {

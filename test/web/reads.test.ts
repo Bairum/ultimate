@@ -2,6 +2,7 @@ import { expect, it, vi } from 'vitest'
 import { ActionError } from '../../web/src/sdk/api.ts'
 import type { Api } from '../../web/src/sdk/api.ts'
 import { createReads } from '../../web/src/sdk/reads.ts'
+import { PAIRING_REQUIRED } from '../../web/src/sdk/pairing.ts'
 
 it('answers readers of one action and args with one call, and asks again after a server restart', async () => {
   const listeners = new Set<() => void>()
@@ -72,4 +73,32 @@ it('keeps a read quiet when its request never reached the server, and asks again
   action.mockRejectedValueOnce(new ActionError('test', 'status', 500, 'boom'))
   await read.refetch()
   expect(store.notify).toHaveBeenCalledTimes(1)
+})
+
+it('leaves pairing refusals to the pairing notice, except on a driven page', async () => {
+  let driven = false
+  vi.stubGlobal('sessionStorage', { getItem: () => (driven ? '1' : null) })
+  const failure = new ActionError('test', 'status', 403, PAIRING_REQUIRED)
+  const store = {
+    getState: () => ({ connection: { status: 'open' } }),
+    subscribe: () => () => {},
+    notify: vi.fn<(notice: unknown) => void>(),
+  }
+  const action = vi.fn<() => Promise<string>>().mockRejectedValue(failure)
+  const read = createReads({ action } as unknown as Api, store as never).get('test', 'status', null)
+  const release = read.use({})
+  try {
+    await read.refetch()
+    expect(read.get()).toMatchObject({ error: failure, loading: false, settled: true })
+    expect(store.notify).not.toHaveBeenCalled()
+    driven = true
+    await read.refetch()
+    expect(store.notify).toHaveBeenCalledExactlyOnceWith({
+      level: 'error',
+      message: `test/status: ${PAIRING_REQUIRED}`,
+    })
+  } finally {
+    release()
+    vi.unstubAllGlobals()
+  }
 })
