@@ -738,21 +738,13 @@ index e0a824be43db62a92a0329ff7c63fc0f14f3af65..c87a148f71260f353bca9b0aa56a6997
    };
  }
 diff --git a/src/turn-relay.ts b/src/turn-relay.ts
-index 08ec86e5df1baac866a1cd97cea4dc94a523fbd7..2ef1b17ce73de770481db520565de74e2dc82a85 100644
+index 08ec86e5df1baac866a1cd97cea4dc94a523fbd7..0288ffb6cf050d38c7f3000a6fc022a697b12393 100644
 --- a/src/turn-relay.ts
 +++ b/src/turn-relay.ts
-@@ -111,7 +111,51 @@ const STRIPPED_REQUEST_HEADERS = new Set([
+@@ -111,7 +111,43 @@ const STRIPPED_REQUEST_HEADERS = new Set([
  
  const STRIPPED_RESPONSE_HEADERS = new Set(["connection", "transfer-encoding", "server", "date"]);
  
-+const TRANSPORT_ERROR_CODES = new Set(["ECONNRESET", "EPIPE", "ETIMEDOUT"]);
-+
-+/** A socket or TLS failure (a corrupted record on a flaky network path), as opposed to an answer from the server. */
-+function isTransportError(error: unknown): boolean {
-+  const code = (error as NodeJS.ErrnoException | undefined)?.code ?? "";
-+  return TRANSPORT_ERROR_CODES.has(code) || code.startsWith("ERR_SSL_") || /socket hang up|SSL routines/u.test(String(error));
-+}
-+
 +/** Request headers never handed to an exchange tap: credentials and anything named like one. */
 +const SECRET_HEADER = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key)$|token|secret|key/iu;
 +
@@ -785,7 +777,7 @@ index 08ec86e5df1baac866a1cd97cea4dc94a523fbd7..2ef1b17ce73de770481db520565de74e
 +const RESPONSE_CAP = 32 * 1024 * 1024;
 +
  export class TurnRelay {
-+  /** Backoff before each retry of a request that failed in transport before any response byte reached Claude Code. */
++  /** Backoff before each retry of a request whose socket never connected or completed TLS. */
 +  static transportRetryDelaysMs = [250, 1_000, 2_000];
 +  /** Set after beginTurn to receive each of the turn's requests and its answer once its handler ends, also when aborted. */
 +  onExchange?: (exchange: RelayExchange) => void;
@@ -793,7 +785,7 @@ index 08ec86e5df1baac866a1cd97cea4dc94a523fbd7..2ef1b17ce73de770481db520565de74e
    capture: AnthropicCapture;
    used = false;
    denied = 0;
-@@ -177,6 +221,7 @@ export class TurnRelay {
+@@ -177,6 +213,7 @@ export class TurnRelay {
      this.errorBody = Buffer.alloc(0);
      this.originalRequestBody = undefined;
      this.requestBody = undefined;
@@ -801,7 +793,7 @@ index 08ec86e5df1baac866a1cd97cea4dc94a523fbd7..2ef1b17ce73de770481db520565de74e
      this.transformRequest = transformRequest;
      this.requestBetas = requestBetas;
      this.cancelled = false;
-@@ -257,6 +302,13 @@ export class TurnRelay {
+@@ -257,6 +294,13 @@ export class TurnRelay {
      this.sockets.add(response);
  
      let upstreamRequest: http.ClientRequest | undefined;
@@ -815,7 +807,7 @@ index 08ec86e5df1baac866a1cd97cea4dc94a523fbd7..2ef1b17ce73de770481db520565de74e
      try {
        let body = await this.readBody(request);
        this.originalRequestBody = Buffer.from(body);
-@@ -282,26 +334,41 @@ export class TurnRelay {
+@@ -282,26 +326,49 @@ export class TurnRelay {
          ].join(",");
        }
  
@@ -850,6 +842,15 @@ index 08ec86e5df1baac866a1cd97cea4dc94a523fbd7..2ef1b17ce73de770481db520565de74e
 +          timeout: this.timeoutMs,
 +        });
 +        this.sockets.add(upstreamRequest);
++        // #114261: no response does not prove no side effect. Retry only before a usable connection existed.
++        let mayHaveSent = false;
++        upstreamRequest.once("socket", (socket) => {
++          // A reused socket is already usable; a new HTTPS socket must finish TLS before sending HTTP.
++          if (!socket.connecting) mayHaveSent = true;
++          else socket.once(this.upstream.protocol === "https:" ? "secureConnect" : "connect", () => {
++            mayHaveSent = true;
++          });
++        });
 +        try {
 +          upstreamResponse = await new Promise<http.IncomingMessage>((resolve, reject) => {
 +            upstreamRequest!.once("response", resolve);
@@ -858,9 +859,8 @@ index 08ec86e5df1baac866a1cd97cea4dc94a523fbd7..2ef1b17ce73de770481db520565de74e
 +          });
 +          break;
 +        } catch (error) {
-+          // Nothing has reached Claude Code yet, so the same body can go again; an HTTP status never lands here.
 +          const delay = TurnRelay.transportRetryDelaysMs[attempt];
-+          if (this.cancelled || delay === undefined || !isTransportError(error)) throw error;
++          if (this.cancelled || mayHaveSent || delay === undefined) throw error;
 +          this.sockets.delete(upstreamRequest);
 +          upstreamRequest.destroy();
 +          await new Promise((resolve) => setTimeout(resolve, delay));
