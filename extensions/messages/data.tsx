@@ -18,11 +18,12 @@ export const emptyMessages: MessagesData = { messages: [], next: 1 }
 export const waitingOnUser = (log: MessagesData) => log.messages.filter(openQuestion).length
 
 /**
- * Where a conversation stands, the one state every view shows:
+ * Where a conversation stands, the one state every view shows, first match wins:
  * - `paused`: the host is paused and its run is parked: no task of it executes until Play;
+ * - `waits`: a question waits on the user, even while the conversation or a subagent of it works, since the question
+ *   asks the user to act: for the primary agent (@ultimate) any question open with the user, for any other
+ *   non-subagent conversation one of its own; views that can keep showing the work (a pulsing mark) do;
  * - `working`: it runs, or has input queued;
- * - `waits`: the primary agent (@ultimate) counts every question open with the user; a non-subagent
- *   conversation has one of its own open. This is the state that asks the user to act;
  * - `awaiting`: a conversation that is no subagent asked the primary agent (a branch asking @ultimate) and waits for
  *   the answer, or reported to it and has not heard from it since; a subagent's questions go to its parent, which
  *   answers them in its own run;
@@ -57,16 +58,13 @@ export function conversationState(
 ): ConversationState {
   const { id, kind, runState } = conversation
   if (conversation.parked) return 'paused'
-  if (conversation.busy || runState === 'working' || runState === 'queued') return 'working'
   if (
     kind === 'primary'
       ? waitingOnUser(log) > 0
-      : kind !== 'subagent' &&
-        log.messages.some(
-          (m) => m.from === id && m.to === 'user' && m.reply && m.state === 'delivered',
-        )
+      : kind === 'other' && log.messages.some((m) => m.from === id && openQuestion(m))
   )
     return 'waits'
+  if (conversation.busy || runState === 'working' || runState === 'queued') return 'working'
   if (
     kind !== 'subagent' &&
     awaitsPrimary(id, conversation.primary, log, () => conversation.concludedSince)
@@ -121,7 +119,7 @@ export const stateTone: Partial<Record<ConversationState, string>> = {
   paused: 'text-warning',
   working: 'text-brand',
   waits: 'text-amber-700 dark:text-amber-300',
-  awaiting: 'text-amber-700/80 dark:text-amber-300/70',
+  awaiting: 'text-brand',
   done: 'text-success',
   failed: 'text-error',
 }
@@ -364,4 +362,23 @@ export function outgoingState(message: Message | undefined, toUser: boolean, run
   if (message.state === 'sent') return 'sending'
   if (!message.reply) return 'delivered'
   return toUser ? 'awaiting your reply' : 'awaiting reply'
+}
+
+/** Where an open question's card is, against the transcript's view. */
+export type Place = 'above' | 'visible' | 'below'
+
+/** A direction's pointer: how many questions wait that way, and the nearest one, which a click goes to. */
+export type Pointer<T> = { count: number; nearest: T }
+
+/**
+ * The pointers to open questions out of view, from each question's place in transcript order (oldest first): one up
+ * when any is above, aiming at the lowest of them, and one down when any is below, aiming at the highest.
+ */
+export function offscreen<T>(questions: readonly { key: T; place: Place }[]) {
+  const above = questions.filter((q) => q.place === 'above')
+  const below = questions.filter((q) => q.place === 'below')
+  return {
+    up: above.length ? { count: above.length, nearest: above.at(-1)!.key } : undefined,
+    down: below.length ? { count: below.length, nearest: below[0].key } : undefined,
+  } satisfies Record<'up' | 'down', Pointer<T> | undefined>
 }

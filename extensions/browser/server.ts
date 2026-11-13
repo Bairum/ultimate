@@ -19,7 +19,7 @@ import { strEnum } from '../../lib/schema.ts'
 import { formatDimensionNote, resizeImage } from '@earendil-works/pi-coding-agent'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core'
-import { identify } from '../../lib/process-group.ts'
+import { groupTarget, identify } from '../../lib/process-group.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { fetchAssets, sourceFrames } from '../../lib/source-frames.ts'
 import { watchSteer } from '../../lib/steer.ts'
@@ -119,14 +119,23 @@ async function browserProcess(browser: Browser) {
  */
 function killGroup(owner: { pid: number; start: string } | undefined) {
   if (!owner || identify(owner.pid) !== owner.start) return
+  const target = groupTarget(owner.pid)
   try {
-    process.kill(-owner.pid, 'SIGKILL')
+    process.kill(target, 'SIGKILL')
   } catch {
     // The group exited since (ESRCH), or only zombies are left of it (EPERM on Darwin).
   }
 }
 
 async function capture(page: Page, file: string, selector?: string, fullPage = false) {
+  // Chromium 155: DOMContentLoaded can precede the page's first compositor surface, and captureScreenshot then fails
+  // with "Unable to capture screenshot". Cross a rendering update first; the first rAF itself still runs before paint.
+  await page.evaluate(
+    () =>
+      new Promise<void>((painted) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => painted())),
+      ),
+  )
   await mkdir(dirname(file), { recursive: true })
   const target = selector ? page.locator(selector) : page
   const png = await target.screenshot({

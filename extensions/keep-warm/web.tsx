@@ -1,5 +1,4 @@
 import { FlameIcon } from 'lucide-react'
-import { useEffect } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { api, cn, defineWebExtension, formatAgo, useAction, useDocOf, useNow } from '@/sdk'
@@ -37,17 +36,13 @@ const failed = (state: WarmConversation) =>
  */
 function Chip() {
   const doc = useDocOf(1, WarmDoc)
-  const { data: state, refetch } = useAction(
+  const { data: state } = useAction(
     StateAction,
     null,
     // A failed poll keeps the last state; the next one asks again.
-    { onError: () => {} },
+    { onError: () => {}, on: doc, every: 60_000 },
   )
   const now = useNow(60_000)
-  useEffect(() => {
-    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
-    void refetch()
-  }, [doc, now, refetch])
   if (!state) return null
   const warm = state.conversations.some(
     (item) => item.lastRequest !== undefined && item.lastRequest + TTL > now,

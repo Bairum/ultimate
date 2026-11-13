@@ -1,5 +1,5 @@
 /** Classify's question and answer types and its actions: one question set over many states, and the daily spend ledger. Browser-safe. */
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { actionRef } from '../../shared/extension-api.ts'
 
 /** One question: its instructions and the criteria for each choice, outcome or score. */

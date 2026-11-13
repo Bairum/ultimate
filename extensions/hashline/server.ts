@@ -1,6 +1,6 @@
 import { chmod, stat } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import { withCancel } from '@earendil-works/chord/context'
 import { bool, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { defineExtension, defineTool, wrapTool } from '@earendil-works/pi-durable'

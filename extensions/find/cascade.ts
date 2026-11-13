@@ -4,7 +4,7 @@
  * full passage. Without the project's opt-in or without classify, the lexical ranking is the answer and nothing is sent.
  */
 import { basename } from 'node:path'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import type { ClassifyQuestion, ClassifyService } from '../classify/api.ts'
 import { READ_LIMIT } from './files.ts'
 import type { FileEntry, Source } from './files.ts'

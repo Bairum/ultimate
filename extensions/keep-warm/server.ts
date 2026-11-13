@@ -5,7 +5,7 @@
  * nothing in any transcript; its tokens count toward that conversation's usage.
  */
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { copyJson } from '@earendil-works/chord'
+import { copyJson } from '@earendil-works/chord/json'
 import {
   defineDoc,
   defineExtension,

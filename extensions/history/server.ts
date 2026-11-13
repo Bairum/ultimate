@@ -1,5 +1,6 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { Context, JsonValue } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { defineExtension } from '@earendil-works/pi-durable'
 import type { ConversationRecord, Cursor, EntryId, EntryRecord } from '@earendil-works/pi-durable'
 import { existsSync, statSync } from 'node:fs'

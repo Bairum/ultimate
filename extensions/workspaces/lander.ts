@@ -3,16 +3,17 @@ import { mkdirSync, mkdtempSync } from 'node:fs'
 import { mkdir, readdir, realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
-import { copyJson } from '@earendil-works/chord'
-import type { Context } from '@earendil-works/chord'
+import { copyJson } from '@earendil-works/chord/json'
+import type { Context } from '@earendil-works/chord/context'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import { withAbortSignal } from '@earendil-works/chord/context'
 import { defineEntry, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationDocToken, ConversationId, Tx } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
+import { needsRestart as restartNeeded } from '../../lib/layers.ts'
 import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import { projectEnv } from '../../lib/exec.ts'
-import { weightDelta } from '../../lib/token-weight.ts'
+import { landingWeight } from '../../lib/token-weight.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { CheckRan, SubmissionFailed, SubmissionLanded } from './api.ts'
 import { setup } from './setup.ts'
@@ -549,7 +550,7 @@ export function createLander(
           if (pushed.retry) return pushed.retry
           const needsRestart =
             (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
-            landed.paths.some((path) => /^(server|shared)\//.test(path))
+            restartNeeded(landed.paths)
           return finish(
             [summary(landed, sha), pushed.text, ...(needsRestart ? ['Needs restart.'] : [])].join(
               '\n',
@@ -778,15 +779,15 @@ export function createLander(
           }
           // The first fast-forward decides what the submission landed, durably on its queue entry with the target's
           // new tip, so any later lander task reports that landing; a push retry integrates again from there.
+          const weight = await landingWeight(source, base, integrated)
           const candidate: Landed = {
             sha: integrated,
             base,
             commits: lines(await git(source, 'log', '--oneline', `${base}..${integrated}`)),
             paths: lines(await git(source, 'diff', '--name-only', base, integrated)),
             flaky,
-            // The weight only decorates the card: target has already moved, so failing to weigh it (a tree listing past
-            // git's 16 MiB buffer) must not report the landing as failed (#105197).
-            weight: await weightDelta(source, base, integrated).catch(() => undefined),
+            // Left out, not undefined: documents refuse undefined values.
+            ...(weight ? { weight } : {}),
           }
           let landed = candidate
           await runtime.commit(async (tx) => {

@@ -25,15 +25,15 @@ export default defineConfig({
     },
     overrides: [
       {
-        files: ['test/**'],
-        excludeFiles: ['test/e2e/**'],
+        files: ['test/**', 'extensions/*/test/**'],
+        excludeFiles: ['test/e2e/**', 'extensions/*/test/e2e/**'],
         rules: {
           'ultimate/no-test-timeout': 'error',
           'ultimate/no-real-wait-in-fast-tests': 'error',
         },
       },
       {
-        files: ['test/**'],
+        files: ['test/**', 'extensions/*/test/**'],
         excludeFiles: ['test/helpers.ts'],
         rules: { 'ultimate/no-local-test-polling': 'error' },
       },
@@ -43,7 +43,7 @@ export default defineConfig({
       },
       {
         files: ['**/*'],
-        excludeFiles: ['test/**'],
+        excludeFiles: ['test/**', 'extensions/*/test/**'],
         rules: {
           'ultimate/replay-safe-reason': 'error',
           'ultimate/no-silent-catch': 'error',
@@ -103,7 +103,9 @@ export default defineConfig({
         },
       },
       {
+        // An extension's test/ folder is not part of it: its tests set up the core and other extensions as test/ does.
         files: ['extensions/**'],
+        excludeFiles: ['extensions/*/test/**'],
         rules: {
           'no-restricted-imports': [
             'error',
@@ -123,6 +125,7 @@ export default defineConfig({
         // Another extension at runtime only through its contract: api.ts from server code, ui.tsx from the browser.
         // A core-tier extension (`export const tier = 'core'` in its api.ts) imports only the core tier.
         files: ['extensions/**/*.ts', 'extensions/**/*.tsx'],
+        excludeFiles: ['extensions/*/test/**'],
         rules: { 'ultimate/api-only-imports': 'error', 'ultimate/core-tier-deps': 'error' },
       },
       {
@@ -135,6 +138,7 @@ export default defineConfig({
       },
       {
         files: ['web/src/**', 'extensions/**/*.tsx'],
+        excludeFiles: ['extensions/*/test/**'],
         plugins: ['react'],
         rules: {
           'react/rules-of-hooks': 'error',
@@ -195,9 +199,11 @@ export default defineConfig({
   test: {
     root: '.',
     globalSetup: ['test/sweep-temp.ts'],
-    setupFiles: ['test/setup.ts'],
-    include: ['test/**/*.test.ts'],
-    exclude: ['test/e2e/**'],
+    setupFiles: ['test/setup.ts', 'test/no-group-signals.ts'],
+    // Core and integration tests in test/, each extension's own in extensions/<name>/test/: `pnpm test extensions/<name>/`
+    // runs one extension's.
+    include: ['test/**/*.test.ts', 'extensions/*/test/**/*.test.ts'],
+    exclude: ['test/e2e/**', 'extensions/*/test/e2e/**'],
     testTimeout: 30000,
     // A hung hook or teardown fails within seconds and names its test, instead of stalling the run.
     hookTimeout: 5000,

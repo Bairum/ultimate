@@ -1,6 +1,8 @@
 import { ActionError, actionMessage, createApi } from './api.ts'
 import { createPairing, driven, refusedForPairing } from './pairing.ts'
-import { createRegistry } from './registry.ts'
+import { createReads } from './reads.ts'
+import { linkedConversation } from './link.ts'
+import { HOME, createRegistry } from './registry.ts'
 import { createStore } from './store.ts'
 import { createTestHook } from './test-hook.ts'
 import type { TestHook } from './test-hook.ts'
@@ -44,6 +46,8 @@ export const store = createStore({
 export const api = createApi(store, { onRefused: () => pairing.refused() })
 /** Whether this browser is paired, read from `GET /api/whoami`; the `pairing` extension shows and fixes it. */
 export const pairing = createPairing(api, store)
+/** The page's shared action reads behind `useAction`. */
+export const reads = createReads(api, store)
 /**
  * A page an agent drives looks at the UI without steering the user's tabs: it reads the shared state once, then its
  * selection and panels are its own, never written or followed. Every automated browser counts (`navigator.webdriver`),
@@ -114,6 +118,10 @@ store.subscribe(() => {
         if (id === undefined) uiState.delete('shell.conversation')
         else uiState.set('shell.conversation', id)
       }
+      const navigation = performance.getEntriesByType('navigation')[0] as
+        | PerformanceNavigationTiming
+        | undefined
+      if (linkedConversation(initialUrl, navigation?.type)) uiState.set('shell.surface', HOME)
       initialized = true
       followSelection()
     } else if (!detached) uiState.receive(shared)

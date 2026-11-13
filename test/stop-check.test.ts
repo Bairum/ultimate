@@ -11,7 +11,7 @@ import {
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import type { GenerationHooks, HookApi } from '@earendil-works/pi-durable'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context } from '../server/harness.ts'
 import type { ExtensionHost } from '../server/extensions.ts'

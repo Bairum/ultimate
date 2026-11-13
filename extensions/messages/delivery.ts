@@ -5,7 +5,7 @@
  * its answer and a recorded answer awaiting delivery both survive a restart without a duplicate reply. One-way inputs
  * also wait for their answer (kept in `answer`, the state stays `delivered`); notes complete once placed.
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import { awaitWithContext } from '@earendil-works/chord/context'
 import {
   AssistantEntry,
@@ -100,9 +100,12 @@ export function delivery(host: ExtensionHost) {
         const tail = m.reply
           ? `\nAnswer here; your answer is sent to ${task.input.fromLabel} automatically. Do not use message to reply.`
           : `\nOne-way message: ${down || `${task.input.fromLabel} expects no answer, and your answer here is not sent to it. If it needs to hear from you, message it.`}`
+        // The user's answer names the message it answers, so one among several open cards is never guessed.
+        const answering =
+          m.from === 'user' && m.re !== undefined ? `Answer to message ${m.re}:\n` : ''
         const body = task.input.note
           ? `Note from ${task.input.fromLabel} (one-way update, no answer goes back):\n${m.text}${serves}`
-          : `Message from ${task.input.fromLabel}${m.from === 'remote' ? " (another project's Ultimate, not the user)" : ''}:\n${m.text}${tail}${serves}`
+          : `Message from ${task.input.fromLabel}${m.from === 'remote' ? " (another project's Ultimate, not the user)" : ''}:\n${answering}${m.text}${tail}${serves}`
         const content = images.length ? [{ type: 'text' as const, text: body }, ...images] : body
         const requestId = `board:${m.id}`
         const placing = task.input.note

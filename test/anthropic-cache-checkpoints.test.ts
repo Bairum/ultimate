@@ -4,7 +4,7 @@ import { normalizeContext } from '@earendil-works/pi-ai'
 import { streamSimple } from '@earendil-works/pi-ai/api/anthropic-messages'
 import { streamSimple as streamCodex } from '@earendil-works/pi-ai/api/openai-codex-responses'
 
-// Pi upstream: exercises the pi-ai 1.4.0 rolling Anthropic checkpoint patch through request assembly.
+// Pi upstream: @earendil-works/pi-ai@1.5.2 — exercises the rolling Anthropic checkpoint patch through request assembly.
 const model: Model<'anthropic-messages'> = {
   id: 'claude-sonnet-4-5',
   name: 'Claude',

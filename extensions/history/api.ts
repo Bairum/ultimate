@@ -2,7 +2,7 @@
  * History: ranked full-text search (FTS5, bm25) over every stored entry of the open chapter, indexed locally in
  * `history.sqlite` beside the chapter's `state.sqlite`. Nothing leaves the machine.
  */
-import type { Context } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
 import { defineApi } from '../../shared/extension-api.ts'
 
 /** One match: the entry, the conversation that wrote it, and a snippet with the matched terms in `**`. */

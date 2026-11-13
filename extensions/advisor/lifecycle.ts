@@ -1,5 +1,6 @@
-import type { Context, JsonValue } from '@earendil-works/chord'
-import { copyJson } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
+import type { JsonValue } from '@earendil-works/chord/json'
+import { copyJson } from '@earendil-works/chord/json'
 import { LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, TaskId } from '@earendil-works/pi-durable'
 import type { AssistantMessage } from '@earendil-works/pi-ai'

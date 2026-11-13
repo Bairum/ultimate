@@ -20,7 +20,8 @@ conversation as `#123` or `123`, a standing agent as `@name`, or `user`.
   answer and ends your run. A message still queued is unread and never owed. `reply: false` is one-way: it wakes the
   recipient and returns nothing.
 - **Images.** `images` forwards images from the sender's own conversation: `'latest'` takes the newest entry with
-  images (a pasted input or a screenshot tool result), a number names that entry. At most `maxImages`, each at most
+  images in the current turn (its input, or a tool result such as a screenshot since) and fails when there is none; an
+  entry id names an older one. At most `maxImages`, each at most
   `maxImageBytes`. `branch` takes `images` for its first message too.
 
 ### Waking upward: notes and reports
@@ -35,10 +36,11 @@ report.**
   reply-enabled message), it goes as a one-way message with `report: true`, which wakes the starter; otherwise as a
   note, since the branch will run again. A landing concludes the branch and wakes the starter itself, asking through
   the `workspaces.branches` point this extension provides (`starter`, `underway`).
-- **Answers back down.** When every input of the primary agent's run was a branch's reply or report, its final answer
-  goes to each of those branches (not concluded, not messaged in the run) with `routed: true`, so a weigh-in reaches the
-  branch. User input, notes and landing cards route nothing. The reply or report @ultimate reads says so (`routeLine`),
-  pointing a result for the user to `message {to: 'user'}`; an echo, or a concluded branch's, keeps its usual text.
+- **Answers back down.** The primary agent's final answer goes to each branch whose reply or report was an input of
+  that run (not concluded, not messaged in the run) with `routed: true`, so a weigh-in reaches the branch. The run's
+  other inputs (the user's, another Ultimate's, a card) neither receive it nor keep it from a branch.
+  The reply or report @ultimate reads says so (`routeLine`), pointing a result for the user to
+  `message {to: 'user'}`; an echo, or a concluded branch's, keeps its usual text.
 - **Results to the asker.** A branch started while its starter owed an agent an answer records it as `serves`; once the
   branch is concluded, the starter's final answer goes to that agent instead, another project's Ultimate included.
 - **Everything else wakes:** reply-enabled messages and one-way messages from anyone who is not the recipient's child or
@@ -51,13 +53,15 @@ message to @ultimate open; @ultimate messaging or concluding it clears that.
 ### Messages to the user
 
 A message to `user` shows in the sender's transcript and starts no run. For @ultimate it is its answer: the run ends
-without restating it, unless a reply-enabled message it has read is still open. While a user's message it has read is
+without restating it, unless a reply-enabled message it has read is still open or a branch whose reply or report the
+run read still waits for its answer: the run goes on to its final answer, which routing sends there. While a user's message it has read is
 open, @ultimate's message to the user answers it and, with `questions`, stays open itself, so it can ask one card after
 another.
 
 A reply-expected message to the user stays open, and its sender shows as awaiting reply, until the user answers that
-message: a Reply with `re` (the answer card or a typed Reply). Dismissing it closes it with a one-way note to the
-sender. A branch's question also puts an attention pointer (`board.asked`) in @ultimate's conversation, and the user's
+message: a Reply with `re` (the answer card or a typed Reply). The delivered input reads `Answer to message N:` before
+the reply, so an asker with several cards open never guesses which one it answers; a spoken (voice) reply answers no
+card while several are open. Dismissing it closes it with a one-way note to the sender. A branch's question also puts an attention pointer (`board.asked`) in @ultimate's conversation, and the user's
 answer a `board.answered` note there; neither starts a run. A branch with an open question shows as `waits on you`.
 
 `questions` (checked in `questions.ts`) render under the message as the questions extension's answer card; see

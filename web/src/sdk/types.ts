@@ -107,6 +107,12 @@ export type EntryRenderer = ComponentType<{
 export type LinkRenderer = ComponentType<{ href: string; children: ReactNode; core: ReactNode }>
 
 /**
+ * An inline code span in Markdown (messages, reports): its text as `code`, and `core`, the rendering so far, starting
+ * with the default `<code>`. Return `core` for spans you leave alone.
+ */
+export type InlineCodeRenderer = ComponentType<{ code: string; core: ReactNode }>
+
+/**
  * A fenced code block in Markdown, by its language: `code`, `language`, `incomplete` while the fence still streams, and
  * `core`, the rendering so far, starting with the highlighted block with its copy button.
  */
@@ -260,6 +266,24 @@ export const ConversationKind = definePoint<ConversationSummary | undefined, str
   'ultimate.conversationKind',
 )
 /**
+ * What conversation `conversation`'s composer says while it is empty (`conversations` provides it: "Message Coach…" for
+ * a standing agent with `title: Coach`). Every provider is asked and the last that answers wins, so one naming its own
+ * conversations leaves another's. Undefined leaves the earlier providers' answer, the core's text while none answers;
+ * a `ComposerRedirect`'s placeholder comes first.
+ */
+export const ComposerPlaceholder = definePoint<
+  { conversation: number; busy: boolean },
+  string | undefined
+>('ultimate.composerPlaceholder')
+/**
+ * What conversation `conversation`'s transcript shows before its first message, in place of the core's card of repo,
+ * model, extensions and host (`conversations` provides it: a standing agent's mark and title). Each provider gets the
+ * rendering so far as `core` and returns it, wraps it or replaces it.
+ */
+export const EmptyTranscript = definePoint<{ conversation: number; core: ReactNode }, ReactNode>(
+  'ultimate.emptyTranscript',
+)
+/**
  * The text another conversation can follow to read message `id` of `conversation` (`codemode` provides it); a stored
  * message offers to copy it. No copy action while nothing provides it.
  */
@@ -301,6 +325,8 @@ export const provide = <Input, Value>(
 export interface WebExtension {
   slots?: Partial<Record<SlotName, Contribution | readonly Contribution[]>>
   panels?: readonly PanelContribution[]
+  /** Badges after a right-panel tab's label or icon, by panel id (any extension's panel), in discovery order. */
+  panelBadges?: Readonly<Record<string, ComponentType>>
   surfaces?: readonly SurfaceContribution[]
   /** Tool-call renderers by tool name. */
   tools?: Readonly<Record<string, ToolRenderer>>
@@ -313,6 +339,8 @@ export interface WebExtension {
   composer?: ComposerRenderer
   /** Renders links in Markdown; renderers compose in discovery order, each wrapping the one before it. */
   link?: LinkRenderer
+  /** Renders inline code spans in Markdown; renderers compose in discovery order, each wrapping the one before it. */
+  inlineCode?: InlineCodeRenderer
   /** Fenced code block renderers by language; they compose in discovery order, each wrapping the one before it. */
   codeBlocks?: Readonly<Record<string, CodeBlockRenderer>>
   /** Contributions to the hover action row on stored messages, in discovery order. */
