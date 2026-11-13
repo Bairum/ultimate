@@ -115,7 +115,8 @@ export default function claudeCode(host: ExtensionHost) {
   const withEnv = <O extends { env?: Record<string, string | undefined>; sessionId?: string }>(
     options: O | undefined,
   ) => {
-    // #114261: Wire is optional. Without a consumer the relay must not retain raw exchange buffers.
+    // #114261: consumer availability is decided per provider call. Disabling Wire mid-turn still lets that
+    // in-flight turn buffer up to the relay's cap, then discards it at the end; the next call captures nothing.
     useExchangeTap(host.want(ClaudeCodeExchanges) ? tap : undefined)
     let extra: Record<string, string> | undefined
     try {
