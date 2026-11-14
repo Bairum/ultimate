@@ -1,4 +1,3 @@
-import { removeTemp } from './helpers.ts'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterAll, expect, it } from 'vitest'
@@ -9,16 +8,13 @@ import { defaultOff } from '../shared/extension-api.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { createRegistry, toolRenderers } from '../web/src/sdk/registry.ts'
 
-const homes: string[] = []
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
-// Tests run concurrently, each on its own server; close them all once the file is done.
-afterAll(async () => {
-  await Promise.all(servers.splice(0).map((server) => server.close()))
-  for (const home of homes.splice(0)) await removeTemp(home)
-})
+// Tests run concurrently, each on its own server; close them all once the file is done. Their homes, source copies
+// included, go with every other temp in helpers' `removeTemps` hook, which allows for a slow delete: removed here too,
+// one after another, closing and deleting about ten servers' copies took over 5 s under the lander's load (#116515).
+afterAll(() => Promise.all(servers.splice(0).map((server) => server.close())))
 async function fixture(settings?: string) {
   const home = await temp()
-  homes.push(home)
   const projectRoot = join(home, 'project')
   await mkdir(projectRoot)
   if (settings !== undefined) {
@@ -36,7 +32,6 @@ async function fixture(settings?: string) {
 }
 it.concurrent('orders facets by source so a project bash tool and renderer win regardless of folder name', async () => {
   const home = await temp()
-  homes.push(home)
   const projectRoot = join(home, 'project')
   for (const [name, root] of [
     ['zzz-bash', home],
@@ -400,7 +395,6 @@ it.concurrent('keeps a core-tier extension enabled over extensions.disable, with
 /** Discovery with every claim disabled in the user's settings; each [source, name] folder declares the core tier. */
 async function discoverCoreClaims(claims: ['user' | 'project', string][]) {
   const home = await temp()
-  homes.push(home)
   const projectRoot = join(home, 'project')
   await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
   await mkdir(join(home, '.ultimate'), { recursive: true })
@@ -438,7 +432,6 @@ it.concurrent('keeps a user or project replacement of a core built-in core, over
 
 it.concurrent('enables every built-in by default except the default-off ones', async () => {
   const home = await temp()
-  homes.push(home)
   const root = await sourceCopy(home)
   const projectRoot = join(home, 'project')
   await mkdir(projectRoot)
@@ -465,7 +458,6 @@ it.concurrent('enables every built-in by default except the default-off ones', a
 
 it.concurrent('turns a default-off built-in on from user or project settings', async () => {
   const home = await temp()
-  homes.push(home)
   const projectRoot = join(home, 'project')
   await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
   await mkdir(join(home, '.ultimate'))
@@ -489,7 +481,6 @@ it.concurrent('turns a default-off built-in on from user or project settings', a
 
 it.concurrent('turns the updater on by default, and keeps it off for a user who disabled it', async () => {
   const home = await temp()
-  homes.push(home)
   const projectRoot = join(home, 'project')
   await mkdir(projectRoot)
   const enabled = async () =>
