@@ -512,10 +512,13 @@ export async function loadExtensions(
    * the first pass after instead. True when it did that.
    */
   async function unlessHeld(work: () => Promise<void>) {
+    // A server that closes skips queued reloads: they would load into a host being torn down (upstream 8030aac9).
+    if (closed) return false
     if (!(await preparedToLoad())) {
       held = true
       return false
     }
+    if (closed) return false
     if (!held) {
       await work()
       return false
@@ -604,6 +607,7 @@ export async function loadExtensions(
       core,
       error: discoveryError,
     } of winners) {
+      if (closed) return
       const previous = records.get(name)
       host.extensionSources.set(name, source)
       const layer = settings.layers.get(name) ?? (source === 'builtin' ? 'default' : 'folder')

@@ -98,8 +98,11 @@ beforeAll(async () => {
   writer = new DatabaseSync(database)
   writer.exec(`PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;
     CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT); CREATE TABLE blobs (data BLOB);`)
+  // One transaction, not 500 autocommits: each would fsync, which takes seconds on a busy disk-backed TMPDIR.
   const note = writer.prepare('INSERT INTO notes (body) VALUES (?)')
+  writer.exec('BEGIN')
   for (let i = 0; i < 500; i++) note.run(`note ${i}`)
+  writer.exec('COMMIT')
   writer.prepare('INSERT INTO blobs VALUES (?)').run(randomBytes(17 * 1024 * 1024))
   progress = []
   manifest = await uploadSnapshot({

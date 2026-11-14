@@ -12,15 +12,21 @@ import { temp } from '../../../test/helpers.ts'
 
 afterEach(() => vi.unstubAllEnvs())
 
-it("runs commands without this server's own variables, so a nested `ultimate` opens its own home", () => {
+it("runs commands without this server's own variables, so a nested `ultimate` opens its own home", async () => {
   vi.stubEnv('ULTIMATE_HOME', '/state/of/this/server')
   vi.stubEnv('ULTIMATE_PROJECT', '/this/project')
   vi.stubEnv('ULTIMATE_SUPERVISED', '1')
   // Vite's dev server sets it on this process; it made a project's `vite build` ship a development bundle.
   vi.stubEnv('NODE_ENV', 'development')
   vi.stubEnv('ULTIMATE_BASH_TIMEOUT', '42')
-  const execution = { command: 'ultimate', cwd: '/', env: { EXTRA: 'kept' }, inheritEnv: true }
-  prepareBash(execution, { conversationId: 7 } as ToolExecutionApi, '/tmp/commits.log')
+  // Outside a Git worktree (a missing folder, so git cannot start there) no commit hooks go in; the env still filters.
+  const execution = {
+    command: 'ultimate',
+    cwd: '/missing-folder',
+    env: { EXTRA: 'kept' },
+    inheritEnv: true,
+  }
+  await prepareBash(execution, { conversationId: 7 } as ToolExecutionApi, '/tmp/commits.log')
   expect(execution.inheritEnv).toBe(false)
   expect(execution.env).not.toHaveProperty('ULTIMATE_HOME')
   expect(execution.env).not.toHaveProperty('ULTIMATE_PROJECT')
@@ -30,8 +36,8 @@ it("runs commands without this server's own variables, so a nested `ultimate` op
     PATH: process.env.PATH,
     ULTIMATE_BASH_TIMEOUT: '42',
     EXTRA: 'kept',
-    ULTIMATE_COMMIT_LOG: '/tmp/commits.log',
   })
+  expect(execution.env).not.toHaveProperty('ULTIMATE_COMMIT_LOG')
 })
 
 it('uses a 600-second default tripwire and leaves explicit timeouts unchanged', async () => {
