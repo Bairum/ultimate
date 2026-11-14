@@ -245,7 +245,9 @@ the lander, an update, another Ultimate or a pull by hand. Calls while one runs 
 `patches/` or `pnpm-lock.yaml` touches no file the watcher reloads for, so each `workspaces.landed` runs the gate at
 once too. Previews never install.
 
-When the install fails, the core holds extension reloads and web builds (the code already loaded keeps running, one
-notice says so) and refuses restarts with the install's last lines. The failure is remembered with its lockfile, so the
-same lockfile is installed again only by an explicit `WorkspacesApi.packages.install` (the update item's **Retry pnpm
-install**) or by a changed lockfile. Once an install succeeds, everything changed meanwhile reloads.
+When the install fails, or another Ultimate still holds the lock after 10 minutes, the core holds extension reloads and
+web builds (the code already loaded keeps running, one notice says so; a host with no bundle yet answers pages with a 503) and refuses restarts with the install's last lines. The failure is remembered with its lockfile, so the same
+lockfile is installed again only by an explicit `WorkspacesApi.packages.install` (the update item's **Retry pnpm
+install**) or by a changed lockfile. Once the packages are the lockfile's, extensions reload: everything changed
+meanwhile, and every facet with a load error, such as one that failed at boot (before any gate) on the old packages.
+A facet that still fails then goes to `update`'s automatic restart when it is on.

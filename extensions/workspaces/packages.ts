@@ -61,15 +61,25 @@ type Shared = {
   installing: Promise<InstallResult | undefined> | undefined
   /** The lockfile whose install failed, and why; until an install succeeds. */
   failed: { lockfile: string | undefined; error: string } | undefined
+  /** Another Ultimate held the clone's lock past `INSTALL_WAIT`, so loads were held; until an install settles here. */
+  blocked: boolean
 }
 
 /** Shared across reloads: a reload installs the new facet before the old one closes, and only one install may run. */
 const state = (host: Host) =>
-  host.resource<Shared>('workspaces.packages', () => ({ installing: undefined, failed: undefined }))
+  host.resource<Shared>('workspaces.packages', () => ({
+    installing: undefined,
+    failed: undefined,
+    blocked: false,
+  }))
 
-/** Whether an install is owed: the lockfile differs from the installed packages, or the last install failed. */
+/**
+ * Whether an install is owed: the lockfile differs from the installed packages, the last install failed, or another
+ * Ultimate's install held loads here (Retry then reloads what was held).
+ */
 export async function owed(host: Host) {
-  return !!state(host).failed || (await installOwed(host.ultimateRoot))
+  const shared = state(host)
+  return !!shared.failed || shared.blocked || (await installOwed(host.ultimateRoot))
 }
 
 /** The last output lines of a failed command. */
@@ -82,18 +92,29 @@ function tail(error: unknown) {
 /**
  * Install the lockfile's packages under the clone-wide lock when they differ from the installed ones or the last install
  * failed (pnpm can write the installed lockfile and still fail after it); undefined when another Ultimate still held the
- * lock after `INSTALL_WAIT`. A failure is remembered with its lockfile. Calls while one runs join it. After a success,
- * reloads held by an earlier failure go on.
+ * lock after `INSTALL_WAIT`. A failure is remembered with its lockfile. Calls while one runs join it. Once packages are
+ * the lockfile's, extensions reload: what a hold kept back, and facets that failed to load (`server/extensions.ts`
+ * retries those), which sends a failure against the still-running core to `update`'s automatic restart.
  */
 export function install(host: Host): Promise<InstallResult | undefined> {
   const shared = state(host)
   const root = host.ultimateRoot
+  const reload = () =>
+    // Not awaited: the reload waits for the gate, which may be waiting for this very install.
+    void host
+      .reloadExtensions()
+      .catch((error: unknown) => host.notice(`Reload after install: ${String(error)}`))
   shared.installing ??= (async () => {
     const lock = await gitPath(root, 'ultimate-update.lock')
     const held = lock ? await acquireLock(lock, { pid: process.pid }, INSTALL_WAIT) : undefined
     try {
+      const blocked = shared.blocked
+      shared.blocked = false
       // Read again under the lock: another Ultimate may just have installed it.
-      if (!shared.failed && !(await installOwed(root))) return { install: 'skipped' as const }
+      if (!shared.failed && !(await installOwed(root))) {
+        if (blocked) reload()
+        return { install: 'skipped' as const }
+      }
       const lockfile = await read(join(root, 'pnpm-lock.yaml'))
       const id = createHash('sha256')
         .update(lockfile ?? '')
@@ -110,22 +131,19 @@ export function install(host: Host): Promise<InstallResult | undefined> {
         )
         return { install: 'failed' as const, installError }
       }
-      const recovered = !!shared.failed
       shared.failed = undefined
       host.notice(`Packages installed for lockfile ${id}`)
-      // Reloads held since the failure load what changed meanwhile. Not awaited: the reload waits for this very install.
-      if (recovered)
-        host
-          .reloadExtensions()
-          .catch((error: unknown) => host.notice(`Reload after install: ${String(error)}`))
+      reload()
       return { install: 'done' as const }
     } finally {
       await held?.close()
     }
   })()
     .catch((error: unknown) => {
-      if (error instanceof Error && error.message.startsWith('Ultimate core already owns'))
+      if (error instanceof Error && error.message.startsWith('Ultimate core already owns')) {
+        shared.blocked = true
         return undefined
+      }
       throw error
     })
     .finally(() => {
@@ -153,7 +171,7 @@ export async function loadable(host: Host): Promise<void> {
   const failed = shared.failed
   if (failed && failed.lockfile === (await read(join(root, 'pnpm-lock.yaml'))))
     throw failure(failed.error)
-  if (!failed && !shared.installing && !(await installOwed(root))) return
+  if (!failed && !shared.blocked && !shared.installing && !(await installOwed(root))) return
   const result = await install(host)
   if (!result) throw new Error('Another Ultimate is still installing packages into this clone')
   if (result.install === 'failed') throw failure(result.installError!)

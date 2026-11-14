@@ -486,9 +486,12 @@ export async function loadExtensions(
     reloadExtensions: async () => {
       const work = chain.then(() => unlessHeld(reloadSettings))
       // The caller gets the failure; the chain recovers so later reloads still run.
-      chain = work.catch(() => changed())
-      await work
-      await rebuildWeb()
+      chain = work.then(
+        () => {},
+        () => changed(),
+      )
+      // A pass that ended a hold rebuilt the bundle already.
+      if (!(await work)) await rebuildWeb()
     },
     doc: findDoc,
     metadata: Metadata,
@@ -504,22 +507,29 @@ export async function loadExtensions(
   let chain = Promise.resolve()
   /** Whether a reload was held (see `preparedToLoad`): what changed meanwhile was never loaded. */
   let held = false
-  /** Run `work` once the clone can be loaded from; skip it while held, and reload everything on the first pass after. */
+  /**
+   * Run `work` once the clone can be loaded from; skip it while held, and reload everything and rebuild the web bundle on
+   * the first pass after instead. True when it did that.
+   */
   async function unlessHeld(work: () => Promise<void>) {
     if (!(await preparedToLoad())) {
       held = true
-      return
+      return false
     }
-    if (!held) return work()
+    if (!held) {
+      await work()
+      return false
+    }
     held = false
     vite.moduleGraph.invalidateAll()
     await reload()
     await rebuildWeb()
+    return true
   }
   /** Runs `work` after earlier reloads; a failure becomes a notice and still publishes what is loaded. */
   function enqueue(work: () => Promise<void>) {
     chain = chain
-      .then(() => unlessHeld(work))
+      .then(async () => void (await unlessHeld(work)))
       .catch((error: unknown) => {
         notice(`Extension reload failed: ${String(error)}`)
         return changed()
@@ -757,7 +767,9 @@ export async function loadExtensions(
               previous.enabled !== entry.enabled ||
               previous.path !== entry.path ||
               targets.get(entry.name) !== entry.target ||
-              settingsReloads.has(entry.name)
+              settingsReloads.has(entry.name) ||
+              // Tried again: it may have failed on packages installed since (#116515).
+              !!previous.server?.error
             )
           })
           .map((entry) => entry.name),

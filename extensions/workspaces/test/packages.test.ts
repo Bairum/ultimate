@@ -2,21 +2,22 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { exec } from '../../../lib/exec.ts'
+import { git } from '../../../lib/git.ts'
+import { acquireLock } from '../../../server/lock.ts'
 import { install, loadable, owed } from '../packages.ts'
 import { temp } from '../../../test/helpers.ts'
 
-// No spawns in a fast test: pnpm is a deferred promise per call, and git says "not a checkout" (no index.lock, no lock).
+// No spawns in a fast test: pnpm is a deferred promise per call, and git says "not a checkout" (no index.lock, no lock)
+// unless a test points it at a lock.
 vi.mock('../../../lib/exec.ts', () => ({ exec: vi.fn<typeof exec>() }))
-vi.mock('../../../lib/git.ts', () => ({
-  git: vi.fn<typeof import('../../../lib/git.ts').git>(async () => {
-    throw new Error('not a git repository')
-  }),
-}))
+vi.mock('../../../lib/git.ts', () => ({ git: vi.fn<typeof git>() }))
+vi.mock('../../../server/lock.ts', () => ({ acquireLock: vi.fn<typeof acquireLock>() }))
 
 afterEach(() => vi.resetAllMocks())
 
 /** A clone whose lockfile differs from the installed one, and a host that records notices and reloads. */
 async function clone() {
+  vi.mocked(git).mockRejectedValue(new Error('not a git repository'))
   const root = await temp('ultimate-packages-')
   await writeFile(join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9\nnew: 1\n')
   await mkdir(join(root, 'node_modules/.pnpm'), { recursive: true })
@@ -87,5 +88,24 @@ it('keeps failing loads after a failed install until a retry succeeds, then relo
   expect(await retry).toEqual({ install: 'done' })
   expect(host.reloadExtensions).toHaveBeenCalledOnce()
   await loadable(host)
+  expect(await owed(host)).toBe(false)
+})
+
+it('reloads what a lock held by another Ultimate kept back, once that install settles', async () => {
+  const { host, installs } = await clone()
+  // A clone in git, whose lock another Ultimate holds past the wait; it then installs the lockfile itself.
+  vi.mocked(git).mockImplementation(async (_cwd, ...args) => join(host.ultimateRoot, args.at(-1)!))
+  vi.mocked(acquireLock).mockRejectedValueOnce(new Error('Ultimate core already owns this lock'))
+  await expect(loadable(host)).rejects.toThrow('Another Ultimate is still installing')
+  expect(await owed(host)).toBe(true)
+  await writeFile(
+    join(host.ultimateRoot, 'node_modules/.pnpm/lock.yaml'),
+    'lockfileVersion: 9\nnew: 1\n',
+  )
+  vi.mocked(acquireLock).mockResolvedValue({ close: async () => {} } as never)
+  // The next load finds nothing to install and reloads what the hold kept back.
+  await loadable(host)
+  expect(installs).toHaveLength(0)
+  expect(host.reloadExtensions).toHaveBeenCalledOnce()
   expect(await owed(host)).toBe(false)
 })

@@ -102,6 +102,8 @@ export async function createWeb(options: {
   /** The last build's facets left out with their errors, or the error that failed it as a whole. */
   let left: { file: string; error: string }[] = []
   let failed: string | undefined
+  /** Whether the last build was held by `before` (packages not installed): the bundle stays stale until it passes. */
+  let held = false
   let pending = new Set<string>()
   let timer: ReturnType<typeof setTimeout> | undefined
   const closing = new AbortController()
@@ -244,8 +246,12 @@ export async function createWeb(options: {
         await mkdir(folder, { recursive: true })
         while (stale && !closing.signal.aborted) {
           // Held while the packages are not the lockfile's: the current bundle keeps serving and stays stale, so the
-          // first build once they are rebuilds it (#116515). A first bundle builds anyway: there is nothing to serve.
-          if (!(await options.before()) && manifest) break
+          // first build once they are rebuilds it (#116515). Without a bundle yet, pages get a 503 meanwhile.
+          if (!(await options.before())) {
+            held = true
+            break
+          }
+          held = false
           stale = false
           changedFiles = [...pending]
           pending = new Set()
@@ -346,8 +352,12 @@ export async function createWeb(options: {
       // One bundle for the whole request, though a build may finish while it is served.
       const current = manifest
       if (!current) {
-        response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
-        response.end('The web UI did not build; the notices name the error.')
+        response.writeHead(held ? 503 : 500, { 'Content-Type': 'text/plain; charset=utf-8' })
+        response.end(
+          held
+            ? 'Ultimate is waiting for its packages to install; the notices say why. Reload once they are.'
+            : 'The web UI did not build; the notices name the error.',
+        )
         return
       }
       const path = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname)

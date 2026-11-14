@@ -331,4 +331,27 @@ export default defineExtension({ name: 'user' })`,
     expect(entry().server!.loadedAt).not.toBe(loaded)
     expect(entry().server!.error).toBeUndefined()
   })
+  // #116515: initial loading runs before any gate exists, so a facet can fail at boot on packages an install then fixes;
+  // the install's reload must load it, not only facets whose files changed.
+  it('loads a facet that failed at boot once packages are installed and extensions reload', async () => {
+    const install = { installed: false, reload: async () => {} }
+    ;(globalThis as { testInstall?: typeof install }).testInstall = install
+    const { server } = await fixture(false, {
+      gate: `import { defineExtension } from '@earendil-works/pi-durable'
+export default host => {
+  globalThis.testInstall.reload = () => host.reloadExtensions()
+  return defineExtension({ name: 'gate' })
+}`,
+      user: `import { defineExtension } from '@earendil-works/pi-durable'
+export default () => {
+  if (!globalThis.testInstall.installed) throw new Error('"./json" is not exported')
+  return defineExtension({ name: 'user' })
+}`,
+    })
+    const entry = () => server.extensions.info().find((extension) => extension.name === 'user')!
+    expect(entry().server!.error).toContain('"./json" is not exported')
+    install.installed = true
+    await install.reload()
+    expect(entry().server!.error).toBeUndefined()
+  })
 })
