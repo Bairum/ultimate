@@ -129,6 +129,11 @@ export default function projects(host: ExtensionHost) {
 
 /** The rail polls both: the trace counts their repeats instead of writing each. */
 export const pollActions = ['list', 'pin']
+/**
+ * Pin writes `~/.ultimate/projects-rail.json`, so it needs a paired browser: acting needs pairing, reading stays open
+ * (fork rule, #116997). An unpaired page's poll is refused too and its rail stays unpinned.
+ */
+export const userActions = ['pin']
 
 export const actions = {
   list: implementAction(ListAction, (_args, { host, signal }) => list(host, signal)),

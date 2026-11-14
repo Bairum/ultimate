@@ -3,7 +3,7 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
-import { list } from '../server.ts'
+import { list, userActions } from '../server.ts'
 import type { ExtensionHost } from '../../../server/extensions.ts'
 import { temp } from '../../../test/helpers.ts'
 
@@ -74,4 +74,8 @@ it('names the Tailscale port of each project the registry knows, for pages opene
     ['other', undefined],
     ['unpublished', undefined],
   ])
+})
+
+it('needs a paired browser to pin the rail, which writes a file for every instance', () => {
+  expect(userActions).toEqual(['pin'])
 })
