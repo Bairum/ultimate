@@ -30,7 +30,7 @@ it('serves bundle files but not what a symlink inside the bundle points at', asy
     userHome: join(root, 'user'),
     home,
     watch: () => () => {},
-    before: async () => {},
+    before: async () => true,
     pages: () => 0,
     changed: () => {},
     notice: () => {},

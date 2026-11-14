@@ -59,8 +59,8 @@ export async function createWeb(options: {
   userHome: string
   home: string
   watch: Watch
-  /** Settles once the checkout and its packages can be read: each build waits for it. */
-  before: () => Promise<unknown>
+  /** Settles once the checkout and its packages can be read, false while they cannot: each build waits for it. */
+  before: () => Promise<boolean>
   /** Open browser pages: with none, a change only marks the bundle stale. */
   pages: () => number
   /** A new bundle is current, or a build started or ended. */
@@ -243,7 +243,9 @@ export async function createWeb(options: {
       try {
         await mkdir(folder, { recursive: true })
         while (stale && !closing.signal.aborted) {
-          await options.before()
+          // Held while the packages are not the lockfile's: the current bundle keeps serving and stays stale, so the
+          // first build once they are rebuilds it (#116515). A first bundle builds anyway: there is nothing to serve.
+          if (!(await options.before()) && manifest) break
           stale = false
           changedFiles = [...pending]
           pending = new Set()

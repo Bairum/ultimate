@@ -35,7 +35,7 @@ One case restarts by itself: an extension's server facet that fails to load (`ho
 
 1. Fetches origin.
 2. Fast-forwards the default branch with `git merge --ff-only`.
-3. Runs `pnpm install --frozen-lockfile` when `pnpm-lock.yaml` differs from the installed `node_modules/.pnpm/lock.yaml`. A failed install is retried by the next update.
+3. Runs `pnpm install --frozen-lockfile` when `pnpm-lock.yaml` differs from the installed `node_modules/.pnpm/lock.yaml`, through `WorkspacesApi.packages.install` after releasing the clone-wide lock (the install takes it itself). A failed install is retried by the next update.
 
 It refuses, and changes nothing, when:
 
@@ -55,19 +55,11 @@ Where the clone is not the project (a project run from a separate Ultimate clone
 
 ## Before anything loads
 
-An extension reload, a web build or a restart must never read a checkout that git is still writing, or packages that `pnpm install` is still linking. The extension registers `host.onBeforeLoad` (`loadable` in `server.ts`), which the core awaits before each of the three:
-
-1. It waits until git's `index.lock` is gone (at most 60 s): a fast-forward holds it until every file is written.
-2. When `pnpm-lock.yaml` differs from the installed `node_modules/.pnpm/lock.yaml`, it runs the same install under the clone-wide lock, waiting up to 10 minutes for another Ultimate that holds it. A patch-only change counts: its hash sits in the lockfile's `patchedDependencies`.
-3. Then the reload, build or restart goes on.
-
-The state is read from disk, never from an event, so every Ultimate on the clone waits the same way, whoever moved it: the lander, **Update now**, another Ultimate or a pull by hand. Calls while one runs join it.
-
-When the install fails, the item reads `install owed`, extensions and the web bundle load as they are with one notice, and a restart is refused with the install's last lines. The failure is remembered: the item keeps offering **Retry pnpm install** even when pnpm wrote its installed lockfile before failing, and the same lockfile is installed again only by that retry. Once a later install succeeds, a facet that still has a load error goes to the automatic restart (see Status line).
+The gate that makes extension reloads, web builds and restarts wait for the checkout and its packages lives in the core-tier `workspaces` extension (its README, "Packages of the Ultimate clone"), so disabling `update` never disables it. This extension shows its state: `install owed` while the lockfile differs from the installed packages or the last install failed, with **Retry pnpm install**, which calls `WorkspacesApi.packages.install`. Once a later install succeeds, a facet that still has a load error goes to the automatic restart (see Status line).
 
 ## After a landing
 
-The lander fast-forwards the host's checkout itself. A landing that changes only `patches/` or `pnpm-lock.yaml` touches no file the extension watcher reloads for, so on each `workspaces.landed` the extension runs the step above at once. The item then reads `updated · restart`, and the landing card says "Needs restart." (`needsRestart` in `lib/layers.ts`, the rule `layersOf` shares): packages a process already imported stay loaded, so only a restart runs the new ones. The landing itself restarts nothing; previews never install.
+The landing card says "Needs restart." for a landing that changed `patches/` or `pnpm-lock.yaml` (`needsRestart` in `lib/layers.ts`, the rule `layersOf` shares), and the item reads `updated · restart` once packages were installed: packages a process already imported stay loaded, so only a restart runs the new ones. The landing itself restarts nothing; previews never install.
 
 ## Events
 

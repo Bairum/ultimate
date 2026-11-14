@@ -224,3 +224,28 @@ of the current code's own task waits for the next submit or open, so a determini
 Top-level mains use `workspace status` and `workspace submit` for their own checkout.
 Landing reports commits and changed paths, with a restart hint for core or package changes to the running clone.
 Landing never restarts Ultimate.
+
+## Packages of the Ultimate clone
+
+An extension reload, a web build or a restart must never read a checkout git is still writing, or packages `pnpm install`
+is still linking or failed to install. The extension registers `host.onBeforeLoad` (`loadable` in `packages.ts`), which
+the core awaits before each of the three. It lives here, in the core tier, because a gate in an optional extension is off
+whenever that extension is: on 2026-11-13 it lived in `update`, which was disabled, and a Pi upgrade landing hot-reloaded
+every host on the clone against the old packages (#116515).
+
+1. It waits until git's `index.lock` is gone (at most 60 s): a fast-forward holds it until every file is written.
+2. When `pnpm-lock.yaml` differs from the installed `node_modules/.pnpm/lock.yaml`, it runs `pnpm install
+   --frozen-lockfile` under the clone-wide lock (`.git/ultimate-update.lock`), waiting up to 10 minutes for another
+   Ultimate that holds it. A patch-only change counts: its hash sits in the lockfile's `patchedDependencies`. Notices
+   say `Installing packages for lockfile <id>…` and then `Packages installed…` or `pnpm install failed…`.
+3. Then the reload, build or restart goes on.
+
+The state is read from disk, never from an event, so every Ultimate on the clone waits the same way whoever moved it:
+the lander, an update, another Ultimate or a pull by hand. Calls while one runs join it. A landing that changes only
+`patches/` or `pnpm-lock.yaml` touches no file the watcher reloads for, so each `workspaces.landed` runs the gate at
+once too. Previews never install.
+
+When the install fails, the core holds extension reloads and web builds (the code already loaded keeps running, one
+notice says so) and refuses restarts with the install's last lines. The failure is remembered with its lockfile, so the
+same lockfile is installed again only by an explicit `WorkspacesApi.packages.install` (the update item's **Retry pnpm
+install**) or by a changed lockfile. Once an install succeeds, everything changed meanwhile reloads.

@@ -21,7 +21,7 @@ import { empty, git, isolatable, noCommit, noRepository } from '../../lib/git.ts
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi, Release } from '../conversations/api.ts'
-import { Branches, WorkspacesApi } from './api.ts'
+import { Branches, SubmissionLanded, WorkspacesApi } from './api.ts'
 import {
   DiskAction,
   GithubAction,
@@ -34,6 +34,7 @@ import {
 import { githubRepo } from '../../lib/project-identity.ts'
 import { sweepChecks } from './lander.ts'
 import { Workspaces, workspaces } from './workspaces.ts'
+import { install, loadable, owed } from './packages.ts'
 export const order = -200
 export const docs = [Workspaces]
 export const userActions = ['setupGit']
@@ -141,9 +142,27 @@ export default function workspaceExtension(host: ExtensionHost) {
     git,
     doc: Workspaces,
     setupGit: () => setupGit(host),
+    packages: { owed: () => owed(host), install: () => install(host) },
   })
   // Concluding conversations frees their worktrees, through conversations' extension point.
   host.implement(Release, { release: (ids, caller) => service.release(ids, caller) })
+  // A preview started by another Ultimate's `instance` tool shares the clone and must never install into it.
+  if (!process.env.ULTIMATE_INSTANCE_OWNER) {
+    // Every extension reload, web build and restart waits for the checkout and its packages.
+    host.onBeforeLoad(() => loadable(host))
+    // A landing may change only files nothing watches (`patches/`, `pnpm-lock.yaml`): install then too, at once. Not
+    // awaited: the reactor's transaction stays short.
+    host.react(
+      'install-landed',
+      [SubmissionLanded],
+      async () => {
+        loadable(host).catch((error: unknown) =>
+          host.notice(`Install after landing: ${String(error)}`),
+        )
+      },
+      { from: 'now' },
+    )
+  }
   const resume = () =>
     service.resume(context).catch((error: unknown) => {
       host.notice(`Lander resume failed: ${String(error)}`)

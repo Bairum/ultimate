@@ -1,7 +1,5 @@
-import { existsSync } from 'node:fs'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { realpath } from 'node:fs/promises'
-import { setTimeout as sleep } from 'node:timers/promises'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord/json'
@@ -16,7 +14,7 @@ import type { Git } from '../../lib/fast-forward.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { SubagentsApi } from '../subagents/api.ts'
-import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
+import { WorkspacesApi } from '../workspaces/api.ts'
 import { PauseApi } from '../pause/api.ts'
 import {
   cloneState,
@@ -46,18 +44,6 @@ export const gitIn =
       throw new Error(`git ${args[0]} failed: ${stderr.trim() || String(error)}`, { cause: error })
     }
   }
-
-const read = (path: string) =>
-  readFile(path, 'utf8').catch(
-    // A missing lockfile or install reads as absent: no clone of Ultimate lacks both.
-    () => undefined,
-  )
-
-/** Whether `pnpm-lock.yaml` differs from what pnpm last installed (`node_modules/.pnpm/lock.yaml`). */
-export async function installOwed(root: string) {
-  const wanted = await read(join(root, 'pnpm-lock.yaml'))
-  return wanted !== undefined && wanted !== (await read(join(root, 'node_modules/.pnpm/lock.yaml')))
-}
 
 /** Whether packages were installed after `startedAt` (ms): this server still runs the ones before. */
 const installedSince = (root: string, startedAt: number) =>
@@ -113,88 +99,6 @@ export function restartOnStaleLoad(options: {
   }
 }
 
-/**
- * Install the lockfile's packages when they differ from the installed ones, or when the last install failed (pnpm can
- * write the installed lockfile and still fail after it); the install's last lines when it fails. A failure is
- * remembered with its lockfile. After a success, a facet that still has a load error (it loaded while an install had
- * failed) goes to the stale-load listener: packages changed under this process, so it restarts.
- */
-async function installPackages(
-  host: ExtensionHost,
-): Promise<{ install: 'done' | 'failed' | 'skipped'; installError?: string }> {
-  const shared = state(host)
-  const root = host.ultimateRoot
-  if (!shared.failed && !(await installOwed(root))) return { install: 'skipped' }
-  const lockfile = await read(join(root, 'pnpm-lock.yaml'))
-  try {
-    await exec('pnpm', ['install', '--frozen-lockfile'], { cwd: root, timeout: 10 * 60_000 })
-  } catch (error) {
-    const installError = tail(error)
-    shared.failed = { lockfile, error: installError }
-    return { install: 'failed', installError }
-  }
-  shared.failed = undefined
-  const broken = host.extensions().find((extension) => extension.server?.error)?.name
-  // Not awaited: its restart waits for this very install to settle.
-  if (broken) shared.recover?.(broken)
-  return { install: 'done' }
-}
-
-/** How long a load waits for git to finish writing the checkout; a lock left by a crashed git must not block forever. */
-const CHECKOUT_WAIT = 60_000
-/** How long a load waits for another Ultimate's install on the clone: as long as an install may take. */
-const INSTALL_WAIT = 10 * 60_000
-
-/**
- * Settle once the clone at `host.ultimateRoot` can be loaded from: git is done writing its checkout (a fast-forward
- * holds `index.lock` until every file is written) and the packages its lockfile names are installed, installing them
- * under the clone-wide lock when they are owed. Read from disk, never from an event, so every Ultimate on the clone
- * waits the same way whoever moved it: the lander, an update, another Ultimate, a pull by hand. Calls while one runs
- * join it. Throws when the install failed, and at once again for the same lockfile until **Retry pnpm install**.
- *
- * Origin: on 2026-11-09 three landings changed a patch (c16450c, 983ad97, e609be7). Extensions hot-reloaded while
- * `pnpm install` was still relinking the package and failed to load, which took the provider down with them.
- */
-export function loadable(host: ExtensionHost): Promise<void> {
-  const shared = state(host)
-  const root = host.ultimateRoot
-  shared.installing ??= (async () => {
-    const index = await gitPath(gitIn(root), root, 'index.lock').catch(
-      // Not a git checkout: nothing moves its files under us.
-      () => undefined,
-    )
-    const deadline = Date.now() + CHECKOUT_WAIT
-    if (index) while (existsSync(index) && Date.now() < deadline) await sleep(50)
-    const failure = (error: string) =>
-      new Error(`pnpm install failed, so the packages on disk are not the lockfile's:\n${error}`)
-    // Before comparing lockfiles: a failed install may have left them equal. Tried again for another lockfile only.
-    const failed = shared.failed
-    if (failed && failed.lockfile === (await read(join(root, 'pnpm-lock.yaml'))))
-      throw failure(failed.error)
-    if (!failed && !(await installOwed(root))) return
-    const result = await withLock(await lockOf(root), () => installPackages(host), INSTALL_WAIT)
-    // Shown by the status item either way: `updated · restart`, or `install owed`.
-    await refresh(host, false).catch((error: unknown) =>
-      host.notice(`Update check: ${String(error)}`),
-    )
-    if (!result) throw new Error('Another Ultimate is still installing packages into this clone')
-    if (result.install === 'failed') throw failure(result.installError!)
-  })().finally(() => {
-    shared.installing = undefined
-  })
-  return shared.installing
-}
-
-/** The last output lines of a failed command. */
-function tail(error: unknown) {
-  const { stdout = '', stderr = '' } = error as {
-    stdout?: string
-    stderr?: string
-  }
-  const output = `${stdout}${stderr}`.trim()
-  return output ? output.split('\n').slice(-20).join('\n') : String(error)
-}
-
 /** A preview started by another Ultimate's `instance` tool: it shares the clone and must never touch it. */
 const preview = () => Boolean(process.env.ULTIMATE_INSTANCE_OWNER)
 
@@ -240,9 +144,6 @@ export default function update(host: ExtensionHost) {
     pending,
   })
   host.onLoadError(onLoadError)
-  // Every extension reload, web build and restart waits for the checkout and its packages.
-  shared.recover = onLoadError
-  host.onBeforeLoad(() => loadable(host))
   const tick = () => {
     // Paused: no fetch starts until Play; the next tick after it catches up.
     if (host.want(PauseApi)?.paused()) return
@@ -252,26 +153,13 @@ export default function update(host: ExtensionHost) {
         shared.ticking = undefined
       })
   }
-  // A landing may change only files nothing watches (`patches/`): install then too, at once. Not awaited: the
-  // reactor's transaction stays short.
-  host.react(
-    'install-landed',
-    [SubmissionLanded],
-    async () => {
-      loadable(host).catch((error: unknown) =>
-        host.notice(`Install after landing: ${String(error)}`),
-      )
-    },
-    { from: 'now' },
-  )
+
   const start = setTimeout(tick, 30_000)
   const timer = setInterval(tick, TICK)
   host.onClose(async () => {
     clearTimeout(start)
     clearInterval(timer)
     await shared.ticking
-    // Its failure was reported to whoever waited for it.
-    await shared.installing?.catch(() => {})
   })
   return defineExtension({ name: 'update' })
 }
@@ -280,11 +168,6 @@ type Shared = {
   ticking: Promise<void> | undefined
   checking: Promise<void> | undefined
   updating: Promise<UpdateResult> | undefined
-  installing: Promise<void> | undefined
-  /** The lockfile whose install failed, and why; until an install succeeds. */
-  failed: { lockfile: string | undefined; error: string } | undefined
-  /** The current facet's stale-load listener, set on each load. */
-  recover: ((name: string) => void) | undefined
   latest: UpdateState | undefined
   updated: (UpdateResult & { ok: true }) | undefined
 }
@@ -295,9 +178,6 @@ const state = (host: ExtensionHost) =>
     ticking: undefined,
     checking: undefined,
     updating: undefined,
-    installing: undefined,
-    failed: undefined,
-    recover: undefined,
     latest: undefined,
     updated: undefined,
   }))
@@ -379,7 +259,7 @@ async function refresh(host: ExtensionHost, check: boolean, force = false) {
     ...(diverged && !landingNow && (await isProject(host)) ? { merge: true as const } : {}),
     ...(error ? { error } : {}),
     ...(repo && remoteHead ? { compare: compareUrl(repo, head, remoteHead) } : {}),
-    install: !!shared.failed || (await installOwed(root)),
+    install: await host.need(WorkspacesApi).packages.owed(),
     restart:
       (await installedSince(root, startedAt)) ||
       (await coreChangedSince(git, await boot(host).head)),
@@ -440,8 +320,8 @@ async function record<D extends JsonValue>(host: ExtensionHost, event: EventToke
 }
 
 /**
- * Fast-forward the clone, install when the lockfile is owed (also with nothing to pull, so a failed install is retried),
- * and record what happened. Holds the clone-wide lock throughout.
+ * Fast-forward the clone under the clone-wide lock, then install when the lockfile is owed (also with nothing to pull,
+ * so a failed install is retried), and record what happened. The install takes the same lock itself.
  */
 async function run(host: ExtensionHost): Promise<UpdateResult> {
   const root = host.ultimateRoot
@@ -449,30 +329,17 @@ async function run(host: ExtensionHost): Promise<UpdateResult> {
     await record(host, Refused, { root, reason: refused })
     return { ok: false, refused }
   }
-  const result = await withLock(await lockOf(root), () => apply(host, refuse))
-  return result ?? refuse('Another Ultimate is updating this clone')
-}
-
-async function apply(
-  host: ExtensionHost,
-  refuse: (refused: string) => Promise<UpdateResult>,
-): Promise<UpdateResult> {
-  const root = host.ultimateRoot
+  const moved = await withLock(await lockOf(root), () => apply(host))
+  if (!moved) return refuse('Another Ultimate is updating this clone')
+  if (typeof moved === 'string') return refuse(moved)
   const git = gitIn(root)
-  let moved
-  try {
-    // The landing check runs again right before the merge, after the fetch. A landing that starts after it is safe:
-    // the lander fast-forwards only from the base it merged onto, sees the moved branch and retries.
-    moved = await fastForward(git, undefined, () => landing(host))
-  } catch (error) {
-    if (error instanceof Refusal) return refuse(error.message)
-    throw error
-  }
   const files =
     moved.before === moved.after ? '' : await git('diff', '--name-only', moved.before, moved.after)
   const layers = layersOf(files.split('\n').filter(Boolean))
   // Owed while the lockfile differs from the installed one: a failed install is retried by the next update.
-  const { install, installError } = await installPackages(host)
+  const installed = await host.need(WorkspacesApi).packages.install()
+  if (!installed) return refuse('Another Ultimate is installing packages into this clone')
+  const { install, installError } = installed
   const result = {
     ok: true as const,
     from: moved.before.slice(0, 7),
@@ -494,6 +361,18 @@ async function apply(
     })
   }
   return result
+}
+
+/** Fast-forward the clone, or why not. */
+async function apply(host: ExtensionHost) {
+  try {
+    // The landing check runs again right before the merge, after the fetch. A landing that starts after it is safe:
+    // the lander fast-forwards only from the base it merged onto, sees the moved branch and retries.
+    return await fastForward(gitIn(host.ultimateRoot), undefined, () => landing(host))
+  } catch (error) {
+    if (error instanceof Refusal) return error.message
+    throw error
+  }
 }
 
 export const userActions = ['merge']

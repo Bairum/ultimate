@@ -56,6 +56,8 @@ async function reopen(
       return resources.get(key) as T
     },
     onOpen: () => {},
+    onBeforeLoad: () => {},
+    react: () => {},
     onClose: (close: () => Promise<void>) => closers.push(close),
   } as unknown as ExtensionHost
   prepared.registry.install(workspaceExtension(host))
@@ -89,7 +91,7 @@ it('clears and reruns a configured add command a crash interrupted', async () =>
       extensions: () => [{ name: 'workspaces', enabled: true }],
       implement: () => {}, need: () => ({}), want: () => undefined,
       resource: (key, create) => { if (!resources.has(key)) resources.set(key, create()); return resources.get(key) },
-      onOpen: () => {}, onClose: () => {} };
+      onOpen: () => {}, onClose: () => {}, onBeforeLoad: () => {}, react: () => {} };
     prepared.registry.install(extension(host));
     opened = await prepared.open();
     await writeFile(${JSON.stringify(idFile)}, String((await actions.create({}, { host })).id));
@@ -159,7 +161,7 @@ it.each(['symlinked home mid-setup', 'branch creation before registration'])(
       extensions: () => [{ name: 'workspaces', enabled: true }],
       implement: () => {}, need: () => ({}), want: () => undefined,
       resource: (key, create) => { if (!resources.has(key)) resources.set(key, create()); return resources.get(key) },
-      onOpen: () => {}, onClose: () => {} };
+      onOpen: () => {}, onClose: () => {}, onBeforeLoad: () => {}, react: () => {} };
     prepared.registry.install(extension(host));
     opened = await prepared.open();
     await writeFile(${JSON.stringify(idFile)}, String((await actions.create({}, { host })).id));

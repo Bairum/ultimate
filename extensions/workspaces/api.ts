@@ -7,6 +7,7 @@ import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import { defineApi } from '../../shared/extension-api.ts'
 import type { git } from '../../lib/git.ts'
 import type { Workspaces, workspaces } from './workspaces.ts'
+import type { InstallResult } from './packages.ts'
 
 type Implementation = ReturnType<typeof workspaces>
 
@@ -27,6 +28,12 @@ export type WorkspaceService = {
   doc: typeof Workspaces
   /** Make the project folder a Git repository with a first commit, so worktrees and landing work. */
   setupGit(): Promise<void>
+  /**
+   * The packages of the Ultimate clone: `owed` while the lockfile differs from the installed packages or the last
+   * install failed; `install` installs them under the clone-wide lock (Retry), undefined when another Ultimate held it.
+   * Reloads and web builds wait for an owed install, and are held after a failed one until an install succeeds.
+   */
+  packages: { owed(): Promise<boolean>; install(): Promise<InstallResult | undefined> }
 }
 /** Worktrees and landing; core, so `need` it. */
 export const WorkspacesApi = defineApi<WorkspaceService>()('workspaces')

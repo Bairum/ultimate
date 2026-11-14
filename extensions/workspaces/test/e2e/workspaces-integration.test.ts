@@ -133,6 +133,7 @@ async function fixture(
     restart,
     notice,
     onOpen: (callback: () => Promise<void>) => openers.push(callback),
+    onBeforeLoad: () => {},
     onClose: (close: () => Promise<void>) => closers.push(close),
     doc: () => undefined,
     conversations: () => [],

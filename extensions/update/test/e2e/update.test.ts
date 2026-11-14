@@ -4,7 +4,8 @@ import { beforeEach, expect, it } from 'vitest'
 import { git } from '../../../../lib/git.ts'
 import { fastForward, Refusal } from '../../../../lib/fast-forward.ts'
 import { cloneState, fetchIfDue, layersOf, withLock } from '../../clone.ts'
-import { gitIn, installOwed } from '../../server.ts'
+import { gitIn } from '../../server.ts'
+import { installOwed } from '../../../workspaces/packages.ts'
 import { temp } from '../../../../test/helpers.ts'
 
 let upstream: string

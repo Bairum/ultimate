@@ -83,8 +83,9 @@ export type ExtensionHost = Pick<
   onLoadError(callback: (name: string, error: string) => void): void
   /**
    * Run `callback` and wait for it before each extension reload, web build and restart, so none of them reads a
-   * checkout or packages that are still being written. When it throws, a reload or build goes on with a notice and a
-   * restart is refused with the message; facet-scoped.
+   * checkout or packages that are still being written. While it throws, reloads and web builds are held (the loaded code
+   * keeps running) and a restart is refused with the message; the first load after it passes again reloads everything.
+   * Facet-scoped.
    */
   onBeforeLoad(callback: () => Promise<void>): void
   harness(): Harness
@@ -309,12 +310,19 @@ export async function loadExtensions(
       }
     return failed
   }
+  /** The failure that holds reloads and web builds, said once per message rather than on every save. */
   let unprepared: string | undefined
-  /** `prepared` for a reload or a web build: it goes on either way, and each failure is said once, not on every save. */
+  /**
+   * `prepared` for a reload or a web build; false while a callback fails, so the caller holds its load: code already
+   * loaded keeps running rather than new code loading against packages that are not the lockfile's (#116515: after a
+   * failed or missing install, facets failed with `"./json" is not exported` and took conversations down with them).
+   */
   async function preparedToLoad() {
     const failed = await prepared()
-    if (failed && failed !== unprepared) notice(`Loading as it is: ${failed}`)
+    if (failed && failed !== unprepared)
+      notice(`Holding extension reloads and web builds until this is fixed: ${failed}`)
     unprepared = failed
+    if (failed) return false
     // Vite's resolver remembers where each package resolved to. pnpm installs a changed (patched) package into a new
     // folder and moves the link, so a facet reloaded after an install kept importing the old folder: "useUrl is not a
     // function" in 19 of 56 patch landings on a scratch host (#545608). Telling the resolver that node_modules
@@ -322,6 +330,7 @@ export async function loadExtensions(
     const modules = join(host.ultimateRoot, 'node_modules')
     for (const environment of Object.values(vite.environments))
       await environment.pluginContainer.watchChange(modules, { event: 'create' })
+    return true
   }
   const releasers = new Set<() => Promise<void>>()
   let open = false
@@ -475,7 +484,7 @@ export async function loadExtensions(
       await extensionHost.reloadExtensions()
     },
     reloadExtensions: async () => {
-      const work = chain.then(preparedToLoad).then(() => reloadSettings())
+      const work = chain.then(() => unlessHeld(reloadSettings))
       // The caller gets the failure; the chain recovers so later reloads still run.
       chain = work.catch(() => changed())
       await work
@@ -493,11 +502,24 @@ export async function loadExtensions(
       ),
     )
   let chain = Promise.resolve()
+  /** Whether a reload was held (see `preparedToLoad`): what changed meanwhile was never loaded. */
+  let held = false
+  /** Run `work` once the clone can be loaded from; skip it while held, and reload everything on the first pass after. */
+  async function unlessHeld(work: () => Promise<void>) {
+    if (!(await preparedToLoad())) {
+      held = true
+      return
+    }
+    if (!held) return work()
+    held = false
+    vite.moduleGraph.invalidateAll()
+    await reload()
+    await rebuildWeb()
+  }
   /** Runs `work` after earlier reloads; a failure becomes a notice and still publishes what is loaded. */
   function enqueue(work: () => Promise<void>) {
     chain = chain
-      .then(preparedToLoad)
-      .then(work)
+      .then(() => unlessHeld(work))
       .catch((error: unknown) => {
         notice(`Extension reload failed: ${String(error)}`)
         return changed()

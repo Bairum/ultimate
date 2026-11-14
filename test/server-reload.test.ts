@@ -293,4 +293,42 @@ export default defineExtension({ name: 'user' })`,
     await until(() => entry().server!.loadedAt !== loaded)
     expect(entry().server!.error).toBeUndefined()
   })
+  // 2026-11-13, landing 1e338e7 (#116515): a reload that went on after the packages were not the lockfile's loaded new
+  // code against Pi 1.5.0 and failed with `"./json" is not exported`.
+  it('holds reloads while an onBeforeLoad callback fails, then loads what changed once it passes', async () => {
+    const install = { failed: '', calls: 0, reload: async () => {} }
+    ;(globalThis as { testInstall?: typeof install }).testInstall = install
+    const { server } = await fixture(false, {
+      gate: `import { defineExtension } from '@earendil-works/pi-durable'
+export default host => {
+  globalThis.testInstall.reload = () => host.reloadExtensions()
+  host.onBeforeLoad(async () => {
+    globalThis.testInstall.calls++
+    if (globalThis.testInstall.failed) throw new Error(globalThis.testInstall.failed)
+  })
+  return defineExtension({ name: 'gate' })
+}`,
+      user: `import { defineExtension } from '@earendil-works/pi-durable'
+export default defineExtension({ name: 'user' })`,
+    })
+    const path = join(server.host.ultimateRoot, 'extensions/user/server.ts')
+    const source = await readFile(path, 'utf8')
+    const entry = () => server.extensions.info().find((extension) => extension.name === 'user')!
+    const loaded = entry().server!.loadedAt
+    install.failed = 'pnpm install failed'
+    const calls = install.calls
+    await writeFile(path, `${source}\nthrow new Error('"./json" is not exported')\n`)
+    await until(() => install.calls > calls)
+    // Queued after the change's reload, so that one has run once this settles; it is held too.
+    await install.reload()
+    // Neither was loaded: the facet keeps running its old code, without a load error.
+    expect(entry().server).toMatchObject({ loadedAt: loaded })
+    expect(entry().server!.error).toBeUndefined()
+    // Fixed on disk while held, then the install succeeds: the first reload after it loads the fixed facet.
+    await writeFile(path, `${source}\n`)
+    install.failed = ''
+    await install.reload()
+    expect(entry().server!.loadedAt).not.toBe(loaded)
+    expect(entry().server!.error).toBeUndefined()
+  })
 })
